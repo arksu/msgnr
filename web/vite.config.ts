@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
+import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath, URL } from 'node:url'
 import Components from 'unplugin-vue-components/vite'
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers'
@@ -11,6 +12,53 @@ export default defineConfig({
       resolvers: [
         AntDesignVueResolver({ importStyle: false }),
       ],
+    }),
+    VitePWA({
+      registerType: 'prompt',
+      includeAssets: [
+        'favicon.svg',
+        'favicon.ico',
+        'apple-touch-icon-180x180.png',
+        'badge-72x72.png',
+      ],
+      manifest: {
+        name: 'Msgnr',
+        short_name: 'Msgnr',
+        description: 'Msgnr messenger',
+        start_url: '/',
+        scope: '/',
+        display: 'standalone',
+        theme_color: '#1a1d21',
+        background_color: '#1a1d21',
+        icons: [
+          {
+            src: 'pwa-64x64.png',
+            sizes: '64x64',
+            type: 'image/png',
+          },
+          {
+            src: 'pwa-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+          },
+          {
+            src: 'pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+          },
+          {
+            src: 'maskable-icon-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        navigateFallback: 'index.html',
+        navigateFallbackDenylist: [/^\/api\//, /^\/ws/, /^\/health/, /^\/ready/],
+      },
     }),
   ],
   resolve: {

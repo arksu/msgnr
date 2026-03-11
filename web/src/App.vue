@@ -1,6 +1,8 @@
 <template>
   <router-view />
 
+  <PwaUpdateBanner />
+
   <Teleport to="body">
     <div
       v-if="showStartupLoader"
@@ -76,6 +78,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { AuthApiError } from '@/services/http/authApi'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
+import PwaUpdateBanner from '@/components/PwaUpdateBanner.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()

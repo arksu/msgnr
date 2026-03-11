@@ -101,6 +101,8 @@ export interface MessageAttachment {
   mimeType: string
 }
 
+export type SendStatus = 'sending' | 'queued' | 'failed'
+
 export interface Message {
   id: string
   channelId: string
@@ -118,7 +120,12 @@ export interface Message {
   myReactions: string[]
   attachments?: MessageAttachment[]
   clientMsgId?: string
+  /** @deprecated Use sendStatus instead. Kept temporarily for migration. */
   pending?: boolean
+  /** Delivery status: 'sending' | 'queued' | 'failed' | undefined (confirmed). */
+  sendStatus?: SendStatus
+  /** Human-readable reason when sendStatus is 'failed'. */
+  failReason?: string
 }
 
 interface PendingReactionOp {
@@ -303,6 +310,8 @@ export const useChatStore = defineStore('chat', () => {
   const userNames = ref<Record<string, string>>({})
   const userAvatars = ref<Record<string, string>>({})
   const pendingReactionOps = ref<Record<string, PendingReactionOp>>({})
+  /** Tracks active send timeouts by clientMsgId. Cleared on ACK or discard. */
+  const sendTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
   const toast = ref<ToastState | null>(null)
   const lastAppliedEventSeq = ref<bigint>(loadLastAppliedEventSeq())
   const lastAckedEventSeq = ref<bigint>(0n)
@@ -584,15 +593,18 @@ export const useChatStore = defineStore('chat', () => {
   function reconcileMessage(channelId: string, clientMsgId: string, ack: SendMessageAck) {
     const list = messages.value[channelId]
     if (!list) return
-    const idx = list.findIndex(m => m.clientMsgId === clientMsgId && m.pending)
+    const idx = list.findIndex(m => m.clientMsgId === clientMsgId && (m.sendStatus || m.pending))
     if (idx === -1) return
+    clearSendTimeout(clientMsgId)
     const existing = list[idx]
-    const confirmed = {
+    const confirmed: Message = {
       ...existing,
       id: ack.messageId,
       channelSeq: ack.channelSeq,
       createdAt: ack.createdAt ? new Date(Number(ack.createdAt.seconds) * 1000).toISOString() : existing.createdAt,
-      pending: false,
+      pending: undefined,
+      sendStatus: undefined,
+      failReason: undefined,
     }
     list.splice(idx, 1, confirmed)
     // Write-through confirmed message to IndexedDB (fire-and-forget)
@@ -604,8 +616,9 @@ export const useChatStore = defineStore('chat', () => {
     // and rely on the subsequent message_created event as the authoritative thread order.
     for (const rootId of Object.keys(threadMessages.value)) {
       const list = threadMessages.value[rootId]
-      const idx = list.findIndex(m => m.clientMsgId === clientMsgId && m.pending)
+      const idx = list.findIndex(m => m.clientMsgId === clientMsgId && (m.sendStatus || m.pending))
       if (idx === -1) continue
+      clearSendTimeout(clientMsgId)
       const duplicate = list.findIndex((m, i) => i !== idx && m.id === ack.messageId)
       if (duplicate !== -1) {
         list.splice(idx, 1)
@@ -617,11 +630,171 @@ export const useChatStore = defineStore('chat', () => {
         id: ack.messageId,
         channelSeq: ack.channelSeq,
         createdAt: ack.createdAt ? new Date(Number(ack.createdAt.seconds) * 1000).toISOString() : existing.createdAt,
-        pending: false,
-      })
+        pending: undefined,
+        sendStatus: undefined,
+        failReason: undefined,
+      } satisfies Message)
       return
     }
   }
+
+  // ── Send status helpers ────────────────────────────────────────────────────
+
+  const SEND_TIMEOUT_MS = 15_000
+
+  function clearSendTimeout(clientMsgId: string) {
+    const timer = sendTimeouts.get(clientMsgId)
+    if (timer) {
+      clearTimeout(timer)
+      sendTimeouts.delete(clientMsgId)
+    }
+  }
+
+  /** Clear all in-flight send timeouts. Called on logout / store reset. */
+  function clearAllSendTimeouts() {
+    for (const timer of sendTimeouts.values()) {
+      clearTimeout(timer)
+    }
+    sendTimeouts.clear()
+  }
+
+  /**
+   * Start a 15-second timeout for a message in 'sending' state.
+   * If the ACK doesn't arrive, transition to 'failed'.
+   */
+  function startSendTimeout(channelId: string, clientMsgId: string, isThread: boolean, threadRootId?: string) {
+    clearSendTimeout(clientMsgId) // avoid double timers
+    const timer = setTimeout(() => {
+      sendTimeouts.delete(clientMsgId)
+      if (isThread && threadRootId) {
+        const list = threadMessages.value[threadRootId]
+        if (!list) return
+        const msg = list.find(m => m.clientMsgId === clientMsgId && m.sendStatus === 'sending')
+        if (msg) {
+          msg.sendStatus = 'failed'
+          msg.failReason = 'Message timed out'
+        }
+      } else {
+        const list = messages.value[channelId]
+        if (!list) return
+        const msg = list.find(m => m.clientMsgId === clientMsgId && m.sendStatus === 'sending')
+        if (msg) {
+          msg.sendStatus = 'failed'
+          msg.failReason = 'Message timed out'
+        }
+      }
+    }, SEND_TIMEOUT_MS)
+    sendTimeouts.set(clientMsgId, timer)
+  }
+
+  function updateSendStatus(channelId: string, clientMsgId: string, status: SendStatus | undefined, failReason?: string) {
+    const list = messages.value[channelId]
+    if (!list) return
+    const msg = list.find(m => m.clientMsgId === clientMsgId)
+    if (!msg) return
+    msg.sendStatus = status
+    msg.failReason = failReason
+    if (status !== 'sending') {
+      clearSendTimeout(clientMsgId)
+    }
+  }
+
+  function updateThreadSendStatus(rootMessageId: string, clientMsgId: string, status: SendStatus | undefined, failReason?: string) {
+    const list = threadMessages.value[rootMessageId]
+    if (!list) return
+    const msg = list.find(m => m.clientMsgId === clientMsgId)
+    if (!msg) return
+    msg.sendStatus = status
+    msg.failReason = failReason
+    if (status !== 'sending') {
+      clearSendTimeout(clientMsgId)
+    }
+  }
+
+  function retryMessage(channelId: string, clientMsgId: string) {
+    const list = messages.value[channelId]
+    if (!list) return
+    const msg = list.find(m => m.clientMsgId === clientMsgId && m.sendStatus === 'failed')
+    if (!msg) return
+    const ws = useWsStore()
+    if (ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING') {
+      // Offline — queue for delivery after reconnect
+      msg.sendStatus = 'queued'
+      msg.failReason = undefined
+      import('@/composables/useOfflineQueue').then(({ useOfflineQueue }) => {
+        useOfflineQueue().enqueue({
+          conversationId: channelId,
+          body: msg.body,
+          clientMsgId,
+          attachmentIds: msg.attachments?.map(a => a.id),
+        })
+      })
+      return
+    }
+    msg.sendStatus = 'sending'
+    msg.failReason = undefined
+    const sent = ws.sendMessage(channelId, msg.body, clientMsgId, undefined, msg.attachments?.map(a => a.id) ?? [])
+    if (!sent) {
+      msg.sendStatus = 'failed'
+      msg.failReason = 'Connection lost'
+      return
+    }
+    startSendTimeout(channelId, clientMsgId, false)
+  }
+
+  function retryThreadMessage(rootMessageId: string, clientMsgId: string) {
+    const list = threadMessages.value[rootMessageId]
+    if (!list) return
+    const msg = list.find(m => m.clientMsgId === clientMsgId && m.sendStatus === 'failed')
+    if (!msg) return
+    const ws = useWsStore()
+    if (ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING') {
+      // Offline — queue for delivery after reconnect
+      msg.sendStatus = 'queued'
+      msg.failReason = undefined
+      import('@/composables/useOfflineQueue').then(({ useOfflineQueue }) => {
+        useOfflineQueue().enqueue({
+          conversationId: msg.channelId,
+          body: msg.body,
+          clientMsgId,
+          threadRootMessageId: rootMessageId,
+          attachmentIds: msg.attachments?.map(a => a.id),
+        })
+      })
+      return
+    }
+    msg.sendStatus = 'sending'
+    msg.failReason = undefined
+    const sent = ws.sendMessage(msg.channelId, msg.body, clientMsgId, rootMessageId, msg.attachments?.map(a => a.id) ?? [])
+    if (!sent) {
+      msg.sendStatus = 'failed'
+      msg.failReason = 'Connection lost'
+      return
+    }
+    startSendTimeout(msg.channelId, clientMsgId, true, rootMessageId)
+  }
+
+  function discardFailedMessage(channelId: string, clientMsgId: string) {
+    const list = messages.value[channelId]
+    if (!list) return
+    const idx = list.findIndex(m => m.clientMsgId === clientMsgId && m.sendStatus === 'failed')
+    if (idx !== -1) {
+      clearSendTimeout(clientMsgId)
+      list.splice(idx, 1)
+    }
+  }
+
+  function discardFailedThreadMessage(rootMessageId: string, clientMsgId: string) {
+    const list = threadMessages.value[rootMessageId]
+    if (!list) return
+    const idx = list.findIndex(m => m.clientMsgId === clientMsgId && m.sendStatus === 'failed')
+    if (idx !== -1) {
+      clearSendTimeout(clientMsgId)
+      list.splice(idx, 1)
+    }
+  }
+
+  // ── Thread management ───────────────────────────────────────────────────────
 
   function openThread(rootMessage: Message) {
     if (rootMessage.threadRootMessageId) return
@@ -632,7 +805,7 @@ export const useChatStore = defineStore('chat', () => {
     // Subscribe from cached replay progress only. Summary-only state can exist
     // after refresh and must not suppress replay delivery.
     const lastKnownSeq = cachedReplies.reduce((max, message) => {
-      if (message.pending) return max
+      if (message.sendStatus || message.pending) return max
       return message.threadSeq > max ? message.threadSeq : max
     }, 0n)
     useWsStore().sendSubscribeThread(rootMessage.channelId, rootMessage.id, lastKnownSeq)
@@ -667,6 +840,8 @@ export const useChatStore = defineStore('chat', () => {
     const now = new Date().toISOString()
     const nextThreadSeq = (threadSummaries.value[rootId]?.lastThreadSeq ?? 0n) + 1n
 
+    const isOffline = ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING'
+
     _upsertThreadMessage(rootId, {
       id: clientMsgId,
       channelId,
@@ -683,7 +858,7 @@ export const useChatStore = defineStore('chat', () => {
       myReactions: [],
       attachments,
       clientMsgId,
-      pending: true,
+      sendStatus: isOffline ? 'queued' : 'sending',
     })
 
     const known = threadSummaries.value[rootId]
@@ -694,13 +869,18 @@ export const useChatStore = defineStore('chat', () => {
       lastReplyUserId: senderId,
     })
 
-    if (ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING') {
+    if (isOffline) {
       // Lazy-import to avoid circular deps — queue for delivery after reconnect
       import('@/composables/useOfflineQueue').then(({ useOfflineQueue }) => {
         useOfflineQueue().enqueue({ conversationId: channelId, body: text, clientMsgId, threadRootMessageId: rootId })
       })
     } else {
-      ws.sendMessage(channelId, text, clientMsgId, rootId, attachmentIds)
+      const sent = ws.sendMessage(channelId, text, clientMsgId, rootId, attachmentIds)
+      if (!sent) {
+        updateThreadSendStatus(rootId, clientMsgId, 'failed', 'Connection lost')
+      } else {
+        startSendTimeout(channelId, clientMsgId, true, rootId)
+      }
     }
   }
 
@@ -879,6 +1059,38 @@ export const useChatStore = defineStore('chat', () => {
         threadSummaries.value = cachedThreads
       }
 
+      // Hydrate offline queue: inject persisted queued messages into the
+      // message lists so they render immediately with 'queued' status.
+      try {
+        const { useOfflineQueue } = await import('@/composables/useOfflineQueue')
+        const queued = await useOfflineQueue().loadPersisted()
+        for (const q of queued) {
+          const list = messages.value[q.conversationId]
+          if (!list) continue
+          // Skip if already present (e.g. from a prior render cycle)
+          if (list.some(m => m.clientMsgId === q.clientMsgId)) continue
+          list.push({
+            id: q.clientMsgId,
+            channelId: q.conversationId,
+            senderId: userId,
+            senderName: workspace.value?.selfDisplayName ?? '',
+            body: q.body,
+            channelSeq: 0n,
+            threadSeq: 0n,
+            threadRootMessageId: q.threadRootMessageId,
+            mentionedUserIds: [],
+            mentionEveryone: false,
+            createdAt: new Date().toISOString(),
+            reactions: [],
+            myReactions: [],
+            clientMsgId: q.clientMsgId,
+            sendStatus: 'queued',
+          })
+        }
+      } catch {
+        // Non-fatal — queued messages will be flushed on reconnect regardless
+      }
+
       return true
     } catch {
       return false
@@ -888,6 +1100,7 @@ export const useChatStore = defineStore('chat', () => {
   function applyBootstrapSnapshot(stage: BootstrapStage) {
     // Bootstrap is the authoritative snapshot — clear any pending optimistic state.
     clearPendingNotificationLevelChange()
+    clearAllSendTimeouts()
 
     const unreadByConversation = stage.unread
     const nextChannels: Channel[] = []
@@ -1965,7 +2178,6 @@ export const useChatStore = defineStore('chat', () => {
         fileSize: Number(item.fileSize),
         mimeType: item.mimeType,
       })),
-      pending: false,
     }
   }
 
@@ -2000,7 +2212,6 @@ export const useChatStore = defineStore('chat', () => {
           fileSize: attachment.file_size,
           mimeType: attachment.mime_type,
         })),
-        pending: false,
       })
 
       const threadReplyCount = Math.max(0, Math.floor(Number(item.thread_reply_count ?? 0)))
@@ -2113,6 +2324,14 @@ export const useChatStore = defineStore('chat', () => {
     onClientFocus,
     setClientActive,
     setNotificationLevel,
+    updateSendStatus,
+    updateThreadSendStatus,
+    retryMessage,
+    retryThreadMessage,
+    discardFailedMessage,
+    discardFailedThreadMessage,
+    startSendTimeout,
+    clearAllSendTimeouts,
   }
 })
 

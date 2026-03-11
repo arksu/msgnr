@@ -15,6 +15,18 @@ export interface PendingOutboundMessage {
   attachmentIds?: string[]
 }
 
+/**
+ * Callback type for notifying the chat store of send-status transitions
+ * during flush. This avoids a direct import of the chat store (circular dep).
+ */
+export type FlushStatusCallback = (
+  conversationId: string,
+  clientMsgId: string,
+  status: 'sending' | 'failed',
+  threadRootMessageId?: string,
+  failReason?: string,
+) => void
+
 // Singleton queue shared across all composable calls
 const queue = ref<PendingOutboundMessage[]>([])
 let hydrated = false
@@ -37,15 +49,45 @@ export function useOfflineQueue() {
   /**
    * Flush all queued messages over the (now-live) WS connection.
    * Called after successful reconnect + AUTH_COMPLETE.
+   *
+   * Each message is removed from IndexedDB individually after sending.
+   * If the socket closes mid-flush, remaining messages stay queued.
+   *
+   * @param ws - The WS store instance for sending messages.
+   * @param onStatusChange - Optional callback to notify the chat store of
+   *   send-status transitions (queued → sending, or queued → failed).
    */
-  function flush(ws: ReturnType<typeof useWsStore>) {
-    const pending = queue.value
-    queue.value = []
-    // Clear IndexedDB queue (fire-and-forget)
-    void clearOutboundQueue()
-    for (const msg of pending) {
-      ws.sendMessage(msg.conversationId, msg.body, msg.clientMsgId, msg.threadRootMessageId, msg.attachmentIds ?? [])
+   function flush(ws: ReturnType<typeof useWsStore>, onStatusChange?: FlushStatusCallback) {
+    const pending = [...queue.value]
+    const remaining: PendingOutboundMessage[] = []
+
+    for (let i = 0; i < pending.length; i++) {
+      const msg = pending[i]
+      // Notify store: queued → sending
+      onStatusChange?.(msg.conversationId, msg.clientMsgId, 'sending', msg.threadRootMessageId)
+
+      const sent = ws.sendMessage(
+        msg.conversationId,
+        msg.body,
+        msg.clientMsgId,
+        msg.threadRootMessageId,
+        msg.attachmentIds ?? [],
+      )
+
+      if (sent) {
+        // Successfully sent — remove from IndexedDB
+        void removeOutbound(msg.clientMsgId)
+      } else {
+        // Socket closed mid-flush — mark this message failed and keep
+        // it plus all subsequent messages in the queue.
+        onStatusChange?.(msg.conversationId, msg.clientMsgId, 'failed', msg.threadRootMessageId, 'Connection lost')
+        remaining.push(...pending.slice(i))
+        break
+      }
     }
+
+    // Update in-memory queue to only contain un-sent messages
+    queue.value = remaining
   }
 
   /** Remove a specific message from the queue (e.g. if user deletes the optimistic bubble) */

@@ -337,6 +337,7 @@ function handleSend(
 
   const clientMsgId = generateId()
   const now = new Date().toISOString()
+  const isOffline = wsStore.state === 'DISCONNECTED' || wsStore.state === 'CONNECTING'
   scheduleGuaranteedBottomScroll()
 
   // Optimistic message — shown immediately regardless of connection state
@@ -361,14 +362,19 @@ function handleSend(
       mimeType: att.mimeType,
     })),
     clientMsgId,
-    pending: true,
+    sendStatus: isOffline ? 'queued' : 'sending',
   })
 
-  if (wsStore.state === 'DISCONNECTED' || wsStore.state === 'CONNECTING') {
+  if (isOffline) {
     // Queue for delivery after reconnect
     offlineQueue.enqueue({ conversationId: channelId, body: messageBody, clientMsgId })
   } else {
-    wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds)
+    const sent = wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds)
+    if (!sent) {
+      chatStore.updateSendStatus(channelId, clientMsgId, 'failed', 'Connection lost')
+    } else {
+      chatStore.startSendTimeout(channelId, clientMsgId, false)
+    }
   }
 }
 

@@ -69,7 +69,7 @@ describe('ChatArea', () => {
       senderName: 'Ada',
       senderAvatarUrl: '/api/public/avatars/avatars/user-1/avatar.png',
       body: 'hello world',
-      pending: true,
+      sendStatus: 'sending',
     }))
     expect(wsStore.sendMessage).toHaveBeenCalledWith('channel-1', 'hello world', expect.any(String), undefined, [])
   })
@@ -118,7 +118,7 @@ describe('ChatArea', () => {
       senderName: 'user1@example.com',
       senderAvatarUrl: '/api/public/avatars/avatars/user-1/auth-avatar.png',
       body: 'hello world',
-      pending: true,
+      sendStatus: 'sending',
     }))
     expect(wsStore.sendMessage).toHaveBeenCalledWith('channel-1', 'hello world', expect.any(String), undefined, [])
   })

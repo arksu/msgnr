@@ -183,7 +183,7 @@ function cachedToMessage(c: CachedMessage): Message {
 /**
  * Write-through: cache messages for a conversation.
  * Keeps only the latest MAX_MESSAGES_PER_CONVERSATION messages per conversation.
- * Skips pending (optimistic) messages — they are not server-confirmed.
+ * Skips pending/sending/queued/failed (optimistic) messages — they are not server-confirmed.
  */
 export async function cacheMessages(
   conversationId: string,
@@ -191,7 +191,7 @@ export async function cacheMessages(
 ): Promise<void> {
   try {
     // Filter out optimistic messages and convert
-    const confirmed = msgs.filter(m => !m.pending)
+    const confirmed = msgs.filter(m => !m.sendStatus && !m.pending)
     const rows = confirmed.map(messageToCache)
 
     await db.transaction('rw', db.messages, async () => {
@@ -210,7 +210,7 @@ export async function cacheMessages(
 
 /** Append a single confirmed message to the cache, trimming if needed. */
 export async function cacheSingleMessage(msg: Message): Promise<void> {
-  if (msg.pending) return
+  if (msg.sendStatus || msg.pending) return
   try {
     const row = messageToCache(msg)
     await db.transaction('rw', db.messages, async () => {

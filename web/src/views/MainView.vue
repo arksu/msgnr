@@ -697,8 +697,22 @@ watch(() => wsStore.state, async (state) => {
   if (state === 'AUTH_COMPLETE') {
     chatStore.startRealtimeFlow()
     applyManualPresencePreference()
-    // Flush any messages that were composed while disconnected
-    offlineQueue.flush(wsStore)
+    // Flush any messages that were composed while disconnected.
+    // Notify the chat store of status transitions (queued → sending / failed)
+    // and start send timeouts for each flushed message.
+    offlineQueue.flush(wsStore, (conversationId, clientMsgId, status, threadRootMessageId, failReason) => {
+      if (threadRootMessageId) {
+        chatStore.updateThreadSendStatus(threadRootMessageId, clientMsgId, status, failReason)
+        if (status === 'sending') {
+          chatStore.startSendTimeout(conversationId, clientMsgId, true, threadRootMessageId)
+        }
+      } else {
+        chatStore.updateSendStatus(conversationId, clientMsgId, status, failReason)
+        if (status === 'sending') {
+          chatStore.startSendTimeout(conversationId, clientMsgId, false)
+        }
+      }
+    })
   }
 })
 

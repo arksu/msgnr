@@ -362,8 +362,8 @@ export const useWsStore = defineStore('ws', () => {
     clientMsgId: string,
     threadRootMessageId?: string,
     attachmentIds: string[] = [],
-  ) {
-    sendEnvelope(create(EnvelopeSchema, {
+  ): boolean {
+    return sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
       traceId: generateId(),
       protocolVersion: PROTOCOL_VERSION,

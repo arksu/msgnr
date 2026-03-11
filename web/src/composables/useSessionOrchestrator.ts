@@ -334,6 +334,7 @@ export function useSessionOrchestrator() {
   async function logout() {
     _stopReconnect(true)
     ws.disconnect('logout')
+    useChatStore().clearAllSendTimeouts()
     await auth.logout()
   }
 

@@ -4,6 +4,8 @@
     :class="[
       showHeader ? 'mt-4' : 'mt-0.5',
       isActiveThread ? 'border-l-2 border-accent bg-accent/5' : '',
+      message.sendStatus === 'failed' ? 'border-l-2 border-red-500/60' : '',
+      message.sendStatus === 'queued' ? 'border-l-2 border-dashed border-gray-500/40' : '',
     ]"
     :style="bubbleStyle"
   >
@@ -33,7 +35,29 @@
       <div v-if="showHeader" class="flex items-baseline gap-2 mb-0.5">
         <span class="font-bold text-white text-[15px]">{{ message.senderName }}</span>
         <span class="text-xs text-gray-500">{{ formattedTime }}</span>
-        <span v-if="message.pending" class="text-xs text-gray-600 italic">sending…</span>
+        <!-- Send status indicators -->
+        <span v-if="message.sendStatus === 'sending'" class="inline-flex items-center gap-1 text-xs text-gray-500">
+          <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+          </svg>
+          sending
+        </span>
+        <span v-else-if="message.sendStatus === 'queued'" class="inline-flex items-center gap-1 text-xs text-gray-500" title="Message queued — will send when connection is restored">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12,6 12,12 16,14"/>
+          </svg>
+          queued
+        </span>
+        <span v-else-if="message.sendStatus === 'failed'" class="inline-flex items-center gap-1 text-xs text-red-400">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          Not sent
+        </span>
 
         <!-- Hover actions (right-aligned) -->
         <div class="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -116,12 +140,51 @@
         </button>
       </div>
 
+      <!-- Send status for grouped messages (no header row) -->
+      <div v-if="!showHeader && message.sendStatus" class="mb-0.5 flex items-center gap-1">
+        <span v-if="message.sendStatus === 'sending'" class="inline-flex items-center gap-1 text-xs text-gray-500">
+          <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+          </svg>
+          sending
+        </span>
+        <span v-else-if="message.sendStatus === 'queued'" class="inline-flex items-center gap-1 text-xs text-gray-500" title="Message queued — will send when connection is restored">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12,6 12,12 16,14"/>
+          </svg>
+          queued
+        </span>
+        <span v-else-if="message.sendStatus === 'failed'" class="inline-flex items-center gap-1 text-xs text-red-400">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          Not sent
+        </span>
+      </div>
+
       <!-- Message body -->
       <p
         v-if="message.body"
         class="text-[15px] leading-relaxed break-words whitespace-pre-wrap"
-        :class="message.pending ? 'text-gray-400' : 'text-gray-100'"
+        :class="bodyTextClass"
       >{{ message.body }}</p>
+
+      <!-- Failed message actions -->
+      <div v-if="message.sendStatus === 'failed'" class="mt-1 flex items-center gap-2">
+        <span v-if="message.failReason" class="text-xs text-red-400/80">{{ message.failReason }}</span>
+        <button
+          class="text-xs text-cyan-400 hover:text-cyan-300 hover:underline transition-colors"
+          @click="handleRetry"
+        >Retry</button>
+        <button
+          class="text-xs text-gray-500 hover:text-gray-400 hover:underline transition-colors"
+          @click="handleDiscard"
+        >Delete</button>
+      </div>
 
       <div v-if="messageAttachments.length > 0" class="mt-2 space-y-2">
         <div
@@ -426,11 +489,44 @@ function relativeTime(isoString: string): string {
   return `${diffD}d ago`
 }
 
+const bodyTextClass = computed(() => {
+  switch (props.message.sendStatus) {
+    case 'sending': return 'text-gray-100 opacity-90'
+    case 'queued': return 'text-gray-100 opacity-80'
+    case 'failed': return 'text-gray-300 opacity-75'
+    default: return props.message.pending ? 'text-gray-400' : 'text-gray-100'
+  }
+})
+
 const bubbleStyle = computed(() =>
   showEmojiPicker.value
     ? undefined
     : ({ contentVisibility: 'auto', containIntrinsicSize: '72px' } as const)
 )
+
+// ── Send status actions ──────────────────────────────────────────────────────
+
+function handleRetry() {
+  const msg = props.message
+  if (!msg.clientMsgId || msg.sendStatus !== 'failed') return
+  const isThread = Boolean(msg.threadRootMessageId && msg.threadRootMessageId !== msg.id)
+  if (isThread && msg.threadRootMessageId) {
+    chat.retryThreadMessage(msg.threadRootMessageId, msg.clientMsgId)
+  } else {
+    chat.retryMessage(msg.channelId, msg.clientMsgId)
+  }
+}
+
+function handleDiscard() {
+  const msg = props.message
+  if (!msg.clientMsgId || msg.sendStatus !== 'failed') return
+  const isThread = Boolean(msg.threadRootMessageId && msg.threadRootMessageId !== msg.id)
+  if (isThread && msg.threadRootMessageId) {
+    chat.discardFailedThreadMessage(msg.threadRootMessageId, msg.clientMsgId)
+  } else {
+    chat.discardFailedMessage(msg.channelId, msg.clientMsgId)
+  }
+}
 
 // ── Attachments ───────────────────────────────────────────────────────────────
 
@@ -469,7 +565,7 @@ function syncAttachmentUrls() {
 async function ensureAttachmentUrl(attachment: MessageAttachment) {
   if (attachmentUrls.value[attachment.id]) return
   if (loadingAttachmentIds.value.has(attachment.id)) return
-  if (props.message.pending) return
+  if (props.message.sendStatus || props.message.pending) return
   loadingAttachmentIds.value.add(attachment.id)
   try {
     const blob = await fetchMessageAttachmentBlob(props.message.id, attachment.id)

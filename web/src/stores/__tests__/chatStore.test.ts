@@ -1175,7 +1175,7 @@ describe('chatStore phase 6 flows', () => {
       lastMessageSeq: 1n,
     }]
 
-    let resolvePage: ((value: {
+    let resolvePage!: (value: {
       messages: Array<{
         id: string
         conversation_id: string
@@ -1191,18 +1191,34 @@ describe('chatStore phase 6 flows', () => {
       has_more: boolean
       page_size: number
       next_before_channel_seq: string
-    }) => void) | null = null
+    }) => void
 
-    chatApiMocks.listConversationMessages.mockImplementation(() =>
-      new Promise((resolve) => {
-        resolvePage = resolve
-      })
-    )
+    const pagePromise = new Promise<{
+      messages: Array<{
+        id: string
+        conversation_id: string
+        sender_id: string
+        sender_name: string
+        body: string
+        channel_seq: string
+        thread_seq: string
+        thread_root_message_id: string
+        mention_everyone: boolean
+        created_at: string
+      }>
+      has_more: boolean
+      page_size: number
+      next_before_channel_seq: string
+    }>((resolve) => {
+      resolvePage = resolve
+    })
+
+    chatApiMocks.listConversationMessages.mockImplementation(() => pagePromise)
 
     const pending = chat.ensureConversationHistory('channel-1')
     expect(chat.isConversationInitialLoading('channel-1')).toBe(true)
 
-    resolvePage?.({
+    resolvePage({
       messages: [{
         id: 'message-1',
         conversation_id: 'channel-1',

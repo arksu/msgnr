@@ -16,15 +16,18 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       includeAssets: [
-        'favicon.svg',
         'favicon.ico',
         'apple-touch-icon-180x180.png',
         'badge-72x72.png',
+        'pwa-64x64.png',
+        'pwa-192x192.png',
+        'pwa-512x512.png',
+        'maskable-icon-512x512.png',
       ],
       manifest: {
         name: 'Msgnr',
         short_name: 'Msgnr',
-        description: 'Msgnr messenger',
+        description: 'Team messenger',
         start_url: '/',
         scope: '/',
         display: 'standalone',
@@ -55,9 +58,59 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Precache: app shell JS/CSS/HTML + SVG + fonts.
+        // PNG/ICO icons handled via includeAssets above.
+        globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        // Exclude heavy lazy-loaded chunks from precache — they use runtime cache instead.
+        globIgnores: [
+          '**/rnnoise-*.js',        // ~3.8MB WASM, only needed during voice calls
+          '**/vendor-livekit-*.js',  // ~439KB, lazy-loaded on call join
+          '**/vendor-emoji-*.js',    // ~885KB, lazy-loaded on first emoji click
+          '**/vendor-emoji-*.css',   // emoji picker styles
+        ],
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/api\//, /^\/ws/, /^\/health/, /^\/ready/],
+        // Speed up navigation on Chrome/Edge — network request starts in parallel with SW boot.
+        navigationPreload: true,
+        runtimeCaching: [
+          // LiveKit WebRTC SDK — cache on first call join, serve stale while revalidating
+          {
+            urlPattern: /\/assets\/vendor-livekit-.*\.js$/,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'vendor-livekit',
+              expiration: { maxEntries: 2, maxAgeSeconds: 30 * 24 * 60 * 60 },
+            },
+          },
+          // Emoji picker data + styles — cache on first emoji click
+          {
+            urlPattern: /\/assets\/vendor-emoji-.*\.(js|css)$/,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'vendor-emoji',
+              expiration: { maxEntries: 4, maxAgeSeconds: 30 * 24 * 60 * 60 },
+            },
+          },
+          // RNNoise WASM files — large, never change per version, cache aggressively
+          {
+            urlPattern: /\/rnnoise-.*\.js$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'rnnoise-wasm',
+              expiration: { maxEntries: 4, maxAgeSeconds: 90 * 24 * 60 * 60 },
+            },
+          },
+          // Avatar images — public endpoint, immutable once uploaded, cache aggressively
+          {
+            urlPattern: /\/api\/public\/avatars\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'avatars',
+              expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
       },
     }),
   ],

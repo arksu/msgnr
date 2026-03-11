@@ -10,6 +10,7 @@
 .aiassistant/
 .idea/
 .codex/
+.opencode/
 
 # Build output
 msgnr-server

@@ -18,10 +18,12 @@ import {
   type InviteCallMembersResponse,
   type JoinCallTokenResponse,
   type CallInviteActionAck,
+  type SetNotificationLevelResponse,
   FeatureCapability,
   ErrorCode,
   ConversationType,
   WorkspaceRole,
+  NotificationLevel,
 } from '@/shared/proto/packets_pb'
 import { generateId } from '@/services/id'
 
@@ -39,6 +41,7 @@ export type CreateCallResponseHandler = (resp: CreateCallResponse) => void
 export type InviteCallMembersResponseHandler = (resp: InviteCallMembersResponse, requestId: string) => void
 export type JoinCallTokenResponseHandler = (resp: JoinCallTokenResponse) => void
 export type CallInviteActionAckHandler = (ack: CallInviteActionAck) => void
+export type SetNotificationLevelResponseHandler = (resp: SetNotificationLevelResponse) => void
 export type ProtocolErrorHandler = (err: { requestId: string; code: ErrorCode; message: string; retryAfterMs: number }) => void
 
 export type WsState =
@@ -135,6 +138,7 @@ export const useWsStore = defineStore('ws', () => {
   let onInviteCallMembersResponseCallback: InviteCallMembersResponseHandler | null = null
   let onJoinCallTokenResponseCallback: JoinCallTokenResponseHandler | null = null
   let onCallInviteActionAckCallback: CallInviteActionAckHandler | null = null
+  let onSetNotificationLevelResponseCallback: SetNotificationLevelResponseHandler | null = null
   let onProtocolErrorCallback: ProtocolErrorHandler | null = null
 
   function onAuthFail(cb: (kind: WsErrorKind) => void) {
@@ -211,6 +215,10 @@ export const useWsStore = defineStore('ws', () => {
 
   function onCallInviteActionAck(cb: CallInviteActionAckHandler) {
     onCallInviteActionAckCallback = cb
+  }
+
+  function onSetNotificationLevelResponse(cb: SetNotificationLevelResponseHandler) {
+    onSetNotificationLevelResponseCallback = cb
   }
 
   function onProtocolError(cb: ProtocolErrorHandler) {
@@ -505,6 +513,23 @@ export const useWsStore = defineStore('ws', () => {
     }))
   }
 
+  function sendSetNotificationLevel(conversationId: string, level: NotificationLevel): string {
+    const requestId = generateId()
+    sendEnvelope(create(EnvelopeSchema, {
+      requestId,
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'setNotificationLevelRequest',
+        value: {
+          conversationId,
+          level,
+        },
+      },
+    }))
+    return requestId
+  }
+
   function sendCreateCall(conversationId: string, conversationType: ConversationType, inviteeUserIds: string[] = []) {
     sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
@@ -707,6 +732,10 @@ export const useWsStore = defineStore('ws', () => {
         onCallInviteActionAckCallback?.(envelope.payload.value)
         break
 
+      case 'setNotificationLevelResponse':
+        onSetNotificationLevelResponseCallback?.(envelope.payload.value)
+        break
+
       case 'error': {
         const err = envelope.payload.value
         onProtocolErrorCallback?.({
@@ -765,6 +794,7 @@ export const useWsStore = defineStore('ws', () => {
     sendUpdateReadCursor,
     sendTyping,
     sendSetPresence,
+    sendSetNotificationLevel,
     sendCreateCall,
     sendInviteCallMembers,
     sendJoinCallToken,
@@ -793,6 +823,7 @@ export const useWsStore = defineStore('ws', () => {
     onInviteCallMembersResponse,
     onJoinCallTokenResponse,
     onCallInviteActionAck,
+    onSetNotificationLevelResponse,
     onProtocolError,
   }
 })

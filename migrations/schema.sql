@@ -73,13 +73,13 @@ CREATE TABLE IF NOT EXISTS channels (
 );
 
 CREATE TABLE IF NOT EXISTS channel_members (
-  channel_id UUID        NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-  user_id    UUID        NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
-  -- per-member mute; not a channel-level property
-  is_muted   BOOLEAN     NOT NULL DEFAULT false,
+  channel_id         UUID        NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  user_id            UUID        NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
+  -- per-member notification level: 0=ALL, 1=MENTIONS_ONLY, 2=NOTHING
+  notification_level SMALLINT    NOT NULL DEFAULT 0,
   -- soft leave flag: archived members keep history but lose active access
-  is_archived BOOLEAN    NOT NULL DEFAULT false,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  is_archived        BOOLEAN     NOT NULL DEFAULT false,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (channel_id, user_id)
 );
 

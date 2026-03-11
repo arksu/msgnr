@@ -13,7 +13,7 @@ import (
 )
 
 const getChannelMember = `-- name: GetChannelMember :one
-SELECT channel_id, user_id, is_muted, created_at
+SELECT channel_id, user_id, notification_level, created_at
 FROM channel_members
 WHERE channel_id = $1
   AND user_id = $2
@@ -27,10 +27,10 @@ type GetChannelMemberParams struct {
 }
 
 type GetChannelMemberRow struct {
-	ChannelID uuid.UUID `json:"channel_id"`
-	UserID    uuid.UUID `json:"user_id"`
-	IsMuted   bool      `json:"is_muted"`
-	CreatedAt time.Time `json:"created_at"`
+	ChannelID         uuid.UUID `json:"channel_id"`
+	UserID            uuid.UUID `json:"user_id"`
+	NotificationLevel int16     `json:"notification_level"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 func (q *Queries) GetChannelMember(ctx context.Context, arg GetChannelMemberParams) (GetChannelMemberRow, error) {
@@ -39,8 +39,27 @@ func (q *Queries) GetChannelMember(ctx context.Context, arg GetChannelMemberPara
 	err := row.Scan(
 		&i.ChannelID,
 		&i.UserID,
-		&i.IsMuted,
+		&i.NotificationLevel,
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const setNotificationLevel = `-- name: SetNotificationLevel :exec
+UPDATE channel_members
+SET notification_level = $3
+WHERE channel_id = $1
+  AND user_id = $2
+  AND is_archived = false
+`
+
+type SetNotificationLevelParams struct {
+	ChannelID         uuid.UUID `json:"channel_id"`
+	UserID            uuid.UUID `json:"user_id"`
+	NotificationLevel int16     `json:"notification_level"`
+}
+
+func (q *Queries) SetNotificationLevel(ctx context.Context, arg SetNotificationLevelParams) error {
+	_, err := q.db.ExecContext(ctx, setNotificationLevel, arg.ChannelID, arg.UserID, arg.NotificationLevel)
+	return err
 }

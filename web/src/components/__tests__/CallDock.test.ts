@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
+import { NotificationLevel } from '@/shared/proto/packets_pb'
 import CallDock from '@/components/CallDock.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -52,6 +53,7 @@ describe('CallDock invite modal', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     callStore.connected = true

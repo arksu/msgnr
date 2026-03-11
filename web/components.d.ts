@@ -17,6 +17,7 @@ declare module 'vue' {
     MessageBubble: typeof import('./src/components/MessageBubble.vue')['default']
     MessageInput: typeof import('./src/components/MessageInput.vue')['default']
     MultiSelect: typeof import('./src/components/tasks/MultiSelect.vue')['default']
+    NotificationLevelSelector: typeof import('./src/components/NotificationLevelSelector.vue')['default']
     PwaUpdateBanner: typeof import('./src/components/PwaUpdateBanner.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

@@ -1440,6 +1440,49 @@ func (s *Server) handleDomainPayload(
 		})
 		s.sendDirectServerEvents(result.DirectDeliveries)
 
+	case *packetspb.Envelope_SetNotificationLevelRequest:
+		req := p.SetNotificationLevelRequest
+		if req == nil {
+			badReq("set_notification_level_request: missing payload")
+			return
+		}
+		channelID, err := uuid.Parse(req.GetConversationId())
+		if err != nil {
+			badReq("set_notification_level_request: invalid conversation_id")
+			return
+		}
+
+		result, err := s.chatSvc.SetNotificationLevel(ctx, chat.SetNotificationLevelParams{
+			ChannelID: channelID,
+			UserID:    principal.UserID,
+			Level:     req.GetLevel(),
+		})
+		if err != nil {
+			if errors.Is(err, chat.ErrNotMember) {
+				forbidden("not a member of this channel")
+				return
+			}
+			if errors.Is(err, chat.ErrInvalidNotificationLevel) {
+				badReq("set_notification_level_request: level must be 0, 1, or 2")
+				return
+			}
+			s.log.Error("ws: SetNotificationLevel error", zap.Error(err))
+			badReq("set_notification_level_request: internal error")
+			return
+		}
+
+		enqueue(&packetspb.Envelope{
+			RequestId:       reqID,
+			TraceId:         traceID,
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_SetNotificationLevelResponse{
+				SetNotificationLevelResponse: &packetspb.SetNotificationLevelResponse{
+					Level: result.Level,
+				},
+			},
+		})
+		s.sendDirectServerEvents(result.DirectDeliveries)
+
 	default:
 		enqueue(s.buildErrorEnvelope(reqID, traceID, packetspb.ErrorCode_ERROR_CODE_BAD_REQUEST, "unsupported payload type", 0))
 	}

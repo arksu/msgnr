@@ -56,6 +56,7 @@
             :active="chatStore.activeChannelId === ch.id"
             :unread="ch.unread"
             :has-unread-thread-replies="ch.hasUnreadThreadReplies"
+            :muted="ch.notificationLevel === NotificationLevel.NOTHING"
             @click="openConversation(ch.id)"
           >
             <template #icon>
@@ -94,16 +95,22 @@
                 </button>
                 <div
                   v-if="isConversationMenuOpen('channel', ch.id)"
-                  class="absolute right-0 top-7 z-50 min-w-28 rounded border border-white/10 bg-sidebar-bg shadow-xl p-1"
+                  class="absolute right-0 top-7 z-50 min-w-40 rounded border border-white/10 bg-sidebar-bg shadow-xl"
                 >
-                  <button
-                    :data-testid="`conversation-leave-channel-${ch.id}`"
-                    class="w-full text-left px-2 py-1 rounded text-xs text-red-300 hover:bg-sidebar-hover disabled:opacity-50"
-                    :disabled="isLeavingConversation('channel', ch.id)"
-                    @click.stop="leaveConversationFromSidebar('channel', ch.id)"
-                  >
-                    Leave
-                  </button>
+                  <NotificationLevelSelector
+                    :model-value="ch.notificationLevel"
+                    @update:model-value="(level) => { chatStore.setNotificationLevel(ch.id, level); closeConversationMenus() }"
+                  />
+                  <div class="border-t border-white/10 p-1">
+                    <button
+                      :data-testid="`conversation-leave-channel-${ch.id}`"
+                      class="w-full text-left px-2 py-1 rounded text-xs text-red-300 hover:bg-sidebar-hover disabled:opacity-50"
+                      :disabled="isLeavingConversation('channel', ch.id)"
+                      @click.stop="leaveConversationFromSidebar('channel', ch.id)"
+                    >
+                      Leave
+                    </button>
+                  </div>
                 </div>
               </div>
             </template>
@@ -148,6 +155,7 @@
             :active="chatStore.activeChannelId === dm.id"
             :unread="dm.unread"
             :has-unread-thread-replies="dm.hasUnreadThreadReplies"
+            :muted="dm.notificationLevel === NotificationLevel.NOTHING"
             @click="openConversation(dm.id)"
           >
             <template #icon>
@@ -186,16 +194,22 @@
                 </button>
                 <div
                   v-if="isConversationMenuOpen('dm', dm.id)"
-                  class="absolute right-0 top-7 z-50 min-w-28 rounded border border-white/10 bg-sidebar-bg shadow-xl p-1"
+                  class="absolute right-0 top-7 z-50 min-w-40 rounded border border-white/10 bg-sidebar-bg shadow-xl"
                 >
-                  <button
-                    :data-testid="`conversation-leave-dm-${dm.id}`"
-                    class="w-full text-left px-2 py-1 rounded text-xs text-red-300 hover:bg-sidebar-hover disabled:opacity-50"
-                    :disabled="isLeavingConversation('dm', dm.id)"
-                    @click.stop="leaveConversationFromSidebar('dm', dm.id)"
-                  >
-                    Leave
-                  </button>
+                  <NotificationLevelSelector
+                    :model-value="dm.notificationLevel"
+                    @update:model-value="(level) => { chatStore.setNotificationLevel(dm.id, level); closeConversationMenus() }"
+                  />
+                  <div class="border-t border-white/10 p-1">
+                    <button
+                      :data-testid="`conversation-leave-dm-${dm.id}`"
+                      class="w-full text-left px-2 py-1 rounded text-xs text-red-300 hover:bg-sidebar-hover disabled:opacity-50"
+                      :disabled="isLeavingConversation('dm', dm.id)"
+                      @click.stop="leaveConversationFromSidebar('dm', dm.id)"
+                    >
+                      Leave
+                    </button>
+                  </div>
                 </div>
               </div>
             </template>
@@ -422,7 +436,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { PresenceStatus } from '@/shared/proto/packets_pb'
+import { NotificationLevel, PresenceStatus } from '@/shared/proto/packets_pb'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
@@ -430,6 +444,7 @@ import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import { createOrOpenDm, joinChannels, leaveConversation, listAvailableChannels, listDmCandidates } from '@/services/http/chatApi'
 import { loadManualPresencePreference, saveManualPresencePreference } from '@/services/storage/manualPresenceStorage'
 import SidebarItem from './SidebarItem.vue'
+import NotificationLevelSelector from './NotificationLevelSelector.vue'
 import UserAvatar from './UserAvatar.vue'
 
 defineEmits<{ profile: []; settings: [] }>()
@@ -641,6 +656,7 @@ async function joinSelectedChannels() {
         visibility: channel.visibility === 'private' ? 'private' as const : 'public' as const,
         unread: 0,
         lastActivityAt: channel.last_activity_at,
+        notificationLevel: NotificationLevel.ALL,
       }
       const existingIdx = chatStore.channels.findIndex(existing => existing.id === channel.id)
       if (existingIdx === -1) {
@@ -678,6 +694,7 @@ async function selectDmCandidate(userId: string) {
       avatarUrl: dm.avatar_url,
       presence: 'offline',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     })
     dmsOpen.value = true
     closeDmPicker()

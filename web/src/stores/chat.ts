@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import {
   CallStatus,
   ConversationType,
+  NotificationLevel,
   PresenceStatus,
   WorkspaceRole,
 } from '@/shared/proto/packets_pb'
@@ -21,6 +22,7 @@ import type {
   ConversationSummary,
   ReadCounterUpdatedEvent,
   NotificationAddedEvent,
+  NotificationLevelChangedEvent,
   CallStateChangedEvent,
   CallInviteCreatedEvent,
   CallInviteCancelledEvent,
@@ -64,6 +66,7 @@ export interface Channel {
   hasUnreadThreadReplies?: boolean
   lastMessageSeq?: bigint
   lastActivityAt?: string
+  notificationLevel: NotificationLevel
 }
 
 export interface DirectMessage {
@@ -75,6 +78,7 @@ export interface DirectMessage {
   unread: number
   hasUnreadThreadReplies?: boolean
   lastMessageSeq?: bigint
+  notificationLevel: NotificationLevel
 }
 
 export interface ActiveConversation {
@@ -882,6 +886,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function applyBootstrapSnapshot(stage: BootstrapStage) {
+    // Bootstrap is the authoritative snapshot — clear any pending optimistic state.
+    clearPendingNotificationLevelChange()
+
     const unreadByConversation = stage.unread
     const nextChannels: Channel[] = []
     const nextDms: DirectMessage[] = []
@@ -909,6 +916,7 @@ export const useChatStore = defineStore('chat', () => {
           unread,
           hasUnreadThreadReplies,
           lastMessageSeq: summary.lastMessageSeq,
+          notificationLevel: summary.notificationLevel,
         })
       } else {
         nextChannels.push({
@@ -922,6 +930,7 @@ export const useChatStore = defineStore('chat', () => {
           lastActivityAt: summary.lastActivityAt
             ? new Date(Number(summary.lastActivityAt.seconds) * 1000).toISOString()
             : undefined,
+          notificationLevel: summary.notificationLevel,
         })
       }
     }
@@ -1251,6 +1260,7 @@ export const useChatStore = defineStore('chat', () => {
     ws.onReadCursorAck(handleReadCursorAck)
     ws.onPresenceEvent(handlePresenceEvent)
     ws.onTypingEvent(handleTypingEvent)
+    ws.onSetNotificationLevelResponse(handleSetNotificationLevelResponse)
   }
 
   function addMessage(msg: Message) {
@@ -1455,6 +1465,9 @@ export const useChatStore = defineStore('chat', () => {
       case 'userIdentityUpdated':
         applyUserIdentityUpdated(evt.payload.value)
         break
+      case 'notificationLevelChanged':
+        applyNotificationLevelChanged(evt.payload.value)
+        break
       default:
         break
     }
@@ -1470,12 +1483,17 @@ export const useChatStore = defineStore('chat', () => {
       || evt.payload.case === 'callInviteCreated'
       || evt.payload.case === 'callInviteCancelled'
       || evt.payload.case === 'forcePasswordChange'
+      || evt.payload.case === 'notificationLevelChanged'
   }
 
   function applyConversationSummary(summary?: ConversationSummary) {
     if (!summary) return
     const unread = currentUnread(summary.conversationId)
     const hasUnreadThreadReplies = currentHasUnreadThreadReplies(summary.conversationId)
+    // ConversationUpserted events from direct delivery may not carry notification_level.
+    // Preserve the current level if the summary doesn't provide one (defaults to ALL=0).
+    const currentLevel = currentNotificationLevel(summary.conversationId)
+    const notificationLevel = summary.notificationLevel || currentLevel
     if (summary.conversationType === ConversationType.DM) {
       registerUserName(summary.topic || summary.conversationId, summary.title)
       const next: DirectMessage = {
@@ -1491,6 +1509,7 @@ export const useChatStore = defineStore('chat', () => {
         unread,
         hasUnreadThreadReplies,
         lastMessageSeq: summary.lastMessageSeq,
+        notificationLevel,
       }
       upsertDirectMessage(next)
       return
@@ -1507,6 +1526,7 @@ export const useChatStore = defineStore('chat', () => {
       lastActivityAt: summary.lastActivityAt
         ? new Date(Number(summary.lastActivityAt.seconds) * 1000).toISOString()
         : undefined,
+      notificationLevel,
     }
     upsertChannel(next)
   }
@@ -1538,6 +1558,74 @@ export const useChatStore = defineStore('chat', () => {
     const ws = useWsStore()
     if (ws.state === 'BOOTSTRAPPING' || ws.state === 'RECOVERING_GAP' || ws.state === 'STALE_REBOOTSTRAP') return
     startBootstrap()
+  }
+
+  function applyNotificationLevelChanged(evt: NotificationLevelChangedEvent) {
+    const channel = channels.value.find(c => c.id === evt.conversationId)
+    if (channel) {
+      channel.notificationLevel = evt.level
+    }
+    const dm = directMessages.value.find(d => d.id === evt.conversationId)
+    if (dm) {
+      dm.notificationLevel = evt.level
+    }
+  }
+
+  // Tracks the pending notification level request for optimistic rollback.
+  // Only one request can be in-flight at a time (the UI shows one dropdown).
+  // If the server doesn't confirm within NOTIFICATION_LEVEL_TIMEOUT_MS, or
+  // returns an error, the optimistic update is rolled back.
+  const NOTIFICATION_LEVEL_TIMEOUT_MS = 10_000
+  let pendingNotificationLevelChange: {
+    requestId: string
+    conversationId: string
+    previousLevel: NotificationLevel
+    timer: ReturnType<typeof setTimeout>
+  } | null = null
+
+  function setNotificationLevel(conversationId: string, level: NotificationLevel) {
+    // Cancel any previous in-flight request.
+    clearPendingNotificationLevelChange()
+
+    const previous = currentNotificationLevel(conversationId)
+
+    // Optimistic update
+    const channel = channels.value.find(c => c.id === conversationId)
+    if (channel) channel.notificationLevel = level
+    const dm = directMessages.value.find(d => d.id === conversationId)
+    if (dm) dm.notificationLevel = level
+
+    // Send WS command — returns the requestId for correlation.
+    const requestId = useWsStore().sendSetNotificationLevel(conversationId, level)
+
+    // Start a rollback timer. If the server doesn't respond, revert.
+    const timer = setTimeout(() => {
+      if (pendingNotificationLevelChange?.requestId === requestId) {
+        rollbackNotificationLevel(conversationId, previous)
+        pendingNotificationLevelChange = null
+      }
+    }, NOTIFICATION_LEVEL_TIMEOUT_MS)
+
+    pendingNotificationLevelChange = { requestId, conversationId, previousLevel: previous, timer }
+  }
+
+  function handleSetNotificationLevelResponse(_resp: import('@/shared/proto/packets_pb').SetNotificationLevelResponse) {
+    // Server confirmed. Clear the pending state — the optimistic update stands.
+    clearPendingNotificationLevelChange()
+  }
+
+  function clearPendingNotificationLevelChange() {
+    if (pendingNotificationLevelChange) {
+      clearTimeout(pendingNotificationLevelChange.timer)
+      pendingNotificationLevelChange = null
+    }
+  }
+
+  function rollbackNotificationLevel(conversationId: string, level: NotificationLevel) {
+    const ch = channels.value.find(c => c.id === conversationId)
+    if (ch) ch.notificationLevel = level
+    const dm = directMessages.value.find(d => d.id === conversationId)
+    if (dm) dm.notificationLevel = level
   }
 
   function applyCallStateChanged(evt: CallStateChangedEvent) {
@@ -1642,12 +1730,25 @@ export const useChatStore = defineStore('chat', () => {
       ?? false
   }
 
+  function currentNotificationLevel(conversationId: string): NotificationLevel {
+    return channels.value.find(channel => channel.id === conversationId)?.notificationLevel
+      ?? directMessages.value.find(dm => dm.id === conversationId)?.notificationLevel
+      ?? NotificationLevel.ALL
+  }
+
   function conversationExists(conversationId: string): boolean {
     return channels.value.some(channel => channel.id === conversationId) || directMessages.value.some(dm => dm.id === conversationId)
   }
 
-  function incrementUnread(conversationId: string) {
+  function incrementUnread(conversationId: string, mentionedUserIds?: string[]) {
     if (conversationId === activeChannelId.value) return
+    const level = currentNotificationLevel(conversationId)
+    if (level === NotificationLevel.NOTHING) return
+    if (level === NotificationLevel.MENTIONS_ONLY) {
+      // Only increment if the current user is @mentioned in this message.
+      const selfUserId = workspace.value?.selfUserId
+      if (!selfUserId || !mentionedUserIds?.includes(selfUserId)) return
+    }
     incrementUnreadDirect(conversationId)
   }
 
@@ -1676,7 +1777,7 @@ export const useChatStore = defineStore('chat', () => {
         lastReplyAt: msg.createdAt,
         lastReplyUserId: evt.senderId,
       })
-      if (!isSelfAuthored) {
+      if (!isSelfAuthored && currentNotificationLevel(channelId) !== NotificationLevel.NOTHING) {
         const channel = channels.value.find(item => item.id === channelId)
         if (channel) channel.hasUnreadThreadReplies = true
         const dm = directMessages.value.find(item => item.id === channelId)
@@ -1701,12 +1802,23 @@ export const useChatStore = defineStore('chat', () => {
         requestReadMark(channelId, evt.channelSeq)
       } else {
         queuePendingReadMark(channelId, evt.channelSeq)
-        if (!isSelfAuthored) incrementUnreadDirect(channelId)
+        if (!isSelfAuthored) {
+          const level = currentNotificationLevel(channelId)
+          if (level === NotificationLevel.ALL) {
+            incrementUnreadDirect(channelId)
+          } else if (level === NotificationLevel.MENTIONS_ONLY) {
+            const selfUserId = workspace.value?.selfUserId
+            if (selfUserId && evt.mentionedUserIds?.includes(selfUserId)) {
+              incrementUnreadDirect(channelId)
+            }
+          }
+          // NOTHING: no increment
+        }
       }
       return
     }
     if (!isSelfAuthored) {
-      incrementUnread(channelId)
+      incrementUnread(channelId, evt.mentionedUserIds)
     }
   }
 
@@ -2000,6 +2112,7 @@ export const useChatStore = defineStore('chat', () => {
     removeConversationLocal,
     onClientFocus,
     setClientActive,
+    setNotificationLevel,
   }
 })
 

@@ -41,6 +41,7 @@ var (
 	ErrInvalidAttachment          = errors.New("invalid attachment")
 	ErrEmptyMessage               = errors.New("message body and attachments are both empty")
 	ErrAttachmentStoreUnavailable = errors.New("attachment storage is unavailable")
+	ErrInvalidNotificationLevel   = errors.New("invalid notification level")
 )
 
 // mentionRe matches @uuid patterns in message bodies.
@@ -1034,6 +1035,15 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		if !isMentionTargetMember {
 			continue
 		}
+		// Check notification level before creating a mention notification.
+		mentionTargetLevel, err := s.getNotificationLevelTx(ctx, tx, p.ChannelID, uid)
+		if err != nil {
+			return SendMessageResult{}, fmt.Errorf("chat.SendMessage mention notification level check: %w", err)
+		}
+		if mentionTargetLevel == notificationLevelNothing {
+			continue // fully muted — skip notification
+		}
+		// MENTIONS_ONLY and ALL both receive mention notifications.
 		delivery, err := s.createNotificationTx(ctx, tx, createNotificationParams{
 			UserID:         uid,
 			ChannelID:      p.ChannelID,
@@ -1141,6 +1151,16 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			return SendMessageResult{}, fmt.Errorf("chat.SendMessage thread recipients: %w", err)
 		}
 		for _, recipientID := range recipients {
+			// Check notification level before creating a thread reply notification.
+			recipientLevel, err := s.getNotificationLevelTx(ctx, tx, p.ChannelID, recipientID)
+			if err != nil {
+				return SendMessageResult{}, fmt.Errorf("chat.SendMessage thread notification level check: %w", err)
+			}
+			if recipientLevel == notificationLevelNothing {
+				continue // fully muted — skip notification
+			}
+			// Thread replies are treated like mentions for MENTIONS_ONLY:
+			// the user participated in the thread, so they should be notified.
 			delivery, err := s.createNotificationTx(ctx, tx, createNotificationParams{
 				UserID:         recipientID,
 				ChannelID:      p.ChannelID,
@@ -1961,17 +1981,50 @@ func (s *Service) loadLastReadSeqTx(ctx context.Context, tx pgx.Tx, channelID, u
 }
 
 func (s *Service) buildUnreadCounterTx(ctx context.Context, tx pgx.Tx, channelID, userID uuid.UUID, lastReadSeq int64) (*packetspb.UnreadCounter, error) {
+	// Fetch notification level to respect mute/mentions-only settings.
+	level, err := s.getNotificationLevelTx(ctx, tx, channelID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("buildUnreadCounterTx notification level: %w", err)
+	}
+
+	// NOTHING: all counters are zero.
+	if level == notificationLevelNothing {
+		return &packetspb.UnreadCounter{
+			ConversationId:         channelID.String(),
+			UnreadMessages:         0,
+			UnreadMentions:         0,
+			HasUnreadThreadReplies: false,
+			LastReadSeq:            lastReadSeq,
+		}, nil
+	}
+
 	var unreadMessages int32
-	if err := tx.QueryRow(ctx, `
-		SELECT COUNT(*)::int
-		  FROM messages m
-		 WHERE m.channel_id = $1
-		   AND m.channel_seq > $2
-		   AND m.thread_root_id IS NULL
-		   AND m.sender_id <> $3`,
-		channelID, lastReadSeq, userID,
-	).Scan(&unreadMessages); err != nil {
-		return nil, err
+	if level == notificationLevelMentionsOnly {
+		// MENTIONS_ONLY: count only mentions as unread messages.
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*)::int
+			  FROM message_mentions mm
+			  JOIN messages m ON m.id = mm.message_id
+			 WHERE mm.user_id = $1
+			   AND m.channel_id = $2
+			   AND m.channel_seq > $3`,
+			userID, channelID, lastReadSeq,
+		).Scan(&unreadMessages); err != nil {
+			return nil, err
+		}
+	} else {
+		// ALL: normal counting.
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*)::int
+			  FROM messages m
+			 WHERE m.channel_id = $1
+			   AND m.channel_seq > $2
+			   AND m.thread_root_id IS NULL
+			   AND m.sender_id <> $3`,
+			channelID, lastReadSeq, userID,
+		).Scan(&unreadMessages); err != nil {
+			return nil, err
+		}
 	}
 
 	var unreadMentions int32
@@ -2373,6 +2426,97 @@ func buildChannelConversationUpsertedDelivery(recipientID uuid.UUID, channel Joi
 		},
 	}
 	return DirectDelivery{UserID: recipientID.String(), Event: evt}
+}
+
+// Notification level constants derived from proto enum for DB comparison.
+const (
+	notificationLevelAll          = int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_ALL)
+	notificationLevelMentionsOnly = int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY)
+	notificationLevelNothing      = int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_NOTHING)
+)
+
+// SetNotificationLevelParams holds the input for SetNotificationLevel.
+type SetNotificationLevelParams struct {
+	ChannelID uuid.UUID
+	UserID    uuid.UUID
+	Level     packetspb.NotificationLevel
+}
+
+// SetNotificationLevelResult carries the persisted level and direct deliveries
+// for syncing other sessions of the same user.
+type SetNotificationLevelResult struct {
+	Level            packetspb.NotificationLevel
+	DirectDeliveries []DirectDelivery
+}
+
+// SetNotificationLevel updates the per-member notification level for a
+// conversation and returns a direct delivery to sync the user's other sessions.
+func (s *Service) SetNotificationLevel(ctx context.Context, p SetNotificationLevelParams) (SetNotificationLevelResult, error) {
+	if p.Level < 0 || p.Level > 2 {
+		return SetNotificationLevelResult{}, fmt.Errorf("%w: notification level must be 0, 1, or 2", ErrInvalidNotificationLevel)
+	}
+
+	isMember, err := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
+		ChannelID: p.ChannelID,
+		UserID:    p.UserID,
+	})
+	if err != nil {
+		return SetNotificationLevelResult{}, fmt.Errorf("chat.SetNotificationLevel membership check: %w", err)
+	}
+	if !isMember {
+		return SetNotificationLevelResult{}, ErrNotMember
+	}
+
+	if err := s.q.SetNotificationLevel(ctx, queries.SetNotificationLevelParams{
+		ChannelID:         p.ChannelID,
+		UserID:            p.UserID,
+		NotificationLevel: int16(p.Level),
+	}); err != nil {
+		return SetNotificationLevelResult{}, fmt.Errorf("chat.SetNotificationLevel update: %w", err)
+	}
+
+	protoLevel := p.Level
+
+	// Direct delivery to the user's other sessions so they sync the change.
+	evt := &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_NOTIFICATION_LEVEL_CHANGED,
+		ConversationId: p.ChannelID.String(),
+		OccurredAt:     timestamppb.Now(),
+		Payload: &packetspb.ServerEvent_NotificationLevelChanged{
+			NotificationLevelChanged: &packetspb.NotificationLevelChangedEvent{
+				ConversationId: p.ChannelID.String(),
+				Level:          protoLevel,
+			},
+		},
+	}
+
+	return SetNotificationLevelResult{
+		Level: protoLevel,
+		DirectDeliveries: []DirectDelivery{
+			{UserID: p.UserID.String(), Event: evt},
+		},
+	}, nil
+}
+
+// getNotificationLevelTx fetches the notification level for a user in a channel
+// within an existing transaction. Returns notificationLevelAll (0) if not found.
+func (s *Service) getNotificationLevelTx(ctx context.Context, tx pgx.Tx, channelID, userID uuid.UUID) (int16, error) {
+	var level int16
+	err := tx.QueryRow(ctx, `
+		SELECT notification_level
+		  FROM channel_members
+		 WHERE channel_id = $1
+		   AND user_id = $2
+		   AND is_archived = false`,
+		channelID, userID,
+	).Scan(&level)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notificationLevelAll, nil
+		}
+		return 0, err
+	}
+	return level, nil
 }
 
 func buildConversationRemovedDelivery(

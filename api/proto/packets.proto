@@ -88,6 +88,12 @@ enum NotificationType {
   NOTIFICATION_TYPE_SYSTEM = 5;
 }
 
+enum NotificationLevel {
+  NOTIFICATION_LEVEL_ALL = 0;
+  NOTIFICATION_LEVEL_MENTIONS_ONLY = 1;
+  NOTIFICATION_LEVEL_NOTHING = 2;
+}
+
 enum WorkspaceRole {
   WORKSPACE_ROLE_UNSPECIFIED = 0;
   WORKSPACE_ROLE_OWNER = 1;
@@ -123,6 +129,7 @@ enum EventType {
   EVENT_TYPE_REACTION_UPDATED = 12;
   EVENT_TYPE_FORCE_PASSWORD_CHANGE = 13;
   EVENT_TYPE_USER_IDENTITY_UPDATED = 14;
+  EVENT_TYPE_NOTIFICATION_LEVEL_CHANGED = 15;
 }
 
 message Envelope {
@@ -169,6 +176,9 @@ message Envelope {
     TypingEvent typing_event = 53;
     SetPresenceRequest set_presence_request = 54;
     PresenceEvent presence_event = 55;
+
+    SetNotificationLevelRequest set_notification_level_request = 58;
+    SetNotificationLevelResponse set_notification_level_response = 59;
   }
 }
 
@@ -411,7 +421,7 @@ message ConversationSummary {
   string title = 3;
   string topic = 4;
   bool is_archived = 5;
-  bool is_muted = 6;
+  NotificationLevel notification_level = 6;
   int64 last_message_seq = 7;
   string last_message_preview = 8;
   google.protobuf.Timestamp last_activity_at = 9;
@@ -589,6 +599,20 @@ message UserIdentityUpdatedEvent {
   string avatar_url = 3;
 }
 
+message SetNotificationLevelRequest {
+  string conversation_id = 1;
+  NotificationLevel level = 2;
+}
+
+message SetNotificationLevelResponse {
+  NotificationLevel level = 1;
+}
+
+message NotificationLevelChangedEvent {
+  string conversation_id = 1;
+  NotificationLevel level = 2;
+}
+
 message ServerEvent {
   // Global strictly monotonic event sequence for the whole workspace stream.
   int64 event_seq = 1;
@@ -614,5 +638,6 @@ message ServerEvent {
     ReactionUpdatedEvent reaction_updated = 21;
     ForcePasswordChangeEvent force_password_change = 22;
     UserIdentityUpdatedEvent user_identity_updated = 23;
+    NotificationLevelChangedEvent notification_level_changed = 24;
   }
 }

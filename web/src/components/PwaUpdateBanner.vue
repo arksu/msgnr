@@ -66,19 +66,30 @@
 </template>
 
 <script setup lang="ts">
-import { watch } from 'vue'
+import { watch, onBeforeUnmount } from 'vue'
 import { usePwaUpdate } from '@/composables/usePwaUpdate'
 
 const { needRefresh, offlineReady, updateServiceWorker, close } = usePwaUpdate()
 
-// Auto-dismiss "offline ready" after 5 seconds
+// Auto-dismiss "offline ready" after 5 seconds.
+// Track the timer so we can cancel it if the component unmounts first.
+let autoCloseTimer: ReturnType<typeof setTimeout> | null = null
+
 watch(offlineReady, (ready) => {
   if (ready) {
-    setTimeout(() => {
+    autoCloseTimer = setTimeout(() => {
+      autoCloseTimer = null
       if (offlineReady.value && !needRefresh.value) {
         close()
       }
     }, 5000)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (autoCloseTimer) {
+    clearTimeout(autoCloseTimer)
+    autoCloseTimer = null
   }
 })
 </script>

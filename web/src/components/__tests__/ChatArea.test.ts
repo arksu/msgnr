@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
+import { NotificationLevel } from '@/shared/proto/packets_pb'
 import ChatArea from '@/components/ChatArea.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -42,6 +43,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     wsStore.state = 'LIVE_SYNCED'
@@ -90,6 +92,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     wsStore.state = 'LIVE_SYNCED'
@@ -129,6 +132,7 @@ describe('ChatArea', () => {
       displayName: 'Bob',
       presence: 'online',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'dm-1'
 
@@ -154,6 +158,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = {
@@ -227,6 +232,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = {
@@ -283,6 +289,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = {
@@ -339,6 +346,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = {
@@ -390,6 +398,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = { 'channel-1': [] }
@@ -418,6 +427,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = {
@@ -483,6 +493,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = {
@@ -540,6 +551,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = {
@@ -598,6 +610,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.messages = {
@@ -696,6 +709,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
 
@@ -736,6 +750,7 @@ describe('ChatArea', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chatStore.activeChannelId = 'channel-1'
     chatStore.activeCalls = [

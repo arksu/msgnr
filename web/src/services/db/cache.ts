@@ -13,6 +13,7 @@ import type {
   CachedThreadSummary,
   QueuedOutboundAction,
 } from './msgnrDb'
+import { NotificationLevel } from '@/shared/proto/packets_pb'
 import type { Channel, DirectMessage, Message, MessageAttachment, ThreadSummary } from '@/stores/chat'
 
 // ── BigInt ↔ string helpers ───────────────────────────────────────────────────
@@ -46,6 +47,7 @@ function channelToCached(ch: Channel): CachedConversation {
     hasUnreadThreadReplies: ch.hasUnreadThreadReplies,
     lastMessageSeq: bigintToStr(ch.lastMessageSeq),
     lastActivityAt: ch.lastActivityAt,
+    notificationLevel: ch.notificationLevel,
     updatedAt: new Date().toISOString(),
   }
 }
@@ -61,6 +63,7 @@ function dmToCached(dm: DirectMessage): CachedConversation {
     unread: dm.unread,
     hasUnreadThreadReplies: dm.hasUnreadThreadReplies,
     lastMessageSeq: bigintToStr(dm.lastMessageSeq),
+    notificationLevel: dm.notificationLevel,
     updatedAt: new Date().toISOString(),
   }
 }
@@ -75,6 +78,7 @@ function cachedToChannel(c: CachedConversation): Channel {
     hasUnreadThreadReplies: c.hasUnreadThreadReplies,
     lastMessageSeq: strToBigint(c.lastMessageSeq),
     lastActivityAt: c.lastActivityAt,
+    notificationLevel: (c.notificationLevel ?? 0) as NotificationLevel,
   }
 }
 
@@ -88,6 +92,7 @@ function cachedToDm(c: CachedConversation): DirectMessage {
     unread: c.unread,
     hasUnreadThreadReplies: c.hasUnreadThreadReplies,
     lastMessageSeq: strToBigint(c.lastMessageSeq),
+    notificationLevel: (c.notificationLevel ?? 0) as NotificationLevel,
   }
 }
 

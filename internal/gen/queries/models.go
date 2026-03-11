@@ -76,11 +76,11 @@ type Channel struct {
 }
 
 type ChannelMember struct {
-	ChannelID  uuid.UUID `json:"channel_id"`
-	UserID     uuid.UUID `json:"user_id"`
-	IsMuted    bool      `json:"is_muted"`
-	IsArchived bool      `json:"is_archived"`
-	CreatedAt  time.Time `json:"created_at"`
+	ChannelID         uuid.UUID `json:"channel_id"`
+	UserID            uuid.UUID `json:"user_id"`
+	NotificationLevel int16     `json:"notification_level"`
+	IsArchived        bool      `json:"is_archived"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type EnumDictionary struct {

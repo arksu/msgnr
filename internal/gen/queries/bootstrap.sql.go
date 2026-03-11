@@ -337,7 +337,7 @@ SELECT
   END
   )::text AS topic,
   COALESCE((c.is_archived OR cm_self.is_archived), false)::bool AS is_archived,
-  cm_self.is_muted,
+  cm_self.notification_level,
   c.next_seq AS last_message_seq,
   COALESCE(last_message.body, '') AS last_message_preview,
   c.last_activity_at,
@@ -393,7 +393,7 @@ type ListBootstrapConversationsPageRow struct {
 	Title              string    `json:"title"`
 	Topic              string    `json:"topic"`
 	IsArchived         bool      `json:"is_archived"`
-	IsMuted            bool      `json:"is_muted"`
+	NotificationLevel  int16     `json:"notification_level"`
 	LastMessageSeq     int64     `json:"last_message_seq"`
 	LastMessagePreview string    `json:"last_message_preview"`
 	LastActivityAt     time.Time `json:"last_activity_at"`
@@ -417,7 +417,7 @@ func (q *Queries) ListBootstrapConversationsPage(ctx context.Context, arg ListBo
 			&i.Title,
 			&i.Topic,
 			&i.IsArchived,
-			&i.IsMuted,
+			&i.NotificationLevel,
 			&i.LastMessageSeq,
 			&i.LastMessagePreview,
 			&i.LastActivityAt,
@@ -601,44 +601,67 @@ func (q *Queries) ListBootstrapPresenceForPage(ctx context.Context, arg ListBoot
 const listBootstrapUnreadCountersForPage = `-- name: ListBootstrapUnreadCountersForPage :many
 SELECT
   c.id AS conversation_id,
-  COALESCE((
-    SELECT COUNT(*)::int
-    FROM messages m_unread
-    WHERE m_unread.channel_id = c.id
-      AND m_unread.channel_seq > COALESCE(mr.last_read_seq, 0)
-      AND m_unread.thread_root_id IS NULL
-      AND m_unread.sender_id <> bs.user_id
-  ), 0)::int AS unread_messages,
-  COALESCE((
-    SELECT COUNT(*)::int
-    FROM message_mentions mm
-    JOIN messages m ON m.id = mm.message_id
-    WHERE mm.user_id = bs.user_id
-      AND m.channel_id = c.id
-      AND m.channel_seq > COALESCE(mr.last_read_seq, 0)
-  ), 0)::int AS unread_mentions,
-  EXISTS (
-    SELECT 1
-    FROM thread_summaries ts
-    JOIN messages root ON root.id = ts.root_message_id
-    LEFT JOIN thread_reads tr ON tr.root_message_id = ts.root_message_id
-      AND tr.user_id = bs.user_id
-    WHERE root.channel_id = c.id
-      AND (
-        root.sender_id = bs.user_id
-        OR EXISTS (
-          SELECT 1
-          FROM messages participant_msg
-          WHERE participant_msg.thread_root_id = ts.root_message_id
-            AND participant_msg.sender_id = bs.user_id
+  -- When notification_level=2 (NOTHING): suppress all unread.
+  -- When notification_level=1 (MENTIONS_ONLY): only count mentions as unread_messages.
+  -- When notification_level=0 (ALL): normal counting.
+  CASE cm_self.notification_level
+    WHEN 2 THEN 0
+    WHEN 1 THEN COALESCE((
+      SELECT COUNT(*)::int
+      FROM message_mentions mm
+      JOIN messages m ON m.id = mm.message_id
+      WHERE mm.user_id = bs.user_id
+        AND m.channel_id = c.id
+        AND m.channel_seq > COALESCE(mr.last_read_seq, 0)
+    ), 0)::int
+    ELSE COALESCE((
+      SELECT COUNT(*)::int
+      FROM messages m_unread
+      WHERE m_unread.channel_id = c.id
+        AND m_unread.channel_seq > COALESCE(mr.last_read_seq, 0)
+        AND m_unread.thread_root_id IS NULL
+        AND m_unread.sender_id <> bs.user_id
+    ), 0)::int
+  END AS unread_messages,
+  CASE cm_self.notification_level
+    WHEN 2 THEN 0
+    ELSE COALESCE((
+      SELECT COUNT(*)::int
+      FROM message_mentions mm
+      JOIN messages m ON m.id = mm.message_id
+      WHERE mm.user_id = bs.user_id
+        AND m.channel_id = c.id
+        AND m.channel_seq > COALESCE(mr.last_read_seq, 0)
+    ), 0)::int
+  END AS unread_mentions,
+  (CASE cm_self.notification_level
+    WHEN 2 THEN false
+    ELSE EXISTS (
+      SELECT 1
+      FROM thread_summaries ts
+      JOIN messages root ON root.id = ts.root_message_id
+      LEFT JOIN thread_reads tr ON tr.root_message_id = ts.root_message_id
+        AND tr.user_id = bs.user_id
+      WHERE root.channel_id = c.id
+        AND (
+          root.sender_id = bs.user_id
+          OR EXISTS (
+            SELECT 1
+            FROM messages participant_msg
+            WHERE participant_msg.thread_root_id = ts.root_message_id
+              AND participant_msg.sender_id = bs.user_id
+          )
         )
-      )
-      AND COALESCE(tr.last_read_thread_seq, 0) < GREATEST(ts.next_thread_seq - 1, 0)
-  ) AS has_unread_thread_replies,
+        AND COALESCE(tr.last_read_thread_seq, 0) < GREATEST(ts.next_thread_seq - 1, 0)
+    )
+  END)::bool AS has_unread_thread_replies,
   COALESCE(mr.last_read_seq, 0) AS last_read_seq
 FROM bootstrap_session_items bsi
 JOIN bootstrap_sessions bs ON bs.id = bsi.session_id
 JOIN channels c ON c.id = bsi.conversation_id
+JOIN channel_members cm_self ON cm_self.channel_id = c.id
+  AND cm_self.user_id = bs.user_id
+  AND cm_self.is_archived = false
 LEFT JOIN message_reads mr ON mr.channel_id = c.id
   AND mr.user_id = bs.user_id
 WHERE bsi.session_id = $1

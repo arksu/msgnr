@@ -21,6 +21,8 @@ export interface CachedConversation {
   /** bigint as decimal string */
   lastMessageSeq?: string
   lastActivityAt?: string
+  /** 0=ALL, 1=MENTIONS_ONLY, 2=NOTHING */
+  notificationLevel?: number
   updatedAt: string
 }
 

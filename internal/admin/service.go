@@ -365,13 +365,15 @@ func (s *Service) CreateChannel(ctx context.Context, p CreateChannelParams) (Cha
 		return ChannelRow{}, fmt.Errorf("admin: count channel members: %w", err)
 	}
 
+	// NotificationLevel intentionally omitted: this is a broadcast event
+	// delivered to all members. The per-member notification level is only
+	// populated in the bootstrap snapshot (which is per-user).
 	summary := &packetspb.ConversationSummary{
 		ConversationId:     row.ID.String(),
 		ConversationType:   visibilityToConversationType(row.Visibility),
 		Title:              stringValue(row.Name),
 		Topic:              "",
 		IsArchived:         row.IsArchived,
-		IsMuted:            false,
 		LastMessageSeq:     0,
 		LastMessagePreview: "",
 		LastActivityAt:     timestamppb.New(row.CreatedAt),
@@ -486,13 +488,13 @@ func (s *Service) RenameChannel(ctx context.Context, channelID uuid.UUID, name s
 		return ChannelRow{}, fmt.Errorf("admin: count channel members: %w", err)
 	}
 
+	// NotificationLevel intentionally omitted: broadcast event (see CreateChannel).
 	summary := &packetspb.ConversationSummary{
 		ConversationId:     row.ID.String(),
 		ConversationType:   visibilityToConversationType(row.Visibility),
 		Title:              stringValue(row.Name),
 		Topic:              "",
 		IsArchived:         row.IsArchived,
-		IsMuted:            false,
 		LastMessageSeq:     0,
 		LastMessagePreview: "",
 		LastActivityAt:     timestamppb.New(time.Now()),

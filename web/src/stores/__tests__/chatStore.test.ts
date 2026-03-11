@@ -23,6 +23,7 @@ import {
   PresenceEventSchema,
   PresenceStatus,
   EventType,
+  NotificationLevel,
 } from '@/shared/proto/packets_pb'
 
 const chatApiMocks = vi.hoisted(() => ({
@@ -65,7 +66,7 @@ describe('chatStore phase 6 flows', () => {
         title: 'general',
         topic: '',
         isArchived: false,
-        isMuted: false,
+        notificationLevel: NotificationLevel.ALL,
         lastMessageSeq: 0n,
         lastMessagePreview: '',
         memberCount: 1,
@@ -125,7 +126,7 @@ describe('chatStore phase 6 flows', () => {
           title: 'general',
           topic: '',
           isArchived: false,
-          isMuted: false,
+          notificationLevel: NotificationLevel.ALL,
           lastMessageSeq: 0n,
           lastMessagePreview: '',
           memberCount: 1,
@@ -137,7 +138,7 @@ describe('chatStore phase 6 flows', () => {
           title: 'Bob',
           topic: 'user-2',
           isArchived: false,
-          isMuted: false,
+          notificationLevel: NotificationLevel.ALL,
           lastMessageSeq: 0n,
           lastMessagePreview: '',
           memberCount: 2,
@@ -184,7 +185,7 @@ describe('chatStore phase 6 flows', () => {
           title: 'private-team',
           topic: '',
           isArchived: false,
-          isMuted: false,
+          notificationLevel: NotificationLevel.ALL,
           lastMessageSeq: 0n,
           lastMessagePreview: '',
           memberCount: 1,
@@ -196,7 +197,7 @@ describe('chatStore phase 6 flows', () => {
           title: 'general',
           topic: '',
           isArchived: false,
-          isMuted: false,
+          notificationLevel: NotificationLevel.ALL,
           lastMessageSeq: 0n,
           lastMessagePreview: '',
           memberCount: 1,
@@ -243,7 +244,7 @@ describe('chatStore phase 6 flows', () => {
           title: 'private-team',
           topic: '',
           isArchived: false,
-          isMuted: false,
+          notificationLevel: NotificationLevel.ALL,
           lastMessageSeq: 0n,
           lastMessagePreview: '',
           memberCount: 1,
@@ -255,7 +256,7 @@ describe('chatStore phase 6 flows', () => {
           title: 'Bob',
           topic: 'user-2',
           isArchived: false,
-          isMuted: false,
+          notificationLevel: NotificationLevel.ALL,
           lastMessageSeq: 0n,
           lastMessagePreview: '',
           memberCount: 2,
@@ -294,6 +295,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 0,
       lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     chat.selectChannel('channel-1')
@@ -347,6 +349,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 3,
       lastMessageSeq: 12n,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     chat.selectChannel('channel-1')
@@ -368,6 +371,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 3,
       lastMessageSeq: 12n,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     chat.selectChannel('channel-1')
@@ -391,6 +395,7 @@ describe('chatStore phase 6 flows', () => {
       displayName: 'Bob',
       presence: 'offline',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     chat.handlePresenceEvent(create(PresenceEventSchema, {
@@ -423,7 +428,7 @@ describe('chatStore phase 6 flows', () => {
         title: 'Bob',
         topic: 'peer-user-1',
         isArchived: false,
-        isMuted: false,
+        notificationLevel: NotificationLevel.ALL,
         lastMessageSeq: 0n,
         lastMessagePreview: '',
         memberCount: 2,
@@ -483,7 +488,7 @@ describe('chatStore phase 6 flows', () => {
         title: 'Bob',
         topic: 'peer-user-1',
         isArchived: false,
-        isMuted: false,
+        notificationLevel: NotificationLevel.ALL,
         lastMessageSeq: 0n,
         lastMessagePreview: '',
         memberCount: 2,
@@ -601,6 +606,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 0,
       lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chat.activeChannelId = 'channel-1'
     chat.bootstrapped = true
@@ -653,6 +659,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 0,
       lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chat.activeChannelId = 'channel-1'
     chat.bootstrapped = true
@@ -775,6 +782,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 0,
       lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chat.activeChannelId = 'channel-1'
     chat.bootstrapped = true
@@ -826,6 +834,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 0,
       lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chat.activeChannelId = 'channel-1'
     chat.bootstrapped = true
@@ -877,6 +886,7 @@ describe('chatStore phase 6 flows', () => {
       unread: 0,
       presence: 'online',
       lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
     }]
     chat.activeChannelId = 'dm-1'
     chat.bootstrapped = true
@@ -915,6 +925,7 @@ describe('chatStore phase 6 flows', () => {
       unread: 4,
       hasUnreadThreadReplies: true,
       lastMessageSeq: 5n,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     chat.handleServerEvent(create(ServerEventSchema, {
@@ -1042,7 +1053,7 @@ describe('chatStore phase 6 flows', () => {
         title: 'general',
         topic: '',
         isArchived: false,
-        isMuted: false,
+        notificationLevel: NotificationLevel.ALL,
         lastMessageSeq: 0n,
         lastMessagePreview: '',
         memberCount: 1,
@@ -1089,6 +1100,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 0,
       hasUnreadThreadReplies: false,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     chat.handleServerEvent(create(ServerEventSchema, {
@@ -1149,6 +1161,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 3,
       lastMessageSeq: 12n,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     chat.selectChannel('channel-1')
@@ -1172,6 +1185,7 @@ describe('chatStore phase 6 flows', () => {
       kind: 'channel',
       visibility: 'public',
       unread: 0,
+      notificationLevel: NotificationLevel.ALL,
       lastMessageSeq: 1n,
     }]
 
@@ -1281,7 +1295,7 @@ describe('chatStore phase 6 flows', () => {
         title: 'general',
         topic: '',
         isArchived: false,
-        isMuted: false,
+        notificationLevel: NotificationLevel.ALL,
         lastMessageSeq: 2n,
         lastMessagePreview: 'restored history',
         memberCount: 2,
@@ -1379,6 +1393,7 @@ describe('chatStore phase 6 flows', () => {
       visibility: 'public',
       unread: 0,
       lastMessageSeq: 3n,
+      notificationLevel: NotificationLevel.ALL,
     }]
 
     await chat.ensureConversationHistory('channel-1')

@@ -213,7 +213,7 @@ func (s *Service) buildResponse(ctx context.Context, userID uuid.UUID, session q
 			Title:              row.Title,
 			Topic:              row.Topic,
 			IsArchived:         row.IsArchived,
-			IsMuted:            row.IsMuted,
+			NotificationLevel:  packetspb.NotificationLevel(row.NotificationLevel),
 			LastMessageSeq:     row.LastMessageSeq,
 			LastMessagePreview: row.LastMessagePreview,
 			LastActivityAt:     timestamppb.New(row.LastActivityAt),

@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { nextTick } from 'vue'
-import { PresenceStatus } from '@/shared/proto/packets_pb'
+import { NotificationLevel, PresenceStatus } from '@/shared/proto/packets_pb'
 import AppSidebar from '@/components/AppSidebar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -126,6 +126,7 @@ describe('AppSidebar', () => {
         avatarUrl: '',
         presence: 'offline',
         unread: 0,
+        notificationLevel: NotificationLevel.ALL,
       },
     ])
   })
@@ -182,6 +183,7 @@ describe('AppSidebar', () => {
         avatarUrl: '',
         presence: 'offline',
         unread: 0,
+        notificationLevel: NotificationLevel.ALL,
       },
     ])
     expect(chatStore.activeChannelId).toBe('dm-1')
@@ -211,6 +213,7 @@ describe('AppSidebar', () => {
         avatarUrl: '',
         presence: 'offline',
         unread: 0,
+        notificationLevel: NotificationLevel.ALL,
       },
     ]
 
@@ -302,8 +305,8 @@ describe('AppSidebar', () => {
       selfRole: 'member',
     }
     chatStore.channels = [
-      { id: 'c2', name: 'zulu', kind: 'channel', visibility: 'public', unread: 0 },
-      { id: 'c1', name: 'Alpha', kind: 'channel', visibility: 'public', unread: 0 },
+      { id: 'c2', name: 'zulu', kind: 'channel', visibility: 'public', unread: 0, notificationLevel: NotificationLevel.ALL },
+      { id: 'c1', name: 'Alpha', kind: 'channel', visibility: 'public', unread: 0, notificationLevel: NotificationLevel.ALL },
     ]
 
     const router = createRouter({
@@ -344,7 +347,7 @@ describe('AppSidebar', () => {
       selfRole: 'member',
     }
     chatStore.channels = [
-      { id: 'private-1', name: 'Secret', kind: 'channel', visibility: 'private', unread: 0 },
+      { id: 'private-1', name: 'Secret', kind: 'channel', visibility: 'private', unread: 0, notificationLevel: NotificationLevel.ALL },
     ]
 
     const router = createRouter({
@@ -384,7 +387,7 @@ describe('AppSidebar', () => {
       selfRole: 'member',
     }
     chatStore.channels = [
-      { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', unread: 0 },
+      { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', unread: 0, notificationLevel: NotificationLevel.ALL },
     ]
     chatStore.activeCalls = [
       { id: 'call-1', conversationId: 'channel-1', status: '1', participantCount: 2 },
@@ -427,7 +430,7 @@ describe('AppSidebar', () => {
       selfRole: 'member',
     }
     chatStore.directMessages = [
-      { id: 'dm-1', userId: 'user-2', displayName: 'Bob', presence: 'online', unread: 0 },
+      { id: 'dm-1', userId: 'user-2', displayName: 'Bob', presence: 'online', unread: 0, notificationLevel: NotificationLevel.ALL },
     ]
     chatStore.activeCalls = [
       { id: 'call-1', conversationId: 'dm-1', status: '1', participantCount: 2 },
@@ -474,7 +477,7 @@ describe('AppSidebar', () => {
       selfRole: 'admin',
     }
     chatStore.channels = [
-      { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', unread: 0 },
+      { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', unread: 0, notificationLevel: NotificationLevel.ALL },
     ]
 
     const router = createRouter({
@@ -576,7 +579,7 @@ describe('AppSidebar', () => {
       selfRole: 'member',
     }
     chatStore.channels = [
-      { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', unread: 0 },
+      { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', unread: 0, notificationLevel: NotificationLevel.ALL },
     ]
     chatStore.activeChannelId = 'channel-1'
 

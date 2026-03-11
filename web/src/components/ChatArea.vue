@@ -50,48 +50,63 @@
     />
 
     <!-- Messages list -->
-    <div
-      ref="scrollEl"
-      class="flex-1 overflow-y-auto px-4 py-4 space-y-0.5"
-      @scroll.passive="handleScroll"
-    >
-      <template v-if="messages.length === 0">
-        <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-2">
-          <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-            <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
-          </svg>
-          <span class="text-sm">No messages yet. Start the conversation!</span>
-          <span v-if="wsStore.state === 'BOOTSTRAPPING' || wsStore.state === 'RECOVERING_GAP' || wsStore.state === 'STALE_REBOOTSTRAP'" class="text-xs text-gray-600">
-            {{ statusLabel }}
-          </span>
-        </div>
-      </template>
-
-      <template v-else>
-        <div
-          v-if="loadingOlderHistory"
-          data-testid="history-loading-spinner"
-          class="sticky top-0 z-10 flex justify-center py-2"
-        >
-          <div class="inline-flex items-center gap-2 rounded-full border border-chat-border bg-chat-header/90 px-2.5 py-1 text-[11px] text-gray-300 backdrop-blur">
-            <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" />
-              <path class="opacity-90" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+    <div class="relative flex-1 min-h-0">
+      <div
+        ref="scrollEl"
+        class="h-full overflow-y-auto px-4 py-4 space-y-0.5"
+        @scroll.passive="handleScroll"
+      >
+        <template v-if="messages.length === 0">
+          <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-2">
+            <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
             </svg>
-            <span>Loading history</span>
+            <span class="text-sm">No messages yet. Start the conversation!</span>
+            <span v-if="wsStore.state === 'BOOTSTRAPPING' || wsStore.state === 'RECOVERING_GAP' || wsStore.state === 'STALE_REBOOTSTRAP'" class="text-xs text-gray-600">
+              {{ statusLabel }}
+            </span>
           </div>
-        </div>
-        <MessageBubble
-          v-for="(msg, idx) in messages"
-          :key="msg.id"
-          :message="msg"
-          :show-header="shouldShowHeader(idx)"
-          :thread-reply-count="threadReplyCount(msg.id)"
-          :is-active-thread="chatStore.activeThreadRootId === msg.id"
-          @open-thread="openThreadFromMessage"
-        />
-      </template>
+        </template>
 
+        <template v-else>
+          <div
+            v-if="loadingOlderHistory"
+            data-testid="history-loading-spinner"
+            class="sticky top-0 z-10 flex justify-center py-2"
+          >
+            <div class="inline-flex items-center gap-2 rounded-full border border-chat-border bg-chat-header/90 px-2.5 py-1 text-[11px] text-gray-300 backdrop-blur">
+              <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" />
+                <path class="opacity-90" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+              </svg>
+              <span>Loading history</span>
+            </div>
+          </div>
+          <MessageBubble
+            v-for="(msg, idx) in messages"
+            :key="msg.id"
+            :message="msg"
+            :show-header="shouldShowHeader(idx)"
+            :thread-reply-count="threadReplyCount(msg.id)"
+            :is-active-thread="chatStore.activeThreadRootId === msg.id"
+            @open-thread="openThreadFromMessage"
+          />
+        </template>
+      </div>
+
+      <div
+        v-if="showConversationLoadingOverlay"
+        data-testid="conversation-loading-overlay"
+        class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-chat-bg/65 backdrop-blur-[1px]"
+      >
+        <div class="inline-flex items-center gap-2 rounded-full border border-chat-border bg-chat-header/90 px-3 py-1.5 text-xs text-gray-200">
+          <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" />
+            <path class="opacity-90" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+          </svg>
+          <span>Loading conversation...</span>
+        </div>
+      </div>
     </div>
 
     <!-- Message input -->
@@ -264,6 +279,9 @@ const statusLabel = computed(() => {
       return ''
   }
 })
+const showConversationLoadingOverlay = computed(() =>
+  chatStore.isConversationInitialLoading(chatStore.activeChannelId)
+)
 
 function shouldShowHeader(idx: number): boolean {
   if (idx === 0) return true

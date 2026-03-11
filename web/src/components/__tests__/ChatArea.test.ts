@@ -380,6 +380,33 @@ describe('ChatArea', () => {
     deferredLoad.resolve?.(1)
   })
 
+  it('shows centered overlay while initial conversation history is loading', () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = { 'channel-1': [] }
+    chatStore.isConversationInitialLoading = vi.fn().mockReturnValue(true)
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-testid="conversation-loading-overlay"]').exists()).toBe(true)
+  })
+
   it('does not force-scroll to bottom when user is reading older history', async () => {
     const chatStore = useChatStore()
     const wsStore = useWsStore()

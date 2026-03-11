@@ -1164,6 +1164,66 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.threadSummaries['message-1'].lastThreadSeq).toBe(2n)
   })
 
+  it('clears initial conversation loading flag after history request resolves', async () => {
+    const chat = useChatStore()
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      lastMessageSeq: 1n,
+    }]
+
+    let resolvePage: ((value: {
+      messages: Array<{
+        id: string
+        conversation_id: string
+        sender_id: string
+        sender_name: string
+        body: string
+        channel_seq: string
+        thread_seq: string
+        thread_root_message_id: string
+        mention_everyone: boolean
+        created_at: string
+      }>
+      has_more: boolean
+      page_size: number
+      next_before_channel_seq: string
+    }) => void) | null = null
+
+    chatApiMocks.listConversationMessages.mockImplementation(() =>
+      new Promise((resolve) => {
+        resolvePage = resolve
+      })
+    )
+
+    const pending = chat.ensureConversationHistory('channel-1')
+    expect(chat.isConversationInitialLoading('channel-1')).toBe(true)
+
+    resolvePage?.({
+      messages: [{
+        id: 'message-1',
+        conversation_id: 'channel-1',
+        sender_id: 'user-2',
+        sender_name: 'Bob',
+        body: 'history',
+        channel_seq: '1',
+        thread_seq: '0',
+        thread_root_message_id: '',
+        mention_everyone: false,
+        created_at: '2026-03-06T00:00:00Z',
+      }],
+      has_more: false,
+      page_size: 50,
+      next_before_channel_seq: '',
+    })
+
+    await pending
+    expect(chat.isConversationInitialLoading('channel-1')).toBe(false)
+  })
+
   it('loads active conversation history after bootstrap restore', async () => {
     const chat = useChatStore()
     const ws = useWsStore()

@@ -277,6 +277,7 @@ export const useChatStore = defineStore('chat', () => {
 
   const messages = ref<Record<string, Message[]>>({})
   const conversationHistoryState = new Map<string, ConversationHistoryState>()
+  const conversationInitialLoadingById = ref<Record<string, boolean>>({})
   const threadMessages = ref<Record<string, Message[]>>({})
   const threadSummaries = ref<Record<string, ThreadSummary>>({})
   const activeThreadRootId = ref('')
@@ -391,6 +392,11 @@ export const useChatStore = defineStore('chat', () => {
   function isConversationHistoryLoading(conversationId: string): boolean {
     if (!conversationId) return false
     return getOrCreateHistoryState(conversationId).loading
+  }
+
+  function isConversationInitialLoading(conversationId: string): boolean {
+    if (!conversationId) return false
+    return conversationInitialLoadingById.value[conversationId] === true
   }
 
   function conversationHasMoreHistory(conversationId: string): boolean {
@@ -857,6 +863,7 @@ export const useChatStore = defineStore('chat', () => {
     pendingInvites.value = stage.pendingInvites.map(callInviteSummaryToItem)
     messages.value = {}
     conversationHistoryState.clear()
+    conversationInitialLoadingById.value = {}
     historyLoadTokenByConversation.clear()
     threadMessages.value = {}
     threadSummaries.value = loadThreadSummariesForUser(stage.workspace?.selfUserId ?? '')
@@ -878,6 +885,12 @@ export const useChatStore = defineStore('chat', () => {
     if (!conversationId) return
     const state = getOrCreateHistoryState(conversationId)
     if (state.initialized) {
+      if (conversationInitialLoadingById.value[conversationId]) {
+        conversationInitialLoadingById.value = {
+          ...conversationInitialLoadingById.value,
+          [conversationId]: false,
+        }
+      }
       const cached = messages.value[conversationId] ?? []
       logConversationPerf('history:cache-hit', {
         conversationId,
@@ -912,6 +925,13 @@ export const useChatStore = defineStore('chat', () => {
     const token = ++historyLoadToken
     historyLoadTokenByConversation.set(conversationId, token)
     state.loading = true
+    const isInitialLoad = !state.initialized
+    if (isInitialLoad) {
+      conversationInitialLoadingById.value = {
+        ...conversationInitialLoadingById.value,
+        [conversationId]: true,
+      }
+    }
 
     const requestStartedAt = performance.now()
     logConversationPerf('history:request:start', {
@@ -968,6 +988,12 @@ export const useChatStore = defineStore('chat', () => {
     } finally {
       if (token === historyLoadTokenByConversation.get(conversationId)) {
         state.loading = false
+      }
+      if (isInitialLoad) {
+        conversationInitialLoadingById.value = {
+          ...conversationInitialLoadingById.value,
+          [conversationId]: false,
+        }
       }
     }
   }
@@ -1451,6 +1477,9 @@ export const useChatStore = defineStore('chat', () => {
     pendingReadByConversation.delete(conversationId)
     conversationHistoryState.delete(conversationId)
     historyLoadTokenByConversation.delete(conversationId)
+    const nextInitialLoading = { ...conversationInitialLoadingById.value }
+    delete nextInitialLoading[conversationId]
+    conversationInitialLoadingById.value = nextInitialLoading
     delete messages.value[conversationId]
     if (activeThreadConversationId.value === conversationId) {
       closeThread()
@@ -1855,6 +1884,7 @@ export const useChatStore = defineStore('chat', () => {
     queueReactionOp,
     isReactionOpPending,
     isConversationHistoryLoading,
+    isConversationInitialLoading,
     conversationHasMoreHistory,
     applyBootstrapSnapshot,
     ensureConversationHistory,

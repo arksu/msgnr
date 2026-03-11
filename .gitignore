@@ -1,0 +1,25 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.DS_Store
+.gocache/
+.windsurf/
+.vscode/
+.aiassistant/
+.idea/
+.codex/
+
+# Build output
+msgnr-server
+
+# Generated proto files
+internal/gen/
+
+# Local config
+.env
+
+server
+web/dist
+web/node_modules

@@ -1,0 +1,618 @@
+syntax = "proto3";
+
+package packets.v1;
+
+option go_package = "msgnr/internal/gen/proto;packetspb";
+
+import "google/protobuf/timestamp.proto";
+
+enum ConversationType {
+  CONVERSATION_TYPE_UNSPECIFIED = 0;
+  CONVERSATION_TYPE_DM = 1;
+  CONVERSATION_TYPE_CHANNEL_PUBLIC = 2;
+  CONVERSATION_TYPE_CHANNEL_PRIVATE = 3;
+}
+
+enum CallStatus {
+  CALL_STATUS_UNSPECIFIED = 0;
+  CALL_STATUS_ACTIVE = 1;
+  CALL_STATUS_ENDED = 2;
+}
+
+enum PresenceStatus {
+  PRESENCE_STATUS_UNSPECIFIED = 0;
+  PRESENCE_STATUS_ONLINE = 1;
+  PRESENCE_STATUS_AWAY = 2;
+  PRESENCE_STATUS_OFFLINE = 3;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_UNAUTHENTICATED = 1;
+  ERROR_CODE_FORBIDDEN = 2;
+  ERROR_CODE_BAD_REQUEST = 3;
+  ERROR_CODE_RATE_LIMITED = 4;
+  ERROR_CODE_BACKPRESSURE_OVERFLOW = 5;
+  ERROR_CODE_BOOTSTRAP_EXPIRED = 6;
+  ERROR_CODE_SYNC_NOT_CONTIGUOUS = 7;
+  ERROR_CODE_INVITE_NOT_ACTIVE = 8;
+  ERROR_CODE_CALL_ALREADY_ACTIVE = 9;
+  ERROR_CODE_CALL_NOT_ACTIVE = 10;
+}
+
+enum SyncBootstrapReason {
+  SYNC_BOOTSTRAP_REASON_UNSPECIFIED = 0;
+  SYNC_BOOTSTRAP_REASON_GAP_TOO_LARGE = 1;
+  SYNC_BOOTSTRAP_REASON_GAP_OUT_OF_RETENTION = 2;
+  SYNC_BOOTSTRAP_REASON_SERVER_RESHARD = 3;
+  SYNC_BOOTSTRAP_REASON_DATA_RECOVERY = 4;
+}
+
+enum InviteState {
+  INVITE_STATE_UNSPECIFIED = 0;
+  INVITE_STATE_CREATED = 1;
+  INVITE_STATE_ACCEPTED = 2;
+  INVITE_STATE_REJECTED = 3;
+  INVITE_STATE_CANCELLED = 4;
+  INVITE_STATE_EXPIRED = 5;
+}
+
+enum InviteCancelReason {
+  INVITE_CANCEL_REASON_UNSPECIFIED = 0;
+  INVITE_CANCEL_REASON_CANCELLED = 1;
+  INVITE_CANCEL_REASON_EXPIRED = 2;
+  INVITE_CANCEL_REASON_REJECTED = 3;
+}
+
+enum MembershipAction {
+  MEMBERSHIP_ACTION_UNSPECIFIED = 0;
+  MEMBERSHIP_ACTION_JOINED = 1;
+  MEMBERSHIP_ACTION_LEFT = 2;
+  MEMBERSHIP_ACTION_REMOVED = 3;
+  MEMBERSHIP_ACTION_ADDED = 4;
+}
+
+enum ConversationRemovedReason {
+  CONVERSATION_REMOVED_REASON_UNSPECIFIED = 0;
+  CONVERSATION_REMOVED_REASON_ARCHIVED = 1;
+  CONVERSATION_REMOVED_REASON_DELETED = 2;
+  CONVERSATION_REMOVED_REASON_ACCESS_REVOKED = 3;
+}
+
+enum NotificationType {
+  NOTIFICATION_TYPE_UNSPECIFIED = 0;
+  NOTIFICATION_TYPE_MENTION = 1;
+  NOTIFICATION_TYPE_THREAD_REPLY = 2;
+  NOTIFICATION_TYPE_CALL_INVITE = 3;
+  NOTIFICATION_TYPE_CALL_MISSED = 4;
+  NOTIFICATION_TYPE_SYSTEM = 5;
+}
+
+enum WorkspaceRole {
+  WORKSPACE_ROLE_UNSPECIFIED = 0;
+  WORKSPACE_ROLE_OWNER = 1;
+  WORKSPACE_ROLE_ADMIN = 2;
+  WORKSPACE_ROLE_MEMBER = 3;
+}
+
+enum FeatureCapability {
+  FEATURE_CAPABILITY_UNSPECIFIED = 0;
+  FEATURE_CAPABILITY_THREADS = 1;
+  FEATURE_CAPABILITY_REACTIONS = 2;
+  FEATURE_CAPABILITY_TYPING = 3;
+  FEATURE_CAPABILITY_PRESENCE = 4;
+  FEATURE_CAPABILITY_BOOTSTRAP_PAGINATION = 5;
+  FEATURE_CAPABILITY_SYNC_SINCE = 6;
+  FEATURE_CAPABILITY_CALL_INVITES = 7;
+  FEATURE_CAPABILITY_INVITE_ACTIONS = 8;
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_CONVERSATION_UPSERTED = 1;
+  EVENT_TYPE_CONVERSATION_REMOVED = 2;
+  EVENT_TYPE_MEMBERSHIP_CHANGED = 3;
+  EVENT_TYPE_MESSAGE_CREATED = 4;
+  EVENT_TYPE_READ_COUNTER_UPDATED = 5;
+  EVENT_TYPE_NOTIFICATION_ADDED = 6;
+  EVENT_TYPE_NOTIFICATION_RESOLVED = 7;
+  EVENT_TYPE_CALL_INVITE_CREATED = 8;
+  EVENT_TYPE_CALL_INVITE_CANCELLED = 9;
+  EVENT_TYPE_CALL_STATE_CHANGED = 10;
+  EVENT_TYPE_THREAD_SUMMARY_UPDATED = 11;
+  EVENT_TYPE_REACTION_UPDATED = 12;
+  EVENT_TYPE_FORCE_PASSWORD_CHANGE = 13;
+  EVENT_TYPE_USER_IDENTITY_UPDATED = 14;
+}
+
+message Envelope {
+  string request_id = 1;
+  string trace_id = 2;
+  uint32 protocol_version = 3;
+
+  oneof payload {
+    ClientHello client_hello = 10;
+    ServerHello server_hello = 11;
+    AuthRequest auth_request = 12;
+    AuthResponse auth_response = 13;
+    Error error = 14;
+
+    SendMessageRequest send_message_request = 23;
+    SendMessageAck send_message_ack = 24;
+    UpdateReadCursorRequest update_read_cursor_request = 26;
+    ReadCursorAck read_cursor_ack = 27;
+
+    CreateCallRequest create_call_request = 30;
+    CreateCallResponse create_call_response = 31;
+    JoinCallTokenRequest join_call_token_request = 32;
+    JoinCallTokenResponse join_call_token_response = 33;
+    AcceptCallInviteRequest accept_call_invite_request = 35;
+    RejectCallInviteRequest reject_call_invite_request = 36;
+    CancelCallInviteRequest cancel_call_invite_request = 37;
+    CallInviteActionAck call_invite_action_ack = 38;
+    InviteCallMembersRequest invite_call_members_request = 56;
+    InviteCallMembersResponse invite_call_members_response = 57;
+
+    BootstrapRequest bootstrap_request = 40;
+    BootstrapResponse bootstrap_response = 41;
+    SyncSinceRequest sync_since_request = 42;
+    SyncSinceResponse sync_since_response = 43;
+    ServerEvent server_event = 44;
+    AckRequest ack_request = 45;
+    AckResponse ack_response = 46;
+    SubscribeThreadRequest subscribe_thread_request = 47;
+    SubscribeThreadResponse subscribe_thread_response = 48;
+    AddReactionRequest add_reaction_request = 49;
+    RemoveReactionRequest remove_reaction_request = 50;
+    ReactionAck reaction_ack = 51;
+    TypingRequest typing_request = 52;
+    TypingEvent typing_event = 53;
+    SetPresenceRequest set_presence_request = 54;
+    PresenceEvent presence_event = 55;
+  }
+}
+
+message ClientHello {
+  string client = 1;
+  string client_version = 2;
+  repeated FeatureCapability capabilities = 3;
+}
+
+message ServerHello {
+  string server = 1;
+  uint32 protocol_version = 2;
+  RateLimitPolicy rate_limit_policy = 3;
+  repeated FeatureCapability accepted_capabilities = 4;
+}
+
+message AuthRequest {
+  string access_token = 1;
+}
+
+message AuthResponse {
+  bool ok = 1;
+  string user_id = 2;
+  string session_id = 3;
+  string error_message = 4;
+  int64 persisted_event_seq = 5;
+  WorkspaceRole user_role = 6;
+}
+
+message Error {
+  ErrorCode code = 1;
+  string message = 2;
+  uint32 retry_after_ms = 3;
+}
+
+message RateLimitPolicy {
+  uint32 max_envelope_bytes = 1;
+  uint32 per_connection_rps = 2;
+  uint32 per_connection_burst = 3;
+  uint32 per_user_rps = 4;
+  uint32 per_user_burst = 5;
+  uint32 outbound_queue_max = 6;
+  uint32 max_sync_batch = 7;
+}
+
+message SendMessageRequest {
+  string conversation_id = 1;
+  ConversationType conversation_type = 2;
+  string client_msg_id = 3;
+  string body = 4;
+  // If set, this message is treated as a reply in a thread.
+  string thread_root_message_id = 5;
+  // Pre-uploaded attachment ids to bind to the new message.
+  repeated string attachment_ids = 6;
+}
+
+message SendMessageAck {
+  string conversation_id = 1;
+  string message_id = 2;
+  int64 channel_seq = 3;
+  google.protobuf.Timestamp created_at = 4;
+  string client_msg_id = 5;
+  bool deduped = 6;
+}
+
+message MessageEvent {
+  string conversation_id = 1;
+  string message_id = 2;
+  string sender_id = 3;
+  string body = 4;
+  int64 channel_seq = 5;
+  google.protobuf.Timestamp created_at = 6;
+  // Empty for channel-level messages; set for thread replies.
+  string thread_root_message_id = 7;
+  // Monotonic ordering inside the thread. Zero for non-thread messages.
+  int64 thread_seq = 8;
+  repeated string mentioned_user_ids = 9;
+  bool mention_everyone = 10;
+  repeated ReactionAggregate reactions = 11;
+  repeated MessageAttachment attachments = 12;
+}
+
+message MessageAttachment {
+  string attachment_id = 1;
+  string file_name = 2;
+  int64 file_size = 3;
+  string mime_type = 4;
+}
+
+message ReactionAggregate {
+  string emoji = 1;
+  int32 count = 2;
+}
+
+message SubscribeThreadRequest {
+  string conversation_id = 1;
+  string thread_root_message_id = 2;
+  int64 last_thread_seq = 3;
+}
+
+message SubscribeThreadResponse {
+  string conversation_id = 1;
+  string thread_root_message_id = 2;
+  int64 current_thread_seq = 3;
+  repeated MessageEvent replay = 4;
+}
+
+message AddReactionRequest {
+  string conversation_id = 1;
+  string message_id = 2;
+  string emoji = 3;
+  string client_op_id = 4;
+}
+
+message RemoveReactionRequest {
+  string conversation_id = 1;
+  string message_id = 2;
+  string emoji = 3;
+  string client_op_id = 4;
+}
+
+message ReactionAck {
+  bool ok = 1;
+  string message_id = 2;
+  string emoji = 3;
+  string client_op_id = 4;
+  bool applied = 5;
+}
+
+message TypingRequest {
+  string conversation_id = 1;
+  string thread_root_message_id = 2;
+  bool is_typing = 3;
+}
+
+message TypingEvent {
+  string conversation_id = 1;
+  string user_id = 2;
+  string thread_root_message_id = 3;
+  // Expiration deadline for active typing state.
+  google.protobuf.Timestamp expires_at = 4;
+  // true: user is currently typing; false: explicit stop event.
+  bool is_typing = 5;
+}
+
+message SetPresenceRequest {
+  PresenceStatus desired_presence = 1;
+}
+
+message PresenceEvent {
+  // Fanout scope: server sends this event only to users who share at least one
+  // conversation (DM/channel) with the subject user_id.
+  string user_id = 1;
+  PresenceStatus effective_presence = 2;
+  google.protobuf.Timestamp last_active_at = 3;
+}
+
+message UpdateReadCursorRequest {
+  string conversation_id = 1;
+  int64 last_read_seq = 2;
+}
+
+message ReadCursorAck {
+  string conversation_id = 1;
+  int64 last_read_seq = 2;
+}
+
+message CreateCallRequest {
+  string conversation_id = 1;
+  ConversationType conversation_type = 2;
+  repeated string invitee_user_ids = 3;
+}
+
+message CreateCallResponse {
+  string call_id = 1;
+  string conversation_id = 2;
+  CallStatus status = 3;
+}
+
+message InviteCallMembersRequest {
+  string conversation_id = 1;
+  ConversationType conversation_type = 2;
+  repeated string invitee_user_ids = 3;
+}
+
+message InviteCallMembersResponse {
+  string call_id = 1;
+  string conversation_id = 2;
+  repeated string invited_user_ids = 3;
+  repeated string skipped_user_ids = 4;
+}
+
+message JoinCallTokenRequest {
+  string conversation_id = 1;
+  ConversationType conversation_type = 2;
+}
+
+message JoinCallTokenResponse {
+  string livekit_url = 1;
+  string livekit_token = 2;
+  string livekit_room = 3;
+}
+
+message AcceptCallInviteRequest {
+  string invite_id = 1;
+}
+
+message RejectCallInviteRequest {
+  string invite_id = 1;
+}
+
+message CancelCallInviteRequest {
+  string invite_id = 1;
+}
+
+message CallInviteActionAck {
+  bool ok = 1;
+  string invite_id = 2;
+  InviteState resulting_state = 3;
+  // False means idempotent no-op (state already terminal or already applied).
+  bool applied = 4;
+}
+
+message WorkspaceSummary {
+  string workspace_id = 1;
+  string workspace_name = 2;
+  UserSummary self_user = 3;
+  WorkspaceRole self_role = 4;
+}
+
+message UserSummary {
+  string user_id = 1;
+  string display_name = 2;
+  string avatar_url = 3;
+}
+
+message ConversationSummary {
+  string conversation_id = 1;
+  ConversationType conversation_type = 2;
+  string title = 3;
+  string topic = 4;
+  bool is_archived = 5;
+  bool is_muted = 6;
+  int64 last_message_seq = 7;
+  string last_message_preview = 8;
+  google.protobuf.Timestamp last_activity_at = 9;
+  int32 member_count = 10;
+  PresenceStatus presence = 11;
+}
+
+message UnreadCounter {
+  string conversation_id = 1;
+  int32 unread_messages = 2;
+  int32 unread_mentions = 3;
+  bool has_unread_thread_replies = 4;
+  int64 last_read_seq = 5;
+}
+
+message ActiveCallSummary {
+  string call_id = 1;
+  string conversation_id = 2;
+  CallStatus status = 3;
+  int32 participant_count = 4;
+}
+
+message CallInviteSummary {
+  string invite_id = 1;
+  string call_id = 2;
+  string conversation_id = 3;
+  string inviter_user_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  InviteState state = 7;
+}
+
+message NotificationSummary {
+  string notification_id = 1;
+  NotificationType type = 2;
+  string title = 3;
+  string body = 4;
+  string conversation_id = 5;
+  bool is_read = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message BootstrapRequest {
+  string client_instance_id = 1;
+  bool include_archived = 2;
+  uint32 page_size_hint = 3;
+  string page_token = 4;
+  // Empty for first page, then must be echoed for continuation pages.
+  string bootstrap_session_id = 5;
+}
+
+message BootstrapResponse {
+  // Atomic snapshot watermark. Client must treat the whole response as one commit.
+  int64 snapshot_seq = 1;
+  WorkspaceSummary workspace = 2;
+  repeated ConversationSummary conversations = 3;
+  repeated UnreadCounter unread = 4;
+  repeated ActiveCallSummary active_calls = 5;
+  repeated CallInviteSummary pending_invites = 6;
+  repeated NotificationSummary notifications = 7;
+  bool has_more = 8;
+  string next_page_token = 9;
+  // Stable id for all pages of one bootstrap operation.
+  string bootstrap_session_id = 10;
+  // If set and current time is past this timestamp, client must restart bootstrap from page 1.
+  google.protobuf.Timestamp bootstrap_expires_at = 11;
+  uint32 page_index = 12;
+  uint32 page_size_effective = 13;
+  uint32 estimated_total_conversations = 14;
+  // Best-effort presence snapshot for bootstrap hydration.
+  // Scope: only users participating in conversations included in this page.
+  repeated PresenceEvent presence = 15;
+  WorkspaceRole user_role = 16;
+}
+
+message SyncSinceRequest {
+  // Request contiguous server events strictly after this sequence.
+  int64 after_seq = 1;
+  // Server may clamp this value.
+  uint32 max_events = 2;
+}
+
+message SyncSinceResponse {
+  // Inclusive returned range. Events must be contiguous when need_full_bootstrap=false.
+  int64 from_seq = 1;
+  int64 to_seq = 2;
+  repeated ServerEvent events = 3;
+  // If true, server cannot provide a safe contiguous tail and client must re-bootstrap.
+  bool need_full_bootstrap = 4;
+  SyncBootstrapReason need_full_bootstrap_reason = 5;
+  // Optional backoff hint before retrying bootstrap.
+  uint32 suggested_retry_after_sec = 6;
+  // Server-side safety limit that may trigger forced full bootstrap for large gaps.
+  uint32 server_sync_event_limit = 7;
+}
+
+message AckRequest {
+  // Client-confirmed watermark for durable resume heuristics.
+  int64 last_applied_event_seq = 1;
+}
+
+message AckResponse {
+  bool ok = 1;
+  int64 persisted_event_seq = 2;
+}
+
+message ConversationUpsertedEvent {
+  ConversationSummary conversation = 1;
+}
+
+message ConversationRemovedEvent {
+  string conversation_id = 1;
+  ConversationRemovedReason reason = 2;
+}
+
+message MembershipChangedEvent {
+  string conversation_id = 1;
+  string user_id = 2;
+  MembershipAction action = 3;
+}
+
+message ReadCounterUpdatedEvent {
+  UnreadCounter counter = 1;
+  string user_id = 2;
+}
+
+message NotificationAddedEvent {
+  NotificationSummary notification = 1;
+  string user_id = 2;
+}
+
+message NotificationResolvedEvent {
+  string notification_id = 1;
+  string user_id = 2;
+}
+
+message CallInviteCreatedEvent {
+  CallInviteSummary invite = 1;
+}
+
+message CallInviteCancelledEvent {
+  string invite_id = 1;
+  InviteCancelReason reason = 2;
+  string cancelled_by_user_id = 3;
+}
+
+message CallStateChangedEvent {
+  string call_id = 1;
+  string conversation_id = 2;
+  CallStatus status = 3;
+}
+
+message ThreadSummaryUpdatedEvent {
+  string conversation_id = 1;
+  string thread_root_message_id = 2;
+  int32 reply_count = 3;
+  google.protobuf.Timestamp last_thread_reply_at = 4;
+  string last_thread_reply_user_id = 5;
+}
+
+message ReactionUpdatedEvent {
+  string conversation_id = 1;
+  string message_id = 2;
+  string emoji = 3;
+  int32 count = 4;
+}
+
+message ForcePasswordChangeEvent {
+  string user_id = 1;
+}
+
+message UserIdentityUpdatedEvent {
+  string user_id = 1;
+  string display_name = 2;
+  string avatar_url = 3;
+}
+
+message ServerEvent {
+  // Global strictly monotonic event sequence for the whole workspace stream.
+  int64 event_seq = 1;
+  // Stable idempotency key for deduplication.
+  string event_id = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+  // Contract: event_type must match payload oneof case.
+  EventType event_type = 4;
+  string conversation_id = 5;
+
+  oneof payload {
+    ConversationUpsertedEvent conversation_upserted = 10;
+    ConversationRemovedEvent conversation_removed = 11;
+    MembershipChangedEvent membership_changed = 12;
+    MessageEvent message_created = 13;
+    ReadCounterUpdatedEvent read_counter_updated = 14;
+    NotificationAddedEvent notification_added = 15;
+    NotificationResolvedEvent notification_resolved = 16;
+    CallInviteCreatedEvent call_invite_created = 17;
+    CallInviteCancelledEvent call_invite_cancelled = 18;
+    CallStateChangedEvent call_state_changed = 19;
+    ThreadSummaryUpdatedEvent thread_summary_updated = 20;
+    ReactionUpdatedEvent reaction_updated = 21;
+    ForcePasswordChangeEvent force_password_change = 22;
+    UserIdentityUpdatedEvent user_identity_updated = 23;
+  }
+}

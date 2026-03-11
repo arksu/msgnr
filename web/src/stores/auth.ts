@@ -27,6 +27,7 @@ import { clearManualPresencePreference } from '@/services/storage/manualPresence
 import { clearAllLastOpenedConversations } from '@/services/storage/lastConversationStorage'
 import { clearStoredThreadSummaries } from '@/services/storage/threadSummaryStorage'
 import { clearLastOpenedTaskId } from '@/services/storage/lastTaskRouteStorage'
+import { cacheUserProfile, loadCachedUserProfile, clearAllData as clearIndexedDb } from '@/services/db/cache'
 
 export type AuthState =
   | 'ANON'
@@ -89,6 +90,14 @@ function saveUser(user: AuthUser | null) {
       return
     }
     globalThis.localStorage?.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user))
+    // Write-through to IndexedDB (fire-and-forget)
+    void cacheUserProfile({
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+      role: user.role,
+    })
   } catch {
     // best-effort persistence
   }
@@ -125,6 +134,28 @@ export const useAuthStore = defineStore('auth', () => {
 
   function loadPersistedRefreshToken(): string | null {
     return getRefreshToken()
+  }
+
+  /**
+   * If the synchronous localStorage read returned null (e.g. storage cleared
+   * by the browser), attempt to recover the user profile from IndexedDB.
+   * Called during cache-first startup before the auth token is refreshed.
+   */
+  async function hydrateUserFromCache(): Promise<void> {
+    if (user.value) return // Already loaded from localStorage
+    try {
+      const cached = await loadCachedUserProfile()
+      if (!cached) return
+      user.value = {
+        id: cached.id,
+        email: cached.email,
+        displayName: cached.displayName,
+        avatarUrl: cached.avatarUrl,
+        role: cached.role ?? '',
+      }
+    } catch {
+      // Non-fatal — auth.refresh() will set the user when it succeeds.
+    }
   }
 
   async function login(email: string, password: string): Promise<void> {
@@ -276,6 +307,8 @@ export const useAuthStore = defineStore('auth', () => {
     clearAllLastOpenedConversations()
     clearStoredThreadSummaries()
     clearLastOpenedTaskId()
+    // Wipe all IndexedDB cached data (fire-and-forget)
+    void clearIndexedDb()
     authState.value = 'ANON'
   }
 
@@ -317,6 +350,7 @@ export const useAuthStore = defineStore('auth', () => {
     effectiveRole,
     needChangePassword,
     loadPersistedRefreshToken,
+    hydrateUserFromCache,
     login,
     refresh,
     logout,

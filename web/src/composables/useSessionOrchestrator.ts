@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useChatStore } from '@/stores/chat'
 import { useWsStore, type WsErrorKind } from '@/stores/ws'
 
 const WS_URL = '/ws'
@@ -291,17 +292,40 @@ export function useSessionOrchestrator() {
   /**
    * Boot-time recovery: if a refresh token exists in storage,
    * try to restore the session without showing the login screen.
+   *
+   * Attempts to load cached data from IndexedDB first for instant start:
+   * the user sees conversations and recent messages while the WS connection
+   * is established in the background. The server bootstrap then overwrites
+   * the cached state with authoritative data.
+   *
    * Returns true if recovery succeeded.
    */
   async function tryRestoreSession(): Promise<boolean> {
     const stored = auth.loadPersistedRefreshToken()
     if (!stored) return false
     startupPhase.value = 'RESTORING_SESSION'
+
+    // Try to hydrate UI from IndexedDB cache for instant start.
+    // The user sees cached data while the network request completes.
+    const chatStore = useChatStore()
+    await auth.hydrateUserFromCache()
+    const cacheLoaded = await chatStore.loadCachedState()
+    if (cacheLoaded) {
+      // User has cached data — dismiss the loading overlay early so
+      // the app shell renders immediately. The WS connect + bootstrap
+      // will overwrite the cached state in the background.
+      startupPhase.value = 'IDLE'
+    }
+
     try {
       refreshAttempted = false
       const newToken = await auth.refresh()
       return await connectAndAuthenticate(newToken)
     } catch {
+      if (cacheLoaded) {
+        // Cache was shown but auth failed — clear the cached UI.
+        chatStore.cachedBootstrap = false
+      }
       startupPhase.value = 'IDLE'
       return false
     }

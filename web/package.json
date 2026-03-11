@@ -19,6 +19,7 @@
     "@jitsi/rnnoise-wasm": "^0.2.1",
     "ant-design-vue": "^4.2.6",
     "axios": "^1.13.6",
+    "dexie": "^4.3.0",
     "emoji-mart-vue-fast": "^15.0.5",
     "livekit-client": "^2.15.7",
     "pinia": "^3.0.4",

@@ -43,6 +43,15 @@ import { listConversationMessages, listDmCandidates } from '@/services/http/chat
 import type { ConversationMessageItem } from '@/services/http/chatApi'
 import { getOrCreateClientInstanceId } from '@/services/storage/clientInstanceStorage'
 import { generateId } from '@/services/id'
+import {
+  cacheConversations,
+  loadCachedConversations,
+  cacheMessages,
+  cacheSingleMessage,
+  loadCachedMessages,
+  cacheThreadSummaries,
+  loadCachedThreadSummaries,
+} from '@/services/db/cache'
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -247,6 +256,7 @@ function loadThreadSummariesForUser(userId: string): Record<string, ThreadSummar
 
 function saveThreadSummariesForUser(userId: string, summaries: Record<string, ThreadSummary>) {
   if (!userId) return
+  // Write to localStorage (synchronous fallback for bootstrap)
   const all = readStoredThreadSummaryBuckets()
   const nextBucket: Record<string, StoredThreadSummary> = {}
   for (const [rootId, summary] of Object.entries(summaries)) {
@@ -259,6 +269,8 @@ function saveThreadSummariesForUser(userId: string, summaries: Record<string, Th
   }
   all[userId] = nextBucket
   storage.setItem(THREAD_SUMMARIES_STORAGE_KEY, JSON.stringify(all))
+  // Write-through to IndexedDB (fire-and-forget)
+  void cacheThreadSummaries(userId, summaries)
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -274,6 +286,8 @@ export const useChatStore = defineStore('chat', () => {
   const presenceByUserId = ref<Record<string, PresenceEvent>>({})
   const typingByConversationId = ref<Record<string, TypingState[]>>({})
   const bootstrapped = ref(false)
+  /** True when UI is showing data loaded from IndexedDB cache, before server bootstrap. */
+  const cachedBootstrap = ref(false)
 
   const messages = ref<Record<string, Message[]>>({})
   const conversationHistoryState = new Map<string, ConversationHistoryState>()
@@ -348,7 +362,7 @@ export const useChatStore = defineStore('chat', () => {
   let userDirectoryHydrated = false
   let userDirectoryPromise: Promise<void> | null = null
   let toastTimer: ReturnType<typeof setTimeout> | null = null
-  const DEBUG_CONVERSATION_OPEN_PERF = true
+  const DEBUG_CONVERSATION_OPEN_PERF = import.meta.env.DEV
 
   function persistThreadSummaries() {
     const userId = workspace.value?.selfUserId ?? ''
@@ -569,13 +583,16 @@ export const useChatStore = defineStore('chat', () => {
     const idx = list.findIndex(m => m.clientMsgId === clientMsgId && m.pending)
     if (idx === -1) return
     const existing = list[idx]
-    list.splice(idx, 1, {
+    const confirmed = {
       ...existing,
       id: ack.messageId,
       channelSeq: ack.channelSeq,
       createdAt: ack.createdAt ? new Date(Number(ack.createdAt.seconds) * 1000).toISOString() : existing.createdAt,
       pending: false,
-    })
+    }
+    list.splice(idx, 1, confirmed)
+    // Write-through confirmed message to IndexedDB (fire-and-forget)
+    void cacheSingleMessage(confirmed)
   }
 
   function reconcileThreadMessage(_channelId: string, clientMsgId: string, ack: SendMessageAck) {
@@ -794,6 +811,76 @@ export const useChatStore = defineStore('chat', () => {
     drainBufferedEvents()
   }
 
+  /** Max conversations whose messages are pre-loaded from cache on startup. */
+  const CACHED_MSG_PRELOAD_LIMIT = 5
+
+  /**
+   * Load cached conversations and messages from IndexedDB for instant startup.
+   * Returns true if cached data was available and hydrated into the store.
+   */
+  async function loadCachedState(): Promise<boolean> {
+    try {
+      const cached = await loadCachedConversations()
+      if (!cached || (cached.channels.length === 0 && cached.dms.length === 0)) {
+        return false
+      }
+      channels.value = cached.channels
+      directMessages.value = cached.dms
+      cachedBootstrap.value = true
+
+      // Determine which conversations' messages to preload.
+      // Start with the last-opened conversation, then fill with the most
+      // recently active channels/DMs (by lastActivityAt or list order).
+      const authStore = useAuthStore()
+      const workspaceId = workspace.value?.id || workspace.value?.name || ''
+      const userId = workspace.value?.selfUserId || authStore.user?.id || ''
+      const lastConversation = loadLastOpenedConversation(workspaceId, userId)
+
+      const preloadIds: string[] = []
+      if (lastConversation) {
+        const exists = cached.channels.some(ch => ch.id === lastConversation)
+          || cached.dms.some(dm => dm.id === lastConversation)
+        if (exists) {
+          activeChannelId.value = lastConversation
+          preloadIds.push(lastConversation)
+        }
+      }
+
+      // Add top recently-active conversations (channels sorted by lastActivityAt desc)
+      const sortedChannels = [...cached.channels]
+        .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''))
+      for (const ch of sortedChannels) {
+        if (preloadIds.length >= CACHED_MSG_PRELOAD_LIMIT) break
+        if (!preloadIds.includes(ch.id)) preloadIds.push(ch.id)
+      }
+      // Add DMs (they are already ordered by recent activity from bootstrap)
+      for (const dm of cached.dms) {
+        if (preloadIds.length >= CACHED_MSG_PRELOAD_LIMIT) break
+        if (!preloadIds.includes(dm.id)) preloadIds.push(dm.id)
+      }
+
+      // Load messages + thread summaries concurrently
+      const [msgResults, cachedThreads] = await Promise.all([
+        Promise.all(
+          preloadIds.map(id => loadCachedMessages(id).then(msgs => ({ id, msgs }))),
+        ),
+        loadCachedThreadSummaries(userId),
+      ])
+      for (const { id, msgs } of msgResults) {
+        if (msgs.length > 0) {
+          messages.value[id] = msgs
+        }
+      }
+      if (cachedThreads) {
+        threadSummaries.value = cachedThreads
+      }
+
+      return true
+    } catch {
+      return false
+    }
+  }
+
   function applyBootstrapSnapshot(stage: BootstrapStage) {
     const unreadByConversation = stage.unread
     const nextChannels: Channel[] = []
@@ -850,6 +937,9 @@ export const useChatStore = defineStore('chat', () => {
     }
     channels.value = nextChannels
     directMessages.value = nextDms
+    cachedBootstrap.value = false
+    // Write-through to IndexedDB (fire-and-forget)
+    void cacheConversations(nextChannels, nextDms)
     // Bootstrap conversation summaries do not carry peer avatar URLs.
     // Hydrate the identity directory after snapshot apply and refresh visible
     // sender/DM labels so avatars persist across full page reloads.
@@ -861,7 +951,18 @@ export const useChatStore = defineStore('chat', () => {
     notifications.value = stage.notifications.map(notificationSummaryToItem)
     activeCalls.value = stage.activeCalls.map(activeCallSummaryToItem)
     pendingInvites.value = stage.pendingInvites.map(callInviteSummaryToItem)
+    // Preserve cached messages for the active conversation so the user
+    // doesn't see a flash of empty content while ensureConversationHistory
+    // fetches the authoritative page from the server. The HTTP history
+    // response will overwrite these via applyConversationHistory.
+    const preservedConversationId = activeChannelId.value
+    const preservedMessages = preservedConversationId
+      ? messages.value[preservedConversationId]
+      : undefined
     messages.value = {}
+    if (preservedConversationId && preservedMessages?.length) {
+      messages.value[preservedConversationId] = preservedMessages
+    }
     conversationHistoryState.clear()
     conversationInitialLoadingById.value = {}
     historyLoadTokenByConversation.clear()
@@ -1589,6 +1690,8 @@ export const useChatStore = defineStore('chat', () => {
     if (alreadyPresent) return
 
     messages.value[channelId].push(msg)
+    // Write-through to IndexedDB (fire-and-forget)
+    void cacheSingleMessage(msg)
     const channel = channels.value.find(item => item.id === channelId)
     if (channel) channel.lastMessageSeq = evt.channelSeq
     const dm = directMessages.value.find(item => item.id === channelId)
@@ -1804,6 +1907,8 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     messages.value[conversationId] = Array.from(byId.values()).sort((a, b) => Number(a.channelSeq - b.channelSeq))
+    // Write-through to IndexedDB (fire-and-forget)
+    void cacheMessages(conversationId, messages.value[conversationId])
     const applyMs = Math.round((performance.now() - applyStartedAt) * 100) / 100
     logConversationPerf('history:merge-sort:done', {
       conversationId,
@@ -1849,6 +1954,7 @@ export const useChatStore = defineStore('chat', () => {
     presenceByUserId,
     typingByConversationId,
     bootstrapped,
+    cachedBootstrap,
     messages,
     threadMessages,
     threadSummaries,
@@ -1886,6 +1992,7 @@ export const useChatStore = defineStore('chat', () => {
     isConversationHistoryLoading,
     isConversationInitialLoading,
     conversationHasMoreHistory,
+    loadCachedState,
     applyBootstrapSnapshot,
     ensureConversationHistory,
     loadOlderConversationHistory,

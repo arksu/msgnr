@@ -1,0 +1,477 @@
+//go:build integration
+
+package calls
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"msgnr/internal/config"
+	"msgnr/internal/events"
+	"msgnr/internal/testdb"
+)
+
+func seedCallUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) uuid.UUID {
+	t.Helper()
+	var userID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', $2, 'member')
+		 RETURNING id`,
+		uuid.NewString()+"@example.com",
+		name,
+	).Scan(&userID)
+	require.NoError(t, err)
+	return userID
+}
+
+func seedCallChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, creatorID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var channelID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO channels (kind, visibility, name, created_by)
+		 VALUES ('channel', 'public', $1, $2)
+		 RETURNING id`,
+		"room-"+uuid.NewString(),
+		creatorID,
+	).Scan(&channelID)
+	require.NoError(t, err)
+	return channelID
+}
+
+func seedMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID, userID uuid.UUID) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, userID)
+	require.NoError(t, err)
+}
+
+func seedActiveCall(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID, creatorID uuid.UUID) (uuid.UUID, string) {
+	t.Helper()
+	callID := uuid.New()
+	room := "call-" + callID.String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO calls (id, channel_id, status, livekit_room, created_by, started_at)
+		VALUES ($1, $2, 'active', $3, $4, now())`,
+		callID, channelID, room, creatorID,
+	)
+	require.NoError(t, err)
+	return callID, room
+}
+
+func seedParticipant(t *testing.T, ctx context.Context, pool *pgxpool.Pool, callID, userID uuid.UUID) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO call_participants (call_id, user_id, joined_at, left_at)
+		VALUES ($1, $2, now(), NULL)`,
+		callID, userID,
+	)
+	require.NoError(t, err)
+}
+
+func seedPendingInviteWithNotification(t *testing.T, ctx context.Context, pool *pgxpool.Pool, callID, channelID, inviterID, inviteeID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var inviteID uuid.UUID
+	err := pool.QueryRow(ctx, `
+		INSERT INTO call_invites (call_id, channel_id, inviter_id, invitee_id, state, expires_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'created', now() + interval '60 seconds', now(), now())
+		RETURNING id`,
+		callID, channelID, inviterID, inviteeID,
+	).Scan(&inviteID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO notifications (user_id, type, title, body, channel_id, is_read, created_at)
+		VALUES ($1, 'call_invite', 'Incoming call', 'Test call invite', $2, false, now())`,
+		inviteeID, channelID,
+	)
+	require.NoError(t, err)
+	return inviteID
+}
+
+func TestIntegration_HandleWebhook_ParticipantLeftEndsCallWhenRoomBecomesEmpty(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{})
+
+	creatorID := seedCallUser(t, ctx, pool, "Creator")
+	channelID := seedCallChannel(t, ctx, pool, creatorID)
+	seedMember(t, ctx, pool, channelID, creatorID)
+	callID, room := seedActiveCall(t, ctx, pool, channelID, creatorID)
+	seedParticipant(t, ctx, pool, callID, creatorID)
+
+	processed, err := svc.HandleWebhook(ctx, &lkwebhookEvent{
+		Event:               "participant_left",
+		RoomName:            room,
+		ParticipantIdentity: creatorID.String(),
+	})
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	var status string
+	err = pool.QueryRow(ctx, `SELECT status FROM calls WHERE id = $1`, callID).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "ended", status)
+
+	var leftCount int
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM call_participants
+		 WHERE call_id = $1
+		   AND left_at IS NOT NULL`, callID).Scan(&leftCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, leftCount)
+
+	var eventCount int
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM workspace_events
+		 WHERE channel_id = $1
+		   AND event_type = 'call_state_changed'`, channelID.String()).Scan(&eventCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, eventCount)
+}
+
+func TestIntegration_HandleWebhook_ParticipantLeftKeepsCallActiveWhenOthersRemain(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{})
+
+	userA := seedCallUser(t, ctx, pool, "User A")
+	userB := seedCallUser(t, ctx, pool, "User B")
+	channelID := seedCallChannel(t, ctx, pool, userA)
+	seedMember(t, ctx, pool, channelID, userA)
+	seedMember(t, ctx, pool, channelID, userB)
+	callID, room := seedActiveCall(t, ctx, pool, channelID, userA)
+	seedParticipant(t, ctx, pool, callID, userA)
+	seedParticipant(t, ctx, pool, callID, userB)
+
+	processed, err := svc.HandleWebhook(ctx, &lkwebhookEvent{
+		Event:               "participant_left",
+		RoomName:            room,
+		ParticipantIdentity: userA.String(),
+	})
+	require.NoError(t, err)
+	assert.False(t, processed)
+
+	var status string
+	err = pool.QueryRow(ctx, `SELECT status FROM calls WHERE id = $1`, callID).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "active", status)
+
+	var activeParticipants int
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM call_participants
+		 WHERE call_id = $1
+		   AND left_at IS NULL`, callID).Scan(&activeParticipants)
+	require.NoError(t, err)
+	assert.Equal(t, 1, activeParticipants)
+}
+
+func TestIntegration_HandleWebhook_ParticipantLeftEndsCallWhenRoomSnapshotIsEmpty(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{})
+
+	userA := seedCallUser(t, ctx, pool, "User A")
+	ghostUser := seedCallUser(t, ctx, pool, "Ghost User")
+	channelID := seedCallChannel(t, ctx, pool, userA)
+	seedMember(t, ctx, pool, channelID, userA)
+	seedMember(t, ctx, pool, channelID, ghostUser)
+	callID, room := seedActiveCall(t, ctx, pool, channelID, userA)
+	seedParticipant(t, ctx, pool, callID, userA)
+	seedParticipant(t, ctx, pool, callID, ghostUser) // stale participant row that did not leave yet
+
+	processed, err := svc.HandleWebhook(ctx, &lkwebhookEvent{
+		Event:               "participant_left",
+		RoomName:            room,
+		ParticipantIdentity: userA.String(),
+		RoomNumParticipants: 0,
+		HasRoomSnapshot:     true,
+	})
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	var status string
+	err = pool.QueryRow(ctx, `SELECT status FROM calls WHERE id = $1`, callID).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "ended", status)
+}
+
+func TestIntegration_HandleWebhook_EndCallAutoRejectsPendingInvites(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{})
+
+	initiatorID := seedCallUser(t, ctx, pool, "Initiator")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	channelID := seedCallChannel(t, ctx, pool, initiatorID)
+	seedMember(t, ctx, pool, channelID, initiatorID)
+	seedMember(t, ctx, pool, channelID, inviteeID)
+	callID, room := seedActiveCall(t, ctx, pool, channelID, initiatorID)
+	seedParticipant(t, ctx, pool, callID, initiatorID)
+	inviteID := seedPendingInviteWithNotification(t, ctx, pool, callID, channelID, initiatorID, inviteeID)
+
+	processed, err := svc.HandleWebhook(ctx, &lkwebhookEvent{
+		Event:               "participant_left",
+		RoomName:            room,
+		ParticipantIdentity: initiatorID.String(),
+		RoomNumParticipants: 0,
+		HasRoomSnapshot:     true,
+	})
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	var inviteState string
+	err = pool.QueryRow(ctx, `SELECT state FROM call_invites WHERE id = $1`, inviteID).Scan(&inviteState)
+	require.NoError(t, err)
+	assert.Equal(t, "rejected", inviteState)
+
+	var inviteEventCount int
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM workspace_events
+		 WHERE channel_id = $1
+		   AND event_type = 'call_invite_cancelled'`, channelID.String()).Scan(&inviteEventCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inviteEventCount)
+
+	var resolvedNotificationEvents int
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM workspace_events
+		 WHERE channel_id = $1
+		   AND event_type = 'notification_resolved'`, channelID.String()).Scan(&resolvedNotificationEvents)
+	require.NoError(t, err)
+	assert.Equal(t, 1, resolvedNotificationEvents)
+}
+
+func TestIntegration_CreateCall_NewInviteRejectsOlderInviteForSameInvitee(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	initiatorID := seedCallUser(t, ctx, pool, "Initiator")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	channelA := seedCallChannel(t, ctx, pool, initiatorID)
+	channelB := seedCallChannel(t, ctx, pool, initiatorID)
+	seedMember(t, ctx, pool, channelA, initiatorID)
+	seedMember(t, ctx, pool, channelA, inviteeID)
+	seedMember(t, ctx, pool, channelB, initiatorID)
+	seedMember(t, ctx, pool, channelB, inviteeID)
+
+	first, err := svc.CreateCall(ctx, CreateCallParams{
+		ConversationID: channelA,
+		InitiatorID:    initiatorID,
+		InviteeUserIDs: []uuid.UUID{inviteeID},
+	})
+	require.NoError(t, err)
+	require.Len(t, first.DirectDeliveries, 2) // invite created + notification added
+
+	second, err := svc.CreateCall(ctx, CreateCallParams{
+		ConversationID: channelB,
+		InitiatorID:    initiatorID,
+		InviteeUserIDs: []uuid.UUID{inviteeID},
+	})
+	require.NoError(t, err)
+
+	var createdCount int
+	var rejectedCount int
+	err = pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE state = 'created')::int,
+			COUNT(*) FILTER (WHERE state = 'rejected')::int
+		FROM call_invites
+		WHERE invitee_id = $1`, inviteeID).Scan(&createdCount, &rejectedCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, createdCount)
+	assert.Equal(t, 1, rejectedCount)
+
+	var cancelledDelivered bool
+	for _, delivery := range second.DirectDeliveries {
+		if delivery.Event != nil && delivery.Event.GetCallInviteCancelled() != nil {
+			cancelledDelivered = true
+			break
+		}
+	}
+	assert.True(t, cancelledDelivered, "second create should deliver cancellation for older invite")
+}
+
+func TestIntegration_InviteCallMembers_CreatesInviteAndNotification(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	actorID := seedCallUser(t, ctx, pool, "Actor")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	channelID := seedCallChannel(t, ctx, pool, actorID)
+	seedMember(t, ctx, pool, channelID, actorID)
+	seedMember(t, ctx, pool, channelID, inviteeID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, actorID)
+	seedParticipant(t, ctx, pool, callID, actorID)
+
+	result, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: channelID,
+		ActorID:        actorID,
+		InviteeUserIDs: []uuid.UUID{inviteeID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, callID, result.CallID)
+	assert.Equal(t, channelID, result.ConversationID)
+	assert.Equal(t, []uuid.UUID{inviteeID}, result.InvitedUserIDs)
+	assert.Empty(t, result.SkippedUserIDs)
+	require.Len(t, result.DirectDeliveries, 2)
+
+	var inviteState string
+	err = pool.QueryRow(ctx, `SELECT state FROM call_invites WHERE call_id = $1 AND invitee_id = $2`, callID, inviteeID).Scan(&inviteState)
+	require.NoError(t, err)
+	assert.Equal(t, "created", inviteState)
+}
+
+func TestIntegration_InviteCallMembers_SkipsAlreadyInCallMembers(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	actorID := seedCallUser(t, ctx, pool, "Actor")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	channelID := seedCallChannel(t, ctx, pool, actorID)
+	seedMember(t, ctx, pool, channelID, actorID)
+	seedMember(t, ctx, pool, channelID, inviteeID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, actorID)
+	seedParticipant(t, ctx, pool, callID, actorID)
+	seedParticipant(t, ctx, pool, callID, inviteeID)
+
+	result, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: channelID,
+		ActorID:        actorID,
+		InviteeUserIDs: []uuid.UUID{inviteeID},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.InvitedUserIDs)
+	assert.Equal(t, []uuid.UUID{inviteeID}, result.SkippedUserIDs)
+	assert.Empty(t, result.DirectDeliveries)
+
+	var inviteCount int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM call_invites WHERE call_id = $1 AND invitee_id = $2`, callID, inviteeID).Scan(&inviteCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, inviteCount)
+}
+
+func TestIntegration_InviteCallMembers_SkipsPendingInviteesForSameCall(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	actorID := seedCallUser(t, ctx, pool, "Actor")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	channelID := seedCallChannel(t, ctx, pool, actorID)
+	seedMember(t, ctx, pool, channelID, actorID)
+	seedMember(t, ctx, pool, channelID, inviteeID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, actorID)
+	seedParticipant(t, ctx, pool, callID, actorID)
+	seedPendingInviteWithNotification(t, ctx, pool, callID, channelID, actorID, inviteeID)
+
+	result, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: channelID,
+		ActorID:        actorID,
+		InviteeUserIDs: []uuid.UUID{inviteeID},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.InvitedUserIDs)
+	assert.Equal(t, []uuid.UUID{inviteeID}, result.SkippedUserIDs)
+	assert.Empty(t, result.DirectDeliveries)
+}
+
+func TestIntegration_InviteCallMembers_SkipsUsersWhoAreNotConversationMembers(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	actorID := seedCallUser(t, ctx, pool, "Actor")
+	memberInviteeID := seedCallUser(t, ctx, pool, "Member Invitee")
+	outsiderID := seedCallUser(t, ctx, pool, "Outsider")
+	channelID := seedCallChannel(t, ctx, pool, actorID)
+	seedMember(t, ctx, pool, channelID, actorID)
+	seedMember(t, ctx, pool, channelID, memberInviteeID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, actorID)
+	seedParticipant(t, ctx, pool, callID, actorID)
+
+	result, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: channelID,
+		ActorID:        actorID,
+		InviteeUserIDs: []uuid.UUID{memberInviteeID, outsiderID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{memberInviteeID}, result.InvitedUserIDs)
+	assert.Equal(t, []uuid.UUID{outsiderID}, result.SkippedUserIDs)
+}
+
+func TestIntegration_InviteCallMembers_FailsForNonMemberActor(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	actorID := seedCallUser(t, ctx, pool, "Actor")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	channelID := seedCallChannel(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, channelID, ownerID)
+	seedMember(t, ctx, pool, channelID, inviteeID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, ownerID)
+	seedParticipant(t, ctx, pool, callID, ownerID)
+
+	_, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: channelID,
+		ActorID:        actorID,
+		InviteeUserIDs: []uuid.UUID{inviteeID},
+	})
+	require.ErrorIs(t, err, ErrNotMember)
+}
+
+func TestIntegration_InviteCallMembers_FailsWhenNoActiveCall(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	actorID := seedCallUser(t, ctx, pool, "Actor")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	channelID := seedCallChannel(t, ctx, pool, actorID)
+	seedMember(t, ctx, pool, channelID, actorID)
+	seedMember(t, ctx, pool, channelID, inviteeID)
+
+	_, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: channelID,
+		ActorID:        actorID,
+		InviteeUserIDs: []uuid.UUID{inviteeID},
+	})
+	require.ErrorIs(t, err, ErrCallNotActive)
+}

@@ -65,6 +65,11 @@ type Config struct {
 	AttachmentMaxSizeMB int    `mapstructure:"ATTACHMENT_MAX_SIZE_MB"`
 	AvatarMaxSizeMB     int    `mapstructure:"AVATAR_MAX_SIZE_MB"`
 
+	// Push notifications (VAPID / Web Push)
+	VAPIDPublicKey  string `mapstructure:"VAPID_PUBLIC_KEY"`
+	VAPIDPrivateKey string `mapstructure:"VAPID_PRIVATE_KEY"`
+	VAPIDSubject    string `mapstructure:"VAPID_SUBJECT"` // mailto: or https: URL
+
 	// Observability
 	MetricsPort string `mapstructure:"METRICS_PORT"`
 }
@@ -124,6 +129,10 @@ func Load() (*Config, error) {
 	viper.SetDefault("MINIO_BUCKET", "task-attachments")
 	viper.SetDefault("ATTACHMENT_MAX_SIZE_MB", 50)
 	viper.SetDefault("AVATAR_MAX_SIZE_MB", 5)
+
+	viper.SetDefault("VAPID_PUBLIC_KEY", "")
+	viper.SetDefault("VAPID_PRIVATE_KEY", "")
+	viper.SetDefault("VAPID_SUBJECT", "")
 
 	viper.SetDefault("METRICS_PORT", "9090")
 

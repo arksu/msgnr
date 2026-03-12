@@ -399,6 +399,67 @@
             </div>
 
           </section>
+
+          <!-- ── Notifications Section ───────────────────────────── -->
+          <section aria-labelledby="notifications-section-heading">
+            <h3 id="notifications-section-heading" class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Notifications</h3>
+
+            <!-- Unsupported browser -->
+            <div
+              v-if="pushUnsupported"
+              class="flex items-start gap-3 rounded-lg bg-gray-500/10 border border-gray-500/30 px-4 py-3 text-sm"
+            >
+              <svg class="w-4 h-4 mt-0.5 shrink-0 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/>
+              </svg>
+              <p class="text-gray-400 text-xs">Push notifications are not supported in this browser.</p>
+            </div>
+
+            <!-- iOS not installed -->
+            <IosInstallGuide v-else-if="pushNeedsIosInstall" />
+
+            <!-- Notification permission denied -->
+            <div
+              v-else-if="pushPermission === 'denied'"
+              class="flex items-start gap-3 rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-3 text-sm"
+            >
+              <svg class="w-4 h-4 mt-0.5 shrink-0 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/>
+              </svg>
+              <div class="text-red-300 text-xs">
+                <p class="font-medium">Notification permission denied.</p>
+                <p class="mt-0.5 text-red-400/80">Reset notification permissions in your browser settings, then try again.</p>
+              </div>
+            </div>
+
+            <!-- Push toggle -->
+            <div v-else class="flex items-center justify-between gap-4">
+              <div class="min-w-0">
+                <p class="text-sm font-medium text-white leading-tight">Push notifications</p>
+                <p class="text-[11px] text-gray-500 mt-0.5 leading-snug">
+                  Receive notifications for new messages when Msgnr is closed.
+                </p>
+              </div>
+              <button
+                role="switch"
+                :aria-checked="pushSubscribed"
+                :aria-label="pushSubscribed ? 'Disable push notifications' : 'Enable push notifications'"
+                :disabled="pushLoading"
+                class="relative shrink-0 h-6 w-10 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent"
+                :class="pushSubscribed ? 'bg-accent' : 'bg-gray-600'"
+                @click="togglePush"
+              >
+                <span
+                  class="pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200"
+                  :class="pushSubscribed ? 'translate-x-4' : 'translate-x-0'"
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
+
+            <!-- Error -->
+            <p v-if="pushError" class="mt-2 text-xs text-red-400">{{ pushError }}</p>
+          </section>
         </div>
 
         <!-- ── Footer ─────────────────────────────────────────────── -->
@@ -428,6 +489,8 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { useAudioDevices } from '@/composables/useAudioDevices'
 import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
+import { usePushNotifications } from '@/composables/usePushNotifications'
+import IosInstallGuide from '@/components/IosInstallGuide.vue'
 
 // ── Props / emits ─────────────────────────────────────────────────────────
 
@@ -465,6 +528,28 @@ const {
   stopOutputTest,
   savePrefs,
 } = useAudioDevices()
+
+// ── Push notifications ────────────────────────────────────────────────────
+
+const {
+  permissionState: pushPermission,
+  isSubscribed: pushSubscribed,
+  isLoading: pushLoading,
+  error: pushError,
+  isUnsupported: pushUnsupported,
+  needsIosInstall: pushNeedsIosInstall,
+  subscribe: pushSubscribe,
+  unsubscribe: pushUnsubscribe,
+  checkExistingSubscription,
+} = usePushNotifications()
+
+async function togglePush() {
+  if (pushSubscribed.value) {
+    await pushUnsubscribe()
+  } else {
+    await pushSubscribe()
+  }
+}
 
 // ── Saved-prefs snapshot (for dirty-checking) ─────────────────────────────
 
@@ -521,6 +606,9 @@ watch(
       // loadDevices() enumerates, checks permission, and sets selectedInputId /
       // selectedOutputId from persisted prefs — so they start at the saved value.
       await loadDevices()
+
+      // Sync push notification state with browser
+      checkExistingSubscription()
 
       // Clear any leftover error from a previous session
       testError.value = ''

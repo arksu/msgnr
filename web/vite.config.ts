@@ -14,6 +14,9 @@ export default defineConfig({
       ],
     }),
     VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       registerType: 'prompt',
       includeAssets: [
         'favicon.ico',
@@ -57,7 +60,7 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
+      injectManifest: {
         // Precache: app shell JS/CSS/HTML + SVG + fonts.
         // PNG/ICO icons handled via includeAssets above.
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
@@ -67,49 +70,6 @@ export default defineConfig({
           '**/vendor-livekit-*.js',  // ~439KB, lazy-loaded on call join
           '**/vendor-emoji-*.js',    // ~885KB, lazy-loaded on first emoji click
           '**/vendor-emoji-*.css',   // emoji picker styles
-        ],
-        navigateFallback: 'index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/ws/, /^\/health/, /^\/ready/],
-        // Speed up navigation on Chrome/Edge — network request starts in parallel with SW boot.
-        navigationPreload: true,
-        runtimeCaching: [
-          // LiveKit WebRTC SDK — cache on first call join, serve stale while revalidating
-          {
-            urlPattern: /\/assets\/vendor-livekit-.*\.js$/,
-            handler: 'StaleWhileRevalidate',
-            options: {
-              cacheName: 'vendor-livekit',
-              expiration: { maxEntries: 2, maxAgeSeconds: 30 * 24 * 60 * 60 },
-            },
-          },
-          // Emoji picker data + styles — cache on first emoji click
-          {
-            urlPattern: /\/assets\/vendor-emoji-.*\.(js|css)$/,
-            handler: 'StaleWhileRevalidate',
-            options: {
-              cacheName: 'vendor-emoji',
-              expiration: { maxEntries: 4, maxAgeSeconds: 30 * 24 * 60 * 60 },
-            },
-          },
-          // RNNoise WASM files — large, never change per version, cache aggressively
-          {
-            urlPattern: /\/rnnoise-.*\.js$/,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'rnnoise-wasm',
-              expiration: { maxEntries: 4, maxAgeSeconds: 90 * 24 * 60 * 60 },
-            },
-          },
-          // Avatar images — public endpoint, immutable once uploaded, cache aggressively
-          {
-            urlPattern: /\/api\/public\/avatars\//,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'avatars',
-              expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
         ],
       },
     }),

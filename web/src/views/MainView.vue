@@ -280,6 +280,8 @@ import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
+import { usePushNotifications, pushSupported } from '@/composables/usePushNotifications'
+import { loadPushEndpoint } from '@/services/storage/pushStorage'
 import { loadManualPresencePreference } from '@/services/storage/manualPresenceStorage'
 import {
   loadLastOpenedTaskId,
@@ -323,6 +325,7 @@ const callStore = useCallStore()
 const authStore = useAuthStore()
 const { logout } = useSessionOrchestrator()
 const offlineQueue = useOfflineQueue()
+const { checkExistingSubscription: checkPushSubscription, subscribe: subscribePush } = usePushNotifications()
 const showServerUnavailableAlert = computed(() => authStore.lastAuthError === 'Server is unavailable')
 const handlingIncomingInvite = ref(false)
 const incomingInviteError = ref('')
@@ -700,6 +703,16 @@ watch(() => wsStore.state, async (state) => {
     // Flush any messages that were composed while disconnected.
     // Notify the chat store of status transitions (queued → sending / failed)
     // and start send timeouts for each flushed message.
+    // Re-validate push subscription if user had push enabled before.
+    if (pushSupported && loadPushEndpoint()) {
+      checkPushSubscription().then(() => {
+        // If the browser subscription was invalidated (SW update, etc.),
+        // re-subscribe transparently — permission was already granted.
+        if (!loadPushEndpoint()) {
+          subscribePush().catch(() => {})
+        }
+      })
+    }
     offlineQueue.flush(wsStore, (conversationId, clientMsgId, status, threadRootMessageId, failReason) => {
       if (threadRootMessageId) {
         chatStore.updateThreadSendStatus(threadRootMessageId, clientMsgId, status, failReason)

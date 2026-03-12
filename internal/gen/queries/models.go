@@ -159,6 +159,17 @@ type Notification struct {
 	ResolvedAt sql.NullTime  `json:"resolved_at"`
 }
 
+type PushSubscription struct {
+	ID        uuid.UUID `json:"id"`
+	UserID    uuid.UUID `json:"user_id"`
+	Endpoint  string    `json:"endpoint"`
+	KeyP256dh string    `json:"key_p256dh"`
+	KeyAuth   string    `json:"key_auth"`
+	UserAgent string    `json:"user_agent"`
+	CreatedAt time.Time `json:"created_at"`
+	LastUsed  time.Time `json:"last_used"`
+}
+
 type Reaction struct {
 	MessageID uuid.UUID `json:"message_id"`
 	UserID    uuid.UUID `json:"user_id"`

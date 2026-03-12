@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import {
   CallStatus,
   ConversationType,
@@ -2258,9 +2258,30 @@ export const useChatStore = defineStore('chat', () => {
     if (!present && idx !== -1) msg.myReactions.splice(idx, 1)
   }
 
+  // ── App badge (PWA) ────────────────────────────────────────────────────────
+  // Update the app icon badge count when the total unread changes.
+
+  const totalUnreadCount = computed(() => {
+    let count = 0
+    for (const ch of channels.value) count += ch.unread
+    for (const dm of directMessages.value) count += dm.unread
+    return count
+  })
+
+  watch(totalUnreadCount, (count) => {
+    if ('setAppBadge' in navigator) {
+      if (count > 0) {
+        (navigator as any).setAppBadge(count).catch(() => {})
+      } else {
+        (navigator as any).clearAppBadge().catch(() => {})
+      }
+    }
+  })
+
   return {
     channels,
     directMessages,
+    totalUnreadCount,
     activeChannelId,
     activeChannel,
     activeConversation,

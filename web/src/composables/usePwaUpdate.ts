@@ -1,5 +1,17 @@
 import { useRegisterSW } from 'virtual:pwa-register/vue'
 
+// Module-level reference to the ServiceWorkerRegistration, shared across
+// consumers so usePushNotifications can access registration.pushManager.
+let _swRegistration: ServiceWorkerRegistration | undefined
+
+/**
+ * Returns the active ServiceWorkerRegistration, if available.
+ * Available after the SW has been registered (typically on app startup).
+ */
+export function getSwRegistration(): ServiceWorkerRegistration | undefined {
+  return _swRegistration
+}
+
 /**
  * Composable wrapping service worker registration and update lifecycle.
  *
@@ -11,6 +23,8 @@ import { useRegisterSW } from 'virtual:pwa-register/vue'
 export function usePwaUpdate() {
   const { needRefresh, offlineReady, updateServiceWorker } = useRegisterSW({
     onRegisteredSW(swUrl, registration) {
+      _swRegistration = registration ?? undefined
+
       if (import.meta.env.DEV) {
         console.debug('[PWA] Service worker registered:', swUrl)
       }

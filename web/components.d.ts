@@ -13,6 +13,7 @@ declare module 'vue' {
     ConnectionBanner: typeof import('./src/components/ConnectionBanner.vue')['default']
     DictionariesTab: typeof import('./src/components/admin/DictionariesTab.vue')['default']
     FieldsPanel: typeof import('./src/components/admin/FieldsPanel.vue')['default']
+    IosInstallGuide: typeof import('./src/components/IosInstallGuide.vue')['default']
     MembersPanel: typeof import('./src/components/MembersPanel.vue')['default']
     MessageBubble: typeof import('./src/components/MessageBubble.vue')['default']
     MessageInput: typeof import('./src/components/MessageInput.vue')['default']

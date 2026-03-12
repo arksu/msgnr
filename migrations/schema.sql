@@ -938,3 +938,24 @@ DO $$ BEGIN
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- Push Subscriptions (Web Push / VAPID)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint    TEXT        NOT NULL UNIQUE,
+  key_p256dh  TEXT        NOT NULL,
+  key_auth    TEXT        NOT NULL,
+  user_agent  TEXT        NOT NULL DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+  ON push_subscriptions(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_last_used
+  ON push_subscriptions(last_used);

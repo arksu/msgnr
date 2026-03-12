@@ -48,6 +48,13 @@ type outboundMsg struct {
 	env *packetspb.Envelope
 }
 
+// PushNotifier is called for DirectDeliveries targeting users with no active
+// WebSocket sessions. Implementations send Web Push notifications.
+type PushNotifier interface {
+	PushChatDeliveries(deliveries []chat.DirectDelivery)
+	PushCallDeliveries(deliveries []calls.DirectDelivery)
+}
+
 // Server handles WebSocket connections and wires each authenticated session
 // to the event Bus for async server-push delivery.
 type Server struct {
@@ -65,6 +72,7 @@ type Server struct {
 	sessionsByUser map[string]map[chan outboundMsg]struct{}
 	typingMu       sync.Mutex
 	typingExpiry   map[string]time.Time
+	pushNotifier   PushNotifier // optional; nil means push disabled
 }
 
 // NewServer creates a Server. bus may be nil during tests that don't exercise
@@ -459,6 +467,20 @@ func (s *Server) registerUserSession(userID string, outboundCh chan outboundMsg)
 	}
 }
 
+// SetPushNotifier configures the optional push notifier. Must be called
+// before the server starts accepting connections.
+func (s *Server) SetPushNotifier(pn PushNotifier) {
+	s.pushNotifier = pn
+}
+
+// HasActiveSessions returns true if the given user has at least one
+// authenticated WebSocket session connected right now.
+func (s *Server) HasActiveSessions(userID string) bool {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	return len(s.sessionsByUser[userID]) > 0
+}
+
 func (s *Server) sendDirectEnvelope(userIDs []string, env *packetspb.Envelope) {
 	s.sessionMu.RLock()
 	targets := make([]chan outboundMsg, 0)
@@ -478,6 +500,7 @@ func (s *Server) sendDirectEnvelope(userIDs []string, env *packetspb.Envelope) {
 }
 
 func (s *Server) sendDirectServerEvents(deliveries []chat.DirectDelivery) {
+	var offlineDeliveries []chat.DirectDelivery
 	for _, delivery := range deliveries {
 		if delivery.UserID == "" || delivery.Event == nil {
 			continue
@@ -488,10 +511,17 @@ func (s *Server) sendDirectServerEvents(deliveries []chat.DirectDelivery) {
 				ServerEvent: delivery.Event,
 			},
 		})
+		if s.pushNotifier != nil && !s.HasActiveSessions(delivery.UserID) {
+			offlineDeliveries = append(offlineDeliveries, delivery)
+		}
+	}
+	if len(offlineDeliveries) > 0 {
+		go s.pushNotifier.PushChatDeliveries(offlineDeliveries)
 	}
 }
 
 func (s *Server) sendDirectCallServerEvents(deliveries []calls.DirectDelivery) {
+	var offlineDeliveries []calls.DirectDelivery
 	for _, delivery := range deliveries {
 		if delivery.UserID == "" || delivery.Event == nil {
 			continue
@@ -502,6 +532,12 @@ func (s *Server) sendDirectCallServerEvents(deliveries []calls.DirectDelivery) {
 				ServerEvent: delivery.Event,
 			},
 		})
+		if s.pushNotifier != nil && !s.HasActiveSessions(delivery.UserID) {
+			offlineDeliveries = append(offlineDeliveries, delivery)
+		}
+	}
+	if len(offlineDeliveries) > 0 {
+		go s.pushNotifier.PushCallDeliveries(offlineDeliveries)
 	}
 }
 

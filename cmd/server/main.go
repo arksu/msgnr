@@ -21,6 +21,7 @@ import (
 	"msgnr/internal/database"
 	"msgnr/internal/events"
 	"msgnr/internal/logger"
+	"msgnr/internal/push"
 	"msgnr/internal/storage"
 	syncsvc "msgnr/internal/sync"
 	"msgnr/internal/tasks"
@@ -82,6 +83,40 @@ func main() {
 	wsServer := ws.NewServer(db, cfg, authSvc, bootstrapSvc, callSvc, chatSvc, syncSvc, eventBus)
 	chatHandler.SetNotifier(wsServer)
 
+	// Push notifications (Web Push / VAPID)
+	pushSvc := push.NewService(db.Pool, cfg, wsServer)
+	pushHandler := push.NewHandler(pushSvc, authSvc)
+	wsServer.SetPushNotifier(pushSvc)
+	if pushSvc.Enabled() {
+		if cfg.VAPIDSubject == "" {
+			log.Warn("VAPID_SUBJECT is not set; push delivery will fail — set to mailto:admin@yourdomain.com")
+		}
+		log.Info("Push notifications enabled (VAPID keys configured)")
+	} else {
+		log.Info("Push notifications disabled (VAPID keys not configured)")
+	}
+
+	// Periodic cleanup of stale push subscriptions (unused for 30+ days).
+	pushCleanupCtx, pushCleanupCancel := context.WithCancel(context.Background())
+	pushCleanupDone := make(chan struct{})
+	go func() {
+		defer close(pushCleanupDone)
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pushCleanupCtx.Done():
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if err := pushSvc.CleanupStaleSubscriptions(ctx); err != nil {
+					log.Warn("Push subscription cleanup failed", zap.Error(err))
+				}
+				cancel()
+			}
+		}
+	}()
+
 	callExpiryCtx, callExpiryCancel := context.WithCancel(context.Background())
 	callExpiryDone := make(chan struct{})
 	go func() {
@@ -130,6 +165,7 @@ func main() {
 	callHandler.RegisterRoutes(mux)
 	adminHandler.RegisterRoutes(mux)
 	tasksHandler.RegisterRoutes(mux)
+	pushHandler.RegisterRoutes(mux)
 
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -179,7 +215,9 @@ func main() {
 		log.Error("Metrics server forced shutdown", zap.Error(err))
 	}
 
-	// Stop the event listener and wait for its goroutine to exit.
+	// Stop background goroutines and wait for them to exit.
+	pushCleanupCancel()
+	<-pushCleanupDone
 	callExpiryCancel()
 	<-callExpiryDone
 	listenerCancel()

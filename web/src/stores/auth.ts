@@ -27,6 +27,7 @@ import { clearManualPresencePreference } from '@/services/storage/manualPresence
 import { clearAllLastOpenedConversations } from '@/services/storage/lastConversationStorage'
 import { clearStoredThreadSummaries } from '@/services/storage/threadSummaryStorage'
 import { clearLastOpenedTaskId } from '@/services/storage/lastTaskRouteStorage'
+import { clearPushEndpoint } from '@/services/storage/pushStorage'
 import { cacheUserProfile, loadCachedUserProfile, clearAllData as clearIndexedDb } from '@/services/db/cache'
 
 export type AuthState =
@@ -307,6 +308,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearAllLastOpenedConversations()
     clearStoredThreadSummaries()
     clearLastOpenedTaskId()
+    clearPushEndpoint()
     // Wipe all IndexedDB cached data (fire-and-forget)
     void clearIndexedDb()
     authState.value = 'ANON'

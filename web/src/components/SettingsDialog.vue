@@ -404,9 +404,29 @@
           <section aria-labelledby="notifications-section-heading">
             <h3 id="notifications-section-heading" class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Notifications</h3>
 
+            <div
+              v-if="isDesktopRuntime"
+              class="rounded-lg border border-chat-border bg-sidebar-bg/60 px-4 py-3 text-sm"
+            >
+              <p class="text-white text-sm font-medium">Desktop notifications</p>
+              <p class="mt-1 text-xs text-gray-400">
+                Msgnr uses native macOS notifications in desktop mode. Push subscription settings are web-only.
+              </p>
+              <div class="mt-3 flex items-center justify-between gap-3">
+                <span class="text-xs text-gray-400">Permission: {{ desktopPermissionLabel }}</span>
+                <button
+                  type="button"
+                  class="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover transition-colors"
+                  @click="requestDesktopNotificationPermission"
+                >
+                  Request permission
+                </button>
+              </div>
+            </div>
+
             <!-- Unsupported browser -->
             <div
-              v-if="pushUnsupported"
+              v-else-if="pushUnsupported"
               class="flex items-start gap-3 rounded-lg bg-gray-500/10 border border-gray-500/30 px-4 py-3 text-sm"
             >
               <svg class="w-4 h-4 mt-0.5 shrink-0 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
@@ -459,7 +479,7 @@
             </div>
 
             <!-- Error -->
-            <p v-if="pushError" class="mt-2 text-xs text-red-400">{{ pushError }}</p>
+            <p v-if="!isDesktopRuntime && pushError" class="mt-2 text-xs text-red-400">{{ pushError }}</p>
           </section>
         </div>
 
@@ -492,6 +512,8 @@ import { useAudioDevices } from '@/composables/useAudioDevices'
 import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
 import { usePushNotifications } from '@/composables/usePushNotifications'
 import IosInstallGuide from '@/components/IosInstallGuide.vue'
+import { isTauriRuntime } from '@/platform/runtime'
+import { getPlatformOrNull } from '@/platform'
 
 // ── Props / emits ─────────────────────────────────────────────────────────
 
@@ -543,6 +565,14 @@ const {
   unsubscribe: pushUnsubscribe,
   checkExistingSubscription,
 } = usePushNotifications()
+const isDesktopRuntime = isTauriRuntime()
+const desktopPermission = ref<'granted' | 'denied' | 'default'>('default')
+
+const desktopPermissionLabel = computed(() => {
+  if (desktopPermission.value === 'granted') return 'granted'
+  if (desktopPermission.value === 'denied') return 'denied'
+  return 'not requested'
+})
 
 async function togglePush() {
   if (pushSubscribed.value) {
@@ -550,6 +580,12 @@ async function togglePush() {
   } else {
     await pushSubscribe()
   }
+}
+
+async function requestDesktopNotificationPermission() {
+  const platform = getPlatformOrNull()
+  if (!platform) return
+  desktopPermission.value = await platform.notifications.requestPermission()
 }
 
 // ── Saved-prefs snapshot (for dirty-checking) ─────────────────────────────
@@ -608,8 +644,10 @@ watch(
       // selectedOutputId from persisted prefs — so they start at the saved value.
       await loadDevices()
 
-      // Sync push notification state with browser
-      checkExistingSubscription()
+      // Sync push notification state with browser (web/PWA only).
+      if (!isDesktopRuntime) {
+        checkExistingSubscription()
+      }
 
       // Clear any leftover error from a previous session
       testError.value = ''

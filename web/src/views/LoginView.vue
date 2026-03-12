@@ -16,6 +16,21 @@
       <!-- Card -->
       <div class="bg-chat-input border border-chat-border rounded-xl p-7 shadow-2xl">
         <form @submit.prevent="handleSubmit" novalidate>
+          <div v-if="isDesktopLogin" class="mb-4">
+            <label class="block text-sm font-medium text-gray-300 mb-1.5">Backend URL</label>
+            <input
+              v-model="form.backendUrl"
+              type="url"
+              autocomplete="url"
+              placeholder="https://chat.company.internal"
+              required
+              class="w-full bg-sidebar-bg border border-chat-border rounded-lg px-3 py-2.5 text-white placeholder-gray-600 text-sm outline-none focus:border-accent transition-colors"
+              :class="errors.backendUrl ? 'border-red-500' : ''"
+              @blur="validateBackendUrl"
+            />
+            <p class="text-gray-500 text-xs mt-1">Desktop client connects to this Msgnr server.</p>
+            <p v-if="errors.backendUrl" class="text-red-400 text-xs mt-1">{{ errors.backendUrl }}</p>
+          </div>
 
           <div class="mb-4">
             <label class="block text-sm font-medium text-gray-300 mb-1.5">Email</label>
@@ -96,14 +111,41 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
+import { isTauriRuntime } from '@/platform/runtime'
+import {
+  getBackendBaseUrl,
+  normalizeBackendBaseUrl,
+  setBackendBaseUrl,
+} from '@/services/runtime/backendEndpoint'
 
 const router = useRouter()
 const authStore = useAuthStore()
 const { login } = useSessionOrchestrator()
+const isDesktopLogin = isTauriRuntime()
 
-const form = reactive({ email: '', password: '' })
+const form = reactive({
+  backendUrl: isDesktopLogin ? getBackendBaseUrl() : '',
+  email: '',
+  password: '',
+})
 const showPassword = ref(false)
-const errors = reactive({ email: '', password: '' })
+const errors = reactive({ backendUrl: '', email: '', password: '' })
+
+function validateBackendUrl() {
+  if (!isDesktopLogin) return true
+  if (!form.backendUrl) {
+    errors.backendUrl = 'Backend URL is required'
+    return false
+  }
+  const normalized = normalizeBackendBaseUrl(form.backendUrl)
+  if (!normalized) {
+    errors.backendUrl = 'Enter a valid http(s) backend URL'
+    return false
+  }
+  errors.backendUrl = ''
+  form.backendUrl = normalized
+  return true
+}
 
 function validateEmail() {
   if (!form.email) { errors.email = 'Email is required'; return false }
@@ -117,10 +159,14 @@ function validatePassword() {
 }
 
 async function handleSubmit() {
+  const b = validateBackendUrl()
   const e = validateEmail()
   const p = validatePassword()
-  if (!e || !p) return
+  if (!b || !e || !p) return
   try {
+    if (isDesktopLogin) {
+      setBackendBaseUrl(form.backendUrl)
+    }
     await login(form.email, form.password)
     router.push({ name: 'main' })
   } catch {

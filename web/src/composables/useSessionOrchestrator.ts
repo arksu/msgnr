@@ -2,8 +2,8 @@ import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useWsStore, type WsErrorKind } from '@/stores/ws'
+import { resolveWsUrl } from '@/services/runtime/backendEndpoint'
 
-const WS_URL = '/ws'
 const RECONNECT_INTERVAL_MS = 5_000
 
 // ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ export function useSessionOrchestrator() {
     let elapsed = 0
 
     ws.setPendingAuthToken(accessToken)
-    ws.connect(WS_URL)
+    ws.connect(resolveWsUrl())
     let timer: ReturnType<typeof setInterval> | null = null
 
     const finalize = (success: boolean) => {

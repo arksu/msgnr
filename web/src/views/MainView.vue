@@ -284,6 +284,8 @@ import { usePushNotifications, pushSupported } from '@/composables/usePushNotifi
 import { loadPushEndpoint } from '@/services/storage/pushStorage'
 import { loadManualPresencePreference } from '@/services/storage/manualPresenceStorage'
 import { useNotificationSoundEngine } from '@/services/sound'
+import { getPlatformOrNull } from '@/platform'
+import { isTauriRuntime } from '@/platform/runtime'
 import {
   loadLastOpenedTaskId,
   saveLastOpenedTaskId,
@@ -326,8 +328,9 @@ const callStore = useCallStore()
 const authStore = useAuthStore()
 const { logout } = useSessionOrchestrator()
 const offlineQueue = useOfflineQueue()
-// TODO(phase-5-platform-adapter): route app notification sounds via usePlatform().
 const soundEngine = useNotificationSoundEngine()
+const platform = getPlatformOrNull()
+const isDesktopRuntime = isTauriRuntime()
 const { checkExistingSubscription: checkPushSubscription, subscribe: subscribePush } = usePushNotifications()
 const showServerUnavailableAlert = computed(() => authStore.lastAuthError === 'Server is unavailable')
 const handlingIncomingInvite = ref(false)
@@ -545,6 +548,14 @@ function dismissInvite(inviteId: string) {
   dismissedInviteIds.value = Array.from(new Set([...dismissedInviteIds.value, inviteId]))
 }
 
+function conversationNotificationTitle(conversationId: string): string {
+  const channel = chatStore.channels.find(item => item.id === conversationId)
+  if (channel) return `#${channel.name}`
+  const dm = chatStore.directMessages.find(item => item.id === conversationId)
+  if (dm) return dm.displayName
+  return 'Msgnr'
+}
+
 function closeSettings() {
   settingsOpen.value = false
   settingsError.value = ''
@@ -740,7 +751,7 @@ watch(() => wsStore.state, async (state) => {
     // Notify the chat store of status transitions (queued → sending / failed)
     // and start send timeouts for each flushed message.
     // Re-validate push subscription if user had push enabled before.
-    if (pushSupported && loadPushEndpoint()) {
+    if (!isDesktopRuntime && pushSupported && loadPushEndpoint()) {
       checkPushSubscription().then(() => {
         // If the browser subscription was invalidated (SW update, etc.),
         // re-subscribe transparently — permission was already granted.
@@ -774,7 +785,18 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  unsubscribeIncomingMessageSound = chatStore.onIncomingMessageNotification(() => {
+  unsubscribeIncomingMessageSound = chatStore.onIncomingMessageNotification((event) => {
+    if (platform?.type === 'tauri') {
+      void platform.notifications.show({
+        title: conversationNotificationTitle(event.conversationId),
+        body: 'New message',
+        conversationId: event.conversationId,
+        tag: `conv:${event.conversationId}`,
+      })
+      void platform.notifications.playSound?.('message-ping')
+      return
+    }
+
     void soundEngine.playMessagePing()
   })
 

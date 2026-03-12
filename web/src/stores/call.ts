@@ -6,6 +6,7 @@ import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useNotificationSoundEngine } from '@/services/sound'
 import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
+import { getPlatformOrNull } from '@/platform'
 
 // RNNoise blob URL is built once per page load and reused across all mute/unmute
 // cycles. Fetching + Blob-URL creation is expensive (~network round trip + WASM
@@ -176,6 +177,7 @@ export const useCallStore = defineStore('call', () => {
 
   const chatStore = useChatStore()
   const soundEngine = useNotificationSoundEngine()
+  const platform = getPlatformOrNull()
 
   let pendingJoinResolve: ((resp: { livekitUrl: string; livekitToken: string; livekitRoom: string }) => void) | null = null
   let pendingJoinReject: ((error: Error) => void) | null = null
@@ -560,7 +562,11 @@ export const useCallStore = defineStore('call', () => {
       clearEmptyCallAutoCloseTimer()
       mediaVersion.value += 1
       if (!isKnownParticipant && connected.value && !suppressParticipantChangeSounds) {
-        void soundEngine.playCallMemberJoined()
+        if (platform?.type === 'tauri') {
+          void platform.notifications.playSound?.('call-member-joined')
+        } else {
+          void soundEngine.playCallMemberJoined()
+        }
       }
     })
 
@@ -577,7 +583,11 @@ export const useCallStore = defineStore('call', () => {
       }
       mediaVersion.value += 1
       if (isKnownParticipant && connected.value && !suppressParticipantChangeSounds) {
-        void soundEngine.playCallMemberLeft()
+        if (platform?.type === 'tauri') {
+          void platform.notifications.playSound?.('call-member-left')
+        } else {
+          void soundEngine.playCallMemberLeft()
+        }
       }
     })
 

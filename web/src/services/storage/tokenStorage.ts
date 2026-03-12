@@ -1,28 +1,95 @@
 import { storage } from '@/services/storage/storageAdapter'
+import { getPlatformOrNull } from '@/platform'
 
 const REFRESH_KEY = 'msgnr.refresh_token'
 const ACCESS_KEY = 'msgnr.access_token'
+const SECURE_REFRESH_KEY = 'msgnr.secure.refresh_token'
+const SECURE_ACCESS_KEY = 'msgnr.secure.access_token'
+
+let refreshCache: string | null = storage.getItem(REFRESH_KEY)
+let accessCache: string | null = storage.getItem(ACCESS_KEY)
+let secureHydrated = false
+
+async function writeSecureItem(key: string, value: string): Promise<void> {
+  const platform = getPlatformOrNull()
+  if (!platform?.storage.setSecureItem) return
+  try {
+    await platform.storage.setSecureItem(key, value)
+  } catch {
+    // Best effort fallback to local storage only.
+  }
+}
+
+async function deleteSecureItem(key: string): Promise<void> {
+  const platform = getPlatformOrNull()
+  if (!platform?.storage.deleteSecureItem) return
+  try {
+    await platform.storage.deleteSecureItem(key)
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
+export async function hydrateTokenStorageFromSecureStore(): Promise<void> {
+  if (secureHydrated) return
+  secureHydrated = true
+
+  const platform = getPlatformOrNull()
+  if (!platform?.storage.getSecureItem) return
+
+  try {
+    const [secureAccess, secureRefresh] = await Promise.all([
+      platform.storage.getSecureItem(SECURE_ACCESS_KEY),
+      platform.storage.getSecureItem(SECURE_REFRESH_KEY),
+    ])
+
+    if (secureAccess) {
+      accessCache = secureAccess
+      storage.setItem(ACCESS_KEY, secureAccess)
+    }
+    if (secureRefresh) {
+      refreshCache = secureRefresh
+      storage.setItem(REFRESH_KEY, secureRefresh)
+    }
+  } catch {
+    // Non-fatal: keep local storage values.
+  }
+}
 
 export function getRefreshToken(): string | null {
-  return storage.getItem(REFRESH_KEY)
+  if (refreshCache == null) {
+    refreshCache = storage.getItem(REFRESH_KEY)
+  }
+  return refreshCache
 }
 
 export function setRefreshToken(token: string): void {
+  refreshCache = token
   storage.setItem(REFRESH_KEY, token)
+  void writeSecureItem(SECURE_REFRESH_KEY, token)
 }
 
 export function clearRefreshToken(): void {
+  refreshCache = null
   storage.removeItem(REFRESH_KEY)
+  void deleteSecureItem(SECURE_REFRESH_KEY)
 }
 
 export function getAccessToken(): string | null {
-  return storage.getItem(ACCESS_KEY)
+  if (accessCache == null) {
+    accessCache = storage.getItem(ACCESS_KEY)
+  }
+  return accessCache
 }
 
 export function setAccessToken(token: string): void {
+  accessCache = token
   storage.setItem(ACCESS_KEY, token)
+  void writeSecureItem(SECURE_ACCESS_KEY, token)
 }
 
 export function clearAccessToken(): void {
+  accessCache = null
   storage.removeItem(ACCESS_KEY)
+  void deleteSecureItem(SECURE_ACCESS_KEY)
 }

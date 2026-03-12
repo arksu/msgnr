@@ -21,6 +21,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 100, cfg.BootstrapDefaultPageSize)
 	assert.Equal(t, 50, cfg.ChatHistoryPageSize)
 	assert.Equal(t, "9090", cfg.MetricsPort)
+	assert.Equal(t, "*", cfg.CORSAllowedOrigins)
 }
 
 func TestLoad_EnvOverrides(t *testing.T) {

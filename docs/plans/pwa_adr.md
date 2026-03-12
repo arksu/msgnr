@@ -10,7 +10,7 @@
 
 Msgnr is a team messenger built with Vue 3 + Vite (frontend) and Go (backend). It currently runs as a plain SPA served over HTTPS. Users access it via browser tabs. There is no installability, no push notifications when the tab is closed, no offline resilience, and no app icon on device home screens.
 
-Users expect a messenger to behave like a native app: always reachable, showing notifications for new messages, and launching instantly. The project also plans future Electron/Tauri desktop builds.
+Users expect a messenger to behave like a native app: always reachable, showing notifications for new messages, and launching instantly. The project plans a Tauri desktop client alongside the web/PWA client.
 
 The original requirements document (`docs/plans/pwa.md`) defines four architectural layers: App Shell, Realtime, Push, and Desktop-ready.
 
@@ -129,21 +129,20 @@ We will implement a Progressive Web App using `vite-plugin-pwa` (Workbox-based) 
 
 ---
 
-### AD-8: Platform abstraction layer for Electron and Tauri
+### AD-8: Platform abstraction layer for PWA and Tauri
 
-**Decision:** Introduce a `PlatformAdapter` interface that abstracts notifications, system tray, window management, and secure storage behind a pluggable implementation. Ship concrete adapter skeletons for **both** Electron and Tauri.
+**Decision:** Introduce a `PlatformAdapter` interface that abstracts notifications, system tray, window management, runtime endpoint selection, and secure storage behind a pluggable implementation. Ship concrete adapters for **PWA and Tauri**.
 
 **Rationale:**
-- The project plans to ship desktop apps. Both Electron and Tauri are viable runtimes with different tradeoffs.
-- Without an abstraction, notification code, badge updates, tray management, and window controls would be scattered across components with platform-specific branching.
-- A thin adapter interface (implemented as `PwaAdapter` now, with `ElectronAdapter` and `TauriAdapter` skeletons) means desktop builds only need to fill in the adapter implementations.
+- The project ships one desktop runtime (Tauri). Without an abstraction, notification code, badge updates, tray management, backend endpoint selection, and window controls would be scattered across components with platform-specific branching.
+- A thin adapter interface (`PwaAdapter`, `TauriAdapter`) keeps feature code shared and isolates platform-only concerns.
 - The interface is intentionally minimal — only methods that differ between PWA and desktop. Shared code (Vue components, Pinia stores, WS protocol) stays untouched.
-- Desktop adapters are lazy-imported via dynamic `import()` so the PWA build never bundles Electron/Tauri code.
-- Runtime detection uses globals (`window.__ELECTRON__`, `window.__TAURI__`) set by the respective runtimes — no user-agent sniffing.
+- Desktop adapters are lazy-imported via dynamic `import()` so the PWA build never bundles Tauri code.
+- Runtime detection uses `window.__TAURI__` set by the desktop shell — no user-agent sniffing.
 
 **What this does NOT do:** It does not abstract the entire app. Vue components, routing, stores, and the WS layer remain platform-agnostic by nature. The adapter only covers the delta: notifications, system integration, and window control.
 
-**Dual-runtime strategy:** Electron is the primary desktop target (mature ecosystem, broader plugin support). Tauri is the secondary target for lightweight deployments (~10MB vs ~150MB binary). The shared `PlatformAdapter` interface ensures feature parity is achievable without duplicating business logic.
+**Runtime strategy:** Tauri is the desktop runtime. The shared `PlatformAdapter` interface ensures feature parity between web/PWA and desktop without duplicating business logic.
 
 ---
 
@@ -227,22 +226,32 @@ We will implement a Progressive Web App using `vite-plugin-pwa` (Workbox-based) 
 
 ---
 
-### AD-14: Dual desktop runtime strategy (Electron + Tauri)
+### AD-14: Tauri-only desktop runtime strategy
 
-**Decision:** Plan for both Electron and Tauri desktop builds, with Electron as the primary target and Tauri as the secondary lightweight target. Both share the same Vue codebase via the `PlatformAdapter` interface.
+**Decision:** Plan for Tauri as the only desktop runtime for v1. Web/PWA and Tauri share the same Vue codebase via the `PlatformAdapter` interface.
 
 **Rationale:**
-- Electron pros: mature ecosystem, extensive plugin library, broad platform support, well-understood security model (contextIsolation + sandbox). Electron cons: large binary (~150MB), high memory usage, Chromium update lag.
-- Tauri pros: small binary (~10MB), lower memory usage, Rust backend for native performance, modern security model. Tauri cons: v2 plugin ecosystem is less mature, some Electron-equivalent features require custom Rust code, smaller community for troubleshooting.
-- The `PlatformAdapter` interface (AD-8) makes dual-runtime viable: the adapter layer is thin (~200 lines per implementation), while the shared Vue/Pinia/WS layer is >95% of the frontend codebase.
-- Starting with Electron for the first desktop release minimizes risk (proven path). Tauri can follow for deployments where binary size matters (e.g., auto-update bandwidth, restricted environments).
+- Tauri provides a small binary footprint and native integrations needed for production desktop features (tray, keyring, updater, notifications).
+- Maintaining one desktop runtime keeps scope focused for GA while preserving shared business logic through the adapter.
+- The adapter layer remains thin relative to shared Vue/Pinia/WS code.
 
 **Alternatives considered:**
-- Electron only: misses the Tauri size/performance advantage
-- Tauri only: higher risk due to less mature plugin ecosystem for features like notifications, autostart, keyring
-- Neutral: no preference forces a decision at build time, risking scope creep
+- Electron + Tauri dual runtime: increases implementation and maintenance cost for no immediate GA value
+- Electron only: larger binary and runtime overhead
+- No desktop runtime at GA: does not meet the planned GA client matrix (web/PWA + macOS desktop)
 
-**Tradeoff:** Maintaining two adapter implementations adds marginal effort (~1 day for skeleton, ~2-3 days for full implementation per platform). This is acceptable given the 95%+ code sharing via the adapter pattern.
+**Tradeoff:** Tauri plugin and command-surface maturity still requires careful testing, but this is acceptable given the reduced scope and shared UI/business layer.
+
+---
+
+### AD-15: Production v1 scope constraints
+
+**Decision:** Production v1 targets self-hosted single-instance deployments with local auth only, minimal compliance scope, and no formal SLO target.
+
+**Rationale:**
+- Matches current system architecture and operational model (single authority server).
+- Keeps GA scope focused on Chat + Calls + Tasks plus desktop readiness.
+- Defers enterprise identity federation and advanced compliance workflows to later phases.
 
 ---
 
@@ -253,7 +262,7 @@ We will implement a Progressive Web App using `vite-plugin-pwa` (Workbox-based) 
 - Users receive push notifications when the app is closed
 - App shell loads instantly even on unreliable networks
 - Cached conversations provide meaningful "instant start" on cold launch
-- Platform abstraction reduces future Electron/Tauri integration effort — adapter skeletons for both runtimes are ready
+- Platform abstraction keeps web/PWA and Tauri codepaths clean and maintainable
 - Badge API provides unread count on app icon (where supported)
 - Per-channel notification levels (ALL/MENTIONS_ONLY/NOTHING) give users Slack-style control over notification noise
 - Dormant mute infrastructure is fully activated — no more dead code in schema/proto
@@ -267,7 +276,7 @@ We will implement a Progressive Web App using `vite-plugin-pwa` (Workbox-based) 
 - Multi-tab coordination via BroadcastChannel adds complexity to the WS lifecycle
 - Notification level enforcement adds a query to the push delivery hot path (mitigated by batching)
 - Proto field 6 type change requires coordinated server+client deploy
-- Dual desktop runtime strategy means two adapter implementations to maintain (mitigated by thin adapter layer)
+- Tauri-native command/plugin surface adds desktop-specific test and release overhead
 
 ### Neutral
 - Build output increases slightly (SW + Workbox runtime ~20KB gzipped)

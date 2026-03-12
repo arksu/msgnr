@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -186,7 +187,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,
-		Handler:      mux,
+		Handler:      withCORS(mux, cfg.CORSAllowedOrigins),
 		ReadTimeout:  cfg.HTTPReadTimeout,
 		WriteTimeout: cfg.HTTPWriteTimeout,
 		IdleTimeout:  cfg.HTTPIdleTimeout,
@@ -266,4 +267,54 @@ func readinessHandler(db *database.DB) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ready"}`))
 	}
+}
+
+func withCORS(next http.Handler, allowedOriginsRaw string) http.Handler {
+	allowedOrigins := map[string]struct{}{}
+	allowAll := false
+
+	for _, raw := range strings.Split(allowedOriginsRaw, ",") {
+		origin := strings.TrimSpace(raw)
+		if origin == "" {
+			continue
+		}
+		if origin == "*" {
+			allowAll = true
+			break
+		}
+		allowedOrigins[origin] = struct{}{}
+	}
+	if allowedOriginsRaw == "" {
+		allowAll = true
+	}
+
+	allowHeaders := "Authorization, Content-Type, Accept, X-Requested-With"
+	allowMethods := "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin != "" {
+			if allowAll {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			} else if _, ok := allowedOrigins[origin]; ok {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
+		}
+
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", allowMethods)
+			reqHeaders := strings.TrimSpace(r.Header.Get("Access-Control-Request-Headers"))
+			if reqHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+			} else {
+				w.Header().Set("Access-Control-Allow-Headers", allowHeaders)
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

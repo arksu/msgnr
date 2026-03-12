@@ -1,7 +1,7 @@
 <template>
   <router-view />
 
-  <PwaUpdateBanner />
+  <PwaUpdateBanner v-if="showPwaBanner" />
 
   <Teleport to="body">
     <div
@@ -79,11 +79,13 @@ import { useAuthStore } from '@/stores/auth'
 import { AuthApiError } from '@/services/http/authApi'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import PwaUpdateBanner from '@/components/PwaUpdateBanner.vue'
+import { isTauriRuntime } from '@/platform/runtime'
 
 const router = useRouter()
 const authStore = useAuthStore()
 const { isStartupLoading, startupMessage } = useSessionOrchestrator()
 const routerReady = ref(false)
+const showPwaBanner = !isTauriRuntime()
 
 onMounted(() => {
   router.isReady().finally(() => {

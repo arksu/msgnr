@@ -7,6 +7,7 @@ import {
   setAccessToken,
   setRefreshToken,
 } from '@/services/storage/tokenStorage'
+import { resolveApiBaseUrl } from '@/services/runtime/backendEndpoint'
 
 interface RefreshResponse {
   access_token: string
@@ -35,7 +36,7 @@ async function refreshAccessToken(): Promise<string | null> {
     const { data } = await axios.post<RefreshResponse>('/api/auth/refresh', {
       refresh_token: refreshToken,
     }, {
-      baseURL: '/',
+      baseURL: resolveApiBaseUrl(),
     })
     if (!data?.access_token || !data?.refresh_token) {
       return null
@@ -58,8 +59,9 @@ async function refreshAccessToken(): Promise<string | null> {
  * Each service module calls this once at module load time.
  */
 export function createAuthenticatedClient() {
-  const http = axios.create({ baseURL: '/' })
+  const http = axios.create({ baseURL: resolveApiBaseUrl() })
   http.interceptors.request.use((config) => {
+    config.baseURL = resolveApiBaseUrl()
     const token = getAccessToken()
     if (token) config.headers.Authorization = `Bearer ${token}`
     return config

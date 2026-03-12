@@ -74,6 +74,9 @@ type Config struct {
 
 	// Observability
 	MetricsPort string `mapstructure:"METRICS_PORT"`
+
+	// CORS
+	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"` // comma-separated origins or "*"
 }
 
 func (c *Config) IsDev() bool {
@@ -139,6 +142,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("PUSH_TTL_SECONDS", 60)
 
 	viper.SetDefault("METRICS_PORT", "9090")
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", "*")
 
 	// Read .env file if present; ignore missing file
 	viper.ReadInConfig()

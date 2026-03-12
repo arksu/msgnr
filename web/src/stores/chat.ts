@@ -45,6 +45,7 @@ import { listConversationMessages, listDmCandidates } from '@/services/http/chat
 import type { ConversationMessageItem } from '@/services/http/chatApi'
 import { getOrCreateClientInstanceId } from '@/services/storage/clientInstanceStorage'
 import { generateId } from '@/services/id'
+import { getPlatformOrNull } from '@/platform'
 import {
   cacheConversations,
   loadCachedConversations,
@@ -2329,7 +2330,17 @@ export const useChatStore = defineStore('chat', () => {
   })
 
   watch(totalUnreadCount, (count) => {
-    if ('setAppBadge' in navigator) {
+    const platform = getPlatformOrNull()
+    if (platform) {
+      if (count > 0) {
+        void platform.notifications.setBadge(count)
+      } else {
+        void platform.notifications.clearBadge()
+      }
+      return
+    }
+
+    if (typeof navigator !== 'undefined' && 'setAppBadge' in navigator) {
       if (count > 0) {
         (navigator as any).setAppBadge(count).catch(() => {})
       } else {

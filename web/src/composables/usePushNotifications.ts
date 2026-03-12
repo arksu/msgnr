@@ -2,6 +2,7 @@ import { ref, computed, readonly } from 'vue'
 import { getSwRegistration } from '@/composables/usePwaUpdate'
 import { getVapidPublicKey, subscribePush, unsubscribePush } from '@/services/http/pushApi'
 import { savePushEndpoint, loadPushEndpoint, clearPushEndpoint } from '@/services/storage/pushStorage'
+import { isTauriRuntime } from '@/platform/runtime'
 
 // ---------------------------------------------------------------------------
 // Module-level state (singleton across components)
@@ -21,6 +22,7 @@ const error = ref<string | null>(null)
 /** True when the browser supports push notifications via a service worker. */
 export const pushSupported =
   typeof window !== 'undefined' &&
+  !isTauriRuntime() &&
   'serviceWorker' in navigator &&
   'PushManager' in window &&
   'Notification' in window

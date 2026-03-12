@@ -54,6 +54,7 @@
       <div
         ref="scrollEl"
         class="h-full overflow-y-auto px-4 py-4 space-y-0.5"
+        style="overflow-anchor: none; overscroll-behavior-y: contain;"
         @scroll.passive="handleScroll"
       >
         <template v-if="messages.length === 0">
@@ -69,15 +70,19 @@
         </template>
 
         <template v-else>
-          <MessageBubble
+          <div
             v-for="(msg, idx) in messages"
             :key="msg.id"
-            :message="msg"
-            :show-header="shouldShowHeader(idx)"
-            :thread-reply-count="threadReplyCount(msg.id)"
-            :is-active-thread="chatStore.activeThreadRootId === msg.id"
-            @open-thread="openThreadFromMessage"
-          />
+            :data-message-id="msg.id"
+          >
+            <MessageBubble
+              :message="msg"
+              :show-header="shouldShowHeader(idx)"
+              :thread-reply-count="threadReplyCount(msg.id)"
+              :is-active-thread="chatStore.activeThreadRootId === msg.id"
+              @open-thread="openThreadFromMessage"
+            />
+          </div>
         </template>
       </div>
 
@@ -229,7 +234,14 @@ const loadingOlderHistory = ref(false)
 const forceScrollToBottomOnNextRender = ref(false)
 let forceScrollResetTimer: ReturnType<typeof setTimeout> | null = null
 const TOP_PRELOAD_THRESHOLD_PX = 120
+const TOP_PRELOAD_REARM_GAP_PX = 72
 const BOTTOM_STICK_THRESHOLD_PX = 72
+const topPreloadArmed = ref(true)
+
+interface ScrollAnchor {
+  messageId: string
+  offsetFromViewportTop: number
+}
 
 const conversation = computed(() => chatStore.activeConversation)
 const messages = computed(() => chatStore.activeMessages)
@@ -533,6 +545,7 @@ async function preloadOlderHistory() {
   if (el.scrollTop > TOP_PRELOAD_THRESHOLD_PX) return
 
   loadingOlderHistory.value = true
+  const anchor = captureTopVisibleAnchor(el)
   const previousHeight = el.scrollHeight
   const previousTop = el.scrollTop
   try {
@@ -541,15 +554,61 @@ async function preloadOlderHistory() {
     await nextTick()
     const current = scrollEl.value
     if (!current) return
-    current.scrollTop = previousTop + (current.scrollHeight - previousHeight)
+    if (!restoreAnchorPosition(current, anchor)) {
+      current.scrollTop = previousTop + (current.scrollHeight - previousHeight)
+    }
   } finally {
     loadingOlderHistory.value = false
   }
 }
 
 function handleScroll() {
-  if (loadingOlderHistory.value) return
-  void preloadOlderHistory()
+  const el = scrollEl.value
+  if (!el) return
+  if (el.scrollTop > TOP_PRELOAD_THRESHOLD_PX + TOP_PRELOAD_REARM_GAP_PX) {
+    topPreloadArmed.value = true
+  }
+  if (loadingOlderHistory.value || !topPreloadArmed.value) return
+  if (el.scrollTop <= TOP_PRELOAD_THRESHOLD_PX) {
+    topPreloadArmed.value = false
+    void preloadOlderHistory()
+  }
+}
+
+function captureTopVisibleAnchor(container: HTMLElement): ScrollAnchor | null {
+  const containerRect = container.getBoundingClientRect()
+  const rows = container.querySelectorAll<HTMLElement>('[data-message-id]')
+  for (const row of rows) {
+    const messageId = row.dataset.messageId?.trim()
+    if (!messageId) continue
+    const rowRect = row.getBoundingClientRect()
+    if (rowRect.bottom >= containerRect.top) {
+      return {
+        messageId,
+        offsetFromViewportTop: rowRect.top - containerRect.top,
+      }
+    }
+  }
+  return null
+}
+
+function restoreAnchorPosition(container: HTMLElement, anchor: ScrollAnchor | null): boolean {
+  if (!anchor) return false
+  const rows = container.querySelectorAll<HTMLElement>('[data-message-id]')
+  let target: HTMLElement | null = null
+  for (const row of rows) {
+    if (row.dataset.messageId === anchor.messageId) {
+      target = row
+      break
+    }
+  }
+  if (!target) return false
+  const containerRect = container.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const delta = (targetRect.top - containerRect.top) - anchor.offsetFromViewportTop
+  if (Math.abs(delta) < 0.5) return true
+  container.scrollTop += delta
+  return true
 }
 
 watch(() => {
@@ -578,6 +637,7 @@ watch(() => {
 watch(() => chatStore.activeChannelId, async (conversationId) => {
   const startedAt = performance.now()
   openRenderProbe.value = { conversationId, startedAt }
+  topPreloadArmed.value = true
   scheduleGuaranteedBottomScroll()
   console.debug('[perf][conversation-open] render:active-channel-changed', {
     conversationId,

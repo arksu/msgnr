@@ -329,6 +329,70 @@ describe('ChatArea', () => {
     expect(chatStore.loadOlderConversationHistory).toHaveBeenCalledWith('channel-1')
   })
 
+  it('re-arms top history preload only after leaving threshold zone', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    chatStore.loadOlderConversationHistory = vi.fn().mockResolvedValue(1)
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [{
+        id: 'message-1',
+        channelId: 'channel-1',
+        senderId: 'user-1',
+        senderName: 'Ada',
+        body: 'hello',
+        channelSeq: 1n,
+        threadSeq: 0n,
+        mentionedUserIds: [],
+        mentionEveryone: false,
+        createdAt: '2026-03-06T00:00:00Z',
+        reactions: [],
+        myReactions: [],
+      }],
+    }
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
+    Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 600, configurable: true })
+
+    el.scrollTop = 40
+    await wrapper.find('.overflow-y-auto').trigger('scroll')
+    await Promise.resolve()
+    expect(chatStore.loadOlderConversationHistory).toHaveBeenCalledTimes(1)
+
+    el.scrollTop = 30
+    await wrapper.find('.overflow-y-auto').trigger('scroll')
+    await Promise.resolve()
+    expect(chatStore.loadOlderConversationHistory).toHaveBeenCalledTimes(1)
+
+    el.scrollTop = 240
+    await wrapper.find('.overflow-y-auto').trigger('scroll')
+    await Promise.resolve()
+
+    el.scrollTop = 40
+    await wrapper.find('.overflow-y-auto').trigger('scroll')
+    await Promise.resolve()
+    expect(chatStore.loadOlderConversationHistory).toHaveBeenCalledTimes(2)
+  })
+
   it('shows spinner at top while loading older history', async () => {
     const chatStore = useChatStore()
     const wsStore = useWsStore()

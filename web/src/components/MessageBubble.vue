@@ -7,7 +7,6 @@
       message.sendStatus === 'failed' ? 'border-l-2 border-red-500/60' : '',
       message.sendStatus === 'queued' ? 'border-l-2 border-dashed border-gray-500/40' : '',
     ]"
-    :style="bubbleStyle"
   >
     <!-- Active thread indicator -->
     <div
@@ -502,12 +501,6 @@ const bodyTextClass = computed(() => {
     default: return props.message.pending ? 'text-gray-400' : 'text-gray-100'
   }
 })
-
-const bubbleStyle = computed(() =>
-  showEmojiPicker.value
-    ? undefined
-    : ({ contentVisibility: 'auto', containIntrinsicSize: '72px' } as const)
-)
 
 // ── Send status actions ──────────────────────────────────────────────────────
 

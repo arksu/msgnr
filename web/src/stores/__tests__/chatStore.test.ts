@@ -866,6 +866,145 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.channels[0].unread).toBe(0)
   })
 
+  it('emits inactive incoming-message notifications when level allows', () => {
+    const chat = useChatStore()
+    chat.setClientActive(false)
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-msg-sound-1',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-sound-1',
+          senderId: 'user-2',
+          body: 'hello',
+          channelSeq: 2n,
+          threadRootMessageId: '',
+          threadSeq: 0n,
+          mentionEveryone: false,
+          mentionedUserIds: [],
+        }),
+      },
+    }))
+
+    expect(onIncoming).toHaveBeenCalledWith({
+      conversationId: 'channel-1',
+      messageId: 'message-sound-1',
+      threadRootMessageId: undefined,
+    })
+    off()
+  })
+
+  it('respects MENTIONS_ONLY for inactive channel messages but always allows DMs', () => {
+    const chat = useChatStore()
+    chat.setClientActive(false)
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.MENTIONS_ONLY,
+    }]
+    chat.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      unread: 0,
+      presence: 'online',
+      lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.MENTIONS_ONLY,
+    }]
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    // Non-mention channel message should NOT trigger in MENTIONS_ONLY mode.
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-msg-sound-mentions-only-1',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-sound-mentions-only-1',
+          senderId: 'user-2',
+          body: 'no mention',
+          channelSeq: 2n,
+          threadRootMessageId: '',
+          threadSeq: 0n,
+          mentionEveryone: false,
+          mentionedUserIds: [],
+        }),
+      },
+    }))
+
+    // DM message should trigger in MENTIONS_ONLY mode.
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 2n,
+      eventId: 'evt-msg-sound-mentions-only-2',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'dm-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'dm-1',
+          messageId: 'message-sound-mentions-only-2',
+          senderId: 'user-2',
+          body: 'dm ping',
+          channelSeq: 2n,
+          threadRootMessageId: '',
+          threadSeq: 0n,
+          mentionEveryone: false,
+          mentionedUserIds: [],
+        }),
+      },
+    }))
+
+    expect(onIncoming).toHaveBeenCalledTimes(1)
+    expect(onIncoming).toHaveBeenCalledWith({
+      conversationId: 'dm-1',
+      messageId: 'message-sound-mentions-only-2',
+      threadRootMessageId: undefined,
+    })
+    off()
+  })
+
   it('marks active direct message as read for self-authored messages', () => {
     const chat = useChatStore()
     const ws = useWsStore()

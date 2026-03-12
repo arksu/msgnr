@@ -184,6 +184,14 @@ export interface PendingInviteItem {
   expiresAt: string
 }
 
+export interface IncomingMessageNotification {
+  conversationId: string
+  messageId: string
+  threadRootMessageId?: string
+}
+
+export type IncomingMessageNotificationHandler = (evt: IncomingMessageNotification) => void
+
 export interface TypingState {
   userId: string
   expiresAt?: string
@@ -375,6 +383,7 @@ export const useChatStore = defineStore('chat', () => {
   let userDirectoryHydrated = false
   let userDirectoryPromise: Promise<void> | null = null
   let toastTimer: ReturnType<typeof setTimeout> | null = null
+  const incomingMessageNotificationHandlers = new Set<IncomingMessageNotificationHandler>()
   const DEBUG_CONVERSATION_OPEN_PERF = import.meta.env.DEV
 
   function persistThreadSummaries() {
@@ -1861,6 +1870,51 @@ export const useChatStore = defineStore('chat', () => {
     ]
   }
 
+  function onIncomingMessageNotification(handler: IncomingMessageNotificationHandler): () => void {
+    incomingMessageNotificationHandlers.add(handler)
+    return () => {
+      incomingMessageNotificationHandlers.delete(handler)
+    }
+  }
+
+  function emitIncomingMessageNotification(evt: IncomingMessageNotification) {
+    for (const handler of incomingMessageNotificationHandlers) {
+      try {
+        handler(evt)
+      } catch {
+        // Best effort callback fanout: one listener failure must not break chat flow.
+      }
+    }
+  }
+
+  function isDirectMessageConversation(conversationId: string): boolean {
+    return directMessages.value.some(dm => dm.id === conversationId)
+  }
+
+  function isMentionsOnlyMessageRelevant(evt: ProtoMessageEvent): boolean {
+    if (isDirectMessageConversation(evt.conversationId)) return true
+    if (evt.threadRootMessageId) return true
+    if (evt.mentionEveryone) return true
+    const selfUserId = workspace.value?.selfUserId
+    if (!selfUserId) return false
+    return evt.mentionedUserIds?.includes(selfUserId) ?? false
+  }
+
+  function maybeEmitIncomingMessageNotification(evt: ProtoMessageEvent, isSelfAuthored: boolean) {
+    if (isSelfAuthored) return
+    if (isClientTabActive()) return
+
+    const level = currentNotificationLevel(evt.conversationId)
+    if (level === NotificationLevel.NOTHING) return
+    if (level === NotificationLevel.MENTIONS_ONLY && !isMentionsOnlyMessageRelevant(evt)) return
+
+    emitIncomingMessageNotification({
+      conversationId: evt.conversationId,
+      messageId: evt.messageId,
+      threadRootMessageId: evt.threadRootMessageId || undefined,
+    })
+  }
+
   function applyUserIdentityUpdated(evt: { userId: string; displayName: string; avatarUrl: string }) {
     registerUserIdentity(evt.userId, evt.displayName, undefined, evt.avatarUrl)
     refreshSenderLabels(evt.userId)
@@ -1979,6 +2033,7 @@ export const useChatStore = defineStore('chat', () => {
 
     if (evt.threadRootMessageId) {
       const rootId = evt.threadRootMessageId
+      const alreadyPresentInThread = (threadMessages.value[rootId] ?? []).some(item => item.id === evt.messageId)
       _upsertThreadMessage(rootId, msg)
       const known = threadSummaries.value[rootId]
       const nextLastThreadSeq = known?.lastThreadSeq && known.lastThreadSeq > evt.threadSeq
@@ -1996,12 +2051,17 @@ export const useChatStore = defineStore('chat', () => {
         const dm = directMessages.value.find(item => item.id === channelId)
         if (dm) dm.hasUnreadThreadReplies = true
       }
+      if (!alreadyPresentInThread) {
+        maybeEmitIncomingMessageNotification(evt, isSelfAuthored)
+      }
       return
     }
 
     if (!messages.value[channelId]) messages.value[channelId] = []
     const alreadyPresent = messages.value[channelId].some(m => m.id === evt.messageId)
     if (alreadyPresent) return
+
+    maybeEmitIncomingMessageNotification(evt, isSelfAuthored)
 
     messages.value[channelId].push(msg)
     // Write-through to IndexedDB (fire-and-forget)
@@ -2344,6 +2404,7 @@ export const useChatStore = defineStore('chat', () => {
     removeConversationLocal,
     onClientFocus,
     setClientActive,
+    onIncomingMessageNotification,
     setNotificationLevel,
     updateSendStatus,
     updateThreadSendStatus,

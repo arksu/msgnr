@@ -98,6 +98,8 @@ self.addEventListener('push', (event: PushEvent) => {
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
+      // Explicitly allow default OS/browser notification sound.
+      silent: false,
       icon: '/pwa-192x192.png',
       badge: '/badge-72x72.png',
       ...(data.tag ? { tag: data.tag } : {}),

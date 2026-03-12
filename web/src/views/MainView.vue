@@ -283,6 +283,7 @@ import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import { usePushNotifications, pushSupported } from '@/composables/usePushNotifications'
 import { loadPushEndpoint } from '@/services/storage/pushStorage'
 import { loadManualPresencePreference } from '@/services/storage/manualPresenceStorage'
+import { useNotificationSoundEngine } from '@/services/sound'
 import {
   loadLastOpenedTaskId,
   saveLastOpenedTaskId,
@@ -325,12 +326,15 @@ const callStore = useCallStore()
 const authStore = useAuthStore()
 const { logout } = useSessionOrchestrator()
 const offlineQueue = useOfflineQueue()
+// TODO(phase-5-platform-adapter): route app notification sounds via usePlatform().
+const soundEngine = useNotificationSoundEngine()
 const { checkExistingSubscription: checkPushSubscription, subscribe: subscribePush } = usePushNotifications()
 const showServerUnavailableAlert = computed(() => authStore.lastAuthError === 'Server is unavailable')
 const handlingIncomingInvite = ref(false)
 const incomingInviteError = ref('')
 const dismissedInviteIds = ref<string[]>([])
 const selectedTemplateFilter = ref<string | null>(null)
+let unsubscribeIncomingMessageSound: (() => void) | null = null
 const tasksStore = useTasksStore()
 const isTaskTrackerRoute = computed(() => route.name === 'tasks-list' || route.name === 'tasks-card')
 const isTaskCardRoute = computed(() => route.name === 'tasks-card')
@@ -469,6 +473,15 @@ const incomingInviteCaller = computed(() => {
 })
 
 const incomingInviteConversationTitle = computed(() => incomingInviteConversation.value?.title ?? 'this conversation')
+
+watch(incomingInvite, (invite) => {
+  if (invite) {
+    void soundEngine.startCallInviteRing()
+    return
+  }
+  soundEngine.stopCallInviteRing()
+}, { immediate: true })
+
 const canSaveSettings = computed(() => {
   const displayName = settingsDisplayName.value.trim()
   const email = settingsEmail.value.trim()
@@ -479,6 +492,7 @@ const canSaveSettings = computed(() => {
 })
 
 async function handleLogout() {
+  soundEngine.stopCallInviteRing()
   offlineQueue.clear()
   await logout()
   await router.push({ name: 'login' })
@@ -759,6 +773,10 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 }
 
 onMounted(async () => {
+  unsubscribeIncomingMessageSound = chatStore.onIncomingMessageNotification(() => {
+    void soundEngine.playMessagePing()
+  })
+
   window.addEventListener('focus', handleClientFocus)
   window.addEventListener('blur', handleClientBlur)
   document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -782,6 +800,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  unsubscribeIncomingMessageSound?.()
+  unsubscribeIncomingMessageSound = null
+  // Keep singleton engine alive across remounts; only stop active playback.
+  soundEngine.stopCallInviteRing()
+
   window.removeEventListener('focus', handleClientFocus)
   window.removeEventListener('blur', handleClientBlur)
   document.removeEventListener('visibilitychange', handleVisibilityChange)

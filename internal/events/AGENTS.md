@@ -8,6 +8,7 @@ This package is the authoritative realtime backbone.
 2. Validate DB `event_type` against the protobuf payload shape.
 3. Deliver committed events through `pg_notify -> listener -> bus -> WS fanout`.
 4. Decode stored JSON payloads back into `ServerEvent` values for replay and sync.
+5. Preserve payload fidelity for downstream consumers (WS fanout, push delivery) that react to specific event families such as `message_created` and `call_invite_created`.
 
 ## Invariants
 

@@ -458,7 +458,12 @@ function debugReaction(label: string, payload?: unknown) {
 
 const formattedTime = computed(() => {
   const d = new Date(props.message.createdAt)
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 })
 
 const hasReactions = computed(() => props.message.reactions.length > 0)

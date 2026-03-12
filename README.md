@@ -1,6 +1,6 @@
 # Msgnr — Corporate Messenger
 
-A production-grade Slack-like team messenger built with Go and Vue 3. Installable as a Progressive Web App with offline-resilient app shell, push-ready service worker, and a desktop-ready abstraction layer.
+A production-grade Slack-like team messenger built with Go and Vue 3. Installable as a Progressive Web App with offline-resilient app shell, Web Push notifications, and a Tauri-ready desktop abstraction layer.
 
 ## Architecture
 
@@ -27,6 +27,7 @@ A production-grade Slack-like team messenger built with Go and Vue 3. Installabl
 - **Framework**: Vue 3.5, Vue Router 5, Pinia 3
 - **Build**: Vite 6 with code-splitting (vendor-core, vendor-livekit, vendor-emoji, vendor-proto)
 - **PWA**: `vite-plugin-pwa` (Workbox-based), service worker with precache, prompt-to-reload updates
+- **Push Delivery**: Web Push (VAPID) via `github.com/SherClockHolmes/webpush-go`
 - **Styling**: Tailwind CSS 3 with Slack-inspired dark theme
 - **Components**: Ant Design Vue 4 (auto-imported)
 - **Real-time**: LiveKit client SDK for voice/video calls
@@ -96,6 +97,11 @@ Key configuration options:
 | `LIVEKIT_URL` | LiveKit server URL | — |
 | `LIVEKIT_API_KEY` | LiveKit API key | — |
 | `LIVEKIT_API_SECRET` | LiveKit API secret | — |
+| `VAPID_PUBLIC_KEY` | Web Push VAPID public key | — |
+| `VAPID_PRIVATE_KEY` | Web Push VAPID private key | — |
+| `VAPID_SUBJECT` | Web Push subject (`mailto:` or `https:`) | — |
+| `PUSH_RATE_LIMIT_WINDOW` | In-memory per-user push rate limit window | `1s` |
+| `PUSH_TTL_SECONDS` | Web Push TTL (seconds) | `60` |
 
 ## Project Structure
 
@@ -116,7 +122,7 @@ internal/
   ws/                    # WebSocket server, protobuf envelope dispatch
   logger/                # Zap structured logging
   metrics/               # Prometheus metrics
-  notifications/         # Push notification service (planned)
+  push/                  # Web Push service + HTTP handlers
   repo/queries/          # SQL queries for sqlc generation
   gen/                   # Generated code (proto, sqlc)
 api/proto/               # Protocol buffer definitions (buf-managed)
@@ -127,7 +133,7 @@ web/                     # Vue 3 frontend
   src/
     components/          # Vue components (chat, sidebar, calls, tasks, admin)
     composables/         # Composables (session orchestrator, offline queue, PWA)
-    services/            # HTTP clients, storage adapters, ID generation
+    services/            # HTTP clients, storage adapters, sound engine, ID generation
     stores/              # Pinia stores (auth, ws, chat, call, tasks)
     views/               # Route views (Login, Main, Admin)
     router/              # Vue Router config
@@ -145,6 +151,8 @@ web/                     # Vue 3 frontend
 - **Presence & Typing**: Online/away status, typing indicators
 - **Admin Panel**: User management, force password change, workspace settings
 - **PWA**: Installable from browser, service worker with precache, prompt-to-reload updates, offline-resilient app shell
+- **Push Notifications**: VAPID-backed Web Push with service worker delivery and click-to-focus/open behavior
+- **Notification Sounds**: Custom call ring (looping while invite is active) and message ping on inactive tabs (cooldown + notification-level aware)
 - **Audio Settings**: Slack-style device selection, mic test with level meter, noise suppression / echo cancellation / AGC toggles, microphone gain slider
 
 ## Monitoring

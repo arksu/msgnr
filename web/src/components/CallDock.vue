@@ -126,6 +126,7 @@
                   :display-name="pinnedTileName"
                   :avatar-url="pinnedTile?.avatarUrl"
                   size="xl"
+                  :class="fallbackAvatarClass"
                 />
               </div>
               <!-- Name badge -->
@@ -185,6 +186,7 @@
                         :display-name="localTile?.name ?? 'You'"
                         :avatar-url="localTile?.avatarUrl"
                         size="lg"
+                        :class="fallbackAvatarClass"
                       />
                     </div>
                     <!-- "Sharing screen" badge -->
@@ -241,6 +243,7 @@
                         :display-name="tile.name"
                         :avatar-url="tile.avatarUrl"
                         size="lg"
+                        :class="fallbackAvatarClass"
                       />
                     </div>
                     <div class="absolute bottom-0 inset-x-0 z-10 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5">
@@ -684,6 +687,11 @@ const tileItemClass = computed(() =>
   maximized.value
     ? 'group relative h-full min-h-0 overflow-hidden rounded-xl bg-slate-800'
     : 'group relative overflow-hidden rounded-xl bg-slate-800'
+)
+
+const fallbackAvatarClass = computed(() =>
+  // Keep fallback avatars circular while filling most of the tile in all sizes.
+  '!h-[90%] !w-auto !aspect-square !max-w-[90%]'
 )
 
 // ── Pin / fullscreen helpers ──────────────────────────────────────────────────

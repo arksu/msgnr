@@ -59,6 +59,15 @@ Rules:
 `SyncSinceRequest{after_seq,max_events}` requests missing events.
 `SyncSinceResponse` returns contiguous events and seq window (`from_seq`, `to_seq`).
 
+## Client Window Activity Signal
+
+`SetClientWindowActivityRequest{is_active}` is a client-to-server runtime signal used by push gating.
+
+Rules:
+1. Clients should report on focus/blur/visibility transitions and after auth/bootstrap readiness.
+2. This signal is ephemeral runtime state, not part of event replay semantics.
+3. Connected sessions do not imply active windows; push suppression decisions use this signal.
+
 ## Client State Machine (Section 2)
 
 Canonical states:
@@ -291,8 +300,12 @@ When evolving protocol:
 1. `MessageEvent` carries mention metadata:
  - `mentioned_user_ids[]`
  - `mention_everyone`
-2. Unread mentions remain server-authoritative through `UnreadCounter.unread_mentions`.
-3. Mention-driven notifications should map to:
+2. Per-conversation notification policy is enum-based:
+ - `NOTIFICATION_LEVEL_ALL = 0`
+ - `NOTIFICATION_LEVEL_MENTIONS_ONLY = 1`
+ - `NOTIFICATION_LEVEL_NOTHING = 2`
+3. Unread mentions remain server-authoritative through `UnreadCounter.unread_mentions`.
+4. Mention-driven notifications should map to:
  - `NOTIFICATION_ADDED`
  - `NOTIFICATION_RESOLVED`
 

@@ -9,6 +9,7 @@ This directory contains the server-side runtime for the messenger.
 - `chat`: messaging, reactions, thread replay, channel HTTP list endpoint.
 - `chat` HTTP history (`GET /api/messages`) returns root timeline rows and includes server-derived `thread_reply_count` from `thread_summaries` for each root message.
 - `events`: append-only event log, event bus, LISTEN/NOTIFY listener, codec.
+- `push`: VAPID/Web Push subscription management and delivery.
 - `sync`: `SyncSince`, ack cursor persistence, retention pruning policy.
 - `ws`: websocket handshake, auth gate, authenticated payload dispatch.
 
@@ -18,6 +19,7 @@ This directory contains the server-side runtime for the messenger.
 2. Prefer query additions in `internal/repo/queries/*.sql` plus `sqlc generate` over handwritten SQL in service code, unless batching/transaction control makes handwritten SQL materially simpler.
 3. Keep DB writes server-authoritative. Do not move unread, ordering, or recovery decisions into the client when the server already owns them.
 4. Favor integration tests for DB-backed behavior and unit tests for pure mapping/validation logic.
+5. Keep push delivery server-authoritative: recipient selection and runtime gating belong to backend state, not frontend assumptions.
 
 ## Cross-Cutting Invariants
 
@@ -26,3 +28,4 @@ This directory contains the server-side runtime for the messenger.
 3. Bootstrap + sync must remain safe under duplicate delivery and reconnect.
 4. Any new behavior that changes recovery or ordering must be tested with reconnect/gap scenarios, not just happy-path request tests.
 5. Thread summary-only state is not replay state: subscribe cursors for thread replay must come from cached replies, and empty cache must subscribe from seq `0`.
+6. Push eligibility is window-activity-aware: connected WS sessions do not suppress push unless at least one session reports an active chat window.

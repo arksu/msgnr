@@ -143,4 +143,20 @@ describe('MessageBubble reactions', () => {
     })
     expect(selfRootWrapper.find('[data-testid="new-thread-button"]').exists()).toBe(true)
   })
+
+  it('shows message header timestamp with date and time', () => {
+    const createdAt = '2026-03-06T13:05:00Z'
+    const msg = buildMessage({ reactions: [], myReactions: [], createdAt })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+    })
+
+    const expected = new Date(createdAt).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+    expect(wrapper.text()).toContain(expected)
+  })
 })

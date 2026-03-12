@@ -16,6 +16,7 @@ This package serves the paginated WS bootstrap snapshot.
 3. Continuation pages must replay the stored session ordering, not live membership order.
 4. `workspace`, `active_calls`, `pending_invites`, and `notifications` are first-page-only.
 5. Invalid or expired continuations must fail deterministically, never silently downgrade to a fresh bootstrap.
+6. Conversation summaries must carry server-authoritative `notification_level` values for client-side notification behavior.
 
 ## Change Guidance
 

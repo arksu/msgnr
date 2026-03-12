@@ -8,6 +8,7 @@ This package owns HTTP auth and WS principal verification.
 2. Refresh-session persistence and revocation.
 3. Access-token verification for WS and authenticated handlers.
 4. Channel-scoped authorization checks for server-pushed events.
+5. Auth middleware behavior is shared by push subscription endpoints (`/api/push/*`) and must stay consistent with WS principal rules.
 
 ## Invariants
 

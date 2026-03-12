@@ -24,10 +24,10 @@ fn set_badge_count(_app: AppHandle, _count: i32) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn play_sound(_sound_id: String) -> Result<(), String> {
+fn play_sound(_sound_id: String) -> Result<bool, String> {
   // Placeholder for native sound routing. The web layer falls back to HTMLAudio
   // where applicable.
-  Ok(())
+  Ok(false)
 }
 
 #[tauri::command]

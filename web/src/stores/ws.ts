@@ -309,6 +309,44 @@ export const useWsStore = defineStore('ws', () => {
     state.value = 'DISCONNECTED'
   }
 
+  function resetRuntimeState() {
+    suppressTransportDrop = true
+    try {
+      socket?.close()
+    } catch {
+      // Best effort.
+    }
+    socket = null
+
+    state.value = 'DISCONNECTED'
+    serverHello.value = null
+    authResult.value = null
+    lastError.value = null
+    lastErrorKind.value = null
+    lastCloseCode.value = null
+
+    pendingAuthToken = null
+    onServerHelloCallback = null
+    onAuthFailCallback = null
+    onTransportDropCallback = null
+    onServerEventCallback = null
+    onSendMessageAckCallback = null
+    onReactionAckCallback = null
+    onSubscribeThreadResponseCallback = null
+    onBootstrapResponseCallback = null
+    onSyncSinceResponseCallback = null
+    onAckResponseCallback = null
+    onReadCursorAckCallback = null
+    onPresenceEventCallback = null
+    onTypingEventCallback = null
+    onCreateCallResponseCallback = null
+    onInviteCallMembersResponseCallback = null
+    onJoinCallTokenResponseCallback = null
+    onCallInviteActionAckCallback = null
+    onSetNotificationLevelResponseCallback = null
+    onProtocolErrorCallback = null
+  }
+
   function sendHello() {
     const envelope = create(EnvelopeSchema, {
       requestId: generateId(),
@@ -795,6 +833,7 @@ export const useWsStore = defineStore('ws', () => {
     lastCloseCode,
     connect,
     disconnect,
+    resetRuntimeState,
     sendAuth,
     sendMessage,
     sendAddReaction,

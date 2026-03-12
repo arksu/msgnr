@@ -915,6 +915,10 @@ describe('chatStore phase 6 flows', () => {
       conversationId: 'channel-1',
       messageId: 'message-sound-1',
       threadRootMessageId: undefined,
+      senderId: 'user-2',
+      senderName: 'user-2',
+      body: 'hello',
+      attachmentCount: 0,
     })
     off()
   })
@@ -1001,6 +1005,10 @@ describe('chatStore phase 6 flows', () => {
       conversationId: 'dm-1',
       messageId: 'message-sound-mentions-only-2',
       threadRootMessageId: undefined,
+      senderId: 'user-2',
+      senderName: 'Bob',
+      body: 'dm ping',
+      attachmentCount: 0,
     })
     off()
   })

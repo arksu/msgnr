@@ -29,6 +29,7 @@ import { clearStoredThreadSummaries } from '@/services/storage/threadSummaryStor
 import { clearLastOpenedTaskId } from '@/services/storage/lastTaskRouteStorage'
 import { clearPushEndpoint } from '@/services/storage/pushStorage'
 import { cacheUserProfile, loadCachedUserProfile, clearAllData as clearIndexedDb } from '@/services/db/cache'
+import { clearAllPersistedClientDataPreservingBackendUrl } from '@/services/storage/hardReset'
 
 export type AuthState =
   | 'ANON'
@@ -235,6 +236,7 @@ export const useAuthStore = defineStore('auth', () => {
       }
     }
     clearSession()
+    await clearAllPersistedClientDataPreservingBackendUrl()
   }
 
   async function ensureUserLoaded(): Promise<AuthUser | null> {

@@ -250,6 +250,36 @@ export const useTasksStore = defineStore('tasks', () => {
     loadTaskList()
   }
 
+  function resetRuntimeState() {
+    templates.value = []
+    statuses.value = []
+    fieldsByTemplate.value = {}
+    configLoaded.value = false
+    configLoading.value = false
+    configError.value = null
+
+    users.value = []
+    usersLoaded.value = false
+    enumItemsByDict.value = {}
+    enumVersionByDict.value = {}
+
+    selectedTask.value = null
+    taskLoading.value = false
+    taskError.value = null
+    createDialogOpen.value = false
+
+    taskListGroups.value = []
+    taskListTotal.value = 0
+    taskListLoading.value = false
+    taskListError.value = null
+    listParams.value = {
+      page: 1,
+      page_size: 50,
+      sort_by: 'created_at',
+      sort_order: 'desc',
+    }
+  }
+
   return {
     // state
     templates,
@@ -296,5 +326,6 @@ export const useTasksStore = defineStore('tasks', () => {
     loadTaskList,
     setListParams,
     resetListParams,
+    resetRuntimeState,
   }
 })

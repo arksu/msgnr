@@ -276,7 +276,7 @@ import { computed, ref, watch, onMounted, onUnmounted, defineAsyncComponent } fr
 import { useRoute, useRouter } from 'vue-router'
 import { PresenceStatus } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
-import { useChatStore } from '@/stores/chat'
+import { useChatStore, type IncomingMessageNotification } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
@@ -556,6 +556,26 @@ function conversationNotificationTitle(conversationId: string): string {
   return 'Msgnr'
 }
 
+function toMessagePreview(event: IncomingMessageNotification): string {
+  const body = event.body.trim().replace(/\s+/g, ' ')
+  if (body) {
+    return body.length > 160 ? `${body.slice(0, 157)}...` : body
+  }
+  if (event.attachmentCount > 0) {
+    return event.attachmentCount === 1 ? 'Sent an attachment' : `Sent ${event.attachmentCount} attachments`
+  }
+  return 'New message'
+}
+
+function conversationNotificationBody(event: IncomingMessageNotification): string {
+  const preview = toMessagePreview(event)
+  const isChannelConversation = chatStore.channels.some(item => item.id === event.conversationId)
+  if (isChannelConversation) {
+    return `${event.senderName}: ${preview}`
+  }
+  return preview
+}
+
 function closeSettings() {
   settingsOpen.value = false
   settingsError.value = ''
@@ -789,7 +809,7 @@ onMounted(async () => {
     if (platform?.type === 'tauri') {
       void platform.notifications.show({
         title: conversationNotificationTitle(event.conversationId),
-        body: 'New message',
+        body: conversationNotificationBody(event),
         conversationId: event.conversationId,
         tag: `conv:${event.conversationId}`,
       })

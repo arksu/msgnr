@@ -1037,6 +1037,32 @@ export const useCallStore = defineStore('call', () => {
     await ensureDisconnected()
   }
 
+  async function resetRuntimeState() {
+    await ensureDisconnected()
+    clearPendingInviteMembers()
+    clearEmptyCallAutoCloseTimer()
+    stopRemoteAudioStatsLoop()
+
+    activeConversationId.value = ''
+    activeConversationKind.value = 'channel'
+    activeConversationVisibility.value = 'public'
+    activeCallId.value = ''
+    activeRoomName.value = ''
+    connecting.value = false
+    connected.value = false
+    minimized.value = false
+    micEnabled.value = false
+    cameraEnabled.value = false
+    screenShareEnabled.value = false
+    remoteParticipantCount.value = 0
+    mediaVersion.value = 0
+    activeSpeakerSids.value = new Set()
+    playbackBlocked.value = false
+    errorMessage.value = ''
+    knownRemoteParticipantSids.clear()
+    suppressParticipantChangeSounds = false
+  }
+
   async function toggleMute() {
     const current = room.value
     if (!current) return
@@ -1233,6 +1259,7 @@ export const useCallStore = defineStore('call', () => {
     startOrJoinCall,
     inviteMembersToActiveCall,
     leaveCall,
+    resetRuntimeState,
     toggleMute,
     toggleCamera,
     toggleScreenShare,

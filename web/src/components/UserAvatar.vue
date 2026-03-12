@@ -25,6 +25,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { resolveApiBaseUrl } from '@/services/runtime/backendEndpoint'
+import { isTauriRuntime } from '@/platform/runtime'
 
 const props = withDefaults(defineProps<{
   userId: string
@@ -53,8 +55,24 @@ const displayLabel = computed(() => {
   return name || 'Unknown user'
 })
 
+const avatarUrl = computed(() => {
+  const raw = (props.avatarUrl ?? '').trim()
+  if (!raw) return ''
+  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(raw) || raw.startsWith('//')) return raw
+  if (!isTauriRuntime()) return raw
+
+  const base = resolveApiBaseUrl().trim()
+  if (!base || base === '/') return raw
+
+  try {
+    return new URL(raw, `${base.replace(/\/+$/, '')}/`).toString()
+  } catch {
+    return raw
+  }
+})
+
 const showImage = computed(() => {
-  const url = (props.avatarUrl ?? '').trim()
+  const url = avatarUrl.value
   return url.length > 0 && !errored.value
 })
 

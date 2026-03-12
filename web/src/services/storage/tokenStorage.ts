@@ -70,9 +70,13 @@ export function setRefreshToken(token: string): void {
 }
 
 export function clearRefreshToken(): void {
+  void clearRefreshTokenAsync()
+}
+
+export async function clearRefreshTokenAsync(): Promise<void> {
   refreshCache = null
   storage.removeItem(REFRESH_KEY)
-  void deleteSecureItem(SECURE_REFRESH_KEY)
+  await deleteSecureItem(SECURE_REFRESH_KEY)
 }
 
 export function getAccessToken(): string | null {
@@ -89,7 +93,18 @@ export function setAccessToken(token: string): void {
 }
 
 export function clearAccessToken(): void {
+  void clearAccessTokenAsync()
+}
+
+export async function clearAccessTokenAsync(): Promise<void> {
   accessCache = null
   storage.removeItem(ACCESS_KEY)
-  void deleteSecureItem(SECURE_ACCESS_KEY)
+  await deleteSecureItem(SECURE_ACCESS_KEY)
+}
+
+export async function clearStoredTokensAsync(): Promise<void> {
+  await Promise.all([
+    clearRefreshTokenAsync(),
+    clearAccessTokenAsync(),
+  ])
 }

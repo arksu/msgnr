@@ -3,6 +3,7 @@ import type {
   AppNotificationPermission,
   PlatformAdapter,
 } from '@/platform/types'
+import { useNotificationSoundEngine } from '@/services/sound'
 
 type TauriNotificationBridge = {
   isPermissionGranted?: () => Promise<boolean>
@@ -78,6 +79,7 @@ function toPermission(result: string): AppNotificationPermission {
 
 export class TauriAdapter implements PlatformAdapter {
   readonly type = 'tauri' as const
+  private readonly soundEngine = useNotificationSoundEngine()
 
   notifications: PlatformAdapter['notifications'] = {
     requestPermission: async () => {
@@ -159,7 +161,25 @@ export class TauriAdapter implements PlatformAdapter {
       await invokeNative('set_badge_count', { count: 0 })
     },
     playSound: async (soundId: string) => {
-      await invokeNative('play_sound', { soundId })
+      let nativeHandled = false
+      try {
+        nativeHandled = await invokeNative<boolean>('play_sound', { soundId })
+      } catch {
+        nativeHandled = false
+      }
+      if (nativeHandled) return
+
+      if (soundId === 'message-ping') {
+        await this.soundEngine.playMessagePing()
+        return
+      }
+      if (soundId === 'call-member-joined') {
+        await this.soundEngine.playCallMemberJoined()
+        return
+      }
+      if (soundId === 'call-member-left') {
+        await this.soundEngine.playCallMemberLeft()
+      }
     },
   }
 

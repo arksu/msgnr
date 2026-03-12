@@ -189,6 +189,10 @@ export interface IncomingMessageNotification {
   conversationId: string
   messageId: string
   threadRootMessageId?: string
+  senderId: string
+  senderName: string
+  body: string
+  attachmentCount: number
 }
 
 export type IncomingMessageNotificationHandler = (evt: IncomingMessageNotification) => void
@@ -380,7 +384,7 @@ export const useChatStore = defineStore('chat', () => {
   let pendingAckEventCount = 0
   const pendingReadByConversation = new Map<string, bigint>()
   let clientIsActive = true
-  const clientInstanceId = getOrCreateClientInstanceId()
+  let clientInstanceId = getOrCreateClientInstanceId()
   let userDirectoryHydrated = false
   let userDirectoryPromise: Promise<void> | null = null
   let toastTimer: ReturnType<typeof setTimeout> | null = null
@@ -668,6 +672,62 @@ export const useChatStore = defineStore('chat', () => {
     sendTimeouts.clear()
   }
 
+  function resetRuntimeState() {
+    clearPendingNotificationLevelChange()
+    clearAllSendTimeouts()
+
+    if (ackTimer) {
+      clearTimeout(ackTimer)
+      ackTimer = null
+    }
+    if (toastTimer) {
+      clearTimeout(toastTimer)
+      toastTimer = null
+    }
+
+    channels.value = []
+    directMessages.value = []
+    activeChannelId.value = ''
+    workspace.value = null
+    notifications.value = []
+    activeCalls.value = []
+    pendingInvites.value = []
+    presenceByUserId.value = {}
+    typingByConversationId.value = {}
+    bootstrapped.value = false
+    cachedBootstrap.value = false
+
+    messages.value = {}
+    threadMessages.value = {}
+    threadSummaries.value = {}
+    conversationInitialLoadingById.value = {}
+    activeThreadRootId.value = ''
+    activeThreadConversationId.value = ''
+
+    userNames.value = {}
+    userAvatars.value = {}
+    pendingReactionOps.value = {}
+    toast.value = null
+    lastAppliedEventSeq.value = 0n
+    lastAckedEventSeq.value = 0n
+
+    conversationHistoryState.clear()
+    historyLoadTokenByConversation.clear()
+    pendingReadByConversation.clear()
+    incomingMessageNotificationHandlers.clear()
+
+    bootstrapStage = null
+    bufferedServerEvents = []
+    seenEventIds = new Set()
+    historyLoadToken = 0
+    pendingAckEventCount = 0
+    clientIsActive = true
+    userDirectoryHydrated = false
+    userDirectoryPromise = null
+
+    clientInstanceId = ''
+  }
+
   /**
    * Start a 15-second timeout for a message in 'sending' state.
    * If the ACK doesn't arrive, transition to 'failed'.
@@ -925,6 +985,9 @@ export const useChatStore = defineStore('chat', () => {
     const ws = useWsStore()
     bootstrapStage = null
     bufferedServerEvents = []
+    if (!clientInstanceId) {
+      clientInstanceId = getOrCreateClientInstanceId()
+    }
     ws.sendBootstrap({
       clientInstanceId,
       pageSizeHint: DEFAULT_SYNC_BATCH,
@@ -1913,6 +1976,10 @@ export const useChatStore = defineStore('chat', () => {
       conversationId: evt.conversationId,
       messageId: evt.messageId,
       threadRootMessageId: evt.threadRootMessageId || undefined,
+      senderId: evt.senderId,
+      senderName: resolveDisplayName(evt.senderId),
+      body: evt.body,
+      attachmentCount: evt.attachments?.length ?? 0,
     })
   }
 
@@ -2416,6 +2483,7 @@ export const useChatStore = defineStore('chat', () => {
     onClientFocus,
     setClientActive,
     onIncomingMessageNotification,
+    resetRuntimeState,
     setNotificationLevel,
     updateSendStatus,
     updateThreadSendStatus,

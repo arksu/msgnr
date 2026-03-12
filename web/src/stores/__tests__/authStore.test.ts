@@ -8,6 +8,8 @@ import { getOrCreateClientInstanceId, getClientInstanceId } from '@/services/sto
 import { saveManualPresencePreference, loadManualPresencePreference } from '@/services/storage/manualPresenceStorage'
 import { saveLastOpenedConversation, loadLastOpenedConversation } from '@/services/storage/lastConversationStorage'
 import { saveLastOpenedTaskId, loadLastOpenedTaskId } from '@/services/storage/lastTaskRouteStorage'
+import { setBackendBaseUrl, getBackendBaseUrl } from '@/services/runtime/backendEndpoint'
+import { saveAudioPrefs, loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
 
 const mockUser = {
   id: 'user-1',
@@ -290,6 +292,38 @@ describe('authStore.logout', () => {
     expect(localStorage.getItem('msgnr:thread-summaries:v1')).toBeNull()
     expect(loadLastOpenedTaskId()).toBe('')
     expect(clientInstanceId).toBeTruthy()
+  })
+
+  it('preserves desktop backend URL but clears all other persisted client data', async () => {
+    setBackendBaseUrl('http://localhost:8080')
+    saveAudioPrefs({
+      inputDeviceId: 'in-1',
+      outputDeviceId: 'out-1',
+      noiseSuppression: false,
+      echoCancellation: false,
+      autoGainControl: false,
+      microphoneGain: 140,
+      rnnoiseEnabled: false,
+    })
+    tokenStorage.setRefreshToken('some-token')
+    tokenStorage.setAccessToken('some-access')
+    vi.spyOn(authApi, 'apiLogout').mockResolvedValue(undefined)
+
+    const store = useAuthStore()
+    await store.logout()
+
+    expect(getBackendBaseUrl()).toBe('http://localhost:8080')
+    expect(tokenStorage.getRefreshToken()).toBeNull()
+    expect(tokenStorage.getAccessToken()).toBeNull()
+    expect(loadAudioPrefs()).toEqual({
+      inputDeviceId: '',
+      outputDeviceId: '',
+      noiseSuppression: true,
+      echoCancellation: true,
+      autoGainControl: true,
+      microphoneGain: 100,
+      rnnoiseEnabled: true,
+    })
   })
 
   it('still clears locally even if server revoke fails', async () => {

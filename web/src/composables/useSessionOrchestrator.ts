@@ -334,7 +334,21 @@ export function useSessionOrchestrator() {
   async function logout() {
     _stopReconnect(true)
     ws.disconnect('logout')
-    useChatStore().clearAllSendTimeouts()
+    ws.resetRuntimeState()
+
+    const chatStore = useChatStore()
+    chatStore.resetRuntimeState()
+
+    const [{ useCallStore }, { useTasksStore }, { useOfflineQueue }] = await Promise.all([
+      import('@/stores/call'),
+      import('@/stores/tasks'),
+      import('@/composables/useOfflineQueue'),
+    ])
+
+    await useCallStore().resetRuntimeState()
+    useTasksStore().resetRuntimeState()
+    useOfflineQueue().clear()
+
     await auth.logout()
   }
 

@@ -2,11 +2,11 @@
 
 ## Overview
 
-Convert Msgnr from a plain Vue 3 SPA into a fully installable Progressive Web App with push notifications, offline resilience, badge support, and a desktop-ready abstraction layer for future Electron/Tauri builds.
+Convert Msgnr from a plain Vue 3 SPA into a fully installable Progressive Web App with push notifications, offline resilience, badge support, and a desktop-ready abstraction layer for future Tauri builds.
 
 **Current state:** Zero PWA infrastructure. No manifest, no service worker, no IndexedDB, no push, no icons (except a source PNG at `docs/msgnr.png`). All client persistence is `localStorage`.
 
-**Target state:** Installable PWA on Chrome, Edge, Safari (desktop + mobile), Android, iOS (home screen). Push notifications independent of open tab. Offline-resilient app shell. Local message cache in IndexedDB. Abstraction layer ready for Electron/Tauri.
+**Target state:** Installable PWA on Chrome, Edge, Safari (desktop + mobile), Android, iOS (home screen). Push notifications independent of open tab. Offline-resilient app shell. Local message cache in IndexedDB. Abstraction layer ready for Tauri.
 
 ---
 
@@ -668,15 +668,15 @@ Frontend:
 
 ---
 
-## Phase 5: Desktop-Ready Abstraction Layer (Electron + Tauri)
+## Phase 5: Desktop-Ready Abstraction Layer (Tauri)
 
-**Goal:** Abstract platform-specific concerns behind interfaces, with concrete adapter skeletons for both Electron and Tauri. The project will plan for **both** runtimes — Electron for maximum ecosystem compatibility, Tauri for lighter-weight native binaries — and choose per deployment target.
+**Goal:** Abstract platform-specific concerns behind interfaces, with a concrete Tauri adapter skeleton. The project will support a single desktop runtime (Tauri) while keeping PWA and desktop code paths isolated behind one adapter contract.
 
 ### 5.1 Platform Abstraction Interface
 
 ```ts
 // web/src/platform/types.ts
-export type PlatformType = 'pwa' | 'electron' | 'tauri'
+export type PlatformType = 'pwa' | 'tauri'
 
 export interface AppNotificationOptions {
   title: string
@@ -717,12 +717,12 @@ export interface PlatformAdapter {
     close?(): void
     focus?(): void
     isVisible?(): boolean
-    /** Electron-specific: close to tray instead of quitting */
+    /** Desktop-only: close to tray instead of quitting */
     setCloseToTray?(enabled: boolean): void
   }
 
   storage: {
-    /** Secure credential storage (Electron: safeStorage, Tauri: keyring plugin) */
+    /** Secure credential storage via OS keyring (Tauri plugin) */
     getSecureItem?(key: string): Promise<string | null>
     setSecureItem?(key: string, value: string): Promise<void>
     deleteSecureItem?(key: string): Promise<void>
@@ -773,75 +773,7 @@ export class PwaAdapter implements PlatformAdapter {
 }
 ```
 
-### 5.3 Electron Adapter (Skeleton)
-
-```ts
-// web/src/platform/electron-adapter.ts
-// Only loaded when running inside Electron (detected via window.__ELECTRON__)
-// Communicates with main process via contextBridge-exposed preload API
-
-export class ElectronAdapter implements PlatformAdapter {
-  readonly type = 'electron'
-
-  notifications = {
-    async requestPermission() { return 'granted' as const }, // Electron always has permission
-    async show(options: AppNotificationOptions) {
-      // Use Electron's Notification API via preload bridge
-      window.__electron__.showNotification(options)
-    },
-    async setBadge(count: number) {
-      window.__electron__.setBadgeCount(count)
-    },
-    async clearBadge() {
-      window.__electron__.setBadgeCount(0)
-    },
-    playSound(soundId: string) {
-      window.__electron__.playSound(soundId)
-    },
-  }
-
-  system = {
-    setTrayTitle(title: string) { window.__electron__.setTrayTitle(title) },
-    setTrayIcon(icon: string) { window.__electron__.setTrayIcon(icon) },
-    setTrayTooltip(tooltip: string) { window.__electron__.setTrayTooltip(tooltip) },
-    showTrayBalloon(title: string, body: string) {
-      window.__electron__.showTrayBalloon(title, body)
-    },
-    async getAutoLaunch() { return window.__electron__.getAutoLaunch() },
-    async setAutoLaunch(enabled: boolean) { window.__electron__.setAutoLaunch(enabled) },
-  }
-
-  window = {
-    minimize() { window.__electron__.minimize() },
-    close() { window.__electron__.close() },
-    focus() { window.__electron__.focus() },
-    isVisible() { return window.__electron__.isVisible() },
-    setCloseToTray(enabled: boolean) { window.__electron__.setCloseToTray(enabled) },
-  }
-
-  storage = {
-    async getSecureItem(key: string) { return window.__electron__.safeStorageGet(key) },
-    async setSecureItem(key: string, value: string) { window.__electron__.safeStorageSet(key, value) },
-    async deleteSecureItem(key: string) { window.__electron__.safeStorageDelete(key) },
-  }
-
-  lifecycle = {
-    async init() { /* Electron main process handles app ready */ },
-    async dispose() { /* IPC cleanup */ },
-  }
-}
-```
-
-**Electron security requirements** (documented for future implementation):
-- `contextIsolation: true` — mandatory
-- `nodeIntegration: false` — mandatory
-- `sandbox: true` — mandatory for renderer
-- All main-process APIs exposed only via `contextBridge.exposeInMainWorld()`
-- CSP header set in `BrowserWindow.webPreferences`
-- No `remote` module usage
-- Protocol handler registration for `msgnr://` deep links
-
-### 5.4 Tauri Adapter (Skeleton)
+### 5.3 Tauri Adapter (Skeleton)
 
 ```ts
 // web/src/platform/tauri-adapter.ts
@@ -943,10 +875,10 @@ export class TauriAdapter implements PlatformAdapter {
 - Rust commands for custom native features (sound, badge on macOS dock)
 - CSP configured in `tauri.conf.json`
 - `msgnr://` protocol handler via Tauri deep-link plugin
-- Smaller binary size vs Electron (~10MB vs ~150MB)
+- Smaller binary footprint than Chromium-embedded desktop shells (~10MB typical)
 - No Node.js runtime — all native code is Rust
 
-### 5.5 Platform Provider
+### 5.4 Platform Provider
 
 ```ts
 // web/src/platform/index.ts
@@ -961,9 +893,6 @@ export async function initPlatform(): Promise<PlatformAdapter> {
   if ((window as any).__TAURI__) {
     const { TauriAdapter } = await import('./tauri-adapter')
     _adapter = new TauriAdapter()
-  } else if ((window as any).__ELECTRON__) {
-    const { ElectronAdapter } = await import('./electron-adapter')
-    _adapter = new ElectronAdapter()
   } else {
     _adapter = new PwaAdapter()
   }
@@ -978,41 +907,40 @@ export function usePlatform(): PlatformAdapter {
 }
 ```
 
-**Key design principle:** Desktop adapters are lazy-imported so the PWA build never bundles Electron/Tauri code. The detection relies on globals set by the respective runtimes — no user-agent sniffing.
+**Key design principle:** Desktop adapters are lazy-imported so the PWA build never bundles Tauri code. Runtime detection relies on the `window.__TAURI__` global set by the desktop shell — no user-agent sniffing.
 
-### 5.6 Integration
+### 5.5 Integration
 
 - Call `initPlatform()` in `main.ts` before creating the Vue app
 - Replace direct `Notification` API calls with `usePlatform().notifications`
 - Replace badge calls with abstraction
 - Wire notification level (Phase 3A) through the adapter: `usePlatform().notifications.show()` is only called when the notification level permits it
-- Document the `window.__ELECTRON__` and `window.__TAURI__` contracts for the respective preload/IPC bridge implementations
+- Document the `window.__TAURI__` contract for the desktop bridge implementation
 
-### 5.7 Dual-Build Strategy
+### 5.6 Build Strategy
 
-The Vue app source is shared across all three targets. Build differences:
+The Vue app source is shared across both targets. Build differences:
 
-| Aspect | PWA | Electron | Tauri |
-|---|---|---|---|
-| Build command | `vite build` | `electron-builder` wrapping `vite build` | `tauri build` wrapping `vite build` |
-| Runtime detection | Default | `window.__ELECTRON__` | `window.__TAURI__` |
-| Notification delivery | Web Push API | Electron `Notification` | Tauri notification plugin |
-| System tray | N/A | Electron `Tray` | Tauri tray plugin |
-| Secure storage | N/A (localStorage) | `safeStorage` | OS keyring via plugin |
-| Auto-update | SW prompt-to-reload | `electron-updater` | Tauri updater plugin |
-| Protocol handler | N/A | `app.setAsDefaultProtocolClient` | Deep-link plugin |
-| Binary size | N/A (web) | ~150MB | ~10MB |
+| Aspect | PWA | Tauri |
+|---|---|---|
+| Build command | `vite build` | `tauri build` wrapping `vite build` |
+| Runtime detection | Default | `window.__TAURI__` |
+| Notification delivery | Web Push API | Tauri notification plugin |
+| System tray | N/A | Tauri tray plugin |
+| Secure storage | N/A (localStorage) | OS keyring via plugin |
+| Auto-update | SW prompt-to-reload | Tauri updater plugin |
+| Protocol handler | N/A | Deep-link plugin |
+| Binary size | N/A (web) | ~10MB |
 
-The `PlatformAdapter` interface ensures that feature code (notification level checks, badge updates, tray counters) is written once and works across all three targets.
+The `PlatformAdapter` interface ensures that feature code (notification level checks, badge updates, tray counters) is written once and works across both targets.
 
 **Deliverables:**
 - `web/src/platform/types.ts` — interface definitions with full typing
 - `web/src/platform/pwa-adapter.ts` — PWA implementation
-- `web/src/platform/electron-adapter.ts` — Electron adapter skeleton (contextBridge-based)
 - `web/src/platform/tauri-adapter.ts` — Tauri adapter skeleton (plugin-based)
 - `web/src/platform/index.ts` — factory + provider with lazy import
 - All notification/badge code routed through platform adapter
-- Security and build documentation for both desktop targets
+- Security and build documentation for the Tauri desktop target
 
 ---
 
@@ -1167,7 +1095,6 @@ Two modes:
 ### Phase 5 — new files
 - `web/src/platform/types.ts`
 - `web/src/platform/pwa-adapter.ts`
-- `web/src/platform/electron-adapter.ts` (skeleton)
 - `web/src/platform/tauri-adapter.ts` (skeleton)
 - `web/src/platform/index.ts`
 
@@ -1192,8 +1119,7 @@ Two modes:
 | Proto field 6 type change (bool→enum) | Wire incompatibility if old clients hit new server | Acceptable: `is_muted` is always `false` today, value `0` maps to `ALL` correctly. Deploy server + client together. |
 | Notification level adds N+1 queries to push delivery | Performance | Batch-fetch notification levels for all target users in a single query per event |
 | Failed message UI confuses users | Support burden | Clear error messages, prominent retry button, auto-retry on reconnect for queued messages |
-| Dual desktop runtime maintenance (Electron + Tauri) | Double the platform-specific code | Thin adapter layer minimizes per-platform code; shared Vue/Pinia/WS layer is >95% of codebase |
-| Tauri v2 plugin ecosystem less mature than Electron | Missing features | Electron as primary desktop target initially; Tauri for lightweight deployments where gaps are acceptable |
+| Tauri plugin/API gaps for specific native features | Missing or delayed desktop capabilities | Keep adapter methods optional, implement Rust-side shims for required features, and fall back to PWA behavior when unavailable |
 
 ---
 
@@ -1207,7 +1133,7 @@ Two modes:
 | Phase 3A: Mute & Notification Levels | 3-4 days | Proto regen, backend + frontend |
 | Phase 3B: Pending Message UX | 2-3 days | Phase 3 (for IndexedDB queue) |
 | Phase 4: Push Notifications | 3-4 days | Phase 1 + Phase 3A (notification levels) + backend |
-| Phase 5: Platform Abstraction | 2-3 days | Phase 4 (Electron + Tauri skeletons add ~1d) |
+| Phase 5: Platform Abstraction | 1-2 days | Phase 4 (single Tauri adapter scope) |
 | Phase 6: Resilience & Polish | 2-3 days | All above |
 | **Total** | **15-22 days** | |
 

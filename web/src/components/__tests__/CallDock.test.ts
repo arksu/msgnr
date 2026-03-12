@@ -9,11 +9,11 @@ import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 
 const chatApiMocks = vi.hoisted(() => ({
-  listConversationMembers: vi.fn(),
+  listDmCandidates: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
-  listConversationMembers: chatApiMocks.listConversationMembers,
+  listDmCandidates: chatApiMocks.listDmCandidates,
 }))
 
 async function flushAll() {
@@ -64,8 +64,7 @@ describe('CallDock invite modal', () => {
       skippedUserIds: ['user-3'],
     })
 
-    chatApiMocks.listConversationMembers.mockResolvedValue([
-      { user_id: 'user-1', display_name: 'Ada', email: 'ada@example.com', avatar_url: '' },
+    chatApiMocks.listDmCandidates.mockResolvedValue([
       { user_id: 'user-2', display_name: 'Bob', email: 'bob@example.com', avatar_url: '' },
       { user_id: 'user-3', display_name: 'Eve', email: 'eve@example.com', avatar_url: '' },
     ])
@@ -82,7 +81,7 @@ describe('CallDock invite modal', () => {
     await wrapper.get('[data-testid="calldock-invite-button"]').trigger('click')
     await flushAll()
 
-    expect(chatApiMocks.listConversationMembers).toHaveBeenCalledWith('channel-1')
+    expect(chatApiMocks.listDmCandidates).toHaveBeenCalledTimes(1)
     const modal = document.body.querySelector('[data-testid="calldock-invite-modal"]') as HTMLElement | null
     expect(modal).not.toBeNull()
     const modalText = modal?.textContent ?? ''
@@ -104,9 +103,7 @@ describe('CallDock invite modal', () => {
     await flushAll()
 
     expect(callStore.inviteMembersToActiveCall).toHaveBeenCalledWith(['user-2', 'user-3'])
-    const modalTextAfterSend = (document.body.querySelector('[data-testid="calldock-invite-modal"]') as HTMLElement | null)?.textContent ?? ''
-    expect(modalTextAfterSend).toContain('Invited 1. Skipped 1.')
-    expect(modalTextAfterSend).toContain('No members are available to invite.')
+    expect(document.body.querySelector('[data-testid="calldock-invite-modal"]')).toBeNull()
 
     wrapper.unmount()
   })

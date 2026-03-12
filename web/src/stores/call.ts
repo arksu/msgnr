@@ -144,6 +144,8 @@ function logScreenShare(message: string, payload?: unknown) {
 export const useCallStore = defineStore('call', () => {
   const room = shallowRef<Room | null>(null)
   const activeConversationId = ref('')
+  const activeConversationKind = ref<'dm' | 'channel'>('channel')
+  const activeConversationVisibility = ref<'public' | 'private' | 'dm'>('public')
   const activeCallId = ref('')
   const activeRoomName = ref('')
   const connecting = ref(false)
@@ -481,6 +483,8 @@ export const useCallStore = defineStore('call', () => {
       activeCallId.value = ''
       activeRoomName.value = ''
       activeConversationId.value = ''
+      activeConversationKind.value = 'channel'
+      activeConversationVisibility.value = 'public'
       room.value = null
       clearEmptyCallAutoCloseTimer()
       knownRemoteParticipantSids.clear()
@@ -820,17 +824,16 @@ export const useCallStore = defineStore('call', () => {
         visibility: 'dm',
       }
     }
-    return null
+    return {
+      kind: activeConversationKind.value,
+      visibility: activeConversationVisibility.value,
+    }
   }
 
   async function inviteMembersToActiveCall(userIds: string[]) {
     const ws = useWsStore()
     if (!activeConversationId.value) {
       throw new Error('No active conversation for call invite')
-    }
-    const activeCall = chatStore.activeCalls.find(call => call.conversationId === activeConversationId.value)
-    if (!activeCall) {
-      throw new Error('Call is no longer active')
     }
     const conversationMeta = resolveActiveConversationType()
     if (!conversationMeta) {
@@ -865,25 +868,30 @@ export const useCallStore = defineStore('call', () => {
     kind: 'dm' | 'channel'
     visibility: 'public' | 'private' | 'dm'
     inviteeUserIds?: string[]
+    joinExistingOnly?: boolean
   }) {
     const ws = useWsStore()
     const { conversationId, kind, visibility } = args
     const inviteeUserIds = args.inviteeUserIds ?? []
+    const joinExistingOnly = args.joinExistingOnly ?? false
     const currentActive = chatStore.activeCalls.find(call => call.conversationId === conversationId)
     callDebug('startOrJoinCall invoked', {
       conversationId,
       kind,
       visibility,
       inviteeUserIds,
+      joinExistingOnly,
       joiningExistingCall: Boolean(currentActive),
     })
+    activeConversationKind.value = kind
+    activeConversationVisibility.value = visibility
 
     errorMessage.value = ''
     connecting.value = true
     clearEmptyCallAutoCloseTimer()
 
     try {
-      if (!currentActive) {
+      if (!currentActive && !joinExistingOnly) {
         ws.sendCreateCall(conversationId, toConversationType(kind, visibility), inviteeUserIds)
       }
 
@@ -1182,6 +1190,9 @@ export const useCallStore = defineStore('call', () => {
 
   function syncWithActiveCalls() {
     if (!activeConversationId.value) return
+    const conversationKnownInSidebar = chatStore.channels.some(channel => channel.id === activeConversationId.value)
+      || chatStore.directMessages.some(dm => dm.id === activeConversationId.value)
+    if (!conversationKnownInSidebar) return
     const stillActive = chatStore.activeCalls.some(call => call.conversationId === activeConversationId.value)
     if (!stillActive) {
       callDebug('active call missing from chat store, leaving room', {

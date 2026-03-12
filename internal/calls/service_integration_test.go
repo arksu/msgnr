@@ -19,13 +19,19 @@ import (
 
 func seedCallUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) uuid.UUID {
 	t.Helper()
+	return seedCallUserWithStatus(t, ctx, pool, name, "active")
+}
+
+func seedCallUserWithStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name, status string) uuid.UUID {
+	t.Helper()
 	var userID uuid.UUID
 	err := pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, display_name, role)
-		 VALUES ($1, 'x', $2, 'member')
+		`INSERT INTO users (email, password_hash, display_name, role, status)
+		 VALUES ($1, 'x', $2, 'member', $3)
 		 RETURNING id`,
 		uuid.NewString()+"@example.com",
 		name,
+		status,
 	).Scan(&userID)
 	require.NoError(t, err)
 	return userID
@@ -43,6 +49,19 @@ func seedCallChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, crea
 	).Scan(&channelID)
 	require.NoError(t, err)
 	return channelID
+}
+
+func seedCallDMConversation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, creatorID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var conversationID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO channels (kind, visibility, name, created_by)
+		 VALUES ('dm', 'dm', '', $1)
+		 RETURNING id`,
+		creatorID,
+	).Scan(&conversationID)
+	require.NoError(t, err)
+	return conversationID
 }
 
 func seedMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID, userID uuid.UUID) {
@@ -405,7 +424,7 @@ func TestIntegration_InviteCallMembers_SkipsPendingInviteesForSameCall(t *testin
 	assert.Empty(t, result.DirectDeliveries)
 }
 
-func TestIntegration_InviteCallMembers_SkipsUsersWhoAreNotConversationMembers(t *testing.T) {
+func TestIntegration_InviteCallMembers_InvitesActiveUsersWhoAreNotConversationMembers(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 
@@ -427,11 +446,36 @@ func TestIntegration_InviteCallMembers_SkipsUsersWhoAreNotConversationMembers(t 
 		InviteeUserIDs: []uuid.UUID{memberInviteeID, outsiderID},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []uuid.UUID{memberInviteeID}, result.InvitedUserIDs)
-	assert.Equal(t, []uuid.UUID{outsiderID}, result.SkippedUserIDs)
+	assert.ElementsMatch(t, []uuid.UUID{memberInviteeID, outsiderID}, result.InvitedUserIDs)
+	assert.Empty(t, result.SkippedUserIDs)
 }
 
-func TestIntegration_InviteCallMembers_FailsForNonMemberActor(t *testing.T) {
+func TestIntegration_InviteCallMembers_SkipsBlockedUsers(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	actorID := seedCallUser(t, ctx, pool, "Actor")
+	activeInviteeID := seedCallUser(t, ctx, pool, "Active Invitee")
+	blockedInviteeID := seedCallUserWithStatus(t, ctx, pool, "Blocked Invitee", "blocked")
+	channelID := seedCallChannel(t, ctx, pool, actorID)
+	seedMember(t, ctx, pool, channelID, actorID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, actorID)
+	seedParticipant(t, ctx, pool, callID, actorID)
+
+	result, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: channelID,
+		ActorID:        actorID,
+		InviteeUserIDs: []uuid.UUID{activeInviteeID, blockedInviteeID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{activeInviteeID}, result.InvitedUserIDs)
+	assert.Equal(t, []uuid.UUID{blockedInviteeID}, result.SkippedUserIDs)
+}
+
+func TestIntegration_InviteCallMembers_FailsForActorWhoIsNotCallParticipant(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 
@@ -452,7 +496,63 @@ func TestIntegration_InviteCallMembers_FailsForNonMemberActor(t *testing.T) {
 		ActorID:        actorID,
 		InviteeUserIDs: []uuid.UUID{inviteeID},
 	})
-	require.ErrorIs(t, err, ErrNotMember)
+	require.ErrorIs(t, err, ErrForbiddenAction)
+}
+
+func TestIntegration_InviteCallMembers_AllowsNonMemberParticipantActor(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	memberPeerID := seedCallUser(t, ctx, pool, "Member Peer")
+	outsiderActorID := seedCallUser(t, ctx, pool, "Outsider Actor")
+	targetID := seedCallUser(t, ctx, pool, "Target")
+	channelID := seedCallChannel(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, channelID, ownerID)
+	seedMember(t, ctx, pool, channelID, memberPeerID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, ownerID)
+	seedParticipant(t, ctx, pool, callID, ownerID)
+	seedParticipant(t, ctx, pool, callID, outsiderActorID)
+
+	result, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: channelID,
+		ActorID:        outsiderActorID,
+		InviteeUserIDs: []uuid.UUID{targetID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{targetID}, result.InvitedUserIDs)
+	assert.Empty(t, result.SkippedUserIDs)
+}
+
+func TestIntegration_InviteCallMembers_AllowsDMParticipantToInviteOutsiders(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	dmPeerID := seedCallUser(t, ctx, pool, "DM Peer")
+	outsiderID := seedCallUser(t, ctx, pool, "Outsider")
+	targetID := seedCallUser(t, ctx, pool, "Target")
+	dmID := seedCallDMConversation(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, dmID, ownerID)
+	seedMember(t, ctx, pool, dmID, dmPeerID)
+	callID, _ := seedActiveCall(t, ctx, pool, dmID, ownerID)
+	seedParticipant(t, ctx, pool, callID, ownerID)
+	seedParticipant(t, ctx, pool, callID, outsiderID)
+
+	result, err := svc.InviteCallMembers(ctx, InviteCallMembersParams{
+		ConversationID: dmID,
+		ActorID:        outsiderID,
+		InviteeUserIDs: []uuid.UUID{targetID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{targetID}, result.InvitedUserIDs)
+	assert.Empty(t, result.SkippedUserIDs)
 }
 
 func TestIntegration_InviteCallMembers_FailsWhenNoActiveCall(t *testing.T) {
@@ -474,4 +574,62 @@ func TestIntegration_InviteCallMembers_FailsWhenNoActiveCall(t *testing.T) {
 		InviteeUserIDs: []uuid.UUID{inviteeID},
 	})
 	require.ErrorIs(t, err, ErrCallNotActive)
+}
+
+func TestIntegration_JoinCallToken_AllowsNonMemberActiveParticipant(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{
+		LiveKitURL:       "ws://localhost:7880",
+		LiveKitAPIKey:    "test-key",
+		LiveKitAPISecret: "test-secret",
+	})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	memberPeerID := seedCallUser(t, ctx, pool, "Member Peer")
+	outsiderID := seedCallUser(t, ctx, pool, "Outsider")
+	channelID := seedCallChannel(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, channelID, ownerID)
+	seedMember(t, ctx, pool, channelID, memberPeerID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, ownerID)
+	seedParticipant(t, ctx, pool, callID, ownerID)
+	seedParticipant(t, ctx, pool, callID, outsiderID)
+
+	result, err := svc.JoinCallToken(ctx, JoinCallTokenParams{
+		ConversationID: channelID,
+		UserID:         outsiderID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "ws://localhost:7880", result.LiveKitURL)
+	assert.NotEmpty(t, result.LiveKitToken)
+	assert.NotEmpty(t, result.LiveKitRoom)
+}
+
+func TestIntegration_JoinCallToken_FailsForNonMemberNonParticipant(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{
+		LiveKitURL:       "ws://localhost:7880",
+		LiveKitAPIKey:    "test-key",
+		LiveKitAPISecret: "test-secret",
+	})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	memberPeerID := seedCallUser(t, ctx, pool, "Member Peer")
+	outsiderID := seedCallUser(t, ctx, pool, "Outsider")
+	channelID := seedCallChannel(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, channelID, ownerID)
+	seedMember(t, ctx, pool, channelID, memberPeerID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, ownerID)
+	seedParticipant(t, ctx, pool, callID, ownerID)
+
+	_, err := svc.JoinCallToken(ctx, JoinCallTokenParams{
+		ConversationID: channelID,
+		UserID:         outsiderID,
+	})
+	require.ErrorIs(t, err, ErrNotMember)
 }

@@ -681,6 +681,7 @@ async function acceptIncomingInvite() {
       conversationId: invite.conversationId,
       kind: conversation.kind,
       visibility: conversation.visibility,
+      joinExistingOnly: true,
     })
   } catch (err) {
     incomingInviteError.value = err instanceof Error ? err.message : 'Failed to join call'

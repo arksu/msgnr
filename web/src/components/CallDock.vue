@@ -477,7 +477,7 @@ import { Track } from 'livekit-client'
 import { useCallStore } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
-import { listConversationMembers, type ConversationMemberItem } from '@/services/http/chatApi'
+import { listDmCandidates, type DmCandidateItem } from '@/services/http/chatApi'
 import UserAvatar from './UserAvatar.vue'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -1074,7 +1074,7 @@ function activeCallParticipantIds(): Set<string> {
   return ids
 }
 
-function toInviteCandidate(member: ConversationMemberItem): InviteCandidate {
+function toInviteCandidate(member: DmCandidateItem): InviteCandidate {
   return {
     userId: member.user_id,
     displayName: member.display_name,
@@ -1099,7 +1099,7 @@ async function openInviteDialog() {
   }
 
   try {
-    const members = await listConversationMembers(conversationId)
+    const members = await listDmCandidates()
     const inCall = activeCallParticipantIds()
     inviteCandidates.value = members
       .filter(member => member.user_id && !inCall.has(member.user_id))
@@ -1137,6 +1137,7 @@ async function sendCallInvites() {
       inviteCandidates.value = inviteCandidates.value.filter(candidate => !consumed.has(candidate.userId))
       selectedInviteeIds.value = selectedInviteeIds.value.filter(id => !consumed.has(id))
     }
+    closeInviteDialog()
   } catch (err) {
     inviteError.value = err instanceof Error ? err.message : 'Failed to send call invites'
   } finally {

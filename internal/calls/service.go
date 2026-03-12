@@ -263,9 +263,6 @@ func (s *Service) JoinCallToken(ctx context.Context, p JoinCallTokenParams) (Joi
 	if err != nil {
 		return JoinCallTokenResult{}, fmt.Errorf("calls.JoinCallToken load conversation: %w", err)
 	}
-	if !isMember {
-		return JoinCallTokenResult{}, ErrNotMember
-	}
 
 	activeCall, exists, err := s.findActiveCallTx(ctx, tx, p.ConversationID)
 	if err != nil {
@@ -273,6 +270,15 @@ func (s *Service) JoinCallToken(ctx context.Context, p JoinCallTokenParams) (Joi
 	}
 	if !exists {
 		return JoinCallTokenResult{}, ErrCallNotActive
+	}
+	if !isMember {
+		isParticipant, err := s.isActiveParticipantTx(ctx, tx, activeCall.ID, p.UserID)
+		if err != nil {
+			return JoinCallTokenResult{}, err
+		}
+		if !isParticipant {
+			return JoinCallTokenResult{}, ErrNotMember
+		}
 	}
 
 	if err := s.upsertParticipantTx(ctx, tx, activeCall.ID, p.UserID); err != nil {
@@ -311,12 +317,9 @@ func (s *Service) InviteCallMembers(ctx context.Context, p InviteCallMembersPara
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	_, isMember, err := s.loadConversationMetaTx(ctx, tx, p.ConversationID, p.ActorID)
+	_, _, err = s.loadConversationMetaTx(ctx, tx, p.ConversationID, p.ActorID)
 	if err != nil {
 		return InviteCallMembersResult{}, fmt.Errorf("calls.InviteCallMembers load conversation: %w", err)
-	}
-	if !isMember {
-		return InviteCallMembersResult{}, ErrNotMember
 	}
 
 	activeCall, exists, err := s.findActiveCallTx(ctx, tx, p.ConversationID)
@@ -335,14 +338,14 @@ func (s *Service) InviteCallMembers(ctx context.Context, p InviteCallMembersPara
 		return InviteCallMembersResult{}, ErrForbiddenAction
 	}
 
-	invitees, membershipSkipped, err := s.resolveProvidedInviteesTx(ctx, tx, p.ConversationID, p.ActorID, p.InviteeUserIDs)
+	invitees, eligibilitySkipped, err := s.resolveProvidedInviteesTx(ctx, tx, p.ActorID, p.InviteeUserIDs)
 	if err != nil {
 		return InviteCallMembersResult{}, err
 	}
 
 	invited := make([]uuid.UUID, 0, len(invitees))
-	skipped := make([]uuid.UUID, 0, len(invitees)+len(membershipSkipped))
-	skipped = append(skipped, membershipSkipped...)
+	skipped := make([]uuid.UUID, 0, len(invitees)+len(eligibilitySkipped))
+	skipped = append(skipped, eligibilitySkipped...)
 	directDeliveries := make([]DirectDelivery, 0, len(invitees)*3)
 
 	for _, inviteeID := range invitees {
@@ -949,7 +952,7 @@ func (s *Service) resolveInviteesTx(ctx context.Context, tx pgx.Tx, meta convers
 	return invitees, nil
 }
 
-func (s *Service) resolveProvidedInviteesTx(ctx context.Context, tx pgx.Tx, conversationID, actorID uuid.UUID, provided []uuid.UUID) ([]uuid.UUID, []uuid.UUID, error) {
+func (s *Service) resolveProvidedInviteesTx(ctx context.Context, tx pgx.Tx, actorID uuid.UUID, provided []uuid.UUID) ([]uuid.UUID, []uuid.UUID, error) {
 	seen := make(map[uuid.UUID]struct{}, len(provided))
 	invitees := make([]uuid.UUID, 0, len(provided))
 	skipped := make([]uuid.UUID, 0, len(provided))
@@ -965,13 +968,10 @@ func (s *Service) resolveProvidedInviteesTx(ctx context.Context, tx pgx.Tx, conv
 		if err := tx.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1
-				  FROM channel_members cm
-				  JOIN users u ON u.id = cm.user_id
-				 WHERE cm.channel_id = $1
-				   AND cm.user_id = $2
-				   AND cm.is_archived = false
+				  FROM users u
+				 WHERE u.id = $1
 				   AND u.status = 'active'
-			)`, conversationID, userID).Scan(&eligible); err != nil {
+			)`, userID).Scan(&eligible); err != nil {
 			return nil, nil, err
 		}
 		if !eligible {

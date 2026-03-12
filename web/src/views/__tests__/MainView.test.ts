@@ -7,6 +7,8 @@ import { PresenceStatus } from '@/shared/proto/packets_pb'
 import { useAuthStore } from '@/stores/auth'
 import { useTasksStore } from '@/stores/tasks'
 import { useWsStore } from '@/stores/ws'
+import { useChatStore } from '@/stores/chat'
+import { useCallStore } from '@/stores/call'
 import MainView from '@/views/MainView.vue'
 
 const orchestratorMocks = vi.hoisted(() => ({
@@ -22,6 +24,14 @@ const taskRouteStorageMocks = vi.hoisted(() => ({
 vi.mock('@/composables/useSessionOrchestrator', () => ({
   useSessionOrchestrator: () => ({
     logout: orchestratorMocks.logout,
+  }),
+}))
+
+vi.mock('@/services/sound', () => ({
+  useNotificationSoundEngine: () => ({
+    playIncomingMessage: vi.fn(),
+    startCallInviteRing: vi.fn().mockResolvedValue(undefined),
+    stopCallInviteRing: vi.fn(),
   }),
 }))
 
@@ -214,6 +224,43 @@ describe('MainView server unavailable state', () => {
     expect(router.currentRoute.value.name).toBe('tasks-card')
     expect(wrapper.find('[data-testid=\"task-card\"]').exists()).toBe(true)
     expect(selectTaskSpy).toHaveBeenCalledWith('task-123', true)
+  })
+
+  it('accepts incoming invites by joining existing call without create-call step', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    const callStore = useCallStore()
+    const startOrJoinSpy = vi.spyOn(callStore, 'startOrJoinCall').mockResolvedValue()
+    const acceptInviteSpy = vi.spyOn(wsStore, 'sendAcceptCallInvite')
+    chatStore.pendingInvites = [{
+      id: 'invite-1',
+      callId: 'call-1',
+      conversationId: 'external-conversation-1',
+      inviterUserId: 'user-2',
+      state: 'created',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    }]
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    const acceptButton = wrapper.findAll('button').find(btn => btn.text().includes('Accept'))
+    expect(acceptButton).toBeDefined()
+    await acceptButton!.trigger('click')
+    await flushUi()
+
+    expect(acceptInviteSpy).toHaveBeenCalledWith('invite-1')
+    expect(startOrJoinSpy).toHaveBeenCalledWith({
+      conversationId: 'external-conversation-1',
+      kind: 'channel',
+      visibility: 'public',
+      joinExistingOnly: true,
+    })
   })
 
   it('navigates back to /tasks when card emits back', async () => {

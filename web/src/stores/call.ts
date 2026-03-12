@@ -4,6 +4,7 @@ import { ConversationType, ErrorCode } from '@/shared/proto/packets_pb'
 import { Room, RoomEvent, Track, ScreenSharePresets, type AudioCaptureOptions, type LocalVideoTrack, type LocalAudioTrack, type TrackPublishOptions, type ScreenShareCaptureOptions } from 'livekit-client'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
+import { useNotificationSoundEngine } from '@/services/sound'
 import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
 
 // RNNoise blob URL is built once per page load and reused across all mute/unmute
@@ -172,6 +173,7 @@ export const useCallStore = defineStore('call', () => {
   const errorMessage = ref('')
 
   const chatStore = useChatStore()
+  const soundEngine = useNotificationSoundEngine()
 
   let pendingJoinResolve: ((resp: { livekitUrl: string; livekitToken: string; livekitRoom: string }) => void) | null = null
   let pendingJoinReject: ((error: Error) => void) | null = null
@@ -183,6 +185,8 @@ export const useCallStore = defineStore('call', () => {
   let remoteAudioStatsTimer: ReturnType<typeof setInterval> | null = null
   let emptyCallAutoCloseTimer: ReturnType<typeof setTimeout> | null = null
   let audioProcessingCleanup: (() => void) | null = null
+  let knownRemoteParticipantSids = new Set<string>()
+  let suppressParticipantChangeSounds = false
 
   const activeConversationTitle = computed(() => {
     const channel = chatStore.channels.find(item => item.id === activeConversationId.value)
@@ -223,6 +227,12 @@ export const useCallStore = defineStore('call', () => {
       clearTimeout(emptyCallAutoCloseTimer)
       emptyCallAutoCloseTimer = null
     }
+  }
+
+  function syncKnownRemoteParticipants(current: Room) {
+    knownRemoteParticipantSids = new Set(
+      Array.from(current.remoteParticipants.values()).map(participant => participant.sid),
+    )
   }
 
   function scheduleEmptyCallAutoClose() {
@@ -473,6 +483,8 @@ export const useCallStore = defineStore('call', () => {
       activeConversationId.value = ''
       room.value = null
       clearEmptyCallAutoCloseTimer()
+      knownRemoteParticipantSids.clear()
+      suppressParticipantChangeSounds = false
     })
 
     next.on(RoomEvent.Connected, () => {
@@ -482,6 +494,8 @@ export const useCallStore = defineStore('call', () => {
         canPlaybackAudio: next.canPlaybackAudio,
       })
       remoteParticipantCount.value = next.remoteParticipants.size
+      syncKnownRemoteParticipants(next)
+      suppressParticipantChangeSounds = false
       mediaVersion.value += 1
       clearEmptyCallAutoCloseTimer()
       if (remoteParticipantCount.value === 0) {
@@ -499,6 +513,8 @@ export const useCallStore = defineStore('call', () => {
         canPlaybackAudio: next.canPlaybackAudio,
       })
       remoteParticipantCount.value = next.remoteParticipants.size
+      syncKnownRemoteParticipants(next)
+      suppressParticipantChangeSounds = false
       mediaVersion.value += 1
       if (remoteParticipantCount.value === 0) {
         scheduleEmptyCallAutoClose()
@@ -508,6 +524,9 @@ export const useCallStore = defineStore('call', () => {
     })
 
     next.on(RoomEvent.ParticipantConnected, (participant) => {
+      const isKnownParticipant = knownRemoteParticipantSids.has(participant.sid)
+      knownRemoteParticipantSids.add(participant.sid)
+
       for (const publication of participant.audioTrackPublications.values()) {
         if (!publication.isSubscribed) {
           callDebug('forcing remote audio subscribe on participant connect', {
@@ -536,9 +555,13 @@ export const useCallStore = defineStore('call', () => {
       remoteParticipantCount.value = next.remoteParticipants.size
       clearEmptyCallAutoCloseTimer()
       mediaVersion.value += 1
+      if (!isKnownParticipant && connected.value && !suppressParticipantChangeSounds) {
+        void soundEngine.playCallMemberJoined()
+      }
     })
 
     next.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      const isKnownParticipant = knownRemoteParticipantSids.delete(participant.sid)
       callDebug('remote participant disconnected', {
         participant: participant.identity,
         sid: participant.sid,
@@ -549,6 +572,9 @@ export const useCallStore = defineStore('call', () => {
         scheduleEmptyCallAutoClose()
       }
       mediaVersion.value += 1
+      if (isKnownParticipant && connected.value && !suppressParticipantChangeSounds) {
+        void soundEngine.playCallMemberLeft()
+      }
     })
 
     next.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
@@ -725,6 +751,7 @@ export const useCallStore = defineStore('call', () => {
   }
 
   async function ensureDisconnected() {
+    suppressParticipantChangeSounds = true
     audioProcessingCleanup?.()
     audioProcessingCleanup = null
     const current = room.value
@@ -747,6 +774,8 @@ export const useCallStore = defineStore('call', () => {
       // best effort
     }
     room.value = null
+    knownRemoteParticipantSids.clear()
+    suppressParticipantChangeSounds = false
   }
 
   async function requestJoinToken(conversationId: string, kind: 'dm' | 'channel', visibility: 'public' | 'private' | 'dm') {

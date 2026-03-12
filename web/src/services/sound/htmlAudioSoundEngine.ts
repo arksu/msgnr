@@ -3,6 +3,8 @@ import type { SoundEngine } from '@/services/sound/types'
 
 const MESSAGE_PING_SRC = '/sounds/message-ping.wav'
 const CALL_INVITE_RING_SRC = '/sounds/call-invite.wav'
+const CALL_MEMBER_JOINED_SRC = '/sounds/call-member-joined.wav'
+const CALL_MEMBER_LEFT_SRC = '/sounds/call-member-left.wav'
 const DEFAULT_MESSAGE_COOLDOWN_MS = 2_000
 
 export class HtmlAudioSoundEngine implements SoundEngine {
@@ -20,15 +22,15 @@ export class HtmlAudioSoundEngine implements SoundEngine {
     if (now - this.lastMessageAt < this.messageCooldownMs) return
     this.lastMessageAt = now
 
-    const audio = this.createAudio(MESSAGE_PING_SRC, false)
-    try {
-      await this.routeToPreferredOutput(audio)
-      // Best effort: play() can fail with NotAllowedError until the page
-      // receives a user gesture (browser autoplay policy).
-      await audio.play()
-    } catch {
-      // Best effort: autoplay/output routing may be blocked by browser policy.
-    }
+    await this.playOneShot(MESSAGE_PING_SRC)
+  }
+
+  async playCallMemberJoined(): Promise<void> {
+    await this.playOneShot(CALL_MEMBER_JOINED_SRC)
+  }
+
+  async playCallMemberLeft(): Promise<void> {
+    await this.playOneShot(CALL_MEMBER_LEFT_SRC)
   }
 
   async startCallInviteRing(): Promise<void> {
@@ -67,6 +69,18 @@ export class HtmlAudioSoundEngine implements SoundEngine {
     audio.loop = loop
     audio.preload = 'auto'
     return audio
+  }
+
+  private async playOneShot(src: string): Promise<void> {
+    const audio = this.createAudio(src, false)
+    try {
+      await this.routeToPreferredOutput(audio)
+      // Best effort: play() can fail with NotAllowedError until the page
+      // receives a user gesture (browser autoplay policy).
+      await audio.play()
+    } catch {
+      // Best effort: autoplay/output routing may be blocked by browser policy.
+    }
   }
 
   private async routeToPreferredOutput(audio: HTMLAudioElement): Promise<void> {

@@ -62,4 +62,14 @@ describe('HtmlAudioSoundEngine', () => {
     expect(pauseSpy).toHaveBeenCalledTimes(1)
     expect(loadSpy).toHaveBeenCalledTimes(1)
   })
+
+  it('plays member join/leave sounds as one-shot effects', async () => {
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play')
+    const engine = new HtmlAudioSoundEngine()
+
+    await engine.playCallMemberJoined()
+    await engine.playCallMemberLeft()
+
+    expect(playSpy).toHaveBeenCalledTimes(2)
+  })
 })

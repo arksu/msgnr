@@ -69,19 +69,6 @@
         </template>
 
         <template v-else>
-          <div
-            v-if="loadingOlderHistory"
-            data-testid="history-loading-spinner"
-            class="sticky top-0 z-10 flex justify-center py-2"
-          >
-            <div class="inline-flex items-center gap-2 rounded-full border border-chat-border bg-chat-header/90 px-2.5 py-1 text-[11px] text-gray-300 backdrop-blur">
-              <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" />
-                <path class="opacity-90" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
-              </svg>
-              <span>Loading history</span>
-            </div>
-          </div>
           <MessageBubble
             v-for="(msg, idx) in messages"
             :key="msg.id"
@@ -92,6 +79,20 @@
             @open-thread="openThreadFromMessage"
           />
         </template>
+      </div>
+
+      <div
+        v-if="loadingOlderHistory"
+        data-testid="history-loading-spinner"
+        class="pointer-events-none absolute top-2 left-0 right-0 z-10 flex justify-center"
+      >
+        <div class="inline-flex items-center gap-2 rounded-full border border-chat-border bg-chat-header/90 px-2.5 py-1 text-[11px] text-gray-300 backdrop-blur">
+          <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" />
+            <path class="opacity-90" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+          </svg>
+          <span>Loading history</span>
+        </div>
       </div>
 
       <div

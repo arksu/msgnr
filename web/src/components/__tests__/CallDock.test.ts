@@ -110,4 +110,48 @@ describe('CallDock invite modal', () => {
 
     wrapper.unmount()
   })
+
+  it('restores from maximized mode when Escape is pressed', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    const callStore = useCallStore()
+
+    authStore.user = {
+      id: 'user-1',
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      avatarUrl: '',
+      role: 'member',
+    }
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfAvatarUrl: '',
+      selfRole: 'member',
+    }
+
+    callStore.connected = true
+    callStore.minimized = false
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    await wrapper.get('button[title="Maximize"]').trigger('click')
+    await flushAll()
+    expect(wrapper.find('button[title="Restore"]').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushAll()
+    expect(wrapper.find('button[title="Maximize"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
 })

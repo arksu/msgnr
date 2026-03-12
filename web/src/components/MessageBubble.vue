@@ -730,13 +730,16 @@ function handleDocumentClick(evt: MouseEvent) {
 
 function handleEscape(evt: KeyboardEvent) {
   if (evt.key !== 'Escape') return
+  if (imagePreview.value.open) {
+    closeImagePreview()
+  }
   showEmojiPicker.value = false
   showContextMenu.value = false
   debugReaction('picker:escape-close')
 }
 
-watch([showEmojiPicker, showContextMenu], ([pickerVisible, menuVisible]) => {
-  const anyOpen = pickerVisible || menuVisible
+watch([showEmojiPicker, showContextMenu, () => imagePreview.value.open], ([pickerVisible, menuVisible, previewVisible]) => {
+  const anyOpen = pickerVisible || menuVisible || previewVisible
   if (anyOpen) {
     document.addEventListener('click', handleDocumentClick)
     document.addEventListener('keydown', handleEscape)

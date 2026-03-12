@@ -1,10 +1,24 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { nextTick } from 'vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
+
+const chatApiMocks = vi.hoisted(() => ({
+  fetchMessageAttachmentBlob: vi.fn(),
+}))
+
+vi.mock('@/services/http/chatApi', () => ({
+  fetchMessageAttachmentBlob: chatApiMocks.fetchMessageAttachmentBlob,
+}))
+
+async function flushAll() {
+  await Promise.resolve()
+  await nextTick()
+}
 
 function buildMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -27,6 +41,9 @@ function buildMessage(overrides: Partial<Message> = {}): Message {
 describe('MessageBubble reactions', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    chatApiMocks.fetchMessageAttachmentBlob.mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:attachment-preview')
+    globalThis.URL.revokeObjectURL = vi.fn()
   })
 
   it('clicking own reaction sends remove', async () => {
@@ -158,5 +175,41 @@ describe('MessageBubble reactions', () => {
       minute: '2-digit',
     })
     expect(wrapper.text()).toContain(expected)
+  })
+
+  it('closes image preview when Escape is pressed', async () => {
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      attachments: [{
+        id: 'att-1',
+        fileName: 'photo.png',
+        fileSize: 3,
+        mimeType: 'image/png',
+      }],
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await flushAll()
+
+    const previewImage = wrapper.find('img[alt="photo.png"]')
+    expect(previewImage.exists()).toBe(true)
+    await previewImage.trigger('click')
+    await flushAll()
+
+    const beforeEscCount = document.body.querySelectorAll('img[alt="photo.png"]').length
+    expect(beforeEscCount).toBe(2)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushAll()
+
+    const afterEscCount = document.body.querySelectorAll('img[alt="photo.png"]').length
+    expect(afterEscCount).toBe(1)
+
+    wrapper.unmount()
   })
 })

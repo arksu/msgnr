@@ -1003,6 +1003,8 @@ function detachAllRemoteAudioTracks() {
 // ── Cleanup on unmount ────────────────────────────────────────────────────────
 
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleEscapeKey)
+
   const localVid = unwrapEl(localVideoEl.value)
   const localScr = unwrapEl(localScreenEl.value)
   const pinnedVid = unwrapEl(pinnedVideoEl.value)
@@ -1028,6 +1030,25 @@ onBeforeUnmount(() => {
 
 watch(() => callStore.minimized, (value) => {
   if (value) maximized.value = false
+})
+
+function handleEscapeKey(evt: KeyboardEvent) {
+  if (evt.key !== 'Escape') return
+  if (inviteDialogOpen.value) {
+    closeInviteDialog()
+    return
+  }
+  if (maximized.value) {
+    maximized.value = false
+  }
+}
+
+watch([maximized, inviteDialogOpen], ([isMaximized, isInviteOpen]) => {
+  const shouldListen = isMaximized || isInviteOpen
+  document.removeEventListener('keydown', handleEscapeKey)
+  if (shouldListen) {
+    document.addEventListener('keydown', handleEscapeKey)
+  }
 })
 
 function toggleMaximized() {

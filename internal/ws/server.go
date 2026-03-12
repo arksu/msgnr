@@ -48,6 +48,10 @@ type outboundMsg struct {
 	env *packetspb.Envelope
 }
 
+type sessionState struct {
+	windowActive bool
+}
+
 // PushNotifier is called for DirectDeliveries targeting users with no active
 // WebSocket sessions. Implementations send Web Push notifications.
 type PushNotifier interface {
@@ -69,7 +73,7 @@ type Server struct {
 	authorizeEvent func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool
 	log            *zap.Logger
 	sessionMu      sync.RWMutex
-	sessionsByUser map[string]map[chan outboundMsg]struct{}
+	sessionsByUser map[string]map[chan outboundMsg]*sessionState
 	typingMu       sync.Mutex
 	typingExpiry   map[string]time.Time
 	pushNotifier   PushNotifier // optional; nil means push disabled
@@ -91,7 +95,7 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, boots
 			return authSvc.CanReceiveEvent(ctx, principal, evt)
 		},
 		log:            logger.Logger,
-		sessionsByUser: make(map[string]map[chan outboundMsg]struct{}),
+		sessionsByUser: make(map[string]map[chan outboundMsg]*sessionState),
 		typingExpiry:   make(map[string]time.Time),
 	}
 }
@@ -346,7 +350,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// State 3: Authenticated — domain payload dispatch.
-		s.handleDomainPayload(r.Context(), &env, principal, enqueue)
+		s.handleDomainPayload(r.Context(), &env, principal, outboundCh, enqueue)
 	}
 }
 
@@ -453,9 +457,9 @@ func (s *Server) registerUserSession(userID string, outboundCh chan outboundMsg)
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
 	if s.sessionsByUser[userID] == nil {
-		s.sessionsByUser[userID] = make(map[chan outboundMsg]struct{})
+		s.sessionsByUser[userID] = make(map[chan outboundMsg]*sessionState)
 	}
-	s.sessionsByUser[userID][outboundCh] = struct{}{}
+	s.sessionsByUser[userID][outboundCh] = &sessionState{windowActive: true}
 	return func() {
 		s.sessionMu.Lock()
 		defer s.sessionMu.Unlock()
@@ -465,6 +469,20 @@ func (s *Server) registerUserSession(userID string, outboundCh chan outboundMsg)
 			delete(s.sessionsByUser, userID)
 		}
 	}
+}
+
+func (s *Server) setSessionWindowActive(userID string, outboundCh chan outboundMsg, active bool) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	sessions := s.sessionsByUser[userID]
+	if sessions == nil {
+		return
+	}
+	state, ok := sessions[outboundCh]
+	if !ok || state == nil {
+		return
+	}
+	state.windowActive = active
 }
 
 // SetPushNotifier configures the optional push notifier. Must be called
@@ -479,6 +497,19 @@ func (s *Server) HasActiveSessions(userID string) bool {
 	s.sessionMu.RLock()
 	defer s.sessionMu.RUnlock()
 	return len(s.sessionsByUser[userID]) > 0
+}
+
+// HasActiveWindowSessions returns true if at least one authenticated websocket
+// session for the user reports its chat window as active (focused + visible).
+func (s *Server) HasActiveWindowSessions(userID string) bool {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	for _, state := range s.sessionsByUser[userID] {
+		if state != nil && state.windowActive {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) sendDirectEnvelope(userIDs []string, env *packetspb.Envelope) {
@@ -787,6 +818,7 @@ func (s *Server) handleDomainPayload(
 	ctx context.Context,
 	env *packetspb.Envelope,
 	principal auth.Principal,
+	outboundCh chan outboundMsg,
 	enqueue func(*packetspb.Envelope) bool,
 ) {
 	reqID := env.GetRequestId()
@@ -1309,6 +1341,14 @@ func (s *Server) handleDomainPayload(
 			return
 		}
 		s.broadcastPresence(ctx, principal.UserID, req.GetDesiredPresence())
+
+	case *packetspb.Envelope_SetClientWindowActivityRequest:
+		req := p.SetClientWindowActivityRequest
+		if req == nil {
+			badReq("set_client_window_activity_request: missing payload")
+			return
+		}
+		s.setSessionWindowActive(principal.UserID.String(), outboundCh, req.GetIsActive())
 
 	case *packetspb.Envelope_TypingRequest:
 		req := p.TypingRequest

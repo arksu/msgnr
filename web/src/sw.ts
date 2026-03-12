@@ -80,7 +80,7 @@ interface PushPayload {
   body: string
   conversationId?: string
   messageId?: string
-  tag: string
+  tag?: string
   url: string
 }
 
@@ -100,7 +100,7 @@ self.addEventListener('push', (event: PushEvent) => {
       body: data.body,
       icon: '/pwa-192x192.png',
       badge: '/badge-72x72.png',
-      tag: data.tag,
+      ...(data.tag ? { tag: data.tag } : {}),
       data: {
         url: data.url || '/',
         conversationId: data.conversationId,

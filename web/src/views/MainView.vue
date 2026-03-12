@@ -487,18 +487,38 @@ async function handleLogout() {
 function handleClientFocus() {
   chatStore.setClientActive(true)
   chatStore.onClientFocus()
+  reportClientWindowActivity(true)
 }
 
 function handleClientBlur() {
   chatStore.setClientActive(false)
+  reportClientWindowActivity(false)
 }
 
 function handleVisibilityChange() {
   if (document.visibilityState === 'hidden') {
     chatStore.setClientActive(false)
+    reportClientWindowActivity(false)
     return
   }
   handleClientFocus()
+}
+
+function isWsActivitySignalReady(): boolean {
+  return wsStore.state === 'AUTH_COMPLETE'
+    || wsStore.state === 'BOOTSTRAPPING'
+    || wsStore.state === 'LIVE_SYNCED'
+    || wsStore.state === 'RECOVERING_GAP'
+    || wsStore.state === 'STALE_REBOOTSTRAP'
+}
+
+function isChatWindowActive(): boolean {
+  return document.visibilityState !== 'hidden' && document.hasFocus()
+}
+
+function reportClientWindowActivity(active: boolean) {
+  if (!isWsActivitySignalReady()) return
+  wsStore.sendSetClientWindowActivity(active)
 }
 
 function applyManualPresencePreference() {
@@ -698,6 +718,7 @@ watch(settingsOpen, (isOpen) => {
 // already authenticated (page refresh scenario)
 watch(() => wsStore.state, async (state) => {
   if (state === 'AUTH_COMPLETE') {
+    reportClientWindowActivity(isChatWindowActive())
     chatStore.startRealtimeFlow()
     applyManualPresencePreference()
     // Flush any messages that were composed while disconnected.
@@ -742,8 +763,9 @@ onMounted(async () => {
   window.addEventListener('blur', handleClientBlur)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   document.addEventListener('keydown', handleGlobalKeydown)
-  chatStore.setClientActive(document.visibilityState !== 'hidden')
-  if (document.visibilityState !== 'hidden') {
+  const active = isChatWindowActive()
+  chatStore.setClientActive(active)
+  if (active) {
     chatStore.onClientFocus()
   }
 
@@ -754,6 +776,7 @@ onMounted(async () => {
   // WS is authenticated; calling startRealtimeFlow() before AUTH_COMPLETE is a no-op
   // and would cause a double-call when the watch fires moments later.
   if (wsStore.state === 'AUTH_COMPLETE') {
+    reportClientWindowActivity(active)
     chatStore.startRealtimeFlow()
   }
 })

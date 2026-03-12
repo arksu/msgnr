@@ -513,6 +513,18 @@ export const useWsStore = defineStore('ws', () => {
     }))
   }
 
+  function sendSetClientWindowActivity(isActive: boolean) {
+    sendEnvelope(create(EnvelopeSchema, {
+      requestId: generateId(),
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'setClientWindowActivityRequest',
+        value: { isActive },
+      },
+    }))
+  }
+
   function sendSetNotificationLevel(conversationId: string, level: NotificationLevel): string {
     const requestId = generateId()
     sendEnvelope(create(EnvelopeSchema, {
@@ -794,6 +806,7 @@ export const useWsStore = defineStore('ws', () => {
     sendUpdateReadCursor,
     sendTyping,
     sendSetPresence,
+    sendSetClientWindowActivity,
     sendSetNotificationLevel,
     sendCreateCall,
     sendInviteCallMembers,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 // SessionChecker determines whether a user has active WS connections.
 type SessionChecker interface {
 	HasActiveSessions(userID string) bool
+	HasActiveWindowSessions(userID string) bool
 }
 
 // Service handles Web Push notification delivery.
@@ -35,6 +37,7 @@ type Service struct {
 	cfg            *config.Config
 	sessionChecker SessionChecker
 	log            *zap.Logger
+	startedAt      time.Time
 
 	// In-memory rate limiter: key = "userID:conversationID", value = last push time.
 	rateMu   sync.Mutex
@@ -52,8 +55,9 @@ func NewService(pool *pgxpool.Pool, cfg *config.Config, sc SessionChecker) *Serv
 		cfg:            cfg,
 		sessionChecker: sc,
 		log:            logger.Logger.Named("push"),
+		startedAt:      time.Now().UTC(),
 		rateMap:        make(map[string]time.Time),
-		rateWind:       3 * time.Second,
+		rateWind:       cfg.PushRateLimitWindow,
 	}
 }
 
@@ -92,33 +96,87 @@ func (s *Service) Unsubscribe(ctx context.Context, userID uuid.UUID, endpoint st
 // PushChatDeliveries sends push notifications for chat DirectDeliveries whose
 // target users are offline. Only NOTIFICATION_ADDED events produce push.
 func (s *Service) PushChatDeliveries(deliveries []chat.DirectDelivery) {
-	if !s.Enabled() {
+	// Chat pushes are driven from MESSAGE_CREATED bus events so that we can
+	// notify on every new message without duplicating mention/thread pushes.
+	_ = deliveries
+}
+
+// PushMessageCreated sends pushes for a message_created event to offline
+// conversation members with notification_level=ALL (0), excluding the sender.
+func (s *Service) PushMessageCreated(evt *packetspb.ServerEvent) {
+	if !s.Enabled() || evt == nil || evt.GetEventType() != packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED {
 		return
 	}
-	for _, d := range deliveries {
-		if d.Event == nil {
+
+	// The event listener replays backlog on startup. Skip historical events to
+	// avoid sending stale pushes after a server restart.
+	if ts := evt.GetOccurredAt(); ts != nil && ts.AsTime().Before(s.startedAt) {
+		return
+	}
+
+	msg := evt.GetMessageCreated()
+	if msg == nil || msg.GetConversationId() == "" || msg.GetSenderId() == "" {
+		return
+	}
+
+	channelID, err := uuid.Parse(msg.GetConversationId())
+	if err != nil {
+		return
+	}
+	senderID, err := uuid.Parse(msg.GetSenderId())
+	if err != nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var senderTitle string
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(NULLIF(display_name, ''), email, 'Someone')
+		  FROM users
+		 WHERE id = $1
+	`, senderID).Scan(&senderTitle); err != nil {
+		senderTitle = "New message"
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT user_id::text, notification_level
+		  FROM channel_members
+		 WHERE channel_id = $1
+		   AND is_archived = false
+		   AND user_id <> $2
+	`, channelID, senderID)
+	if err != nil {
+		s.log.Warn("failed to load push recipients", zap.Error(err), zap.String("conversation_id", msg.GetConversationId()))
+		return
+	}
+	defer rows.Close()
+
+	hasAttachment := len(msg.GetAttachments()) > 0
+	body := messagePushBody(msg.GetBody(), hasAttachment)
+
+	for rows.Next() {
+		var userID string
+		var level int16
+		if err := rows.Scan(&userID, &level); err != nil {
 			continue
 		}
-		// Only send push for notification_added events (mentions, thread replies).
-		// Other direct deliveries (read_counter, notification_resolved, etc.) are
-		// UI-state updates that don't warrant a system notification.
-		if d.Event.EventType != packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED {
+		// 0 = ALL. Respect existing per-conversation notification levels.
+		if level != 0 {
 			continue
 		}
-		na := d.Event.GetNotificationAdded()
-		if na == nil || na.Notification == nil {
+		if s.sessionChecker != nil && s.sessionChecker.HasActiveWindowSessions(userID) {
 			continue
 		}
-		n := na.Notification
-		payload := PushPayload{
-			Type:           notificationTypeString(n.Type),
-			Title:          n.Title,
-			Body:           truncate(n.Body, 200),
-			ConversationID: n.ConversationId,
-			Tag:            "conv:" + n.ConversationId,
+		s.sendToUser(userID, PushPayload{
+			Type:           "message",
+			Title:          senderTitle,
+			Body:           body,
+			ConversationID: msg.GetConversationId(),
+			MessageID:      msg.GetMessageId(),
 			URL:            "/",
-		}
-		s.sendToUser(d.UserID, payload)
+		})
 	}
 }
 
@@ -174,24 +232,31 @@ func (s *Service) PushCallDeliveries(deliveries []calls.DirectDelivery) {
 
 // sendToUser looks up all push subscriptions for the user and sends the payload.
 func (s *Service) sendToUser(userID string, payload PushPayload) {
-	// Rate limit: skip if same user+conversation was pushed within the window.
-	rateKey := userID + ":" + payload.ConversationID
-	s.rateMu.Lock()
-	if last, ok := s.rateMap[rateKey]; ok && time.Since(last) < s.rateWind {
-		s.rateMu.Unlock()
-		return
-	}
-	s.rateMap[rateKey] = time.Now()
-	// Prune expired entries to prevent unbounded growth.
-	if len(s.rateMap) > 1000 {
-		now := time.Now()
-		for k, t := range s.rateMap {
-			if now.Sub(t) > s.rateWind {
-				delete(s.rateMap, k)
+	// Rate limit (optional): if message_id exists, limit by message to avoid
+	// suppressing distinct messages in the same conversation.
+	if s.rateWind > 0 {
+		rateKey := userID + ":" + payload.ConversationID
+		if payload.MessageID != "" {
+			rateKey = userID + ":" + payload.MessageID
+		}
+
+		s.rateMu.Lock()
+		if last, ok := s.rateMap[rateKey]; ok && time.Since(last) < s.rateWind {
+			s.rateMu.Unlock()
+			return
+		}
+		s.rateMap[rateKey] = time.Now()
+		// Prune expired entries to prevent unbounded growth.
+		if len(s.rateMap) > 1000 {
+			now := time.Now()
+			for k, t := range s.rateMap {
+				if now.Sub(t) > s.rateWind {
+					delete(s.rateMap, k)
+				}
 			}
 		}
+		s.rateMu.Unlock()
 	}
-	s.rateMu.Unlock()
 
 	uid, err := uuid.Parse(userID)
 	if err != nil {
@@ -217,13 +282,21 @@ func (s *Service) sendToUser(userID string, payload PushPayload) {
 		return
 	}
 
+	ttlSeconds := s.cfg.PushTTLSeconds
+	if ttlSeconds <= 0 {
+		ttlSeconds = 60
+	}
+
 	opts := &webpush.Options{
 		Subscriber:      s.cfg.VAPIDSubject,
 		VAPIDPublicKey:  s.cfg.VAPIDPublicKey,
 		VAPIDPrivateKey: s.cfg.VAPIDPrivateKey,
-		TTL:             300, // 5 minutes
+		TTL:             ttlSeconds,
 		Urgency:         webpush.UrgencyHigh,
-		Topic:           payload.Tag,
+	}
+	// Disable push-service collapse for chat message pushes.
+	if payload.Type != "message" && payload.Tag != "" {
+		opts.Topic = payload.Tag
 	}
 
 	for _, sub := range subs {
@@ -269,27 +342,21 @@ func (s *Service) CleanupStaleSubscriptions(ctx context.Context) error {
 // Helpers
 // ---------------------------------------------------------------------------
 
-func notificationTypeString(t packetspb.NotificationType) string {
-	switch t {
-	case packetspb.NotificationType_NOTIFICATION_TYPE_MENTION:
-		return "mention"
-	case packetspb.NotificationType_NOTIFICATION_TYPE_THREAD_REPLY:
-		return "thread_reply"
-	case packetspb.NotificationType_NOTIFICATION_TYPE_CALL_INVITE:
-		return "call_invite"
-	case packetspb.NotificationType_NOTIFICATION_TYPE_CALL_MISSED:
-		return "call_missed"
-	case packetspb.NotificationType_NOTIFICATION_TYPE_SYSTEM:
-		return "system"
-	default:
-		return "message"
-	}
-}
-
 func truncate(s string, maxRunes int) string {
 	runes := []rune(s)
 	if len(runes) <= maxRunes {
 		return s
 	}
 	return string(runes[:maxRunes-1]) + "\u2026"
+}
+
+func messagePushBody(body string, hasAttachment bool) string {
+	trimmed := strings.TrimSpace(body)
+	if trimmed != "" {
+		return trimmed
+	}
+	if hasAttachment {
+		return "Sent an attachment"
+	}
+	return "New message"
 }

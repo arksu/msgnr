@@ -179,6 +179,7 @@ message Envelope {
 
     SetNotificationLevelRequest set_notification_level_request = 58;
     SetNotificationLevelResponse set_notification_level_response = 59;
+    ClientWindowActivityRequest set_client_window_activity_request = 60;
   }
 }
 
@@ -326,6 +327,13 @@ message TypingEvent {
 
 message SetPresenceRequest {
   PresenceStatus desired_presence = 1;
+}
+
+// Updates only this websocket session's foreground/background state.
+// Used by push gating so users can receive push when all connected chat
+// windows are inactive, even if websocket sessions remain connected.
+message ClientWindowActivityRequest {
+  bool is_active = 1;
 }
 
 message PresenceEvent {

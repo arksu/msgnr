@@ -49,6 +49,41 @@ export function isIosSafariNotInstalled(): boolean {
  * ```
  */
 export function usePushNotifications() {
+  /**
+   * Resolve an active service worker registration.
+   * This is resilient to startup timing where `useRegisterSW` callback has not
+   * fired yet but the browser already has/soon gets a registration.
+   */
+  async function resolveSwRegistration(): Promise<ServiceWorkerRegistration | null> {
+    const cached = getSwRegistration()
+    if (cached) return cached
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return null
+
+    try {
+      const current = await navigator.serviceWorker.getRegistration()
+      if (current) return current
+    } catch {
+      // Ignore and continue with additional fallbacks.
+    }
+
+    try {
+      const all = await navigator.serviceWorker.getRegistrations()
+      if (all.length > 0) return all[0]
+    } catch {
+      // Ignore and continue with additional fallbacks.
+    }
+
+    try {
+      const ready = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+      ])
+      return ready
+    } catch {
+      return null
+    }
+  }
+
   /** Request the browser notification permission (user-facing prompt). */
   async function requestPermission(): Promise<NotificationPermission> {
     if (!pushSupported) return 'denied'
@@ -84,9 +119,15 @@ export function usePushNotifications() {
       }
 
       // Step 2: Get SW registration
-      const registration = getSwRegistration()
+      const registration = await resolveSwRegistration()
       if (!registration) {
-        error.value = 'Service worker not available. Try refreshing the page.'
+        if (typeof window !== 'undefined' && !window.isSecureContext) {
+          error.value = 'Push notifications require HTTPS (or localhost).'
+        } else if (import.meta.env.DEV) {
+          error.value = 'Service worker unavailable in this dev session. Use a production build/preview or enable VitePWA dev SW.'
+        } else {
+          error.value = 'Service worker not available yet. Wait a moment and try again.'
+        }
         return false
       }
 
@@ -132,7 +173,7 @@ export function usePushNotifications() {
     error.value = null
 
     try {
-      const registration = getSwRegistration()
+      const registration = await resolveSwRegistration()
       if (registration) {
         const pushSubscription = await registration.pushManager.getSubscription()
         if (pushSubscription) {
@@ -166,7 +207,7 @@ export function usePushNotifications() {
   async function checkExistingSubscription(): Promise<void> {
     if (!pushSupported) return
     permissionState.value = Notification.permission
-    const registration = getSwRegistration()
+    const registration = await resolveSwRegistration()
     if (!registration) return
 
     try {

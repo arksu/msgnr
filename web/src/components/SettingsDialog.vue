@@ -445,8 +445,9 @@
                 :aria-checked="pushSubscribed"
                 :aria-label="pushSubscribed ? 'Disable push notifications' : 'Enable push notifications'"
                 :disabled="pushLoading"
-                class="relative shrink-0 h-6 w-10 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent"
-                :class="pushSubscribed ? 'bg-accent' : 'bg-gray-600'"
+                type="button"
+                class="relative inline-flex items-center h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-[#1a1d21] disabled:cursor-not-allowed disabled:opacity-50"
+                :class="pushSubscribed ? 'bg-accent' : 'bg-white/20'"
                 @click="togglePush"
               >
                 <span

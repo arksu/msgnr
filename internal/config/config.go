@@ -66,9 +66,11 @@ type Config struct {
 	AvatarMaxSizeMB     int    `mapstructure:"AVATAR_MAX_SIZE_MB"`
 
 	// Push notifications (VAPID / Web Push)
-	VAPIDPublicKey  string `mapstructure:"VAPID_PUBLIC_KEY"`
-	VAPIDPrivateKey string `mapstructure:"VAPID_PRIVATE_KEY"`
-	VAPIDSubject    string `mapstructure:"VAPID_SUBJECT"` // mailto: or https: URL
+	VAPIDPublicKey      string        `mapstructure:"VAPID_PUBLIC_KEY"`
+	VAPIDPrivateKey     string        `mapstructure:"VAPID_PRIVATE_KEY"`
+	VAPIDSubject        string        `mapstructure:"VAPID_SUBJECT"` // mailto: or https: URL
+	PushRateLimitWindow time.Duration `mapstructure:"PUSH_RATE_LIMIT_WINDOW"`
+	PushTTLSeconds      int           `mapstructure:"PUSH_TTL_SECONDS"`
 
 	// Observability
 	MetricsPort string `mapstructure:"METRICS_PORT"`
@@ -133,6 +135,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("VAPID_PUBLIC_KEY", "")
 	viper.SetDefault("VAPID_PRIVATE_KEY", "")
 	viper.SetDefault("VAPID_SUBJECT", "")
+	viper.SetDefault("PUSH_RATE_LIMIT_WINDOW", 1*time.Second)
+	viper.SetDefault("PUSH_TTL_SECONDS", 60)
 
 	viper.SetDefault("METRICS_PORT", "9090")
 

@@ -20,6 +20,7 @@ import (
 	"msgnr/internal/config"
 	"msgnr/internal/database"
 	"msgnr/internal/events"
+	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/logger"
 	"msgnr/internal/push"
 	"msgnr/internal/storage"
@@ -87,11 +88,27 @@ func main() {
 	pushSvc := push.NewService(db.Pool, cfg, wsServer)
 	pushHandler := push.NewHandler(pushSvc, authSvc)
 	wsServer.SetPushNotifier(pushSvc)
+	stopMessagePushFanout := func() {}
+	messagePushFanoutDone := make(chan struct{})
+	close(messagePushFanoutDone)
 	if pushSvc.Enabled() {
 		if cfg.VAPIDSubject == "" {
 			log.Warn("VAPID_SUBJECT is not set; push delivery will fail — set to mailto:admin@yourdomain.com")
 		}
 		log.Info("Push notifications enabled (VAPID keys configured)")
+
+		filter := func(evt *packetspb.ServerEvent) bool {
+			return evt != nil && evt.GetEventType() == packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED
+		}
+		_, messagePushCh, unsubscribe := eventBus.Subscribe(filter, cfg.EventBusSubscriberBuffer)
+		stopMessagePushFanout = unsubscribe
+		messagePushFanoutDone = make(chan struct{})
+		go func() {
+			defer close(messagePushFanoutDone)
+			for evt := range messagePushCh {
+				pushSvc.PushMessageCreated(evt)
+			}
+		}()
 	} else {
 		log.Info("Push notifications disabled (VAPID keys not configured)")
 	}
@@ -216,6 +233,8 @@ func main() {
 	}
 
 	// Stop background goroutines and wait for them to exit.
+	stopMessagePushFanout()
+	<-messagePushFanoutDone
 	pushCleanupCancel()
 	<-pushCleanupDone
 	callExpiryCancel()

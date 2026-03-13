@@ -488,6 +488,51 @@ func (q *Queries) ListConversationMessagePage(ctx context.Context, arg ListConve
 	return items, nil
 }
 
+const listReactionUsersByMessageEmoji = `-- name: ListReactionUsersByMessageEmoji :many
+SELECT r.user_id,
+       COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
+       u.avatar_url
+FROM reactions r
+JOIN users u ON u.id = r.user_id
+WHERE r.message_id = $1
+  AND r.emoji = $2
+ORDER BY r.created_at DESC, r.user_id
+`
+
+type ListReactionUsersByMessageEmojiParams struct {
+	MessageID uuid.UUID `json:"message_id"`
+	Emoji     string    `json:"emoji"`
+}
+
+type ListReactionUsersByMessageEmojiRow struct {
+	UserID      uuid.UUID `json:"user_id"`
+	DisplayName string    `json:"display_name"`
+	AvatarUrl   string    `json:"avatar_url"`
+}
+
+func (q *Queries) ListReactionUsersByMessageEmoji(ctx context.Context, arg ListReactionUsersByMessageEmojiParams) ([]ListReactionUsersByMessageEmojiRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReactionUsersByMessageEmoji, arg.MessageID, arg.Emoji)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReactionUsersByMessageEmojiRow
+	for rows.Next() {
+		var i ListReactionUsersByMessageEmojiRow
+		if err := rows.Scan(&i.UserID, &i.DisplayName, &i.AvatarUrl); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserChannels = `-- name: ListUserChannels :many
 SELECT c.id, c.kind, c.visibility, c.name, c.topic, c.is_archived,
        c.next_seq, c.last_activity_at, c.created_at

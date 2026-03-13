@@ -12,6 +12,7 @@ import { listConversationMembers } from '@/services/http/chatApi'
 
 vi.mock('@/services/http/chatApi', () => ({
   listConversationMembers: vi.fn(),
+  listMessageReactionUsers: vi.fn(),
 }))
 
 const listConversationMembersMock = vi.mocked(listConversationMembers)

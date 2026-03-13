@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
@@ -9,10 +9,12 @@ import { useWsStore } from '@/stores/ws'
 
 const chatApiMocks = vi.hoisted(() => ({
   fetchMessageAttachmentBlob: vi.fn(),
+  listMessageReactionUsers: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
   fetchMessageAttachmentBlob: chatApiMocks.fetchMessageAttachmentBlob,
+  listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
 }))
 
 async function flushAll() {
@@ -42,8 +44,14 @@ describe('MessageBubble reactions', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     chatApiMocks.fetchMessageAttachmentBlob.mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    chatApiMocks.listMessageReactionUsers.mockReset()
+    chatApiMocks.listMessageReactionUsers.mockResolvedValue([])
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:attachment-preview')
     globalThis.URL.revokeObjectURL = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('clicking own reaction sends remove', async () => {
@@ -209,6 +217,137 @@ describe('MessageBubble reactions', () => {
 
     const afterEscCount = document.body.querySelectorAll('img[alt="photo.png"]').length
     expect(afterEscCount).toBe(1)
+
+    wrapper.unmount()
+  })
+
+  it('shows reaction users popup on hover and keeps it open when moving pointer into popup', async () => {
+    vi.useFakeTimers()
+    chatApiMocks.listMessageReactionUsers.mockResolvedValue([
+      { user_id: 'user-1', display_name: 'Alice', avatar_url: '/api/public/avatars/alice.png' },
+      { user_id: 'user-2', display_name: 'Bob', avatar_url: '' },
+    ])
+
+    const msg = buildMessage()
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    const reactionButton = wrapper.findAll('button').find(button => button.text().includes(':+1:'))
+    expect(reactionButton).toBeTruthy()
+    await reactionButton!.trigger('mouseenter')
+    await flushAll()
+
+    expect(chatApiMocks.listMessageReactionUsers).toHaveBeenCalledWith('channel-1', 'message-1', ':+1:')
+    expect(document.body.querySelector('[data-testid="reaction-users-popup"]')).toBeTruthy()
+    expect(document.body.textContent).toContain('Alice')
+
+    await reactionButton!.trigger('mouseleave')
+    const popup = document.body.querySelector('[data-testid="reaction-users-popup"]')
+    expect(popup).toBeTruthy()
+    popup!.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
+    vi.advanceTimersByTime(200)
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="reaction-users-popup"]')).toBeTruthy()
+
+    popup!.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }))
+    vi.advanceTimersByTime(200)
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="reaction-users-popup"]')).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('reuses cached reaction users and invalidates cache when count changes', async () => {
+    vi.useFakeTimers()
+    chatApiMocks.listMessageReactionUsers.mockResolvedValue([
+      { user_id: 'user-1', display_name: 'Alice', avatar_url: '' },
+    ])
+
+    const msg = buildMessage()
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    let reactionButton = wrapper.findAll('button').find(button => button.text().includes(':+1:'))
+    expect(reactionButton).toBeTruthy()
+
+    await reactionButton!.trigger('mouseenter')
+    await flushAll()
+    expect(chatApiMocks.listMessageReactionUsers).toHaveBeenCalledTimes(1)
+
+    await reactionButton!.trigger('mouseleave')
+    vi.advanceTimersByTime(200)
+    await flushAll()
+
+    reactionButton = wrapper.findAll('button').find(button => button.text().includes(':+1:'))
+    await reactionButton!.trigger('mouseenter')
+    await flushAll()
+    expect(chatApiMocks.listMessageReactionUsers).toHaveBeenCalledTimes(1)
+
+    await wrapper.setProps({
+      message: {
+        ...msg,
+        reactions: [{ emoji: ':+1:', count: 2 }],
+      },
+    })
+    await flushAll()
+    await reactionButton!.trigger('mouseleave')
+    vi.advanceTimersByTime(200)
+    await flushAll()
+
+    reactionButton = wrapper.findAll('button').find(button => button.text().includes(':+1:'))
+    await reactionButton!.trigger('mouseenter')
+    await flushAll()
+    expect(chatApiMocks.listMessageReactionUsers).toHaveBeenCalledTimes(2)
+
+    wrapper.unmount()
+  })
+
+  it('renders loading and error states for reaction users popup', async () => {
+    vi.useFakeTimers()
+    let resolveUsers!: (value: Array<{ user_id: string; display_name: string; avatar_url: string }>) => void
+    chatApiMocks.listMessageReactionUsers.mockImplementationOnce(() => new Promise(resolve => {
+      resolveUsers = resolve
+    }))
+
+    const msg = buildMessage()
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    const reactionButton = wrapper.findAll('button').find(button => button.text().includes(':+1:'))
+    expect(reactionButton).toBeTruthy()
+    await reactionButton!.trigger('mouseenter')
+    await nextTick()
+
+    expect(document.body.querySelector('[data-testid="reaction-users-loading"]')).toBeTruthy()
+
+    resolveUsers([{ user_id: 'user-1', display_name: 'Alice', avatar_url: '' }])
+    await flushAll()
+    expect(document.body.textContent).toContain('Alice')
+
+    await reactionButton!.trigger('mouseleave')
+    vi.advanceTimersByTime(200)
+    await flushAll()
+
+    chatApiMocks.listMessageReactionUsers.mockRejectedValueOnce(new Error('boom'))
+    await wrapper.setProps({
+      message: {
+        ...msg,
+        reactions: [{ emoji: ':+1:', count: 2 }],
+      },
+    })
+    await flushAll()
+
+    await reactionButton!.trigger('mouseenter')
+    await flushAll()
+    const errorNode = document.body.querySelector('[data-testid="reaction-users-error"]')
+    expect(errorNode).toBeTruthy()
+    expect(errorNode?.textContent).toContain('Failed to load reactions')
 
     wrapper.unmount()
   })

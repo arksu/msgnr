@@ -1,4 +1,5 @@
 import { AxiosError } from 'axios'
+import type { AxiosProgressEvent } from 'axios'
 import { createAuthenticatedClient } from './client'
 
 const http = createAuthenticatedClient()
@@ -108,6 +109,16 @@ export interface ConversationHistoryPage {
   next_before_channel_seq?: string
 }
 
+export interface ReactionUserItem {
+  user_id: string
+  display_name: string
+  avatar_url: string
+}
+
+interface ReactionUsersResponse {
+  users: ReactionUserItem[]
+}
+
 export async function listDmCandidates(): Promise<DmCandidateItem[]> {
   try {
     const { data } = await http.get<DmCandidateItem[]>('/api/dm-candidates')
@@ -173,12 +184,40 @@ export async function listConversationMessages(
   }
 }
 
-export async function uploadChatAttachment(conversationId: string, file: File): Promise<ChatMessageAttachmentItem> {
+export async function listMessageReactionUsers(
+  conversationId: string,
+  messageId: string,
+  emoji: string,
+): Promise<ReactionUserItem[]> {
+  try {
+    const { data } = await http.get<ReactionUsersResponse>('/api/messages/reaction-users', {
+      params: {
+        conversation_id: conversationId,
+        message_id: messageId,
+        emoji,
+      },
+    })
+    return data.users ?? []
+  } catch (e) { handleError(e) }
+}
+
+export async function uploadChatAttachment(
+  conversationId: string,
+  file: File,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<ChatMessageAttachmentItem> {
   const form = new FormData()
   form.append('conversation_id', conversationId)
   form.append('file', file)
   try {
-    const { data } = await http.post<ChatMessageAttachmentItem>('/api/chat/attachments', form)
+    const { data } = await http.post<ChatMessageAttachmentItem>('/api/chat/attachments', form, {
+      onUploadProgress: (event: AxiosProgressEvent) => {
+        onProgress?.(
+          event.loaded ?? 0,
+          event.total ?? file.size,
+        )
+      },
+    })
     return data
   } catch (e) { handleError(e) }
 }

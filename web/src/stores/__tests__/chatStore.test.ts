@@ -29,11 +29,13 @@ import {
 const chatApiMocks = vi.hoisted(() => ({
   listConversationMessages: vi.fn(),
   listDmCandidates: vi.fn(),
+  listMessageReactionUsers: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
   listConversationMessages: chatApiMocks.listConversationMessages,
   listDmCandidates: chatApiMocks.listDmCandidates,
+  listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
 }))
 
 describe('chatStore phase 6 flows', () => {

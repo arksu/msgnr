@@ -52,6 +52,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/conversations/members", h.requireAuth(h.listConversationMembers))
 	mux.HandleFunc("/api/conversations/invite", h.requireAuth(h.inviteToConversation))
 	mux.HandleFunc("/api/messages", h.requireAuth(h.listConversationMessages))
+	mux.HandleFunc("/api/messages/reaction-users", h.requireAuth(h.listMessageReactionUsers))
 	mux.HandleFunc("/api/messages/", h.requireAuth(h.messageAttachmentDownload))
 	mux.HandleFunc("/api/chat/attachments", h.requireAuth(h.chatAttachments))
 	mux.HandleFunc("/api/chat/attachments/", h.requireAuth(h.chatAttachmentItem))
@@ -135,6 +136,16 @@ type messageAttachmentResponse struct {
 type reactionAggregateResponse struct {
 	Emoji string `json:"emoji"`
 	Count int32  `json:"count"`
+}
+
+type reactionUserResponse struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	AvatarURL   string `json:"avatar_url"`
+}
+
+type reactionUsersResponse struct {
+	Users []reactionUserResponse `json:"users"`
 }
 
 type conversationMessagesPageResponse struct {
@@ -420,6 +431,55 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *Handler) listMessageReactionUsers(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		return
+	}
+
+	conversationID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("conversation_id")))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody("invalid conversation_id"))
+		return
+	}
+	messageID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("message_id")))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody("invalid message_id"))
+		return
+	}
+	emoji := strings.TrimSpace(r.URL.Query().Get("emoji"))
+	if emoji == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody("emoji is required"))
+		return
+	}
+
+	users, err := h.svc.ListReactionUsers(r.Context(), principal.UserID, conversationID, messageID, emoji)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotMember):
+			writeJSON(w, http.StatusForbidden, errorBody("not a member of this channel"))
+		case errors.Is(err, ErrMessageNotFound):
+			writeJSON(w, http.StatusNotFound, errorBody("message not found"))
+		default:
+			h.log.Error("listMessageReactionUsers error", zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+		}
+		return
+	}
+
+	resp := reactionUsersResponse{
+		Users: make([]reactionUserResponse, 0, len(users)),
+	}
+	for _, user := range users {
+		resp.Users = append(resp.Users, reactionUserResponse{
+			UserID:      user.UserID.String(),
+			DisplayName: user.DisplayName,
+			AvatarURL:   user.AvatarURL,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // POST /api/chat/attachments

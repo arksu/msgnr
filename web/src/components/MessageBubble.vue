@@ -267,10 +267,13 @@
         <button
           v-for="r in message.reactions"
           :key="r.emoji"
+          data-testid="reaction-chip"
           class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm border transition-colors"
           :class="reactionChipClass(r.emoji)"
           :title="`${r.count} ${r.count === 1 ? 'reaction' : 'reactions'}`"
           :disabled="chat.isReactionOpPending(message.channelId, message.id, r.emoji)"
+          @mouseenter="onReactionChipMouseEnter($event, r.emoji)"
+          @mouseleave="onReactionChipMouseLeave(r.emoji)"
           @click="toggleReaction(r.emoji)"
         >
           <span class="text-lg leading-none">{{ r.emoji }}</span>
@@ -327,6 +330,56 @@
     </div>
   </Teleport>
 
+  <Teleport to="body">
+    <div
+      v-if="reactionPopupVisible"
+      ref="reactionUsersPopupRoot"
+      data-testid="reaction-users-popup"
+      class="fixed z-[10000] overflow-hidden rounded-md border border-white/10 bg-sidebar-bg shadow-xl"
+      :style="reactionUsersPopupStyle"
+      @mouseenter="onReactionPopupMouseEnter"
+      @mouseleave="onReactionPopupMouseLeave"
+    >
+      <div class="max-h-72 overflow-y-auto p-1">
+        <div
+          v-if="reactionUsersLoading"
+          data-testid="reaction-users-loading"
+          class="px-2 py-1.5 text-xs text-gray-400"
+        >
+          Loading users...
+        </div>
+        <div
+          v-else-if="reactionUsersError"
+          data-testid="reaction-users-error"
+          class="px-2 py-1.5 text-xs text-red-300"
+        >
+          {{ reactionUsersError }}
+        </div>
+        <div
+          v-else-if="activeReactionUsers.length === 0"
+          class="px-2 py-1.5 text-xs text-gray-400"
+        >
+          No reactions yet
+        </div>
+        <div v-else class="space-y-0.5">
+          <div
+            v-for="user in activeReactionUsers"
+            :key="`${user.user_id}-${activeReactionEmoji}`"
+            class="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-white/5"
+          >
+            <UserAvatar
+              :user-id="user.user_id"
+              :display-name="user.display_name"
+              :avatar-url="user.avatar_url"
+              size="xs"
+            />
+            <span class="truncate text-xs text-gray-200">{{ user.display_name }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
   <!-- Context menu — teleported to <body> to escape all overflow/clip contexts -->
   <Teleport to="body">
     <div
@@ -374,7 +427,7 @@ import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { generateId } from '@/services/id'
-import { fetchMessageAttachmentBlob } from '@/services/http/chatApi'
+import { fetchMessageAttachmentBlob, listMessageReactionUsers } from '@/services/http/chatApi'
 import UserAvatar from './UserAvatar.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
 
@@ -409,11 +462,36 @@ const emojiPickerStyle = ref<Record<string, string>>({
   left: '8px',
   width: '340px',
 })
+interface ReactionUserItem {
+  user_id: string
+  display_name: string
+  avatar_url: string
+}
+const reactionUsersPopupStyle = ref<Record<string, string>>({
+  position: 'fixed',
+  top: '8px',
+  left: '8px',
+  width: '260px',
+})
+const reactionUsersPopupRoot = ref<HTMLElement | null>(null)
+const activeReactionEmoji = ref<string | null>(null)
+const activeReactionTrigger = ref<HTMLElement | null>(null)
+const reactionUsersLoading = ref(false)
+const reactionUsersError = ref('')
+const reactionUsersCache = ref<Record<string, ReactionUserItem[]>>({})
+const reactionCountsSnapshot = ref<Record<string, number>>({})
+const reactionTriggerHovered = ref(false)
+const reactionPopupHovered = ref(false)
+let reactionPopupCloseTimer: ReturnType<typeof setTimeout> | null = null
+let reactionUsersFetchToken = 0
 const instanceId = createEmojiPickerInstanceId()
 const EMOJI_PICKER_WIDTH = 340
 const EMOJI_PICKER_HEIGHT = 380
 const EMOJI_PICKER_GAP = 8
 const EMOJI_PICKER_EDGE_PADDING = 8
+const REACTION_USERS_POPUP_WIDTH = 260
+const REACTION_USERS_POPUP_MAX_HEIGHT = 288
+const REACTION_USERS_POPUP_GAP = 8
 const attachmentUrls = ref<Record<string, string>>({})
 const loadingAttachmentIds = ref(new Set<string>())
 const imagePreview = ref<{ open: boolean; src: string; fileName: string }>({
@@ -445,6 +523,12 @@ const formattedTime = computed(() => {
 })
 
 const hasReactions = computed(() => props.message.reactions.length > 0)
+const reactionPopupVisible = computed(() => Boolean(activeReactionEmoji.value))
+const activeReactionUsers = computed(() => {
+  const emoji = activeReactionEmoji.value
+  if (!emoji) return [] as ReactionUserItem[]
+  return reactionUsersCache.value[emoji] ?? []
+})
 
 const isThreadReply = computed(() => {
   const rootId = props.message.threadRootMessageId
@@ -604,6 +688,169 @@ function formatFileSize(size: number): string {
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
+
+// ── Reaction users hover popup ───────────────────────────────────────────────
+
+function clearReactionPopupCloseTimer() {
+  if (!reactionPopupCloseTimer) return
+  clearTimeout(reactionPopupCloseTimer)
+  reactionPopupCloseTimer = null
+}
+
+function closeReactionUsersPopup() {
+  clearReactionPopupCloseTimer()
+  reactionTriggerHovered.value = false
+  reactionPopupHovered.value = false
+  activeReactionEmoji.value = null
+  activeReactionTrigger.value = null
+  reactionUsersLoading.value = false
+  reactionUsersError.value = ''
+}
+
+function scheduleReactionPopupClose() {
+  clearReactionPopupCloseTimer()
+  reactionPopupCloseTimer = setTimeout(() => {
+    if (reactionTriggerHovered.value || reactionPopupHovered.value) return
+    closeReactionUsersPopup()
+  }, 120)
+}
+
+function updateReactionUsersPopupPosition() {
+  const trigger = activeReactionTrigger.value
+  if (!trigger || !activeReactionEmoji.value) return
+
+  const rect = trigger.getBoundingClientRect()
+  const viewportHeight = window.innerHeight
+  const viewportWidth = window.innerWidth
+  if (viewportHeight <= 0 || viewportWidth <= 0) return
+
+  const popupHeight = Math.max(
+    0,
+    Math.min(REACTION_USERS_POPUP_MAX_HEIGHT, viewportHeight - EMOJI_PICKER_EDGE_PADDING * 2),
+  )
+  const popupWidth = Math.max(
+    0,
+    Math.min(REACTION_USERS_POPUP_WIDTH, viewportWidth - EMOJI_PICKER_EDGE_PADDING * 2),
+  )
+  if (popupHeight <= 0 || popupWidth <= 0) return
+
+  // Keep popup anchored below the reaction chip at all times.
+  const rawTop = rect.bottom + REACTION_USERS_POPUP_GAP
+  const desiredLeft = rect.left
+
+  const leftMax = viewportWidth - popupWidth - EMOJI_PICKER_EDGE_PADDING
+  const top = Math.max(EMOJI_PICKER_EDGE_PADDING, rawTop)
+  const left = clamp(desiredLeft, EMOJI_PICKER_EDGE_PADDING, leftMax)
+
+  reactionUsersPopupStyle.value = {
+    ...reactionUsersPopupStyle.value,
+    top: `${Math.round(top)}px`,
+    left: `${Math.round(left)}px`,
+    width: `${Math.round(popupWidth)}px`,
+    maxHeight: `${Math.round(popupHeight)}px`,
+  }
+}
+
+async function ensureReactionUsersLoaded(emoji: string) {
+  if (reactionUsersCache.value[emoji]) {
+    reactionUsersLoading.value = false
+    reactionUsersError.value = ''
+    return
+  }
+
+  const fetchToken = ++reactionUsersFetchToken
+  reactionUsersLoading.value = true
+  reactionUsersError.value = ''
+  try {
+    const users = await listMessageReactionUsers(props.message.channelId, props.message.id, emoji)
+    if (fetchToken !== reactionUsersFetchToken || activeReactionEmoji.value !== emoji) return
+    reactionUsersCache.value = {
+      ...reactionUsersCache.value,
+      [emoji]: users,
+    }
+  } catch {
+    if (fetchToken !== reactionUsersFetchToken || activeReactionEmoji.value !== emoji) return
+    reactionUsersError.value = 'Failed to load reactions'
+  } finally {
+    if (fetchToken === reactionUsersFetchToken && activeReactionEmoji.value === emoji) {
+      reactionUsersLoading.value = false
+    }
+  }
+}
+
+function onReactionChipMouseEnter(evt: MouseEvent, emoji: string) {
+  const target = evt.currentTarget as HTMLElement | null
+  if (!target || !props.message.channelId) return
+  clearReactionPopupCloseTimer()
+  reactionTriggerHovered.value = true
+  reactionPopupHovered.value = false
+  activeReactionEmoji.value = emoji
+  activeReactionTrigger.value = target
+  reactionUsersError.value = ''
+  reactionUsersLoading.value = !Boolean(reactionUsersCache.value[emoji])
+  updateReactionUsersPopupPosition()
+  if (!reactionUsersCache.value[emoji]) {
+    void ensureReactionUsersLoaded(emoji)
+  }
+}
+
+function onReactionChipMouseLeave(emoji: string) {
+  if (activeReactionEmoji.value !== emoji) return
+  reactionTriggerHovered.value = false
+  scheduleReactionPopupClose()
+}
+
+function onReactionPopupMouseEnter() {
+  reactionPopupHovered.value = true
+  clearReactionPopupCloseTimer()
+}
+
+function onReactionPopupMouseLeave() {
+  reactionPopupHovered.value = false
+  scheduleReactionPopupClose()
+}
+
+// invalidate per-emoji cache when count changes so next hover re-fetches fresh users
+watch(
+  () => props.message.reactions.map(r => `${r.emoji}:${r.count}`).join('|'),
+  () => {
+    const nextCounts: Record<string, number> = {}
+    for (const reaction of props.message.reactions) {
+      nextCounts[reaction.emoji] = reaction.count
+    }
+
+    const prevCounts = reactionCountsSnapshot.value
+    let nextCache = reactionUsersCache.value
+    let cacheChanged = false
+    for (const [emoji, prevCount] of Object.entries(prevCounts)) {
+      const nextCount = nextCounts[emoji]
+      if (typeof nextCount === 'undefined' || nextCount !== prevCount) {
+        if (typeof nextCache[emoji] !== 'undefined') {
+          if (!cacheChanged) {
+            nextCache = { ...nextCache }
+            cacheChanged = true
+          }
+          delete nextCache[emoji]
+        }
+      }
+    }
+    if (cacheChanged) {
+      reactionUsersCache.value = nextCache
+    }
+    reactionCountsSnapshot.value = nextCounts
+
+    if (activeReactionEmoji.value && typeof nextCounts[activeReactionEmoji.value] === 'undefined') {
+      closeReactionUsersPopup()
+    }
+  },
+  { immediate: true },
+)
+
+watch(() => props.message.id, () => {
+  closeReactionUsersPopup()
+  reactionUsersCache.value = {}
+  reactionCountsSnapshot.value = {}
+})
 
 // ── Reactions ────────────────────────────────────────────────────────────────
 
@@ -765,6 +1012,13 @@ function handleDocumentClick(evt: MouseEvent) {
   if (showContextMenu.value) {
     showContextMenu.value = false
   }
+  if (activeReactionEmoji.value) {
+    const insideTrigger = activeReactionTrigger.value?.contains(target)
+    const insidePopup = reactionUsersPopupRoot.value?.contains(target)
+    if (!insideTrigger && !insidePopup) {
+      closeReactionUsersPopup()
+    }
+  }
 }
 
 function handleEscape(evt: KeyboardEvent) {
@@ -774,11 +1028,14 @@ function handleEscape(evt: KeyboardEvent) {
   }
   showEmojiPicker.value = false
   showContextMenu.value = false
+  closeReactionUsersPopup()
   debugReaction('picker:escape-close')
 }
 
-watch([showEmojiPicker, showContextMenu, () => imagePreview.value.open], ([pickerVisible, menuVisible, previewVisible]) => {
-  const anyOpen = pickerVisible || menuVisible || previewVisible
+watch(
+  [showEmojiPicker, showContextMenu, () => imagePreview.value.open, reactionPopupVisible],
+  ([pickerVisible, menuVisible, previewVisible, popupVisible]) => {
+  const anyOpen = pickerVisible || menuVisible || previewVisible || popupVisible
   if (anyOpen) {
     document.addEventListener('click', handleDocumentClick)
     document.addEventListener('keydown', handleEscape)
@@ -786,7 +1043,8 @@ watch([showEmojiPicker, showContextMenu, () => imagePreview.value.open], ([picke
     document.removeEventListener('click', handleDocumentClick)
     document.removeEventListener('keydown', handleEscape)
   }
-})
+  },
+)
 
 watch(activeEmojiPickerId, (value) => {
   if (value !== instanceId && showEmojiPicker.value) {
@@ -806,6 +1064,17 @@ watch(showEmojiPicker, visible => {
   window.removeEventListener('scroll', updateEmojiPickerPosition, true)
 })
 
+watch(reactionPopupVisible, visible => {
+  if (visible) {
+    void nextTick(updateReactionUsersPopupPosition)
+    window.addEventListener('resize', updateReactionUsersPopupPosition)
+    window.addEventListener('scroll', updateReactionUsersPopupPosition, true)
+    return
+  }
+  window.removeEventListener('resize', updateReactionUsersPopupPosition)
+  window.removeEventListener('scroll', updateReactionUsersPopupPosition, true)
+})
+
 watch(messageAttachments, () => {
   syncAttachmentUrls()
   preloadAttachmentUrls()
@@ -816,10 +1085,14 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleEscape)
   window.removeEventListener('resize', updateEmojiPickerPosition)
   window.removeEventListener('scroll', updateEmojiPickerPosition, true)
+  window.removeEventListener('resize', updateReactionUsersPopupPosition)
+  window.removeEventListener('scroll', updateReactionUsersPopupPosition, true)
   if (activeEmojiPickerId.value === instanceId) {
     activeEmojiPickerId.value = null
   }
+  closeReactionUsersPopup()
   closeImagePreview()
+  clearReactionPopupCloseTimer()
   for (const id of Object.keys(attachmentUrls.value)) {
     revokeAttachmentUrl(id)
   }

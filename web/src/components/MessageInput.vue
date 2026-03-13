@@ -85,7 +85,20 @@
         <kbd class="font-mono">Enter</kbd> to send · <kbd class="font-mono">Shift+Enter</kbd> for new line
       </span>
     </p>
-    <p v-if="uploading" class="mt-1 pl-1 text-[11px] text-gray-500">Uploading attachments...</p>
+    <div v-if="uploading" class="mt-1 pl-1">
+      <div class="mb-1 flex items-center justify-between gap-2 text-[11px] text-gray-500">
+        <span class="truncate">
+          Uploading{{ currentUploadingFileName ? ` ${currentUploadingFileName}` : ' attachments' }}...
+        </span>
+        <span class="tabular-nums">{{ uploadProgressPercent }}%</span>
+      </div>
+      <div class="h-1.5 w-full overflow-hidden rounded bg-white/10">
+        <div
+          class="h-full bg-accent transition-[width] duration-150"
+          :style="{ width: `${uploadProgressPercent}%` }"
+        />
+      </div>
+    </div>
     <p v-else-if="attachmentWarning" class="mt-1 pl-1 text-[11px] text-amber-300">{{ attachmentWarning }}</p>
     <p v-else-if="attachmentError" class="mt-1 pl-1 text-[11px] text-red-400">{{ attachmentError }}</p>
   </div>
@@ -123,6 +136,8 @@ const inputEl = ref<HTMLTextAreaElement | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const attachments = ref<ComposerAttachment[]>([])
 const uploading = ref(false)
+const uploadProgressPercent = ref(0)
+const currentUploadingFileName = ref('')
 const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
@@ -212,19 +227,36 @@ async function uploadFiles(files: File[]) {
   }
 
   uploading.value = true
+  uploadProgressPercent.value = 0
+  currentUploadingFileName.value = ''
   try {
+    const totalBytes = selected.reduce((sum, file) => sum + Math.max(0, file.size), 0)
+    let uploadedBytes = 0
     for (const file of selected) {
-      const uploaded = await uploadChatAttachment(props.conversationId, file)
+      currentUploadingFileName.value = file.name
+      const fileBytes = Math.max(0, file.size)
+      const uploaded = await uploadChatAttachment(props.conversationId, file, (loaded, total) => {
+        const effectiveTotal = Math.max(1, total || fileBytes || loaded)
+        const clampedCurrent = Math.min(Math.max(0, loaded), effectiveTotal)
+        const overallLoaded = uploadedBytes + clampedCurrent
+        const overallTotal = Math.max(1, totalBytes || effectiveTotal)
+        uploadProgressPercent.value = Math.min(100, Math.round((overallLoaded / overallTotal) * 100))
+      })
       attachments.value.push({
         id: uploaded.id,
         fileName: uploaded.file_name,
         fileSize: uploaded.file_size,
         mimeType: uploaded.mime_type,
       })
+      uploadedBytes += fileBytes
+      const overallTotal = Math.max(1, totalBytes || uploadedBytes || 1)
+      uploadProgressPercent.value = Math.min(100, Math.round((uploadedBytes / overallTotal) * 100))
     }
   } catch (error) {
     attachmentError.value = error instanceof Error ? error.message : 'Failed to upload attachment'
   } finally {
+    currentUploadingFileName.value = ''
+    uploadProgressPercent.value = 0
     uploading.value = false
   }
 }

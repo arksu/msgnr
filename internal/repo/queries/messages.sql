@@ -99,6 +99,16 @@ SELECT EXISTS (
       AND is_archived = false
 ) AS is_member;
 
+-- name: ListReactionUsersByMessageEmoji :many
+SELECT r.user_id,
+       COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
+       u.avatar_url
+FROM reactions r
+JOIN users u ON u.id = r.user_id
+WHERE r.message_id = @message_id
+  AND r.emoji = @emoji
+ORDER BY r.created_at DESC, r.user_id;
+
 -- name: ListConversationMessagePage :many
 SELECT m.id, m.channel_id, m.sender_id, u.display_name, m.body, m.channel_seq,
        COALESCE(m.thread_seq, 0) AS thread_seq,

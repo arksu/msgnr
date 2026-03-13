@@ -15,6 +15,7 @@ const chatApiMocks = vi.hoisted(() => ({
   listAvailableChannels: vi.fn(),
   joinChannels: vi.fn(),
   leaveConversation: vi.fn(),
+  listMessageReactionUsers: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
@@ -23,6 +24,7 @@ vi.mock('@/services/http/chatApi', () => ({
   listAvailableChannels: chatApiMocks.listAvailableChannels,
   joinChannels: chatApiMocks.joinChannels,
   leaveConversation: chatApiMocks.leaveConversation,
+  listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
 }))
 
 vi.mock('@/composables/useSessionOrchestrator', () => ({

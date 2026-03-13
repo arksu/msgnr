@@ -89,6 +89,12 @@ type ConversationMember struct {
 	AvatarURL   string
 }
 
+type ReactionUser struct {
+	UserID      uuid.UUID
+	DisplayName string
+	AvatarURL   string
+}
+
 type DirectMessage struct {
 	ConversationID uuid.UUID
 	UserID         uuid.UUID
@@ -545,6 +551,55 @@ func normalizeJSONValue(v any) ([]byte, error) {
 		}
 		return b, nil
 	}
+}
+
+func (s *Service) ListReactionUsers(
+	ctx context.Context,
+	requesterID, conversationID, messageID uuid.UUID,
+	emoji string,
+) ([]ReactionUser, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListReactionUsers begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if err := s.validateReactionTargetTx(ctx, tx, ReactionParams{
+		ChannelID: conversationID,
+		MessageID: messageID,
+		UserID:    requesterID,
+	}); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT r.user_id,
+		       COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
+		       u.avatar_url
+		  FROM reactions r
+		  JOIN users u ON u.id = r.user_id
+		 WHERE r.message_id = $1
+		   AND r.emoji = $2
+		 ORDER BY r.created_at DESC, r.user_id`,
+		messageID, emoji,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListReactionUsers query: %w", err)
+	}
+	defer rows.Close()
+
+	users := make([]ReactionUser, 0)
+	for rows.Next() {
+		var user ReactionUser
+		if err := rows.Scan(&user.UserID, &user.DisplayName, &user.AvatarURL); err != nil {
+			return nil, fmt.Errorf("chat.ListReactionUsers scan: %w", err)
+		}
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chat.ListReactionUsers rows: %w", err)
+	}
+	return users, nil
 }
 
 // CreateOrOpenDirectMessage returns the existing 1:1 DM for the pair or creates it.

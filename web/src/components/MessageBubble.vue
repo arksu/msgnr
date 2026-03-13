@@ -68,7 +68,7 @@
             title="Add reaction"
             @click.stop="togglePickerButton"
           >
-            <span class="text-sm leading-none font-semibold">+</span>
+            <span class="text-sm leading-none font-semibold">😎</span>
           </button>
 
           <!-- 💬 Reply in thread: hide when thread already has replies -->
@@ -107,7 +107,7 @@
           title="Add reaction"
           @click.stop="togglePickerButton"
         >
-          <span class="text-sm leading-none font-semibold">+</span>
+          <span class="text-sm leading-none font-semibold">😎</span>
         </button>
         <button
           v-if="!threadReplyCount && showThreadAction && !isThreadReply"
@@ -724,8 +724,6 @@ function updateEmojiPickerPosition() {
     ...emojiPickerStyle.value,
     top: `${Math.round(top)}px`,
     left: `${Math.round(left)}px`,
-    width: `${Math.round(availablePickerWidth)}px`,
-    height: `${Math.round(availablePickerHeight)}px`,
     overflow: 'hidden',
   }
 }

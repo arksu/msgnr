@@ -1,8 +1,8 @@
 import type {
   AppNotificationOptions,
-  AppNotificationPermission,
   PlatformAdapter,
 } from '@/platform/types'
+import { normalizeNotificationPermission } from '@/platform/types'
 import { useNotificationSoundEngine } from '@/services/sound'
 
 type TauriNotificationBridge = {
@@ -71,12 +71,6 @@ async function invokeNative<T = unknown>(command: string, args?: Record<string, 
   return invoke<T>(command, args)
 }
 
-function toPermission(result: string): AppNotificationPermission {
-  if (result === 'granted' || result === 'denied' || result === 'default') return result
-  if (result === 'prompt' || result === 'prompt-with-rationale') return 'default'
-  return 'default'
-}
-
 export class TauriAdapter implements PlatformAdapter {
   readonly type = 'tauri' as const
   private readonly soundEngine = useNotificationSoundEngine()
@@ -89,7 +83,7 @@ export class TauriAdapter implements PlatformAdapter {
           return 'granted'
         }
         if (bridge?.requestPermission) {
-          return toPermission(await bridge.requestPermission())
+          return normalizeNotificationPermission(await bridge.requestPermission())
         }
       } catch {
         // Fall through to invoke-based path.
@@ -102,14 +96,14 @@ export class TauriAdapter implements PlatformAdapter {
           return 'granted'
         }
         const result = await invokeNative<string>('plugin:notification|request_permission')
-        return toPermission(result)
+        return normalizeNotificationPermission(result)
       } catch {
         // Fall through to browser Notification API.
       }
 
       try {
         if (typeof Notification !== 'undefined' && typeof Notification.requestPermission === 'function') {
-          return toPermission(await Notification.requestPermission())
+          return normalizeNotificationPermission(await Notification.requestPermission())
         }
       } catch {
         // Fall through to denied.
@@ -155,10 +149,18 @@ export class TauriAdapter implements PlatformAdapter {
       }
     },
     setBadge: async (count: number) => {
-      await invokeNative('set_badge_count', { count: Math.max(0, Math.floor(count)) })
+      try {
+        await invokeNative('set_badge_count', { count: Math.max(0, Math.floor(count)) })
+      } catch {
+        // Best effort.
+      }
     },
     clearBadge: async () => {
-      await invokeNative('set_badge_count', { count: 0 })
+      try {
+        await invokeNative('set_badge_count', { count: 0 })
+      } catch {
+        // Best effort.
+      }
     },
     playSound: async (soundId: string) => {
       let nativeHandled = false

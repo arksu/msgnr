@@ -3,6 +3,7 @@ import { useRegisterSW } from 'virtual:pwa-register/vue'
 // Module-level reference to the ServiceWorkerRegistration, shared across
 // consumers so usePushNotifications can access registration.pushManager.
 let _swRegistration: ServiceWorkerRegistration | undefined
+let _updateIntervalStarted = false
 
 /**
  * Returns the active ServiceWorkerRegistration, if available.
@@ -30,7 +31,8 @@ export function usePwaUpdate() {
       }
 
       // Periodically check for updates (every 60 minutes)
-      if (registration) {
+      if (registration && !_updateIntervalStarted) {
+        _updateIntervalStarted = true
         setInterval(() => {
           registration.update()
         }, 60 * 60 * 1000)

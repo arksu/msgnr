@@ -45,6 +45,47 @@ func (q *Queries) GetChannelMember(ctx context.Context, arg GetChannelMemberPara
 	return i, err
 }
 
+const listPushRecipientsForChannel = `-- name: ListPushRecipientsForChannel :many
+SELECT user_id, notification_level
+FROM channel_members
+WHERE channel_id = $1
+  AND is_archived = false
+  AND user_id <> $2
+`
+
+type ListPushRecipientsForChannelParams struct {
+	ChannelID uuid.UUID `json:"channel_id"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
+type ListPushRecipientsForChannelRow struct {
+	UserID            uuid.UUID `json:"user_id"`
+	NotificationLevel int16     `json:"notification_level"`
+}
+
+func (q *Queries) ListPushRecipientsForChannel(ctx context.Context, arg ListPushRecipientsForChannelParams) ([]ListPushRecipientsForChannelRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPushRecipientsForChannel, arg.ChannelID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPushRecipientsForChannelRow
+	for rows.Next() {
+		var i ListPushRecipientsForChannelRow
+		if err := rows.Scan(&i.UserID, &i.NotificationLevel); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setNotificationLevel = `-- name: SetNotificationLevel :exec
 UPDATE channel_members
 SET notification_level = $3

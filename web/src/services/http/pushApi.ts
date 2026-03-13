@@ -31,5 +31,11 @@ export async function subscribePush(subscription: PushSubscriptionJSON): Promise
  * Remove a push subscription from the server.
  */
 export async function unsubscribePush(endpoint: string): Promise<void> {
-  await http.delete('/api/push/subscribe', { data: { endpoint } })
+  const encodedEndpoint = encodeURIComponent(endpoint)
+  try {
+    await http.delete(`/api/push/subscriptions/${encodedEndpoint}`)
+  } catch {
+    // Backward-compatible fallback for older servers.
+    await http.delete('/api/push/subscribe', { data: { endpoint } })
+  }
 }

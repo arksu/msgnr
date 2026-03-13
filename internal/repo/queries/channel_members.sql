@@ -12,3 +12,10 @@ SET notification_level = $3
 WHERE channel_id = $1
   AND user_id = $2
   AND is_archived = false;
+
+-- name: ListPushRecipientsForChannel :many
+SELECT user_id, notification_level
+FROM channel_members
+WHERE channel_id = $1
+  AND is_archived = false
+  AND user_id <> $2;

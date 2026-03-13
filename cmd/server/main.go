@@ -236,6 +236,9 @@ func main() {
 	// Stop background goroutines and wait for them to exit.
 	stopMessagePushFanout()
 	<-messagePushFanoutDone
+	if err := pushSvc.Close(shutCtx); err != nil {
+		log.Warn("Push service shutdown timed out", zap.Error(err))
+	}
 	pushCleanupCancel()
 	<-pushCleanupDone
 	callExpiryCancel()

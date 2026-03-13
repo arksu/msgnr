@@ -11,6 +11,19 @@ import (
 	"github.com/google/uuid"
 )
 
+const getPushSenderTitle = `-- name: GetPushSenderTitle :one
+SELECT COALESCE(NULLIF(display_name, ''), email, 'Someone') AS title
+FROM users
+WHERE id = $1
+`
+
+func (q *Queries) GetPushSenderTitle(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRowContext(ctx, getPushSenderTitle, id)
+	var title string
+	err := row.Scan(&title)
+	return title, err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
 SELECT id, email, password_hash, display_name, avatar_url, role, status, need_change_password, created_at, updated_at FROM users WHERE email = $1
 `

@@ -43,13 +43,32 @@ type Service struct {
 	rateMu   sync.Mutex
 	rateMap  map[string]time.Time
 	rateWind time.Duration
+
+	enqueueCh  chan pushJob
+	stopCh     chan struct{}
+	closeOnce  sync.Once
+	closeDone  chan struct{}
+	workerWg   sync.WaitGroup
+	pruneEvery time.Duration
 }
+
+type pushJob struct {
+	userID  string
+	payload PushPayload
+}
+
+const (
+	pushWorkerCount  = 8
+	pushQueueSize    = 2048
+	minPruneInterval = 1 * time.Second
+	maxPruneInterval = 30 * time.Second
+)
 
 // NewService creates a push notification service.
 // If VAPID keys are not configured, the service is inert (all sends are no-ops).
 func NewService(pool *pgxpool.Pool, cfg *config.Config, sc SessionChecker) *Service {
 	sqlDB := stdlib.OpenDBFromPool(pool)
-	return &Service{
+	svc := &Service{
 		db:             sqlDB,
 		q:              queries.New(sqlDB),
 		cfg:            cfg,
@@ -58,12 +77,106 @@ func NewService(pool *pgxpool.Pool, cfg *config.Config, sc SessionChecker) *Serv
 		startedAt:      time.Now().UTC(),
 		rateMap:        make(map[string]time.Time),
 		rateWind:       cfg.PushRateLimitWindow,
+		enqueueCh:      make(chan pushJob, pushQueueSize),
+		stopCh:         make(chan struct{}),
+		closeDone:      make(chan struct{}),
+		pruneEvery:     computePruneInterval(cfg.PushRateLimitWindow),
 	}
+	svc.startBackground()
+	return svc
 }
 
 // Enabled returns true when VAPID keys are configured and push delivery is active.
 func (s *Service) Enabled() bool {
 	return s.cfg.VAPIDPublicKey != "" && s.cfg.VAPIDPrivateKey != ""
+}
+
+func computePruneInterval(rateWind time.Duration) time.Duration {
+	if rateWind <= 0 {
+		return maxPruneInterval
+	}
+	if rateWind < minPruneInterval {
+		return minPruneInterval
+	}
+	if rateWind > maxPruneInterval {
+		return maxPruneInterval
+	}
+	return rateWind
+}
+
+func (s *Service) startBackground() {
+	for i := 0; i < pushWorkerCount; i++ {
+		s.workerWg.Add(1)
+		go s.runPushWorker()
+	}
+	if s.rateWind > 0 {
+		s.workerWg.Add(1)
+		go s.runRatePruner()
+	}
+}
+
+func (s *Service) runPushWorker() {
+	defer s.workerWg.Done()
+	for {
+		select {
+		case <-s.stopCh:
+			for {
+				select {
+				case job := <-s.enqueueCh:
+					s.sendToUserSync(job.userID, job.payload)
+				default:
+					return
+				}
+			}
+		case job := <-s.enqueueCh:
+			s.sendToUserSync(job.userID, job.payload)
+		}
+	}
+}
+
+func (s *Service) runRatePruner() {
+	defer s.workerWg.Done()
+	ticker := time.NewTicker(s.pruneEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.pruneRateMap()
+		}
+	}
+}
+
+func (s *Service) pruneRateMap() {
+	if s.rateWind <= 0 {
+		return
+	}
+	cutoff := time.Now().Add(-s.rateWind)
+	s.rateMu.Lock()
+	for key, last := range s.rateMap {
+		if last.Before(cutoff) {
+			delete(s.rateMap, key)
+		}
+	}
+	s.rateMu.Unlock()
+}
+
+// Close stops background workers and waits for in-flight queue work.
+func (s *Service) Close(ctx context.Context) error {
+	s.closeOnce.Do(func() {
+		close(s.stopCh)
+		go func() {
+			defer close(s.closeDone)
+			s.workerWg.Wait()
+		}()
+	})
+	select {
+	case <-s.closeDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Subscribe stores (upserts) a push subscription for a user.
@@ -131,41 +244,29 @@ func (s *Service) PushMessageCreated(evt *packetspb.ServerEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var senderTitle string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(NULLIF(display_name, ''), email, 'Someone')
-		  FROM users
-		 WHERE id = $1
-	`, senderID).Scan(&senderTitle); err != nil {
+	senderTitle, err := s.q.GetPushSenderTitle(ctx, senderID)
+	if err != nil {
 		senderTitle = "New message"
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT user_id::text, notification_level
-		  FROM channel_members
-		 WHERE channel_id = $1
-		   AND is_archived = false
-		   AND user_id <> $2
-	`, channelID, senderID)
+	recipients, err := s.q.ListPushRecipientsForChannel(ctx, queries.ListPushRecipientsForChannelParams{
+		ChannelID: channelID,
+		UserID:    senderID,
+	})
 	if err != nil {
 		s.log.Warn("failed to load push recipients", zap.Error(err), zap.String("conversation_id", msg.GetConversationId()))
 		return
 	}
-	defer rows.Close()
 
 	hasAttachment := len(msg.GetAttachments()) > 0
 	body := messagePushBody(msg.GetBody(), hasAttachment)
 
-	for rows.Next() {
-		var userID string
-		var level int16
-		if err := rows.Scan(&userID, &level); err != nil {
-			continue
-		}
+	for _, recipient := range recipients {
 		// 0 = ALL. Respect existing per-conversation notification levels.
-		if level != 0 {
+		if recipient.NotificationLevel != 0 {
 			continue
 		}
+		userID := recipient.UserID.String()
 		if s.sessionChecker != nil && s.sessionChecker.HasActiveWindowSessions(userID) {
 			continue
 		}
@@ -230,8 +331,21 @@ func (s *Service) PushCallDeliveries(deliveries []calls.DirectDelivery) {
 // Internal
 // ---------------------------------------------------------------------------
 
-// sendToUser looks up all push subscriptions for the user and sends the payload.
 func (s *Service) sendToUser(userID string, payload PushPayload) {
+	select {
+	case <-s.stopCh:
+		return
+	default:
+	}
+	select {
+	case s.enqueueCh <- pushJob{userID: userID, payload: payload}:
+	default:
+		s.log.Warn("dropping push job: queue full", zap.String("user_id", userID), zap.String("type", payload.Type))
+	}
+}
+
+// sendToUser looks up all push subscriptions for the user and sends the payload.
+func (s *Service) sendToUserSync(userID string, payload PushPayload) {
 	// Rate limit (optional): if message_id exists, limit by message to avoid
 	// suppressing distinct messages in the same conversation.
 	if s.rateWind > 0 {
@@ -246,15 +360,6 @@ func (s *Service) sendToUser(userID string, payload PushPayload) {
 			return
 		}
 		s.rateMap[rateKey] = time.Now()
-		// Prune expired entries to prevent unbounded growth.
-		if len(s.rateMap) > 1000 {
-			now := time.Now()
-			for k, t := range s.rateMap {
-				if now.Sub(t) > s.rateWind {
-					delete(s.rateMap, k)
-				}
-			}
-		}
 		s.rateMu.Unlock()
 	}
 

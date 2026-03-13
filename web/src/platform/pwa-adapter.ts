@@ -1,22 +1,15 @@
-import type {
-  AppNotificationOptions,
-  AppNotificationPermission,
-  PlatformAdapter,
-} from '@/platform/types'
+import { normalizeNotificationPermission } from '@/platform/types'
+import type { AppNotificationOptions, PlatformAdapter } from '@/platform/types'
 import { useNotificationSoundEngine } from '@/services/sound'
-
-function toPermission(result: NotificationPermission | string): AppNotificationPermission {
-  if (result === 'granted' || result === 'denied' || result === 'default') return result
-  return 'default'
-}
 
 export class PwaAdapter implements PlatformAdapter {
   readonly type = 'pwa' as const
+  private readonly soundEngine = useNotificationSoundEngine()
 
   notifications: PlatformAdapter['notifications'] = {
     requestPermission: async () => {
       if (typeof window === 'undefined' || !('Notification' in window)) return 'denied'
-      return toPermission(await Notification.requestPermission())
+      return normalizeNotificationPermission(await Notification.requestPermission())
     },
     show: async (options: AppNotificationOptions) => {
       if (typeof window === 'undefined' || !('Notification' in window)) return
@@ -56,17 +49,16 @@ export class PwaAdapter implements PlatformAdapter {
       }
     },
     playSound: async (soundId: string) => {
-      const sound = useNotificationSoundEngine()
       if (soundId === 'message-ping') {
-        await sound.playMessagePing()
+        await this.soundEngine.playMessagePing()
         return
       }
       if (soundId === 'call-member-joined') {
-        await sound.playCallMemberJoined()
+        await this.soundEngine.playCallMemberJoined()
         return
       }
       if (soundId === 'call-member-left') {
-        await sound.playCallMemberLeft()
+        await this.soundEngine.playCallMemberLeft()
       }
     },
   }

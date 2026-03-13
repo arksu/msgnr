@@ -20,15 +20,12 @@ async function createAdapter(): Promise<PlatformAdapter> {
 
 export async function initPlatform(): Promise<PlatformAdapter> {
   if (adapter) return adapter
-  if (initPromise) return initPromise
-
-  initPromise = (async () => {
+  initPromise ??= (async () => {
     const next = await createAdapter()
     await next.lifecycle.init()
     adapter = next
     return next
   })()
-
   return initPromise
 }
 

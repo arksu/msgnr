@@ -14,6 +14,7 @@ import (
 
 	"msgnr/internal/auth"
 	"msgnr/internal/config"
+	"msgnr/internal/httputil"
 	"msgnr/internal/logger"
 )
 
@@ -162,14 +163,14 @@ type editMessageRequest struct {
 
 func (h *Handler) listChannels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	channels, err := h.svc.q.ListUserChannels(r.Context(), principal.UserID)
 	if err != nil {
 		h.log.Error("listChannels query error", zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		return
 	}
 
@@ -188,19 +189,19 @@ func (h *Handler) listChannels(w http.ResponseWriter, r *http.Request, principal
 		})
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) listAvailableChannels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	channels, err := h.svc.ListAvailablePublicChannels(r.Context(), principal.UserID)
 	if err != nil {
 		h.log.Error("listAvailableChannels error", zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		return
 	}
 
@@ -214,18 +215,18 @@ func (h *Handler) listAvailableChannels(w http.ResponseWriter, r *http.Request, 
 			LastActivityAt: ch.LastActivityAt.UTC().Format("2006-01-02T15:04:05Z"),
 		})
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) joinChannels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	var req joinChannelsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid json"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
 		return
 	}
 
@@ -233,7 +234,7 @@ func (h *Handler) joinChannels(w http.ResponseWriter, r *http.Request, principal
 	for _, rawID := range req.ChannelIDs {
 		channelID, err := uuid.Parse(rawID)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid channel_id"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid channel_id"))
 			return
 		}
 		channelIDs = append(channelIDs, channelID)
@@ -242,7 +243,7 @@ func (h *Handler) joinChannels(w http.ResponseWriter, r *http.Request, principal
 	joined, err := h.svc.JoinPublicChannels(r.Context(), principal.UserID, channelIDs)
 	if err != nil {
 		h.log.Error("joinChannels error", zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		return
 	}
 	if len(joined) > 0 && h.notifier != nil {
@@ -263,23 +264,23 @@ func (h *Handler) joinChannels(w http.ResponseWriter, r *http.Request, principal
 			LastActivityAt: ch.LastActivityAt.UTC().Format("2006-01-02T15:04:05Z"),
 		})
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) leaveConversation(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	var req leaveConversationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid json"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
 		return
 	}
 	conversationID, err := uuid.Parse(req.ConversationID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid conversation_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
 		return
 	}
 
@@ -287,10 +288,10 @@ func (h *Handler) leaveConversation(w http.ResponseWriter, r *http.Request, prin
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		default:
 			h.log.Error("leaveConversation error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -298,18 +299,18 @@ func (h *Handler) leaveConversation(w http.ResponseWriter, r *http.Request, prin
 		h.notifier.SendChatDirectServerEvents(result.DirectDeliveries)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	httputil.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h *Handler) listConversationMembers(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	conversationID, err := uuid.Parse(r.URL.Query().Get("conversation_id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid conversation_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
 		return
 	}
 
@@ -317,10 +318,10 @@ func (h *Handler) listConversationMembers(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		default:
 			h.log.Error("listConversationMembers error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -334,18 +335,18 @@ func (h *Handler) listConversationMembers(w http.ResponseWriter, r *http.Request
 			AvatarURL:   member.AvatarURL,
 		})
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	conversationID, err := uuid.Parse(r.URL.Query().Get("conversation_id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid conversation_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
 		return
 	}
 
@@ -353,11 +354,11 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 	if raw := r.URL.Query().Get("before_channel_seq"); raw != "" {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid before_channel_seq"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid before_channel_seq"))
 			return
 		}
 		if parsed <= 0 {
-			writeJSON(w, http.StatusBadRequest, errorBody("before_channel_seq must be > 0"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("before_channel_seq must be > 0"))
 			return
 		}
 		beforeChannelSeq = &parsed
@@ -378,10 +379,10 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this channel"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this channel"))
 		default:
 			h.log.Error("listConversationMessages error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -440,28 +441,28 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 		page.NextBeforeChannelSeq = strconv.FormatInt(messages[0].ChannelSeq, 10)
 	}
 
-	writeJSON(w, http.StatusOK, page)
+	httputil.WriteJSON(w, http.StatusOK, page)
 }
 
 func (h *Handler) listMessageReactionUsers(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	conversationID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("conversation_id")))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid conversation_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
 		return
 	}
 	messageID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("message_id")))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid message_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid message_id"))
 		return
 	}
 	emoji := strings.TrimSpace(r.URL.Query().Get("emoji"))
 	if emoji == "" {
-		writeJSON(w, http.StatusBadRequest, errorBody("emoji is required"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("emoji is required"))
 		return
 	}
 
@@ -469,12 +470,12 @@ func (h *Handler) listMessageReactionUsers(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this channel"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this channel"))
 		case errors.Is(err, ErrMessageNotFound):
-			writeJSON(w, http.StatusNotFound, errorBody("message not found"))
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("message not found"))
 		default:
 			h.log.Error("listMessageReactionUsers error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -489,13 +490,13 @@ func (h *Handler) listMessageReactionUsers(w http.ResponseWriter, r *http.Reques
 			AvatarURL:   user.AvatarURL,
 		})
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // POST /api/chat/attachments
 func (h *Handler) chatAttachments(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
@@ -506,19 +507,19 @@ func (h *Handler) chatAttachments(w http.ResponseWriter, r *http.Request, princi
 	maxBytes := int64(maxAttachSizeMB) * 1024 * 1024
 	formLimit := maxBytes + 2*1024*1024
 	if err := r.ParseMultipartForm(formLimit); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("failed to parse multipart form: "+err.Error()))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("failed to parse multipart form: "+err.Error()))
 		return
 	}
 
 	conversationID, err := uuid.Parse(strings.TrimSpace(r.FormValue("conversation_id")))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid conversation_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("missing 'file' field in form"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("missing 'file' field in form"))
 		return
 	}
 	defer file.Close()
@@ -528,11 +529,11 @@ func (h *Handler) chatAttachments(w http.ResponseWriter, r *http.Request, princi
 		mimeType = "application/octet-stream"
 	}
 	if header.Size < 0 {
-		writeJSON(w, http.StatusBadRequest, errorBody("unable to determine file size"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("unable to determine file size"))
 		return
 	}
 	if header.Size > maxBytes {
-		writeJSON(w, http.StatusBadRequest, errorBody(fmt.Sprintf("invalid attachment: file exceeds maximum allowed size of %d MB", maxAttachSizeMB)))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody(fmt.Sprintf("invalid attachment: file exceeds maximum allowed size of %d MB", maxAttachSizeMB)))
 		return
 	}
 	cr := &countingReader{r: io.LimitReader(file, header.Size)}
@@ -548,17 +549,17 @@ func (h *Handler) chatAttachments(w http.ResponseWriter, r *http.Request, princi
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		case errors.Is(err, ErrInvalidAttachment):
-			writeJSON(w, http.StatusBadRequest, errorBody(err.Error()))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody(err.Error()))
 		default:
 			h.log.Error("chatAttachments upload error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, messageAttachmentResponse{
+	httputil.WriteJSON(w, http.StatusCreated, messageAttachmentResponse{
 		ID:       attachment.ID.String(),
 		FileName: attachment.FileName,
 		FileSize: attachment.FileSize,
@@ -569,28 +570,28 @@ func (h *Handler) chatAttachments(w http.ResponseWriter, r *http.Request, princi
 // DELETE /api/chat/attachments/:attachment_id
 func (h *Handler) chatAttachmentItem(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodDelete {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	rawID := strings.TrimPrefix(r.URL.Path, "/api/chat/attachments/")
 	attachmentID, err := uuid.Parse(rawID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid attachment_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid attachment_id"))
 		return
 	}
 
 	if err := h.svc.DeleteStagedMessageAttachment(r.Context(), principal.UserID, attachmentID); err != nil {
 		switch {
 		case errors.Is(err, ErrAttachmentNotFound):
-			writeJSON(w, http.StatusNotFound, errorBody("attachment not found"))
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("attachment not found"))
 		case errors.Is(err, ErrAttachmentOwnership):
-			writeJSON(w, http.StatusForbidden, errorBody("attachment does not belong to user"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("attachment does not belong to user"))
 		case errors.Is(err, ErrAttachmentNotStaged):
-			writeJSON(w, http.StatusConflict, errorBody("attachment already linked to a message"))
+			httputil.WriteJSON(w, http.StatusConflict, httputil.ErrorBody("attachment already linked to a message"))
 		default:
 			h.log.Error("chatAttachmentItem delete error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -603,7 +604,7 @@ func (h *Handler) messageItem(w http.ResponseWriter, r *http.Request, principal 
 	if len(parts) == 1 {
 		messageID, err := uuid.Parse(parts[0])
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid message_id"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid message_id"))
 			return
 		}
 		switch r.Method {
@@ -614,7 +615,7 @@ func (h *Handler) messageItem(w http.ResponseWriter, r *http.Request, principal 
 			h.deleteMessage(w, r, principal, messageID)
 			return
 		default:
-			writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+			httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 			return
 		}
 	}
@@ -622,30 +623,30 @@ func (h *Handler) messageItem(w http.ResponseWriter, r *http.Request, principal 
 	// GET /api/messages/:message_id/attachments/:attachment_id/download
 	if len(parts) == 4 && parts[1] == "attachments" && parts[3] == "download" {
 		if r.Method != http.MethodGet {
-			writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+			httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 			return
 		}
 		messageID, err := uuid.Parse(parts[0])
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid message_id"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid message_id"))
 			return
 		}
 		attachmentID, err := uuid.Parse(parts[2])
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid attachment_id"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid attachment_id"))
 			return
 		}
 		h.downloadMessageAttachment(w, r, principal, messageID, attachmentID)
 		return
 	}
 
-	writeJSON(w, http.StatusNotFound, errorBody("not found"))
+	httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("not found"))
 }
 
 func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal, messageID uuid.UUID) {
 	var req editMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid json"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
 		return
 	}
 	result, err := h.svc.EditMessage(r.Context(), EditMessageParams{
@@ -656,16 +657,16 @@ func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrMessageNotFound):
-			writeJSON(w, http.StatusNotFound, errorBody("message not found"))
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("message not found"))
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		case errors.Is(err, ErrMessageNotAuthor):
-			writeJSON(w, http.StatusForbidden, errorBody("only author can edit this message"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("only author can edit this message"))
 		case errors.Is(err, ErrEmptyMessage):
-			writeJSON(w, http.StatusBadRequest, errorBody("message body and attachments are both empty"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("message body and attachments are both empty"))
 		default:
 			h.log.Error("patchMessage error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -676,7 +677,7 @@ func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal
 	if result.EditedAt != nil {
 		editedAt = result.EditedAt.AsTime().UTC().Format("2006-01-02T15:04:05Z")
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{
 		"message_id": messageID.String(),
 		"edited_at":  editedAt,
 	})
@@ -690,14 +691,14 @@ func (h *Handler) deleteMessage(w http.ResponseWriter, r *http.Request, principa
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrMessageNotFound):
-			writeJSON(w, http.StatusNotFound, errorBody("message not found"))
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("message not found"))
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		case errors.Is(err, ErrMessageNotAuthor):
-			writeJSON(w, http.StatusForbidden, errorBody("only author can delete this message"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("only author can delete this message"))
 		default:
 			h.log.Error("deleteMessage error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -718,12 +719,12 @@ func (h *Handler) downloadMessageAttachment(
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrAttachmentNotFound):
-			writeJSON(w, http.StatusNotFound, errorBody("attachment not found"))
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("attachment not found"))
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		default:
 			h.log.Error("downloadMessageAttachment error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -738,14 +739,14 @@ func (h *Handler) downloadMessageAttachment(
 
 func (h *Handler) listDMCandidates(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	candidates, err := h.svc.ListDMCandidates(r.Context(), principal.UserID)
 	if err != nil {
 		h.log.Error("listDMCandidates query error", zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		return
 	}
 
@@ -759,24 +760,24 @@ func (h *Handler) listDMCandidates(w http.ResponseWriter, r *http.Request, princ
 		})
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) createOrOpenDirectMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	var req createDirectMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid json"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
 		return
 	}
 
 	targetUserID, err := uuid.Parse(req.UserID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid user_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid user_id"))
 		return
 	}
 
@@ -784,12 +785,12 @@ func (h *Handler) createOrOpenDirectMessage(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalidDMTarget):
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid dm target"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid dm target"))
 		case errors.Is(err, ErrBlockedDMTarget):
-			writeJSON(w, http.StatusNotFound, errorBody("user not available"))
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("user not available"))
 		default:
 			h.log.Error("createOrOpenDirectMessage error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -801,7 +802,7 @@ func (h *Handler) createOrOpenDirectMessage(w http.ResponseWriter, r *http.Reque
 	}
 
 	dm := result.DM
-	writeJSON(w, http.StatusOK, directMessageResponse{
+	httputil.WriteJSON(w, http.StatusOK, directMessageResponse{
 		ConversationID: dm.ConversationID.String(),
 		UserID:         dm.UserID.String(),
 		DisplayName:    dm.DisplayName,
@@ -814,24 +815,24 @@ func (h *Handler) createOrOpenDirectMessage(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) inviteToConversation(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	var req inviteConversationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid json"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
 		return
 	}
 
 	conversationID, err := uuid.Parse(req.ConversationID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid conversation_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
 		return
 	}
 	targetUserID, err := uuid.Parse(req.UserID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid user_id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid user_id"))
 		return
 	}
 
@@ -839,16 +840,16 @@ func (h *Handler) inviteToConversation(w http.ResponseWriter, r *http.Request, p
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotMember):
-			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		case errors.Is(err, ErrInviteUnsupportedTarget):
-			writeJSON(w, http.StatusForbidden, errorBody("cannot invite users to this conversation"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("cannot invite users to this conversation"))
 		case errors.Is(err, ErrConversationArchived):
-			writeJSON(w, http.StatusForbidden, errorBody("cannot invite users to archived conversations"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("cannot invite users to archived conversations"))
 		case errors.Is(err, ErrNotPublicChannel):
-			writeJSON(w, http.StatusForbidden, errorBody("conversation not found"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("conversation not found"))
 		default:
 			h.log.Error("inviteToConversation error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -859,44 +860,25 @@ func (h *Handler) inviteToConversation(w http.ResponseWriter, r *http.Request, p
 		h.notifier.SendChatDirectServerEvents(result.DirectDeliveries)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	httputil.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // requireAuth is a thin middleware that validates the Bearer JWT and injects
 // the Principal into the handler.
 func (h *Handler) requireAuth(next func(w http.ResponseWriter, r *http.Request, p auth.Principal)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := bearerToken(r)
+		token := httputil.BearerToken(r)
 		if token == "" {
-			writeJSON(w, http.StatusUnauthorized, errorBody("missing authorization"))
+			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("missing authorization"))
 			return
 		}
 		principal, err := h.authSvc.VerifyAccess(r.Context(), token)
 		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, errorBody("invalid or expired token"))
+			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid or expired token"))
 			return
 		}
 		next(w, r, principal)
 	}
-}
-
-func bearerToken(r *http.Request) string {
-	const prefix = "Bearer "
-	h := r.Header.Get("Authorization")
-	if len(h) > len(prefix) && h[:len(prefix)] == prefix {
-		return h[len(prefix):]
-	}
-	return ""
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body) //nolint:errcheck
-}
-
-func errorBody(msg string) map[string]string {
-	return map[string]string{"error": msg}
 }
 
 // countingReader tracks bytes consumed while streaming multipart file contents.

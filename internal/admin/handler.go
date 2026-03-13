@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"msgnr/internal/auth"
+	"msgnr/internal/httputil"
 )
 
 // Notifier is the subset of ws.Server used by the admin handler to push
@@ -50,7 +51,7 @@ func (h *Handler) users(w http.ResponseWriter, r *http.Request) {
 			h.internalError(w, "list users", err)
 			return
 		}
-		writeJSON(w, http.StatusOK, rows)
+		httputil.WriteJSON(w, http.StatusOK, rows)
 
 	case http.MethodPost:
 		var req struct {
@@ -61,7 +62,7 @@ func (h *Handler) users(w http.ResponseWriter, r *http.Request) {
 			NeedChangePassword *bool  `json:"need_change_password"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 			return
 		}
 		// Default need_change_password to true when not explicitly set.
@@ -80,10 +81,10 @@ func (h *Handler) users(w http.ResponseWriter, r *http.Request) {
 			h.serviceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, row)
+		httputil.WriteJSON(w, http.StatusCreated, row)
 
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 	}
 }
 
@@ -95,14 +96,14 @@ func (h *Handler) usersItem(w http.ResponseWriter, r *http.Request) {
 
 	id, err := uuid.Parse(parts[0])
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("invalid user id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid user id"))
 		return
 	}
 
 	// PATCH /api/admin/users/{id} — update display_name, email, role, password
 	if len(parts) == 1 {
 		if r.Method != http.MethodPatch {
-			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+			httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 			return
 		}
 		var req struct {
@@ -112,7 +113,7 @@ func (h *Handler) usersItem(w http.ResponseWriter, r *http.Request) {
 			Password    string `json:"password"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 			return
 		}
 		row, err := h.svc.UpdateUser(r.Context(), id, UpdateUserParams{
@@ -125,13 +126,13 @@ func (h *Handler) usersItem(w http.ResponseWriter, r *http.Request) {
 			h.serviceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, row)
+		httputil.WriteJSON(w, http.StatusOK, row)
 		return
 	}
 
 	// POST /api/admin/users/{id}/{action}
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
@@ -146,7 +147,7 @@ func (h *Handler) usersItem(w http.ResponseWriter, r *http.Request) {
 			NeedChangePassword bool `json:"need_change_password"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 			return
 		}
 		row, err = h.svc.SetNeedChangePassword(r.Context(), id, req.NeedChangePassword)
@@ -157,10 +158,10 @@ func (h *Handler) usersItem(w http.ResponseWriter, r *http.Request) {
 		if req.NeedChangePassword {
 			h.notifier.SendForcePasswordChange(id.String())
 		}
-		writeJSON(w, http.StatusOK, row)
+		httputil.WriteJSON(w, http.StatusOK, row)
 		return
 	default:
-		writeJSON(w, http.StatusNotFound, errBody("not found"))
+		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("not found"))
 		return
 	}
 
@@ -168,7 +169,7 @@ func (h *Handler) usersItem(w http.ResponseWriter, r *http.Request) {
 		h.serviceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, row)
+	httputil.WriteJSON(w, http.StatusOK, row)
 }
 
 // ---- /api/admin/channels ----
@@ -181,7 +182,7 @@ func (h *Handler) channels(w http.ResponseWriter, r *http.Request) {
 			h.internalError(w, "list channels", err)
 			return
 		}
-		writeJSON(w, http.StatusOK, rows)
+		httputil.WriteJSON(w, http.StatusOK, rows)
 
 	case http.MethodPost:
 		principal := principalFromCtx(r)
@@ -192,14 +193,14 @@ func (h *Handler) channels(w http.ResponseWriter, r *http.Request) {
 			MemberIDs   []string `json:"member_ids"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 			return
 		}
 		memberIDs := make([]uuid.UUID, 0, len(req.MemberIDs))
 		for _, raw := range req.MemberIDs {
 			memberID, err := uuid.Parse(raw)
 			if err != nil {
-				writeJSON(w, http.StatusBadRequest, errBody("invalid member_ids"))
+				httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid member_ids"))
 				return
 			}
 			memberIDs = append(memberIDs, memberID)
@@ -215,10 +216,10 @@ func (h *Handler) channels(w http.ResponseWriter, r *http.Request) {
 			h.serviceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, row)
+		httputil.WriteJSON(w, http.StatusCreated, row)
 
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 	}
 }
 
@@ -235,7 +236,7 @@ func (h *Handler) channelsItem(w http.ResponseWriter, r *http.Request) {
 
 	channelID, err := uuid.Parse(parts[0])
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("invalid channel id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid channel id"))
 		return
 	}
 
@@ -254,7 +255,7 @@ func (h *Handler) channelsItem(w http.ResponseWriter, r *http.Request) {
 				Name string `json:"name"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+				httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 				return
 			}
 			row, err := h.svc.RenameChannel(r.Context(), channelID, req.Name)
@@ -262,16 +263,16 @@ func (h *Handler) channelsItem(w http.ResponseWriter, r *http.Request) {
 				h.serviceError(w, err)
 				return
 			}
-			writeJSON(w, http.StatusOK, row)
+			httputil.WriteJSON(w, http.StatusOK, row)
 			return
 		default:
-			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+			httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 			return
 		}
 	}
 
 	if parts[1] != "members" {
-		writeJSON(w, http.StatusNotFound, errBody("not found"))
+		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("not found"))
 		return
 	}
 
@@ -284,19 +285,19 @@ func (h *Handler) channelsItem(w http.ResponseWriter, r *http.Request) {
 				h.internalError(w, "list members", err)
 				return
 			}
-			writeJSON(w, http.StatusOK, rows)
+			httputil.WriteJSON(w, http.StatusOK, rows)
 
 		case http.MethodPost:
 			var req struct {
 				UserID string `json:"user_id"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+				httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 				return
 			}
 			userID, err := uuid.Parse(req.UserID)
 			if err != nil {
-				writeJSON(w, http.StatusBadRequest, errBody("invalid user_id"))
+				httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid user_id"))
 				return
 			}
 			if err := h.svc.AddChannelMember(r.Context(), channelID, userID); err != nil {
@@ -306,7 +307,7 @@ func (h *Handler) channelsItem(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 
 		default:
-			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+			httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		}
 		return
 	}
@@ -314,11 +315,11 @@ func (h *Handler) channelsItem(w http.ResponseWriter, r *http.Request) {
 	// /api/admin/channels/{id}/members/{userID}
 	userID, err := uuid.Parse(parts[2])
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("invalid user id"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid user id"))
 		return
 	}
 	if r.Method != http.MethodDelete {
-		writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 	if err := h.svc.RemoveChannelMember(r.Context(), channelID, userID); err != nil {
@@ -334,20 +335,20 @@ type ctxKey struct{}
 
 func (h *Handler) adminOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := bearerToken(r)
+		token := httputil.BearerToken(r)
 		if token == "" {
-			writeJSON(w, http.StatusUnauthorized, errBody("missing token"))
+			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("missing token"))
 			return
 		}
 
 		principal, err := h.authSvc.VerifyAccess(r.Context(), token)
 		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, errBody("invalid or expired token"))
+			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid or expired token"))
 			return
 		}
 
 		if principal.Role != "admin" && principal.Role != "owner" {
-			writeJSON(w, http.StatusForbidden, errBody("admin role required"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("admin role required"))
 			return
 		}
 
@@ -375,11 +376,11 @@ func principalFromCtx(r *http.Request) auth.Principal {
 func (h *Handler) serviceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeJSON(w, http.StatusNotFound, errBody(err.Error()))
+		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody(err.Error()))
 	case errors.Is(err, ErrConflict):
-		writeJSON(w, http.StatusConflict, errBody(err.Error()))
+		httputil.WriteJSON(w, http.StatusConflict, httputil.ErrorBody(err.Error()))
 	case errors.Is(err, ErrBadRequest):
-		writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody(err.Error()))
 	default:
 		h.internalError(w, "", err)
 	}
@@ -391,23 +392,5 @@ func (h *Handler) internalError(w http.ResponseWriter, msg string, err error) {
 	} else {
 		h.log.Error("admin: internal error", zap.Error(err))
 	}
-	writeJSON(w, http.StatusInternalServerError, errBody("internal error"))
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
-}
-
-func errBody(msg string) map[string]string {
-	return map[string]string{"error": msg}
-}
-
-func bearerToken(r *http.Request) string {
-	v := r.Header.Get("Authorization")
-	if after, ok := strings.CutPrefix(v, "Bearer "); ok {
-		return strings.TrimSpace(after)
-	}
-	return ""
+	httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 }

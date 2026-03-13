@@ -1,6 +1,11 @@
 -- name: GetUserByID :one
 SELECT * FROM users WHERE id = $1;
 
+-- name: GetPushSenderTitle :one
+SELECT COALESCE(NULLIF(display_name, ''), email, 'Someone') AS title
+FROM users
+WHERE id = $1;
+
 -- name: ListActiveUsers :many
 SELECT id, display_name, email, avatar_url
 FROM users

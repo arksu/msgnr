@@ -2,6 +2,14 @@ export type PlatformType = 'pwa' | 'tauri'
 
 export type AppNotificationPermission = 'granted' | 'denied' | 'default'
 
+export function normalizeNotificationPermission(
+  result: NotificationPermission | string,
+): AppNotificationPermission {
+  if (result === 'granted' || result === 'denied' || result === 'default') return result
+  if (result === 'prompt' || result === 'prompt-with-rationale') return 'default'
+  return 'default'
+}
+
 export interface AppNotificationOptions {
   title: string
   body: string

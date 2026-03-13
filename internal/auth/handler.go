@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"go.uber.org/zap"
+	"msgnr/internal/httputil"
 	"msgnr/internal/logger"
 )
 
@@ -89,13 +90,13 @@ type logoutRequest struct {
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || req.Password == "" {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid request body"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 		return
 	}
 
@@ -106,17 +107,17 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalidCredentials):
-			writeJSON(w, http.StatusUnauthorized, errorBody("invalid credentials"))
+			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid credentials"))
 		case errors.Is(err, ErrUserBlocked):
-			writeJSON(w, http.StatusForbidden, errorBody("account blocked"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("account blocked"))
 		default:
 			h.log.Error("login error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
 
-	writeJSON(w, http.StatusOK, loginResponse{
+	httputil.WriteJSON(w, http.StatusOK, loginResponse{
 		AccessToken:  pair.AccessToken,
 		RefreshToken: pair.RefreshToken,
 		ExpiresInSec: int64(pair.ExpiresIn.Seconds()),
@@ -126,13 +127,13 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	var req refreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid request body"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 		return
 	}
 
@@ -140,17 +141,17 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrSessionNotFound):
-			writeJSON(w, http.StatusUnauthorized, errorBody("invalid or expired refresh token"))
+			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid or expired refresh token"))
 		case errors.Is(err, ErrUserBlocked):
-			writeJSON(w, http.StatusForbidden, errorBody("account blocked"))
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("account blocked"))
 		default:
 			h.log.Error("refresh error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
 
-	writeJSON(w, http.StatusOK, refreshResponse{
+	httputil.WriteJSON(w, http.StatusOK, refreshResponse{
 		AccessToken:  pair.AccessToken,
 		RefreshToken: pair.RefreshToken,
 		ExpiresInSec: int64(pair.ExpiresIn.Seconds()),
@@ -159,19 +160,19 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	var req logoutRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid request body"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 		return
 	}
 
 	if err := h.svc.Logout(r.Context(), req.RefreshToken); err != nil {
 		h.log.Error("logout error", zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		return
 	}
 
@@ -180,19 +181,19 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPatch {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
-	token := bearerToken(r)
+	token := httputil.BearerToken(r)
 	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, errorBody("missing authorization"))
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("missing authorization"))
 		return
 	}
 
 	principal, err := h.svc.VerifyAccess(r.Context(), token)
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, errorBody("invalid or expired token"))
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid or expired token"))
 		return
 	}
 
@@ -200,16 +201,16 @@ func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
 		info, err := h.svc.GetProfile(r.Context(), principal.UserID)
 		if err != nil {
 			h.log.Error("getProfile error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 			return
 		}
-		writeJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
+		httputil.WriteJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
 		return
 	}
 
 	var req updateProfileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid request body"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 		return
 	}
 
@@ -217,34 +218,34 @@ func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrProfileConflict):
-			writeJSON(w, http.StatusConflict, errorBody(err.Error()))
+			httputil.WriteJSON(w, http.StatusConflict, httputil.ErrorBody(err.Error()))
 		case errors.Is(err, ErrProfileBadRequest):
-			writeJSON(w, http.StatusBadRequest, errorBody(err.Error()))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody(err.Error()))
 		default:
 			h.log.Error("updateProfile error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
 
-	writeJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
+	httputil.WriteJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
 }
 
 func (h *Handler) avatar(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
-	token := bearerToken(r)
+	token := httputil.BearerToken(r)
 	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, errorBody("missing authorization"))
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("missing authorization"))
 		return
 	}
 
 	principal, err := h.svc.VerifyAccess(r.Context(), token)
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, errorBody("invalid or expired token"))
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid or expired token"))
 		return
 	}
 
@@ -254,14 +255,14 @@ func (h *Handler) avatar(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			switch {
 			case errors.Is(err, ErrAvatarNotConfigured):
-				writeJSON(w, http.StatusServiceUnavailable, errorBody("avatar service unavailable"))
+				httputil.WriteJSON(w, http.StatusServiceUnavailable, httputil.ErrorBody("avatar service unavailable"))
 			default:
 				h.log.Error("removeAvatar error", zap.Error(err))
-				writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+				httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 			}
 			return
 		}
-		writeJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
+		httputil.WriteJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
 		return
 
 	case http.MethodPost:
@@ -270,15 +271,15 @@ func (h *Handler) avatar(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		if err := r.ParseMultipartForm(maxBodyBytes); err != nil {
 			if isRequestTooLarge(err) {
-				writeJSON(w, http.StatusRequestEntityTooLarge, errorBody("avatar file exceeds maximum allowed size"))
+				httputil.WriteJSON(w, http.StatusRequestEntityTooLarge, httputil.ErrorBody("avatar file exceeds maximum allowed size"))
 				return
 			}
-			writeJSON(w, http.StatusBadRequest, errorBody("failed to parse multipart form"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("failed to parse multipart form"))
 			return
 		}
 		file, _, err := r.FormFile("avatar")
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("missing avatar file"))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("missing avatar file"))
 			return
 		}
 		defer file.Close()
@@ -287,21 +288,21 @@ func (h *Handler) avatar(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			switch {
 			case errors.Is(err, ErrAvatarTooLarge):
-				writeJSON(w, http.StatusBadRequest, errorBody("avatar file exceeds maximum allowed size"))
+				httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("avatar file exceeds maximum allowed size"))
 			case errors.Is(err, ErrAvatarUnsupported):
-				writeJSON(w, http.StatusBadRequest, errorBody("unsupported avatar format"))
+				httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("unsupported avatar format"))
 			case errors.Is(err, ErrAvatarBadRequest):
-				writeJSON(w, http.StatusBadRequest, errorBody("invalid avatar image"))
+				httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid avatar image"))
 			case errors.Is(err, ErrAvatarNotConfigured):
-				writeJSON(w, http.StatusServiceUnavailable, errorBody("avatar service unavailable"))
+				httputil.WriteJSON(w, http.StatusServiceUnavailable, httputil.ErrorBody("avatar service unavailable"))
 			default:
 				h.log.Error("uploadAvatar error", zap.Error(err))
-				writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+				httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 			}
 			return
 		}
 
-		writeJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
+		httputil.WriteJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
 	}
 }
 
@@ -315,19 +316,19 @@ func isRequestTooLarge(err error) bool {
 
 func (h *Handler) publicAvatar(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
 	escapedPath := r.URL.EscapedPath()
 	storageKeyEscaped := strings.TrimPrefix(escapedPath, "/api/public/avatars/")
 	if storageKeyEscaped == escapedPath || storageKeyEscaped == "" {
-		writeJSON(w, http.StatusNotFound, errorBody("not found"))
+		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("not found"))
 		return
 	}
 	storageKey, err := url.PathUnescape(storageKeyEscaped)
 	if err != nil || strings.TrimSpace(storageKey) == "" {
-		writeJSON(w, http.StatusNotFound, errorBody("not found"))
+		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("not found"))
 		return
 	}
 
@@ -335,12 +336,12 @@ func (h *Handler) publicAvatar(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrAvatarNotFound):
-			writeJSON(w, http.StatusNotFound, errorBody("not found"))
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("not found"))
 		case errors.Is(err, ErrAvatarNotConfigured):
-			writeJSON(w, http.StatusServiceUnavailable, errorBody("avatar service unavailable"))
+			httputil.WriteJSON(w, http.StatusServiceUnavailable, httputil.ErrorBody("avatar service unavailable"))
 		default:
 			h.log.Error("publicAvatar error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
@@ -371,52 +372,40 @@ func toUserBody(info UserInfo) userBody {
 
 func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
 		return
 	}
 
-	token := bearerToken(r)
+	token := httputil.BearerToken(r)
 	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, errorBody("missing authorization"))
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("missing authorization"))
 		return
 	}
 
 	principal, err := h.svc.VerifyAccess(r.Context(), token)
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, errorBody("invalid or expired token"))
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid or expired token"))
 		return
 	}
 
 	var req changePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NewPassword == "" {
-		writeJSON(w, http.StatusBadRequest, errorBody("new_password is required"))
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("new_password is required"))
 		return
 	}
 
 	if err := h.svc.ChangePassword(r.Context(), principal.UserID, req.NewPassword); err != nil {
 		switch {
 		case errors.Is(err, ErrPasswordChangeFailed):
-			writeJSON(w, http.StatusBadRequest, errorBody(err.Error()))
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody(err.Error()))
 		default:
 			h.log.Error("change password error", zap.Error(err))
-			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// ---- helpers ----
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
-}
-
-func errorBody(msg string) map[string]string {
-	return map[string]string{"error": msg}
 }
 
 func realIP(r *http.Request) string {
@@ -427,12 +416,4 @@ func realIP(r *http.Request) string {
 		return ip
 	}
 	return r.RemoteAddr
-}
-
-func bearerToken(r *http.Request) string {
-	v := r.Header.Get("Authorization")
-	if after, ok := strings.CutPrefix(v, "Bearer "); ok {
-		return strings.TrimSpace(after)
-	}
-	return ""
 }

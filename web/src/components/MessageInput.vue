@@ -317,13 +317,21 @@ function extractClipboardFiles(event: ClipboardEvent): File[] {
     files.push(file)
   }
 
+  const itemFiles: File[] = []
   for (const item of Array.from(data.items ?? [])) {
     if (item.kind !== 'file') continue
-    pushFile(item.getAsFile())
+    const file = item.getAsFile()
+    if (file) itemFiles.push(file)
   }
-  for (const file of Array.from(data.files ?? [])) {
-    pushFile(file)
+
+  // Browsers may expose the same pasted image in both `items` and `files`.
+  // Prefer `items` when available to avoid duplicate uploads from one paste.
+  if (itemFiles.length > 0) {
+    for (const file of itemFiles) pushFile(file)
+    return files
   }
+
+  for (const file of Array.from(data.files ?? [])) pushFile(file)
   return files
 }
 

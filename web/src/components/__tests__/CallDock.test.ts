@@ -252,6 +252,69 @@ describe('CallDock invite modal', () => {
   })
 })
 
+describe('CallDock input device selector', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('shows input selector and switches active microphone device from the call window', async () => {
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.switchInputDevice = vi.fn().mockResolvedValue(undefined)
+
+    const originalMediaDevices = navigator.mediaDevices
+    const addEventListener = vi.fn()
+    const removeEventListener = vi.fn()
+    const enumerateDevices = vi.fn().mockResolvedValue([
+      { kind: 'audioinput', deviceId: 'mic-1', label: 'Built-in Mic' },
+      { kind: 'audioinput', deviceId: 'mic-2', label: 'USB Mic' },
+      { kind: 'audiooutput', deviceId: 'spk-1', label: 'Speakers' },
+    ])
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        enumerateDevices,
+        addEventListener,
+        removeEventListener,
+      },
+    })
+
+    let wrapper: ReturnType<typeof mount> | null = null
+    try {
+      wrapper = mount(CallDock, {
+        attachTo: document.body,
+        global: {
+          stubs: {
+            UserAvatar: true,
+          },
+        },
+      })
+
+      await flushAll()
+
+      const toggle = wrapper.get('[data-testid="calldock-input-device-toggle"]')
+      await toggle.trigger('click')
+      await flushAll()
+      expect(wrapper.get('[data-testid="calldock-input-device-menu"]').exists()).toBe(true)
+
+      const option = wrapper.get('[data-testid="calldock-input-device-option-mic-2"]')
+      await option.trigger('click')
+      await flushAll()
+
+      expect(callStore.switchInputDevice).toHaveBeenCalledWith('mic-2')
+      expect(enumerateDevices).toHaveBeenCalled()
+    } finally {
+      wrapper?.unmount()
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: originalMediaDevices,
+      })
+    }
+  })
+})
+
 describe('CallDock screen annotation overlay', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

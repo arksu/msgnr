@@ -292,6 +292,9 @@
         <div v-if="callStore.errorMessage" class="rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
           {{ callStore.errorMessage }}
         </div>
+        <div v-if="inputDeviceError" class="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          {{ inputDeviceError }}
+        </div>
         <div v-if="callStore.playbackBlocked" class="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
           <div class="mb-2">Audio playback is blocked by the browser.</div>
           <button class="rounded bg-amber-500/80 px-2 py-1 text-xs text-white hover:bg-amber-500" @click="handleEnableAudio">
@@ -302,29 +305,71 @@
         <!-- Controls bar — icon-only buttons -->
         <div class="relative flex items-center justify-center gap-2 py-1 shrink-0">
 
-          <!-- Microphone -->
-          <button
-            class="flex h-10 w-10 items-center justify-center rounded-full transition-colors"
-            :class="callStore.micEnabled ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-red-500/20 hover:bg-red-500/30 text-red-400'"
-            :title="callStore.micEnabled ? 'Mute microphone' : 'Unmute microphone'"
-            @click="handleToggleMute"
-          >
-            <!-- Mic on -->
-            <svg v-if="callStore.micEnabled" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
-            </svg>
-            <!-- Mic off / muted -->
-            <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <line x1="1" y1="1" x2="23" y2="23"/>
-              <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23M12 19v3M8 23h8"/>
-            </svg>
-          </button>
+          <!-- Microphone + arrow selector -->
+          <div ref="inputSelectorWrapEl" class="relative">
+            <div class="flex h-10 items-center overflow-hidden rounded-xl border border-slate-600 bg-slate-700/90">
+              <button
+                class="flex h-10 w-10 items-center justify-center transition-colors"
+                :class="callStore.micEnabled ? 'text-white hover:bg-slate-600' : 'text-red-400 hover:bg-red-500/15'"
+                :title="callStore.micEnabled ? 'Mute microphone' : 'Unmute microphone'"
+                @click="handleToggleMute"
+              >
+                <svg v-if="callStore.micEnabled" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
+                </svg>
+                <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <line x1="1" y1="1" x2="23" y2="23"/>
+                  <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23M12 19v3M8 23h8"/>
+                </svg>
+              </button>
+              <div class="h-6 w-px bg-slate-500/60" />
+              <button
+                class="flex h-10 w-8 items-center justify-center text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+                title="Select input device"
+                data-testid="calldock-input-device-toggle"
+                :disabled="inputDeviceLoading || inputDeviceSwitching || !callStore.connected"
+                @pointerdown="logInputSelectorPointerDown"
+                @click="toggleInputDeviceMenu"
+              >
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M6 15l6-6 6 6" />
+                </svg>
+              </button>
+            </div>
+
+            <div
+              v-if="inputDeviceMenuOpen"
+              class="absolute bottom-[calc(100%+8px)] left-0 z-30 w-64 rounded-xl border border-slate-600 bg-slate-900 shadow-2xl"
+              data-testid="calldock-input-device-menu"
+            >
+              <button
+                class="w-full truncate px-3 py-2 text-left text-xs transition-colors hover:bg-white/10"
+                :class="selectedInputDeviceId === '' ? 'text-emerald-300' : 'text-slate-100'"
+                data-testid="calldock-input-device-option-default"
+                @click="handleInputDeviceSelect('')"
+              >
+                System mic
+              </button>
+              <button
+                v-for="device in inputDevices"
+                :key="device.deviceId"
+                class="w-full truncate px-3 py-2 text-left text-xs transition-colors hover:bg-white/10"
+                :class="selectedInputDeviceId === device.deviceId ? 'text-emerald-300' : 'text-slate-100'"
+                :data-testid="`calldock-input-device-option-${device.deviceId}`"
+                @click="handleInputDeviceSelect(device.deviceId)"
+              >
+                {{ labelInputDevice(device) }}
+              </button>
+            </div>
+          </div>
 
           <!-- Camera -->
           <button
-            class="flex h-10 w-10 items-center justify-center rounded-full transition-colors"
-            :class="callStore.cameraEnabled ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-red-500/20 hover:bg-red-500/30 text-red-400'"
+            class="flex h-10 w-10 items-center justify-center rounded-xl border transition-colors"
+            :class="callStore.cameraEnabled
+              ? 'border-slate-600 bg-slate-700/90 hover:bg-slate-600 text-white'
+              : 'border-slate-600 bg-slate-700/90 hover:bg-red-500/15 text-red-400'"
             :title="callStore.cameraEnabled ? 'Turn off camera' : 'Turn on camera'"
             @click="handleToggleCamera"
           >
@@ -342,11 +387,11 @@
 
           <!-- Screen share -->
           <button
-            class="flex h-10 w-10 items-center justify-center rounded-full transition-colors"
+            class="flex h-10 w-10 items-center justify-center rounded-xl border transition-colors"
             :class="[
               callStore.screenShareEnabled
-                ? 'bg-emerald-600/80 hover:bg-emerald-600 text-white'
-                : 'bg-slate-700 text-white',
+                ? 'border-emerald-500/50 bg-emerald-600/80 hover:bg-emerald-600 text-white'
+                : 'border-slate-600 bg-slate-700/90 text-white',
               !callStore.screenShareEnabled && callStore.remoteScreenShareActive
                 ? 'opacity-50 cursor-not-allowed'
                 : !callStore.screenShareEnabled ? 'hover:bg-slate-600' : '',
@@ -368,12 +413,12 @@
 
           <!-- Screen annotation -->
           <button
-            class="flex h-10 w-10 items-center justify-center rounded-full transition-colors"
+            class="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-600 transition-colors"
             data-testid="calldock-annotation-toggle"
             :class="[
               annotationDrawMode
                 ? 'bg-amber-500/80 text-white hover:bg-amber-500'
-                : 'bg-slate-700 text-white hover:bg-slate-600',
+                : 'bg-slate-700/90 text-white hover:bg-slate-600',
               !annotationCanDraw ? 'opacity-50 cursor-not-allowed' : '',
             ]"
             :title="annotationToggleTitle"
@@ -388,7 +433,7 @@
 
           <!-- Invite members -->
           <button
-            class="flex h-10 items-center justify-center gap-1.5 rounded-full px-3 transition-colors bg-slate-700 text-white hover:bg-slate-600"
+            class="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-slate-600 px-3 transition-colors bg-slate-700/90 text-white hover:bg-slate-600"
             title="Invite members"
             data-testid="calldock-invite-button"
             :disabled="inviteLoading || inviteSubmitting"
@@ -405,7 +450,7 @@
 
           <!-- End call -->
           <button
-            class="flex h-10 w-10 items-center justify-center rounded-full bg-red-500 hover:bg-red-400 text-white transition-colors"
+            class="flex h-10 w-10 items-center justify-center rounded-xl border border-red-400/50 bg-red-500/90 hover:bg-red-500 text-white transition-colors"
             title="Leave call"
             @click="handleLeave"
           >
@@ -511,6 +556,7 @@ import { useCallStore, type ScreenAnnotationEvent, type ScreenAnnotationSegmentV
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { listDmCandidates, type DmCandidateItem } from '@/services/http/chatApi'
+import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
 import UserAvatar from './UserAvatar.vue'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -603,6 +649,7 @@ const pinnedVideoEl = ref<HTMLVideoElement | null>(null)  // pinned full-stage v
 const stageEl = ref<HTMLDivElement | null>(null)
 const annotationCanvasEl = ref<HTMLCanvasElement | null>(null)
 const remoteAudioHostEl = ref<HTMLDivElement | null>(null)
+const inputSelectorWrapEl = ref<HTMLDivElement | null>(null)
 const maximized = ref(false)
 const pinnedSid = ref<string | null>(null)
 const inviteDialogOpen = ref(false)
@@ -612,6 +659,12 @@ const inviteLoading = ref(false)
 const inviteSubmitting = ref(false)
 const inviteError = ref('')
 const inviteResultSummary = ref('')
+const inputDevices = ref<MediaDeviceInfo[]>([])
+const selectedInputDeviceId = ref(loadAudioPrefs().inputDeviceId)
+const inputDeviceLoading = ref(false)
+const inputDeviceSwitching = ref(false)
+const inputDeviceError = ref('')
+const inputDeviceMenuOpen = ref(false)
 const annotationDrawMode = ref(false)
 const annotationActiveSegmentCount = ref(0)
 const annotationFadingSegmentCount = ref(0)
@@ -635,6 +688,7 @@ let annotationRenderTimer: ReturnType<typeof setInterval> | null = null
 let annotationStrokeCounter = 0
 let activeAnnotationStroke: ActiveAnnotationStroke | null = null
 let canvas2dSupported: boolean | null = null
+let inputDeviceChangeListener: (() => void) | null = null
 
 // ── Debug ─────────────────────────────────────────────────────────────────────
 
@@ -654,6 +708,183 @@ function callDebug(message: string, payload?: unknown) {
 
 function isScreenSource(source: unknown): boolean {
   return String(source ?? '').toLowerCase().includes('screen')
+}
+
+function mediaDevicesOrNull(): MediaDevices | null {
+  if (typeof navigator === 'undefined') return null
+  return navigator.mediaDevices ?? null
+}
+
+function labelInputDevice(device: MediaDeviceInfo): string {
+  return device.label || `Microphone (${device.deviceId.slice(0, 8)}…)`
+}
+
+function inputDeviceLog(message: string, payload?: unknown) {
+  if (typeof payload === 'undefined') {
+    console.info(`[call-input-device] ${message}`)
+    return
+  }
+  console.info(`[call-input-device] ${message}`, payload)
+}
+
+function logInputSelectorPointerDown() {
+  inputDeviceLog('selector pointerdown', {
+    connected: callStore.connected,
+    loading: inputDeviceLoading.value,
+    switching: inputDeviceSwitching.value,
+    disabled: inputDeviceLoading.value || inputDeviceSwitching.value || !callStore.connected,
+    knownInputDevices: inputDevices.value.length,
+    selectedInputDeviceId: selectedInputDeviceId.value || 'default',
+  })
+}
+
+async function toggleInputDeviceMenu() {
+  const nextOpen = !inputDeviceMenuOpen.value
+  inputDeviceLog('toggle input selector menu', {
+    nextOpen,
+    connected: callStore.connected,
+    loading: inputDeviceLoading.value,
+    switching: inputDeviceSwitching.value,
+    knownInputDevices: inputDevices.value.length,
+  })
+  inputDeviceMenuOpen.value = nextOpen
+  if (nextOpen) {
+    await refreshInputDevices('menu-open')
+  }
+}
+
+function detachInputDeviceChangeListener() {
+  const mediaDevices = mediaDevicesOrNull()
+  if (!mediaDevices || !inputDeviceChangeListener) return
+  mediaDevices.removeEventListener('devicechange', inputDeviceChangeListener)
+  inputDeviceLog('detached mediaDevices.devicechange listener')
+  inputDeviceChangeListener = null
+}
+
+function ensureInputDeviceChangeListener() {
+  const mediaDevices = mediaDevicesOrNull()
+  if (!mediaDevices || inputDeviceChangeListener) return
+  inputDeviceChangeListener = () => {
+    inputDeviceLog('mediaDevices.devicechange fired')
+    void refreshInputDevices('devicechange')
+  }
+  mediaDevices.addEventListener('devicechange', inputDeviceChangeListener)
+  inputDeviceLog('attached mediaDevices.devicechange listener')
+}
+
+async function refreshInputDevices(trigger: string = 'manual') {
+  const mediaDevices = mediaDevicesOrNull()
+  inputDeviceLog('refresh start', {
+    trigger,
+    connected: callStore.connected,
+    loading: inputDeviceLoading.value,
+    switching: inputDeviceSwitching.value,
+  })
+  if (!mediaDevices || typeof mediaDevices.enumerateDevices !== 'function') {
+    inputDevices.value = []
+    inputDeviceError.value = 'Input device selection is unavailable on this platform.'
+    console.warn('[call-input-device] refresh aborted: enumerateDevices unavailable')
+    return
+  }
+
+  inputDeviceLoading.value = true
+  inputDeviceError.value = ''
+  try {
+    const devices = await mediaDevices.enumerateDevices()
+    inputDevices.value = devices.filter(device => device.kind === 'audioinput')
+    inputDeviceLog('enumerated input devices', {
+      trigger,
+      totalDevices: devices.length,
+      inputDevices: inputDevices.value.length,
+      labelsAvailable: inputDevices.value.filter(device => Boolean(device.label)).length,
+    })
+
+    const savedInputDeviceId = loadAudioPrefs().inputDeviceId
+    if (savedInputDeviceId && !inputDevices.value.some(device => device.deviceId === savedInputDeviceId)) {
+      selectedInputDeviceId.value = ''
+      inputDeviceError.value = 'Selected microphone is unavailable. Using system default.'
+      console.warn('[call-input-device] saved device missing, fallback to system default', {
+        trigger,
+        savedInputDeviceId,
+      })
+      return
+    }
+    selectedInputDeviceId.value = savedInputDeviceId
+    inputDeviceLog('refresh success', {
+      trigger,
+      selectedInputDeviceId: selectedInputDeviceId.value || 'default',
+    })
+  } catch (err) {
+    inputDevices.value = []
+    inputDeviceError.value = err instanceof Error ? err.message : 'Failed to load input devices.'
+    console.warn('[call-input-device] refresh failed', {
+      trigger,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  } finally {
+    inputDeviceLoading.value = false
+    inputDeviceLog('refresh end', {
+      trigger,
+      loading: inputDeviceLoading.value,
+      error: inputDeviceError.value || '',
+    })
+  }
+}
+
+async function handleInputDeviceSelect(deviceId: string) {
+  const nextDeviceId = deviceId.trim()
+  const previousDeviceId = selectedInputDeviceId.value
+  if (nextDeviceId === previousDeviceId) {
+    inputDeviceLog('change ignored (same selection)', {
+      selectedInputDeviceId: nextDeviceId || 'default',
+    })
+    inputDeviceMenuOpen.value = false
+    return
+  }
+
+  inputDeviceLog('change requested', {
+    from: previousDeviceId || 'default',
+    to: nextDeviceId || 'default',
+    connected: callStore.connected,
+    micEnabled: callStore.micEnabled,
+  })
+
+  selectedInputDeviceId.value = nextDeviceId
+  inputDeviceSwitching.value = true
+  inputDeviceError.value = ''
+  try {
+    await callStore.switchInputDevice(nextDeviceId)
+    inputDeviceLog('switchInputDevice resolved', {
+      selectedInputDeviceId: nextDeviceId || 'default',
+    })
+    await refreshInputDevices('post-change')
+    inputDeviceMenuOpen.value = false
+  } catch (err) {
+    selectedInputDeviceId.value = previousDeviceId
+    inputDeviceError.value = err instanceof Error ? err.message : 'Failed to switch microphone.'
+    console.warn('[call-input-device] switchInputDevice failed', {
+      from: previousDeviceId || 'default',
+      to: nextDeviceId || 'default',
+      error: err instanceof Error ? err.message : String(err),
+    })
+  } finally {
+    inputDeviceSwitching.value = false
+    inputDeviceLog('change end', {
+      selectedInputDeviceId: selectedInputDeviceId.value || 'default',
+      switching: inputDeviceSwitching.value,
+      error: inputDeviceError.value || '',
+    })
+  }
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  if (!inputDeviceMenuOpen.value) return
+  const wrap = unwrapEl(inputSelectorWrapEl.value)
+  const target = event.target instanceof Node ? event.target : null
+  if (!wrap || !target) return
+  if (wrap.contains(target)) return
+  inputDeviceMenuOpen.value = false
+  inputDeviceLog('closed input selector menu (outside click)')
 }
 
 // ── Computed layout ───────────────────────────────────────────────────────────
@@ -1593,7 +1824,9 @@ function forceStopLocalCapturePreviews() {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleEscapeKey)
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
   window.removeEventListener('resize', handleAnnotationWindowResize)
+  detachInputDeviceChangeListener()
   unsubscribeScreenAnnotations()
   stopAnnotationRenderLoop()
   stopActiveAnnotationStroke()
@@ -1630,6 +1863,10 @@ watch(() => callStore.minimized, (value) => {
 
 function handleEscapeKey(evt: KeyboardEvent) {
   if (evt.key !== 'Escape') return
+  if (inputDeviceMenuOpen.value) {
+    inputDeviceMenuOpen.value = false
+    return
+  }
   if (inviteDialogOpen.value) {
     closeInviteDialog()
     return
@@ -1639,21 +1876,42 @@ function handleEscapeKey(evt: KeyboardEvent) {
   }
 }
 
-watch([maximized, inviteDialogOpen], ([isMaximized, isInviteOpen]) => {
-  const shouldListen = isMaximized || isInviteOpen
+watch([maximized, inviteDialogOpen, inputDeviceMenuOpen], ([isMaximized, isInviteOpen, isInputMenuOpen]) => {
+  const shouldListen = isMaximized || isInviteOpen || isInputMenuOpen
   document.removeEventListener('keydown', handleEscapeKey)
   if (shouldListen) {
     document.addEventListener('keydown', handleEscapeKey)
   }
 })
 
+watch(inputDeviceMenuOpen, (open) => {
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+  if (open) {
+    document.addEventListener('pointerdown', handleDocumentPointerDown)
+  }
+})
+
 watch(isVisible, (visible) => {
-  if (visible) return
+  if (visible) {
+    inputDeviceLog('call dock visible: refreshing input devices')
+    void refreshInputDevices('visible')
+    ensureInputDeviceChangeListener()
+    return
+  }
+  inputDeviceLog('call dock hidden: detaching input device listener')
+  detachInputDeviceChangeListener()
+  inputDeviceMenuOpen.value = false
   annotationDrawMode.value = false
   stopActiveAnnotationStroke()
   clearRenderedAnnotationSegments()
   forceStopLocalCapturePreviews()
 })
+
+if (isVisible.value) {
+  inputDeviceLog('call dock initially visible: refreshing input devices')
+  void refreshInputDevices('initial-visible')
+  ensureInputDeviceChangeListener()
+}
 
 function toggleMaximized() {
   maximized.value = !maximized.value

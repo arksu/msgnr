@@ -296,69 +296,45 @@
               <path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
             </svg>
           </button>
-
-          <!-- Emoji picker (anchored here when reactions exist) -->
-          <div v-if="showEmojiPicker && hasReactions" class="absolute bottom-8 left-0 z-20">
-            <component
-              :is="pickerComponent"
-              v-if="pickerComponent && emojiIndex"
-              :data="emojiIndex"
-              :native="true"
-              set="native"
-              title="Add reaction"
-              emoji="slightly_smiling_face"
-              :show-preview="false"
-              :show-skin-tones="false"
-              :infinite-scroll="false"
-              :emoji-size="20"
-              :per-line="9"
-              color="#2f81f7"
-              @select="onSelectEmoji"
-              @selected="onSelectEmoji"
-            />
-            <div
-              v-else
-              class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
-            >
-              Loading emoji...
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Emoji picker (anchored to hover action button when no reactions) -->
-      <div
-        v-if="showEmojiPicker && !hasReactions"
-        ref="pickerRoot"
-        class="absolute right-2 top-8 z-20"
-      >
-        <component
-          :is="pickerComponent"
-          v-if="pickerComponent && emojiIndex"
-          :data="emojiIndex"
-          :native="true"
-          set="native"
-          title="Add reaction"
-          emoji="slightly_smiling_face"
-          :show-preview="false"
-          :show-skin-tones="false"
-          :infinite-scroll="false"
-          :emoji-size="20"
-          :per-line="9"
-          color="#2f81f7"
-          @select="onSelectEmoji"
-          @selected="onSelectEmoji"
-        />
-        <div
-          v-else
-          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
-        >
-          Loading emoji...
         </div>
       </div>
 
     </div>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="showEmojiPicker"
+      ref="pickerRoot"
+      class="z-20"
+      :style="emojiPickerStyle"
+      @click.stop
+    >
+      <component
+        :is="pickerComponent"
+        v-if="pickerComponent && emojiIndex"
+        :data="emojiIndex"
+        :native="true"
+        set="apple"
+        title="Add reaction"
+        emoji="slightly_smiling_face"
+        :show-preview="true"
+        :show-skin-tones="false"
+        :infinite-scroll="true"
+        :emoji-size="26"
+        :per-line="9"
+        color="#ae65c5"
+        @select="onSelectEmoji"
+        @selected="onSelectEmoji"
+      />
+      <div
+        v-else
+        class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+      >
+        Loading emoji...
+      </div>
+    </div>
+  </Teleport>
 
   <!-- Context menu — teleported to <body> to escape all overflow/clip contexts -->
   <Teleport to="body">
@@ -402,13 +378,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onBeforeUnmount, shallowRef } from 'vue'
+import { computed, ref, watch, onBeforeUnmount, shallowRef, nextTick } from 'vue'
 import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { generateId } from '@/services/id'
 import { fetchMessageAttachmentBlob } from '@/services/http/chatApi'
 import UserAvatar from './UserAvatar.vue'
+import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
 
 const props = withDefaults(defineProps<{
   message: Message
@@ -435,6 +412,17 @@ const contextMenuTrigger = ref<HTMLElement | null>(null)
 const pickerComponent = shallowRef<any>(null)
 const emojiIndex = shallowRef<any>(null)
 const emojiPickerLoading = ref(false)
+const emojiPickerStyle = ref<Record<string, string>>({
+  position: 'fixed',
+  top: '8px',
+  left: '8px',
+  width: '340px',
+})
+const instanceId = createEmojiPickerInstanceId()
+const EMOJI_PICKER_WIDTH = 340
+const EMOJI_PICKER_HEIGHT = 380
+const EMOJI_PICKER_GAP = 8
+const EMOJI_PICKER_EDGE_PADDING = 8
 const attachmentUrls = ref<Record<string, string>>({})
 const loadingAttachmentIds = ref(new Set<string>())
 const imagePreview = ref<{ open: boolean; src: string; fileName: string }>({
@@ -678,11 +666,77 @@ function onSelectEmoji(emoji: { native?: string; colons?: string; id?: string })
 // ── Emoji picker ─────────────────────────────────────────────────────────────
 
 function togglePickerButton() {
-  showEmojiPicker.value = !showEmojiPicker.value
+  if (showEmojiPicker.value) {
+    showEmojiPicker.value = false
+    if (activeEmojiPickerId.value === instanceId) {
+      activeEmojiPickerId.value = null
+    }
+    return
+  }
+
+  activeEmojiPickerId.value = instanceId
+  showEmojiPicker.value = true
   if (showEmojiPicker.value) {
     void ensureEmojiPickerLoaded()
+    void nextTick(updateEmojiPickerPosition)
   }
   debugReaction('picker:toggle', { visible: showEmojiPicker.value })
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) return min
+  if (value < min) return min
+  if (value > max) return max
+  return value
+}
+
+function updateEmojiPickerPosition() {
+  const trigger = pickerToggleButton.value
+  if (!trigger) return
+
+  const rect = trigger.getBoundingClientRect()
+  const viewportHeight = window.innerHeight
+  const viewportWidth = window.innerWidth
+  if (viewportHeight <= 0 || viewportWidth <= 0) return
+
+  const availablePickerHeight = Math.max(
+    0,
+    Math.min(EMOJI_PICKER_HEIGHT, viewportHeight - EMOJI_PICKER_EDGE_PADDING * 2),
+  )
+  const availablePickerWidth = Math.max(
+    0,
+    Math.min(EMOJI_PICKER_WIDTH, viewportWidth - EMOJI_PICKER_EDGE_PADDING * 2),
+  )
+  if (availablePickerHeight <= 0 || availablePickerWidth <= 0) return
+
+  const spaceBelow = viewportHeight - rect.bottom - EMOJI_PICKER_EDGE_PADDING
+  const spaceAbove = rect.top - EMOJI_PICKER_EDGE_PADDING
+  const canOpenDown = spaceBelow >= availablePickerHeight + EMOJI_PICKER_GAP
+  const canOpenUp = spaceAbove >= availablePickerHeight + EMOJI_PICKER_GAP
+
+  const openUp = canOpenDown ? false : (canOpenUp || spaceAbove > spaceBelow)
+  const rawTop = openUp
+    ? rect.top - availablePickerHeight - EMOJI_PICKER_GAP
+    : rect.bottom + EMOJI_PICKER_GAP
+
+  const alignByRight = !hasReactions.value
+  const desiredLeft = alignByRight
+    ? rect.right - availablePickerWidth
+    : rect.left
+
+  const topMax = viewportHeight - availablePickerHeight - EMOJI_PICKER_EDGE_PADDING
+  const leftMax = viewportWidth - availablePickerWidth - EMOJI_PICKER_EDGE_PADDING
+  const top = clamp(rawTop, EMOJI_PICKER_EDGE_PADDING, topMax)
+  const left = clamp(desiredLeft, EMOJI_PICKER_EDGE_PADDING, leftMax)
+
+  emojiPickerStyle.value = {
+    ...emojiPickerStyle.value,
+    top: `${Math.round(top)}px`,
+    left: `${Math.round(left)}px`,
+    width: `${Math.round(availablePickerWidth)}px`,
+    height: `${Math.round(availablePickerHeight)}px`,
+    overflow: 'hidden',
+  }
 }
 
 async function ensureEmojiPickerLoaded() {
@@ -713,6 +767,9 @@ function handleDocumentClick(evt: MouseEvent) {
     if (pickerToggleButton.value?.contains(target)) return
     if (pickerRoot.value?.contains(target)) return
     showEmojiPicker.value = false
+    if (activeEmojiPickerId.value === instanceId) {
+      activeEmojiPickerId.value = null
+    }
     debugReaction('picker:outside-close')
   }
   // Close context menu — allow clicks inside the teleported menu itself
@@ -742,6 +799,24 @@ watch([showEmojiPicker, showContextMenu, () => imagePreview.value.open], ([picke
   }
 })
 
+watch(activeEmojiPickerId, (value) => {
+  if (value !== instanceId && showEmojiPicker.value) {
+    showEmojiPicker.value = false
+    debugReaction('picker:closed-by-other', { active: value })
+  }
+})
+
+watch(showEmojiPicker, visible => {
+  if (visible) {
+    void nextTick(updateEmojiPickerPosition)
+    window.addEventListener('resize', updateEmojiPickerPosition)
+    window.addEventListener('scroll', updateEmojiPickerPosition, true)
+    return
+  }
+  window.removeEventListener('resize', updateEmojiPickerPosition)
+  window.removeEventListener('scroll', updateEmojiPickerPosition, true)
+})
+
 watch(messageAttachments, () => {
   syncAttachmentUrls()
   preloadAttachmentUrls()
@@ -750,6 +825,11 @@ watch(messageAttachments, () => {
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleDocumentClick)
   document.removeEventListener('keydown', handleEscape)
+  window.removeEventListener('resize', updateEmojiPickerPosition)
+  window.removeEventListener('scroll', updateEmojiPickerPosition, true)
+  if (activeEmojiPickerId.value === instanceId) {
+    activeEmojiPickerId.value = null
+  }
   closeImagePreview()
   for (const id of Object.keys(attachmentUrls.value)) {
     revokeAttachmentUrl(id)

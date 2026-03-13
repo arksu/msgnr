@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { NotificationLevel } from '@/shared/proto/packets_pb'
 import { useCallStore } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
+import { loadAudioPrefs, saveAudioPrefs } from '@/services/storage/audioPrefsStorage'
 
 vi.mock('@/services/sound', () => ({
   useNotificationSoundEngine: () => ({
@@ -128,6 +129,70 @@ describe('callStore leaveCall media cleanup', () => {
     expect(micTrackStop).toHaveBeenCalledTimes(1)
     expect(micMediaTrackStop).toHaveBeenCalledTimes(1)
     expect(room.disconnect).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('callStore switchInputDevice', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('persists the selected microphone and republishes local audio when mic is active', async () => {
+    const callStore = useCallStore()
+    const oldTrack = { sid: 'old-mic-track' }
+    const setMicrophoneEnabled = vi.fn().mockResolvedValue(undefined)
+    const unpublishTrack = vi.fn().mockResolvedValue(undefined)
+    const getTrackPublication = vi.fn()
+      .mockReturnValueOnce({ track: oldTrack })
+      .mockReturnValueOnce(undefined)
+
+    const originalMediaDevices = navigator.mediaDevices
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        ...(originalMediaDevices ?? {}),
+        getUserMedia: vi.fn(),
+      },
+    })
+
+    try {
+      callStore.room = {
+        name: 'room-1',
+        localParticipant: {
+          identity: 'user-1',
+          setMicrophoneEnabled,
+          unpublishTrack,
+          getTrackPublication,
+        },
+      } as never
+      callStore.connected = true
+      callStore.micEnabled = true
+
+      const currentPrefs = loadAudioPrefs()
+      saveAudioPrefs({
+        ...currentPrefs,
+        inputDeviceId: '',
+      })
+
+      await callStore.switchInputDevice('mic-2')
+
+      expect(loadAudioPrefs().inputDeviceId).toBe('mic-2')
+      expect(setMicrophoneEnabled).toHaveBeenNthCalledWith(1, false)
+      expect(unpublishTrack).toHaveBeenCalledWith(oldTrack, true)
+      expect(setMicrophoneEnabled).toHaveBeenNthCalledWith(
+        2,
+        true,
+        expect.objectContaining({
+          deviceId: 'mic-2',
+        }),
+      )
+      expect(callStore.micEnabled).toBe(true)
+    } finally {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: originalMediaDevices,
+      })
+    }
   })
 })
 

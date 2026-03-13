@@ -5,7 +5,7 @@ import { Room, RoomEvent, Track, ScreenSharePresets, type AudioCaptureOptions, t
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useNotificationSoundEngine } from '@/services/sound'
-import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
+import { loadAudioPrefs, saveAudioPrefs } from '@/services/storage/audioPrefsStorage'
 import { getPlatformOrNull } from '@/platform'
 import { getRuntimePlatformType } from '@/platform/runtime'
 
@@ -939,6 +939,15 @@ export const useCallStore = defineStore('call', () => {
     return opts
   }
 
+  function persistInputDevicePreference(deviceId: string): void {
+    const prefs = loadAudioPrefs()
+    if (prefs.inputDeviceId === deviceId) return
+    saveAudioPrefs({
+      ...prefs,
+      inputDeviceId: deviceId,
+    })
+  }
+
   // Builds the complete audio post-processing pipeline in a single AudioContext
   // and replaces the track LiveKit is sending with the processed output.
   //
@@ -1037,6 +1046,37 @@ export const useCallStore = defineStore('call', () => {
       console.error('[call] applyAudioProcessing failed:', err)
       ctx.close().catch(() => {})
       throw err
+    }
+  }
+
+  async function enableMicrophoneWithProcessing(current: Room): Promise<void> {
+    await current.localParticipant.setMicrophoneEnabled(true, buildAudioCaptureOptions())
+    micEnabled.value = true
+    callDebug('microphone enabled', { localParticipant: current.localParticipant.identity })
+
+    const prefs = loadAudioPrefs()
+    const pub = current.localParticipant.getTrackPublication(Track.Source.Microphone)
+    const audioTrack = pub?.track as LocalAudioTrack | undefined
+    if (!audioTrack) {
+      audioProcessingCleanup?.()
+      audioProcessingCleanup = null
+      return
+    }
+
+    try {
+      audioProcessingCleanup?.()
+      audioProcessingCleanup = await applyAudioProcessing(audioTrack, {
+        autoGainControl: prefs.autoGainControl,
+        microphoneGain: prefs.microphoneGain,
+        rnnoiseEnabled: prefs.rnnoiseEnabled,
+      })
+      callDebug('audio processing applied', {
+        gain: prefs.microphoneGain,
+        rnnoise: prefs.rnnoiseEnabled,
+        agc: prefs.autoGainControl,
+      })
+    } catch (err) {
+      callDebug('audio processing failed', { error: err instanceof Error ? err.message : String(err) })
     }
   }
 
@@ -1852,34 +1892,7 @@ export const useCallStore = defineStore('call', () => {
       micEnabled.value = false
       if (canUseMediaDevices) {
         try {
-          await nextRoom.localParticipant.setMicrophoneEnabled(true, buildAudioCaptureOptions())
-          micEnabled.value = true
-          callDebug('microphone enabled', { localParticipant: nextRoom.localParticipant.identity })
-          // Apply audio post-processing (RNNoise and/or software gain)
-          const prefs = loadAudioPrefs()
-          const pub = nextRoom.localParticipant.getTrackPublication(Track.Source.Microphone)
-          const audioTrack = pub?.track as LocalAudioTrack | undefined
-          if (audioTrack) {
-            // Build the unified audio processing pipeline:
-            //   gain (if needed) → RNNoise (if enabled) → replaceTrack
-            // Gain runs before RNNoise so the noise suppressor receives a
-            // well-levelled signal. See applyAudioProcessing for details.
-            try {
-              audioProcessingCleanup?.()
-              audioProcessingCleanup = await applyAudioProcessing(audioTrack, {
-                autoGainControl: prefs.autoGainControl,
-                microphoneGain: prefs.microphoneGain,
-                rnnoiseEnabled: prefs.rnnoiseEnabled,
-              })
-              callDebug('audio processing applied', {
-                gain: prefs.microphoneGain,
-                rnnoise: prefs.rnnoiseEnabled,
-                agc: prefs.autoGainControl,
-              })
-            } catch (err) {
-              callDebug('audio processing failed', { error: err instanceof Error ? err.message : String(err) })
-            }
-          }
+          await enableMicrophoneWithProcessing(nextRoom)
         } catch (err) {
           errorMessage.value = err instanceof Error
             ? err.message
@@ -1981,6 +1994,80 @@ export const useCallStore = defineStore('call', () => {
     callDebug('toggle mute', {
       enabled: next,
       room: current.name,
+    })
+  }
+
+  async function switchInputDevice(deviceId: string) {
+    const normalizedDeviceId = deviceId.trim()
+    console.info('[call-input-device] switchInputDevice called', {
+      requestedDeviceId: normalizedDeviceId || 'default',
+      connected: connected.value,
+      micEnabled: micEnabled.value,
+      hasRoom: Boolean(room.value),
+    })
+    persistInputDevicePreference(normalizedDeviceId)
+
+    const current = room.value
+    if (!current || !connected.value) {
+      console.info('[call-input-device] switchInputDevice no-op: call is not connected')
+      return
+    }
+    if (!micEnabled.value) {
+      console.info('[call-input-device] switchInputDevice no-op: microphone is muted')
+      return
+    }
+    if (!hasGetUserMedia()) {
+      console.warn('[call-input-device] switchInputDevice blocked: getUserMedia unavailable')
+      throw new Error(mediaUnavailableMessage())
+    }
+
+    callDebug('switch input device requested', {
+      room: current.name,
+      deviceId: normalizedDeviceId || 'default',
+    })
+
+    const local = current.localParticipant
+    const previousPublication = local.getTrackPublication(Track.Source.Microphone)
+    const previousTrack = previousPublication?.track ?? null
+    console.info('[call-input-device] switching microphone track', {
+      room: current.name,
+      previousTrackSid: previousTrack?.sid ?? null,
+      requestedDeviceId: normalizedDeviceId || 'default',
+    })
+
+    await local.setMicrophoneEnabled(false)
+    micEnabled.value = false
+    console.info('[call-input-device] microphone disabled before republish', {
+      room: current.name,
+    })
+    if (previousTrack) {
+      try {
+        await Promise.resolve(local.unpublishTrack(previousTrack, true))
+        console.info('[call-input-device] unpublished previous microphone track', {
+          room: current.name,
+          previousTrackSid: previousTrack.sid ?? null,
+        })
+      } catch (err) {
+        console.warn('[call-input-device] failed to unpublish previous microphone track', {
+          room: current.name,
+          error: toErrorMessage(err),
+        })
+        callDebug('failed to unpublish previous microphone track', {
+          room: current.name,
+          error: toErrorMessage(err),
+        })
+      }
+    }
+
+    // Device changes require rebuilding the capture + processing pipeline so the
+    // new source track becomes the one LiveKit publishes.
+    audioProcessingCleanup?.()
+    audioProcessingCleanup = null
+    await enableMicrophoneWithProcessing(current)
+    console.info('[call-input-device] switchInputDevice completed', {
+      room: current.name,
+      requestedDeviceId: normalizedDeviceId || 'default',
+      micEnabled: micEnabled.value,
     })
   }
 
@@ -2211,6 +2298,7 @@ export const useCallStore = defineStore('call', () => {
     leaveCall,
     resetRuntimeState,
     toggleMute,
+    switchInputDevice,
     toggleCamera,
     toggleScreenShare,
     publishScreenAnnotationSegment,

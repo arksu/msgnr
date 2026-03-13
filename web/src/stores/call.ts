@@ -7,6 +7,7 @@ import { useChatStore } from '@/stores/chat'
 import { useNotificationSoundEngine } from '@/services/sound'
 import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
 import { getPlatformOrNull } from '@/platform'
+import { getRuntimePlatformType } from '@/platform/runtime'
 
 // RNNoise blob URL is built once per page load and reused across all mute/unmute
 // cycles. Fetching + Blob-URL creation is expensive (~network round trip + WASM
@@ -227,6 +228,47 @@ const JOIN_ROOM_CONNECT_TIMEOUT_MS = 15000
 const REMOTE_AUDIO_STATS_INTERVAL_MS = 3000
 const EMPTY_CALL_AUTO_CLOSE_MS = 5000
 const CALL_DEBUG_STORAGE_KEY = 'debug.calls'
+const SCREEN_ANNOTATION_TOPIC = 'screen-annotation.v1'
+const SCREEN_ANNOTATION_OVERLAY_LABEL = 'annotation_overlay'
+
+export interface ScreenAnnotationPoint {
+  x: number
+  y: number
+}
+
+export type ScreenAnnotationSharerPlatform = 'tauri' | 'pwa' | 'unknown'
+export type ScreenAnnotationShareType = 'monitor' | 'window' | 'browser' | 'unknown'
+export type ScreenAnnotationSessionMode = 'os-overlay' | 'preview-fallback' | 'disabled'
+
+export interface ScreenAnnotationSessionState {
+  version: 1
+  kind: 'session'
+  active: boolean
+  sharerIdentity: string
+  sharerPlatform: ScreenAnnotationSharerPlatform
+  shareType: ScreenAnnotationShareType
+  shareLabel: string
+  sentAtMs: number
+}
+
+export interface ScreenAnnotationSegmentV1 {
+  version: 1
+  kind: 'segment'
+  shareTrackSid: string
+  senderIdentity: string
+  strokeId: string
+  seq: number
+  from: ScreenAnnotationPoint
+  to: ScreenAnnotationPoint
+  sentAtMs: number
+}
+
+export interface ScreenAnnotationEvent extends ScreenAnnotationSegmentV1 {
+  receivedAtMs: number
+}
+
+type ScreenAnnotationPacketV1 = ScreenAnnotationSessionState | ScreenAnnotationSegmentV1
+type ScreenAnnotationListener = (event: ScreenAnnotationEvent) => void
 
 function isLoopbackHost(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1'
@@ -318,6 +360,76 @@ function isScreenSource(source: unknown): boolean {
   return String(source ?? '').toLowerCase().includes('screen')
 }
 
+function isFinitePoint(value: unknown): value is ScreenAnnotationPoint {
+  if (!value || typeof value !== 'object') return false
+  const point = value as { x?: unknown; y?: unknown }
+  if (typeof point.x !== 'number' || !Number.isFinite(point.x)) return false
+  if (typeof point.y !== 'number' || !Number.isFinite(point.y)) return false
+  return point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1
+}
+
+function normalizeShareType(value: unknown): ScreenAnnotationShareType {
+  const normalized = String(value ?? '').toLowerCase()
+  if (normalized === 'monitor') return 'monitor'
+  if (normalized === 'window') return 'window'
+  if (normalized === 'browser') return 'browser'
+  return 'unknown'
+}
+
+function normalizeSharerPlatform(value: unknown): ScreenAnnotationSharerPlatform {
+  const normalized = String(value ?? '').toLowerCase()
+  if (normalized === 'tauri') return 'tauri'
+  if (normalized === 'pwa') return 'pwa'
+  return 'unknown'
+}
+
+function decodeScreenAnnotationPacket(payload: Uint8Array): ScreenAnnotationPacketV1 | null {
+  let parsed: unknown
+  try {
+    const decoded = new TextDecoder().decode(payload)
+    parsed = JSON.parse(decoded)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const candidate = parsed as Record<string, unknown>
+  if (candidate.version !== 1) return null
+  if (candidate.kind === 'session') {
+    if (typeof candidate.active !== 'boolean') return null
+    if (typeof candidate.sharerIdentity !== 'string') return null
+    if (typeof candidate.sentAtMs !== 'number' || !Number.isFinite(candidate.sentAtMs)) return null
+    return {
+      version: 1,
+      kind: 'session',
+      active: candidate.active,
+      sharerIdentity: candidate.sharerIdentity.trim(),
+      sharerPlatform: normalizeSharerPlatform(candidate.sharerPlatform),
+      shareType: normalizeShareType(candidate.shareType),
+      shareLabel: typeof candidate.shareLabel === 'string' ? candidate.shareLabel : '',
+      sentAtMs: candidate.sentAtMs,
+    }
+  }
+  if (candidate.kind !== 'segment') return null
+  if (typeof candidate.shareTrackSid !== 'string' || !candidate.shareTrackSid.trim()) return null
+  if (typeof candidate.senderIdentity !== 'string' || !candidate.senderIdentity.trim()) return null
+  if (typeof candidate.strokeId !== 'string' || !candidate.strokeId.trim()) return null
+  if (typeof candidate.seq !== 'number' || !Number.isInteger(candidate.seq) || candidate.seq < 0) return null
+  if (typeof candidate.sentAtMs !== 'number' || !Number.isFinite(candidate.sentAtMs)) return null
+  if (!isFinitePoint(candidate.from) || !isFinitePoint(candidate.to)) return null
+
+  return {
+    version: 1,
+    kind: 'segment',
+    shareTrackSid: candidate.shareTrackSid,
+    senderIdentity: candidate.senderIdentity,
+    strokeId: candidate.strokeId,
+    seq: candidate.seq,
+    from: candidate.from,
+    to: candidate.to,
+    sentAtMs: candidate.sentAtMs,
+  }
+}
+
 function logScreenShare(message: string, payload?: unknown) {
   if (typeof payload === 'undefined') {
     console.info(`[call-screen] ${message}`)
@@ -343,6 +455,7 @@ export const useCallStore = defineStore('call', () => {
   const screenShareEnabled = ref(false)
   const remoteParticipantCount = ref(0)
   const mediaVersion = ref(0)
+  const annotationSessionState = ref<ScreenAnnotationSessionState | null>(null)
 
   // True when any remote participant is actively sharing a screen track.
   // Reads mediaVersion to re-evaluate whenever track publications change.
@@ -364,6 +477,27 @@ export const useCallStore = defineStore('call', () => {
   const chatStore = useChatStore()
   const soundEngine = useNotificationSoundEngine()
   const platform = getPlatformOrNull()
+  const annotationListeners = new Set<ScreenAnnotationListener>()
+
+  const annotationSessionMode = computed<ScreenAnnotationSessionMode>(() => {
+    const session = annotationSessionState.value
+    if (!session?.active) return 'disabled'
+    if (session.sharerPlatform !== 'tauri') return 'disabled'
+    return session.shareType === 'window' || session.shareType === 'browser'
+      ? 'preview-fallback'
+      : 'os-overlay'
+  })
+
+  const annotationAvailable = computed(() => annotationSessionMode.value !== 'disabled')
+
+  const annotationDisabledReason = computed(() => {
+    if (!annotationSessionState.value?.active) return 'No active screen share'
+    if (screenShareEnabled.value) return 'Screen sharer cannot draw'
+    if (annotationSessionState.value.sharerPlatform !== 'tauri') {
+      return 'Annotation is unavailable: sharer is not on Tauri desktop'
+    }
+    return ''
+  })
 
   let pendingJoinResolve: ((resp: { livekitUrl: string; livekitToken: string; livekitRoom: string }) => void) | null = null
   let pendingJoinReject: ((error: Error) => void) | null = null
@@ -418,6 +552,195 @@ export const useCallStore = defineStore('call', () => {
       clearTimeout(emptyCallAutoCloseTimer)
       emptyCallAutoCloseTimer = null
     }
+  }
+
+  function localRuntimePlatform(): ScreenAnnotationSharerPlatform {
+    const platformType = getPlatformOrNull()?.type ?? getRuntimePlatformType()
+    return platformType === 'tauri' ? 'tauri' : 'pwa'
+  }
+
+  function isLocalSharerSession(session: ScreenAnnotationSessionState | null): boolean {
+    if (!session?.active) return false
+    const current = room.value
+    if (!current) return false
+    const identity = current.localParticipant.identity?.trim() || ''
+    return Boolean(identity && identity === session.sharerIdentity)
+  }
+
+  async function showNativeAnnotationOverlay(shareLabel: string): Promise<void> {
+    if (localRuntimePlatform() !== 'tauri') return
+    try {
+      await platform?.system.invokeNative?.('annotation_overlay_show', {
+        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+        shareLabel,
+      })
+    } catch (err) {
+      callDebug('annotation overlay show failed', { error: toErrorMessage(err) })
+    }
+  }
+
+  async function hideNativeAnnotationOverlay(): Promise<void> {
+    if (localRuntimePlatform() !== 'tauri') return
+    try {
+      await platform?.system.invokeNative?.('annotation_overlay_hide', {
+        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+      })
+    } catch (err) {
+      callDebug('annotation overlay hide failed', { error: toErrorMessage(err) })
+    }
+  }
+
+  async function clearNativeAnnotationOverlay(): Promise<void> {
+    if (localRuntimePlatform() !== 'tauri') return
+    try {
+      await platform?.system.invokeNative?.('annotation_overlay_clear', {
+        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+      })
+    } catch (err) {
+      callDebug('annotation overlay clear failed', { error: toErrorMessage(err) })
+    }
+  }
+
+  async function pushNativeAnnotationOverlaySegment(segment: ScreenAnnotationEvent): Promise<void> {
+    if (localRuntimePlatform() !== 'tauri') return
+    try {
+      await platform?.system.invokeNative?.('annotation_overlay_push_segment', {
+        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+        segmentJson: JSON.stringify(segment),
+      })
+    } catch (err) {
+      callDebug('annotation overlay segment push failed', { error: toErrorMessage(err) })
+    }
+  }
+
+  function syncNativeOverlayWithSession(nextSession: ScreenAnnotationSessionState | null) {
+    const isSharer = isLocalSharerSession(nextSession)
+    const nextMode: ScreenAnnotationSessionMode = !nextSession?.active
+      ? 'disabled'
+      : nextSession.sharerPlatform !== 'tauri'
+        ? 'disabled'
+        : nextSession.shareType === 'window' || nextSession.shareType === 'browser'
+          ? 'preview-fallback'
+          : 'os-overlay'
+
+    if (!isSharer || nextMode !== 'os-overlay') {
+      void hideNativeAnnotationOverlay()
+      return
+    }
+
+    void showNativeAnnotationOverlay(nextSession?.shareLabel ?? '')
+    void clearNativeAnnotationOverlay()
+  }
+
+  function setAnnotationSession(nextSession: ScreenAnnotationSessionState | null) {
+    annotationSessionState.value = nextSession
+    syncNativeOverlayWithSession(nextSession)
+  }
+
+  function clearAnnotationSession() {
+    setAnnotationSession(null)
+  }
+
+  function emitScreenAnnotation(event: ScreenAnnotationEvent) {
+    for (const listener of annotationListeners) {
+      try {
+        listener(event)
+      } catch (err) {
+        callDebug('screen annotation listener failed', {
+          error: toErrorMessage(err),
+        })
+      }
+    }
+  }
+
+  function onScreenAnnotation(listener: ScreenAnnotationListener): () => void {
+    annotationListeners.add(listener)
+    return () => {
+      annotationListeners.delete(listener)
+    }
+  }
+
+  async function publishAnnotationPacket(packet: ScreenAnnotationPacketV1): Promise<void> {
+    const current = room.value
+    if (!current) return
+    const encoded = new TextEncoder().encode(JSON.stringify(packet))
+    await current.localParticipant.publishData(encoded, {
+      reliable: false,
+      topic: SCREEN_ANNOTATION_TOPIC,
+    })
+  }
+
+  function resolveLocalShareCaptureContext(current: Room): { shareType: ScreenAnnotationShareType; shareLabel: string } {
+    const publication = current.localParticipant.getTrackPublication(Track.Source.ScreenShare)
+    const trackLike = publication?.track as {
+      mediaStreamTrack?: MediaStreamTrack | null
+    } | null
+    const mediaTrack = trackLike?.mediaStreamTrack ?? null
+    if (!mediaTrack) {
+      return { shareType: 'unknown', shareLabel: '' }
+    }
+    const label = mediaTrack.label || ''
+    let shareType: ScreenAnnotationShareType = 'unknown'
+    try {
+      const settings = mediaTrack.getSettings?.()
+      const surface = String(settings?.displaySurface ?? '').toLowerCase()
+      if (surface === 'monitor' || surface === 'window' || surface === 'browser') {
+        shareType = surface
+      }
+    } catch {
+      shareType = 'unknown'
+    }
+    if (shareType === 'unknown') {
+      const normalized = label.toLowerCase()
+      if (normalized.includes('screen') || normalized.includes('display') || normalized.includes('monitor')) {
+        shareType = 'monitor'
+      } else if (normalized.includes('window')) {
+        shareType = 'window'
+      } else if (normalized.includes('tab') || normalized.includes('browser')) {
+        shareType = 'browser'
+      }
+    }
+    return { shareType, shareLabel: label }
+  }
+
+  async function publishLocalAnnotationSessionUpdate(active: boolean, shareType: ScreenAnnotationShareType, shareLabel: string) {
+    const current = room.value
+    if (!current) return
+    const identity = current.localParticipant.identity?.trim() || ''
+    const session: ScreenAnnotationSessionState = {
+      version: 1,
+      kind: 'session',
+      active,
+      sharerIdentity: identity,
+      sharerPlatform: localRuntimePlatform(),
+      shareType,
+      shareLabel,
+      sentAtMs: Date.now(),
+    }
+    setAnnotationSession(session)
+    await publishAnnotationPacket(session)
+  }
+
+  function ingestScreenAnnotationPacket(payload: Uint8Array, participantIdentity?: string): boolean {
+    const parsed = decodeScreenAnnotationPacket(payload)
+    if (!parsed) return false
+    if (parsed.kind === 'session') {
+      setAnnotationSession({
+        ...parsed,
+        sharerIdentity: participantIdentity?.trim() || parsed.sharerIdentity,
+      })
+      return true
+    }
+    const event: ScreenAnnotationEvent = {
+      ...parsed,
+      senderIdentity: participantIdentity?.trim() || parsed.senderIdentity,
+      receivedAtMs: Date.now(),
+    }
+    emitScreenAnnotation(event)
+    if (isLocalSharerSession(annotationSessionState.value) && annotationSessionMode.value === 'os-overlay') {
+      void pushNativeAnnotationOverlaySegment(event)
+    }
+    return true
   }
 
   function syncKnownRemoteParticipants(current: Room) {
@@ -747,6 +1070,7 @@ export const useCallStore = defineStore('call', () => {
       activeConversationKind.value = 'channel'
       activeConversationVisibility.value = 'public'
       room.value = null
+      clearAnnotationSession()
       stopTrackedDisplayCaptureTracks('room-event-disconnected')
       clearEmptyCallAutoCloseTimer()
       knownRemoteParticipantSids.clear()
@@ -792,6 +1116,10 @@ export const useCallStore = defineStore('call', () => {
     next.on(RoomEvent.ParticipantConnected, (participant) => {
       const isKnownParticipant = knownRemoteParticipantSids.has(participant.sid)
       knownRemoteParticipantSids.add(participant.sid)
+      if (screenShareEnabled.value) {
+        const capture = resolveLocalShareCaptureContext(next)
+        void publishLocalAnnotationSessionUpdate(true, capture.shareType, capture.shareLabel)
+      }
 
       for (const publication of participant.audioTrackPublications.values()) {
         if (!publication.isSubscribed) {
@@ -832,6 +1160,9 @@ export const useCallStore = defineStore('call', () => {
 
     next.on(RoomEvent.ParticipantDisconnected, (participant) => {
       const isKnownParticipant = knownRemoteParticipantSids.delete(participant.sid)
+      if (annotationSessionState.value?.sharerIdentity === participant.identity) {
+        clearAnnotationSession()
+      }
       callDebug('remote participant disconnected', {
         participant: participant.identity,
         sid: participant.sid,
@@ -848,6 +1179,18 @@ export const useCallStore = defineStore('call', () => {
         } else {
           void soundEngine.playCallMemberLeft()
         }
+      }
+    })
+
+    next.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+      if (topic !== SCREEN_ANNOTATION_TOPIC) return
+      const accepted = ingestScreenAnnotationPacket(payload, participant?.identity)
+      if (!accepted) {
+        callDebug('screen annotation packet ignored (invalid payload)', {
+          participant: participant?.identity ?? null,
+          topic,
+          payloadSize: payload.byteLength,
+        })
       }
     })
 
@@ -880,6 +1223,9 @@ export const useCallStore = defineStore('call', () => {
         source: publication.source,
       })
       if (isScreenSource(publication.source)) {
+        if (annotationSessionState.value?.sharerIdentity === participant.identity) {
+          clearAnnotationSession()
+        }
         logScreenShare('remote screen track unsubscribed', {
           participant: participant.identity,
           participantSid: participant.sid,
@@ -933,6 +1279,8 @@ export const useCallStore = defineStore('call', () => {
       mediaVersion.value += 1
       if (isScreenSource(publication.source)) {
         localScreenShareUsedInSession = true
+        const capture = resolveLocalShareCaptureContext(next)
+        void publishLocalAnnotationSessionUpdate(true, capture.shareType, capture.shareLabel)
         const variants = getTrackMediaVariants(publication.track)
         for (const variant of variants) {
           rememberDisplayCaptureTrack(variant.track, {
@@ -962,6 +1310,7 @@ export const useCallStore = defineStore('call', () => {
     next.on(RoomEvent.LocalTrackUnpublished, (publication) => {
       mediaVersion.value += 1
       if (isScreenSource(publication.source)) {
+        void publishLocalAnnotationSessionUpdate(false, 'unknown', '')
         logScreenShare('local screen track unpublished', {
           trackSid: publication.trackSid,
           source: publication.source,
@@ -976,6 +1325,7 @@ export const useCallStore = defineStore('call', () => {
       //      Safari keeps showing the audio capture indicator indefinitely.
       if (publication.source === Track.Source.ScreenShare) {
         screenShareEnabled.value = false
+        clearAnnotationSession()
         const audioPublication = next.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)
         if (audioPublication?.track) {
           const audioTrackStateBefore = describeMediaTrack(audioPublication.track.mediaStreamTrack ?? null)
@@ -1077,6 +1427,7 @@ export const useCallStore = defineStore('call', () => {
     stopRemoteAudioStatsLoop()
     clearEmptyCallAutoCloseTimer()
     if (!current) {
+      clearAnnotationSession()
       suppressParticipantChangeSounds = false
       logScreenShare('ensureDisconnected skipped: no active room', { teardownId })
       return
@@ -1104,6 +1455,7 @@ export const useCallStore = defineStore('call', () => {
       })
     }
     room.value = null
+    clearAnnotationSession()
     knownRemoteParticipantSids.clear()
     suppressParticipantChangeSounds = false
     logTrackedDisplayCaptureState('ensureDisconnected:end', { teardownId })
@@ -1583,6 +1935,7 @@ export const useCallStore = defineStore('call', () => {
 
   async function resetRuntimeState() {
     await ensureDisconnected()
+    clearAnnotationSession()
     localScreenShareUsedInSession = false
     clearPendingInviteMembers()
     clearEmptyCallAutoCloseTimer()
@@ -1689,9 +2042,12 @@ export const useCallStore = defineStore('call', () => {
         }
         await current.localParticipant.setScreenShareEnabled(true, captureOptions, publishOptions)
         localScreenShareUsedInSession = true
+        const capture = resolveLocalShareCaptureContext(current)
+        await publishLocalAnnotationSessionUpdate(true, capture.shareType, capture.shareLabel)
         trackLocalScreenCapturePublications(current, 'toggle:on:after-set-enabled', { toggleId })
       } else {
         await current.localParticipant.setScreenShareEnabled(false)
+        await publishLocalAnnotationSessionUpdate(false, 'unknown', '')
         trackLocalScreenCapturePublications(current, 'toggle:off:after-set-disabled', { toggleId })
         stopTrackedDisplayCaptureTracks(`toggle:off:${toggleId}`)
       }
@@ -1712,6 +2068,33 @@ export const useCallStore = defineStore('call', () => {
       enabled: next,
       room: current.name,
     })
+  }
+
+  async function publishScreenAnnotationSegment(segment: ScreenAnnotationSegmentV1): Promise<boolean> {
+    const current = room.value
+    if (!current) return false
+    if (screenShareEnabled.value) return false
+    if (!annotationAvailable.value) return false
+
+    const localIdentity = current.localParticipant.identity?.trim() || segment.senderIdentity.trim()
+    if (!localIdentity) return false
+    const payload: ScreenAnnotationSegmentV1 = {
+      version: 1,
+      kind: 'segment',
+      shareTrackSid: segment.shareTrackSid.trim(),
+      senderIdentity: localIdentity,
+      strokeId: segment.strokeId.trim(),
+      seq: segment.seq,
+      from: segment.from,
+      to: segment.to,
+      sentAtMs: Number.isFinite(segment.sentAtMs) ? segment.sentAtMs : Date.now(),
+    }
+    if (!payload.shareTrackSid || !payload.strokeId) return false
+    if (!isFinitePoint(payload.from) || !isFinitePoint(payload.to)) return false
+    if (!Number.isInteger(payload.seq) || payload.seq < 0) return false
+
+    await publishAnnotationPacket(payload)
+    return true
   }
 
   async function enableAudioPlayback() {
@@ -1813,6 +2196,10 @@ export const useCallStore = defineStore('call', () => {
     micEnabled,
     cameraEnabled,
     screenShareEnabled,
+    annotationSessionState,
+    annotationAvailable,
+    annotationDisabledReason,
+    annotationSessionMode,
     remoteScreenShareActive,
     remoteParticipantCount,
     mediaVersion,
@@ -1826,6 +2213,9 @@ export const useCallStore = defineStore('call', () => {
     toggleMute,
     toggleCamera,
     toggleScreenShare,
+    publishScreenAnnotationSegment,
+    onScreenAnnotation,
+    ingestScreenAnnotationPacket,
     enableAudioPlayback,
     localVideoTrack,
     localScreenShareTrack,

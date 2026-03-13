@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Msgnr Overlay</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      #overlay {
+        width: 100%;
+        height: 100%;
+        display: block;
+        pointer-events: none;
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="overlay"></canvas>
+    <script>
+      const SEGMENT_TTL_MS = 20000;
+      const FADE_MS = 300;
+      const STROKE_COLOR = '#f59e0b';
+      const STROKE_WIDTH = 3;
+      const segments = [];
+
+      const canvas = document.getElementById('overlay');
+      const ctx = canvas.getContext('2d', { alpha: true });
+
+      function resize() {
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const width = Math.max(1, Math.floor(window.innerWidth));
+        const height = Math.max(1, Math.floor(window.innerHeight));
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        if (!ctx) return;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      function prune(now) {
+        for (let i = segments.length - 1; i >= 0; i -= 1) {
+          if (segments[i].expiresAt <= now) {
+            segments.splice(i, 1);
+          }
+        }
+      }
+
+      function draw() {
+        if (!ctx) return;
+        const now = Date.now();
+        prune(now);
+
+        const width = Math.max(1, window.innerWidth);
+        const height = Math.max(1, window.innerHeight);
+        ctx.clearRect(0, 0, width, height);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = STROKE_COLOR;
+        ctx.lineWidth = STROKE_WIDTH;
+
+        for (const segment of segments) {
+          const msLeft = segment.expiresAt - now;
+          if (msLeft <= 0) continue;
+          const alpha = msLeft < FADE_MS ? Math.max(0, msLeft / FADE_MS) : 1;
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          ctx.moveTo(segment.from.x * width, segment.from.y * height);
+          ctx.lineTo(segment.to.x * width, segment.to.y * height);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function pushSegment(segment) {
+        if (!segment || typeof segment !== 'object') return;
+        if (!segment.from || !segment.to) return;
+        segments.push({
+          from: segment.from,
+          to: segment.to,
+          expiresAt: Date.now() + SEGMENT_TTL_MS,
+        });
+      }
+
+      window.__overlayPushSegmentFromJson = function overlayPushSegmentFromJson(raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          pushSegment(parsed);
+        } catch {
+          // best effort
+        }
+      };
+
+      window.__overlayClear = function overlayClear() {
+        segments.length = 0;
+        draw();
+      };
+
+      window.addEventListener('resize', resize);
+      resize();
+      setInterval(draw, 50);
+      draw();
+    </script>
+  </body>
+</html>

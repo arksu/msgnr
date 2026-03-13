@@ -85,7 +85,7 @@
         <div :class="maximized ? 'flex-1 min-h-0 flex flex-col' : ''">
 
           <!-- ── Main stage ─────────────────────────────────────────────── -->
-          <div :class="stageClass">
+          <div ref="stageEl" :class="stageClass">
 
             <!--
               Remote screen share video — ALWAYS in DOM (v-show, not v-if) so the
@@ -110,8 +110,8 @@
               <!-- Pinned video — always in DOM so ref is stable -->
               <video
                 ref="pinnedVideoEl"
-                class="absolute inset-0 h-full w-full object-cover bg-black"
-                :class="pinnedTileHasVideo ? '' : 'invisible'"
+                class="absolute inset-0 h-full w-full bg-black"
+                :class="[pinnedTileHasVideo ? '' : 'invisible', pinnedScreenShareActive ? 'object-contain' : 'object-cover']"
                 autoplay
                 playsinline
                 muted
@@ -272,6 +272,19 @@
               </div>
             </template>
 
+            <canvas
+              ref="annotationCanvasEl"
+              data-testid="calldock-annotation-overlay"
+              :data-surface-kind="annotationSurfaceKind || 'none'"
+              :data-active-segments="annotationActiveSegmentCount"
+              :data-fading-segments="annotationFadingSegmentCount"
+              :class="annotationCanvasClass"
+              @pointerdown="handleAnnotationPointerDown"
+              @pointermove="handleAnnotationPointerMove"
+              @pointerup="handleAnnotationPointerUp"
+              @pointercancel="handleAnnotationPointerCancel"
+            />
+
           </div>
         </div>
 
@@ -350,6 +363,26 @@
               <polyline v-if="callStore.screenShareEnabled" points="17 8 12 3 7 8"/>
               <line v-if="callStore.screenShareEnabled" x1="12" y1="3" x2="12" y2="15"/>
               <polyline v-else points="12 8 12 13 15 10"/>
+            </svg>
+          </button>
+
+          <!-- Screen annotation -->
+          <button
+            class="flex h-10 w-10 items-center justify-center rounded-full transition-colors"
+            data-testid="calldock-annotation-toggle"
+            :class="[
+              annotationDrawMode
+                ? 'bg-amber-500/80 text-white hover:bg-amber-500'
+                : 'bg-slate-700 text-white hover:bg-slate-600',
+              !annotationCanDraw ? 'opacity-50 cursor-not-allowed' : '',
+            ]"
+            :title="annotationToggleTitle"
+            :disabled="!annotationCanDraw"
+            @click="toggleAnnotationDrawMode"
+          >
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
             </svg>
           </button>
 
@@ -474,7 +507,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, toRaw, watch, watchEffect } from 'vue'
 import { Track } from 'livekit-client'
-import { useCallStore } from '@/stores/call'
+import { useCallStore, type ScreenAnnotationEvent, type ScreenAnnotationSegmentV1 } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { listDmCandidates, type DmCandidateItem } from '@/services/http/chatApi'
@@ -508,6 +541,43 @@ interface InviteCandidate {
   avatarUrl: string
 }
 
+interface NormalizedPoint {
+  x: number
+  y: number
+}
+
+interface OverlayRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+interface AnnotationSurfaceGeometry {
+  kind: 'remote' | 'local' | 'pinned'
+  trackSid: string
+  videoRect: OverlayRect
+  contentRect: OverlayRect
+}
+
+interface RenderedAnnotationSegment extends ScreenAnnotationEvent {
+  key: string
+  expiresAtMs: number
+}
+
+interface ActiveAnnotationStroke {
+  pointerId: number
+  strokeId: string
+  seq: number
+  shareTrackSid: string
+  lastPoint: NormalizedPoint
+}
+
+const ANNOTATION_SEGMENT_TTL_MS = 20_000
+const ANNOTATION_SEGMENT_FADE_MS = 300
+const ANNOTATION_STROKE_WIDTH_PX = 3
+const ANNOTATION_STROKE_COLOR = '#f59e0b'
+
 // ── Stores ────────────────────────────────────────────────────────────────────
 
 const callStore = useCallStore()
@@ -530,6 +600,8 @@ const localVideoEl = ref<HTMLVideoElement | null>(null)   // local camera
 const localScreenEl = ref<HTMLVideoElement | null>(null)  // local screen share
 const remoteScreenEl = ref<HTMLVideoElement | null>(null) // remote screen share (always mounted)
 const pinnedVideoEl = ref<HTMLVideoElement | null>(null)  // pinned full-stage view
+const stageEl = ref<HTMLDivElement | null>(null)
+const annotationCanvasEl = ref<HTMLCanvasElement | null>(null)
 const remoteAudioHostEl = ref<HTMLDivElement | null>(null)
 const maximized = ref(false)
 const pinnedSid = ref<string | null>(null)
@@ -540,6 +612,9 @@ const inviteLoading = ref(false)
 const inviteSubmitting = ref(false)
 const inviteError = ref('')
 const inviteResultSummary = ref('')
+const annotationDrawMode = ref(false)
+const annotationActiveSegmentCount = ref(0)
+const annotationFadingSegmentCount = ref(0)
 
 // Imperative track attachment state (not reactive — lives outside Vue reactivity)
 let attachedLocalCameraTrack: AttachableMediaTrack | null = null
@@ -554,6 +629,12 @@ const remoteTileEls = new Map<string, HTMLVideoElement | null>()
 
 const remoteScreenActive = ref(false)
 const remoteScreenOwnerLabel = ref('Screen share')
+const annotationSegments: RenderedAnnotationSegment[] = []
+const annotationSegmentKeys = new Set<string>()
+let annotationRenderTimer: ReturnType<typeof setInterval> | null = null
+let annotationStrokeCounter = 0
+let activeAnnotationStroke: ActiveAnnotationStroke | null = null
+let canvas2dSupported: boolean | null = null
 
 // ── Debug ─────────────────────────────────────────────────────────────────────
 
@@ -708,6 +789,102 @@ const pinnedTileHasVideo = computed(() => {
   return tile.cameraOn || tile.screenShareOn
 })
 
+function resolveLocalScreenShareTrackSid(): string {
+  const currentRoom = callStore.room
+  if (!currentRoom) return ''
+  const publication = currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)
+  if (!publication?.track || publication.isMuted) return ''
+  return publication.track.sid ?? ''
+}
+
+function resolveRemoteScreenShareTrackSid(): string {
+  const currentRoom = callStore.room
+  if (!currentRoom) return ''
+  for (const participant of currentRoom.remoteParticipants.values()) {
+    for (const publication of participant.videoTrackPublications.values()) {
+      if (!isScreenSource(publication.source)) continue
+      if (!publication.track || publication.isMuted) continue
+      if (!publication.track.sid) continue
+      return publication.track.sid
+    }
+  }
+  return ''
+}
+
+const pinnedScreenShareTrackSid = computed(() => {
+  void callStore.mediaVersion
+  const sid = pinnedSid.value
+  if (!sid) return ''
+  const currentRoom = callStore.room
+  if (!currentRoom) return ''
+
+  if (sid === currentRoom.localParticipant.sid) {
+    return resolveLocalScreenShareTrackSid()
+  }
+  const participant = Array.from(currentRoom.remoteParticipants.values()).find(item => item.sid === sid)
+  if (!participant) return ''
+  for (const publication of participant.videoTrackPublications.values()) {
+    if (!isScreenSource(publication.source)) continue
+    if (!publication.isSubscribed && typeof publication.setSubscribed === 'function') {
+      publication.setSubscribed(true)
+    }
+    if (!publication.track || publication.isMuted) continue
+    return publication.track.sid
+  }
+  return ''
+})
+
+const pinnedScreenShareActive = computed(() => Boolean(pinnedScreenShareTrackSid.value))
+
+const currentScreenShareTrackSid = computed(() => {
+  void callStore.mediaVersion
+  if (callStore.screenShareEnabled) {
+    return resolveLocalScreenShareTrackSid()
+  }
+  return resolveRemoteScreenShareTrackSid()
+})
+
+const annotationSurfaceMeta = computed(() => {
+  void callStore.mediaVersion
+  if (pinnedSid.value) {
+    const trackSid = pinnedScreenShareTrackSid.value
+    if (!trackSid) return null
+    return { kind: 'pinned' as const, trackSid }
+  }
+  const remoteTrackSid = resolveRemoteScreenShareTrackSid()
+  if (remoteTrackSid) {
+    return { kind: 'remote' as const, trackSid: remoteTrackSid }
+  }
+  const localTrackSid = resolveLocalScreenShareTrackSid()
+  if (localTrackSid && callStore.screenShareEnabled) {
+    return { kind: 'local' as const, trackSid: localTrackSid }
+  }
+  return null
+})
+
+const annotationSurfaceKind = computed(() => annotationSurfaceMeta.value?.kind ?? '')
+const annotationCanRender = computed(() => Boolean(annotationSurfaceMeta.value?.trackSid))
+const annotationRenderInCallCanvas = computed(() => (
+  callStore.screenShareEnabled && callStore.annotationSessionMode === 'preview-fallback'
+))
+const annotationCanDraw = computed(() => (
+  annotationCanRender.value && callStore.annotationAvailable && !callStore.screenShareEnabled
+))
+const annotationToggleTitle = computed(() => {
+  if (annotationCanDraw.value) {
+    return annotationDrawMode.value ? 'Disable drawing mode' : 'Enable drawing mode'
+  }
+  if (!annotationCanRender.value) return 'No active shared screen'
+  if (callStore.annotationDisabledReason) return callStore.annotationDisabledReason
+  if (callStore.screenShareEnabled) return 'Screen sharer cannot draw'
+  return annotationDrawMode.value ? 'Disable drawing mode' : 'Enable drawing mode'
+})
+const annotationCanvasClass = computed(() => (
+  annotationCanDraw.value && annotationDrawMode.value
+    ? 'absolute inset-0 z-20 touch-none pointer-events-auto cursor-crosshair'
+    : 'absolute inset-0 z-20 touch-none pointer-events-none'
+))
+
 function pinTile(sid: string) {
   pinnedSid.value = sid
 }
@@ -728,6 +905,339 @@ function setRemoteTileRef(sid: string, el: HTMLVideoElement | null) {
   remoteTileEls.set(sid, unwrapEl(el))
 }
 
+function clamp01(value: number): number {
+  if (value < 0) return 0
+  if (value > 1) return 1
+  return value
+}
+
+function annotationSegmentKey(segment: Pick<ScreenAnnotationSegmentV1, 'senderIdentity' | 'strokeId' | 'seq'>): string {
+  return `${segment.senderIdentity}:${segment.strokeId}:${segment.seq}`
+}
+
+function resolveActiveAnnotationVideoEl(kind: AnnotationSurfaceGeometry['kind']): HTMLVideoElement | null {
+  if (kind === 'remote') return unwrapEl(remoteScreenEl.value)
+  if (kind === 'local') return unwrapEl(localScreenEl.value)
+  return unwrapEl(pinnedVideoEl.value)
+}
+
+function toOverlayRect(videoRect: DOMRect, stageRect: DOMRect): OverlayRect {
+  return {
+    left: videoRect.left - stageRect.left,
+    top: videoRect.top - stageRect.top,
+    width: videoRect.width,
+    height: videoRect.height,
+  }
+}
+
+function resolveVideoContentRect(video: HTMLVideoElement, stageRect: DOMRect): OverlayRect | null {
+  const videoRect = video.getBoundingClientRect()
+  if (videoRect.width <= 0 || videoRect.height <= 0) return null
+  const renderedRect = toOverlayRect(videoRect, stageRect)
+
+  const sourceWidth = video.videoWidth || Math.round(videoRect.width)
+  const sourceHeight = video.videoHeight || Math.round(videoRect.height)
+  if (!sourceWidth || !sourceHeight) return renderedRect
+
+  const fit = getComputedStyle(video).objectFit || 'contain'
+  if (fit === 'fill') return renderedRect
+
+  const widthScale = videoRect.width / sourceWidth
+  const heightScale = videoRect.height / sourceHeight
+  let scale = widthScale
+  if (fit === 'cover') {
+    scale = Math.max(widthScale, heightScale)
+  } else if (fit === 'none') {
+    scale = 1
+  } else {
+    scale = Math.min(widthScale, heightScale)
+  }
+
+  const contentWidth = sourceWidth * scale
+  const contentHeight = sourceHeight * scale
+  return {
+    left: renderedRect.left + ((videoRect.width - contentWidth) / 2),
+    top: renderedRect.top + ((videoRect.height - contentHeight) / 2),
+    width: contentWidth,
+    height: contentHeight,
+  }
+}
+
+function resolveAnnotationSurfaceGeometry(): AnnotationSurfaceGeometry | null {
+  const stage = unwrapEl(stageEl.value)
+  const meta = annotationSurfaceMeta.value
+  if (!stage || !meta?.trackSid) return null
+  const video = resolveActiveAnnotationVideoEl(meta.kind)
+  if (!video) return null
+  const stageRect = stage.getBoundingClientRect()
+  if (stageRect.width <= 0 || stageRect.height <= 0) return null
+  const videoRect = video.getBoundingClientRect()
+  if (videoRect.width <= 0 || videoRect.height <= 0) return null
+  const contentRect = resolveVideoContentRect(video, stageRect)
+  if (!contentRect) return null
+
+  return {
+    kind: meta.kind,
+    trackSid: meta.trackSid,
+    videoRect: toOverlayRect(videoRect, stageRect),
+    contentRect,
+  }
+}
+
+function ensureAnnotationCanvasSize(canvas: HTMLCanvasElement, stage: HTMLDivElement) {
+  const width = Math.max(1, Math.round(stage.clientWidth))
+  const height = Math.max(1, Math.round(stage.clientHeight))
+  const dpr = Math.max(1, window.devicePixelRatio || 1)
+  const nextWidth = Math.round(width * dpr)
+  const nextHeight = Math.round(height * dpr)
+  if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+    canvas.width = nextWidth
+    canvas.height = nextHeight
+  }
+  const ctx = safeGetCanvasContext(canvas)
+  if (!ctx) return
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+}
+
+function safeGetCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
+  if (canvas2dSupported === false) return null
+  try {
+    const ctx = canvas.getContext('2d')
+    canvas2dSupported = Boolean(ctx)
+    return ctx
+  } catch {
+    canvas2dSupported = false
+    return null
+  }
+}
+
+function safePlay(element: HTMLMediaElement) {
+  try {
+    const result = element.play()
+    if (result && typeof result.catch === 'function') {
+      void result.catch(() => { /* autoplay policy */ })
+    }
+  } catch {
+    // Best effort for test/runtime environments where play() is unavailable.
+  }
+}
+
+function pruneExpiredAnnotationSegments(nowMs: number): number {
+  if (!annotationSegments.length) return 0
+  let removed = 0
+  for (let i = annotationSegments.length - 1; i >= 0; i -= 1) {
+    const segment = annotationSegments[i]
+    if (segment.expiresAtMs > nowMs) continue
+    annotationSegments.splice(i, 1)
+    annotationSegmentKeys.delete(segment.key)
+    removed += 1
+  }
+  return removed
+}
+
+function renderAnnotationOverlay() {
+  const canvas = annotationCanvasEl.value
+  const stage = unwrapEl(stageEl.value)
+  if (!canvas || !stage) return
+
+  const nowMs = Date.now()
+  if (pruneExpiredAnnotationSegments(nowMs) > 0) {
+    annotationActiveSegmentCount.value = annotationSegments.length
+  }
+  annotationFadingSegmentCount.value = annotationSegments.reduce((count, segment) => {
+    const msLeft = segment.expiresAtMs - nowMs
+    return count + (msLeft > 0 && msLeft < ANNOTATION_SEGMENT_FADE_MS ? 1 : 0)
+  }, 0)
+
+  ensureAnnotationCanvasSize(canvas, stage)
+  const ctx = safeGetCanvasContext(canvas)
+  if (!ctx) return
+
+  const stageWidth = Math.max(1, stage.clientWidth)
+  const stageHeight = Math.max(1, stage.clientHeight)
+  ctx.clearRect(0, 0, stageWidth, stageHeight)
+  if (!annotationRenderInCallCanvas.value) return
+  const surface = resolveAnnotationSurfaceGeometry()
+  if (!surface || !annotationSegments.length) return
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(surface.videoRect.left, surface.videoRect.top, surface.videoRect.width, surface.videoRect.height)
+  ctx.clip()
+
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = ANNOTATION_STROKE_COLOR
+  ctx.lineWidth = ANNOTATION_STROKE_WIDTH_PX
+
+  for (const segment of annotationSegments) {
+    if (segment.shareTrackSid !== surface.trackSid) continue
+    const msLeft = segment.expiresAtMs - nowMs
+    if (msLeft <= 0) continue
+    const fadeAlpha = msLeft < ANNOTATION_SEGMENT_FADE_MS
+      ? clamp01(msLeft / ANNOTATION_SEGMENT_FADE_MS)
+      : 1
+    if (fadeAlpha < 1) {
+      annotationFadingSegmentCount.value += 1
+    }
+    ctx.globalAlpha = fadeAlpha
+    ctx.beginPath()
+    ctx.moveTo(
+      surface.contentRect.left + (segment.from.x * surface.contentRect.width),
+      surface.contentRect.top + (segment.from.y * surface.contentRect.height),
+    )
+    ctx.lineTo(
+      surface.contentRect.left + (segment.to.x * surface.contentRect.width),
+      surface.contentRect.top + (segment.to.y * surface.contentRect.height),
+    )
+    ctx.stroke()
+  }
+
+  ctx.restore()
+  ctx.globalAlpha = 1
+}
+
+function stopAnnotationRenderLoop() {
+  if (!annotationRenderTimer) return
+  clearInterval(annotationRenderTimer)
+  annotationRenderTimer = null
+}
+
+function ensureAnnotationRenderLoop() {
+  if (annotationRenderTimer) return
+  annotationRenderTimer = setInterval(() => {
+    renderAnnotationOverlay()
+    if (annotationSegments.length === 0 && !activeAnnotationStroke) {
+      stopAnnotationRenderLoop()
+    }
+  }, 50)
+}
+
+function clearRenderedAnnotationSegments() {
+  annotationSegments.length = 0
+  annotationSegmentKeys.clear()
+  annotationActiveSegmentCount.value = 0
+  annotationFadingSegmentCount.value = 0
+  stopAnnotationRenderLoop()
+  renderAnnotationOverlay()
+}
+
+function addRenderedAnnotationSegment(segment: ScreenAnnotationEvent) {
+  if (!annotationRenderInCallCanvas.value) return
+  const key = annotationSegmentKey(segment)
+  if (annotationSegmentKeys.has(key)) return
+  annotationSegmentKeys.add(key)
+  annotationSegments.push({
+    ...segment,
+    key,
+    expiresAtMs: segment.receivedAtMs + ANNOTATION_SEGMENT_TTL_MS,
+  })
+  annotationActiveSegmentCount.value = annotationSegments.length
+  ensureAnnotationRenderLoop()
+  renderAnnotationOverlay()
+}
+
+function toggleAnnotationDrawMode() {
+  if (!annotationCanDraw.value) return
+  annotationDrawMode.value = !annotationDrawMode.value
+}
+
+function toNormalizedPoint(
+  clientX: number,
+  clientY: number,
+  contentRect: OverlayRect,
+): NormalizedPoint | null {
+  if (contentRect.width <= 0 || contentRect.height <= 0) return null
+  const x = (clientX - contentRect.left) / contentRect.width
+  const y = (clientY - contentRect.top) / contentRect.height
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  return { x: clamp01(x), y: clamp01(y) }
+}
+
+function commitLocalAnnotationSegment(
+  stroke: ActiveAnnotationStroke,
+  nextPoint: NormalizedPoint,
+) {
+  const senderIdentity = callStore.room?.localParticipant.identity || 'local'
+  const segment: ScreenAnnotationSegmentV1 = {
+    version: 1,
+    kind: 'segment',
+    shareTrackSid: stroke.shareTrackSid,
+    senderIdentity,
+    strokeId: stroke.strokeId,
+    seq: stroke.seq,
+    from: stroke.lastPoint,
+    to: nextPoint,
+    sentAtMs: Date.now(),
+  }
+  stroke.seq += 1
+  stroke.lastPoint = nextPoint
+  void callStore.publishScreenAnnotationSegment(segment).catch(() => {
+    // Best effort.
+  })
+}
+
+function stopActiveAnnotationStroke(pointerId?: number) {
+  if (!activeAnnotationStroke) return
+  if (typeof pointerId === 'number' && activeAnnotationStroke.pointerId !== pointerId) return
+  activeAnnotationStroke = null
+}
+
+function handleAnnotationPointerDown(event: PointerEvent) {
+  if (!annotationDrawMode.value || !annotationCanDraw.value) return
+  if (event.button !== 0) return
+  const surface = resolveAnnotationSurfaceGeometry()
+  if (!surface) return
+  const point = toNormalizedPoint(event.offsetX, event.offsetY, surface.contentRect)
+  if (!point) return
+  activeAnnotationStroke = {
+    pointerId: event.pointerId,
+    strokeId: `stroke-${Date.now()}-${++annotationStrokeCounter}`,
+    seq: 0,
+    shareTrackSid: surface.trackSid,
+    lastPoint: point,
+  }
+  annotationCanvasEl.value?.setPointerCapture?.(event.pointerId)
+  ensureAnnotationRenderLoop()
+  event.preventDefault()
+}
+
+function handleAnnotationPointerMove(event: PointerEvent) {
+  const stroke = activeAnnotationStroke
+  if (!stroke || stroke.pointerId !== event.pointerId) return
+  const surface = resolveAnnotationSurfaceGeometry()
+  if (!surface || surface.trackSid !== stroke.shareTrackSid) {
+    stopActiveAnnotationStroke(event.pointerId)
+    return
+  }
+  const point = toNormalizedPoint(event.offsetX, event.offsetY, surface.contentRect)
+  if (!point) return
+  if (point.x === stroke.lastPoint.x && point.y === stroke.lastPoint.y) return
+  commitLocalAnnotationSegment(stroke, point)
+}
+
+function handleAnnotationPointerUp(event: PointerEvent) {
+  annotationCanvasEl.value?.releasePointerCapture?.(event.pointerId)
+  stopActiveAnnotationStroke(event.pointerId)
+}
+
+function handleAnnotationPointerCancel(event: PointerEvent) {
+  annotationCanvasEl.value?.releasePointerCapture?.(event.pointerId)
+  stopActiveAnnotationStroke(event.pointerId)
+}
+
+const unsubscribeScreenAnnotations = callStore.onScreenAnnotation((segment) => {
+  addRenderedAnnotationSegment(segment)
+})
+
+function handleAnnotationWindowResize() {
+  renderAnnotationOverlay()
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', handleAnnotationWindowResize)
+}
+
 // ── watchEffect: runs on every mediaVersion bump ──────────────────────────────
 
 watchEffect(() => {
@@ -739,11 +1249,45 @@ watchEffect(() => {
   syncRemoteScreenTrack()
   syncRemoteCameraTracks()
   syncPinnedTrack()
+  renderAnnotationOverlay()
 })
 
 // Re-sync pinned track whenever pinnedSid changes (not covered by mediaVersion)
 watch(pinnedSid, () => {
   syncPinnedTrack()
+  renderAnnotationOverlay()
+})
+
+watch(currentScreenShareTrackSid, (next, prev) => {
+  if (!next) {
+    annotationDrawMode.value = false
+    stopActiveAnnotationStroke()
+    clearRenderedAnnotationSegments()
+    return
+  }
+  if (prev && prev !== next) {
+    stopActiveAnnotationStroke()
+    clearRenderedAnnotationSegments()
+  }
+})
+
+watch(annotationCanDraw, (next) => {
+  if (next) return
+  annotationDrawMode.value = false
+  stopActiveAnnotationStroke()
+})
+
+watch(annotationRenderInCallCanvas, (next) => {
+  if (next) return
+  clearRenderedAnnotationSegments()
+})
+
+watch(annotationSurfaceKind, () => {
+  renderAnnotationOverlay()
+})
+
+watch(maximized, () => {
+  renderAnnotationOverlay()
 })
 
 // ── Local camera track ────────────────────────────────────────────────────────
@@ -827,7 +1371,7 @@ function syncRemoteCameraTracks() {
     videoEl.setAttribute('playsinline', 'true')
     attachedRemoteCamera.set(sid, { track, element: videoEl })
     callDebug('attached remote camera track', { sid })
-    void videoEl.play().catch(() => { /* autoplay policy */ })
+    safePlay(videoEl)
   }
 }
 
@@ -889,7 +1433,7 @@ function syncRemoteScreenTrack() {
   nextTrack.attach(video)
   attachedRemoteScreenTrack = nextTrack
   callDebug('attached remote screen track', { sid: nextTrack.sid })
-  void video.play().catch(() => { /* autoplay policy */ })
+  safePlay(video)
 }
 
 // ── Pinned full-stage track ───────────────────────────────────────────────────
@@ -924,9 +1468,18 @@ function syncPinnedTrack() {
     if (currentRoom) {
       const participant = Array.from(currentRoom.remoteParticipants.values()).find(p => p.sid === sid)
       if (participant) {
-        const pub = participant.getTrackPublication(Track.Source.Camera)
-        if (pub?.isSubscribed && pub.track && !pub.isMuted) {
-          nextTrack = pub.track as AttachableMediaTrack | null
+        for (const publication of participant.videoTrackPublications.values()) {
+          if (!isScreenSource(publication.source)) continue
+          if (!publication.isSubscribed) publication.setSubscribed(true)
+          if (!publication.track || publication.isMuted) continue
+          nextTrack = publication.track as AttachableMediaTrack | null
+          break
+        }
+        if (!nextTrack) {
+          const pub = participant.getTrackPublication(Track.Source.Camera)
+          if (pub?.isSubscribed && pub.track && !pub.isMuted) {
+            nextTrack = pub.track as AttachableMediaTrack | null
+          }
         }
       }
     }
@@ -944,7 +1497,7 @@ function syncPinnedTrack() {
   nextTrack.attach(video)
   attachedPinnedTrack = nextTrack
   callDebug('attached pinned track', { sid, trackSid: nextTrack.sid })
-  void video.play().catch(() => { /* autoplay policy */ })
+  safePlay(video)
 }
 
 // ── Remote audio tracks ───────────────────────────────────────────────────────
@@ -985,9 +1538,21 @@ function syncRemoteAudioTracks() {
     host.appendChild(element)
     attachedRemoteAudio.set(sid, { track, element })
     callDebug('attached remote audio', { sid })
-    void element.play().catch(async () => {
-      try { await currentRoom.startAudio(); await element.play() } catch { /* best effort */ }
-    })
+    try {
+      const playResult = element.play()
+      if (playResult && typeof playResult.catch === 'function') {
+        void playResult.catch(async () => {
+          try {
+            await currentRoom.startAudio()
+            safePlay(element)
+          } catch {
+            // best effort
+          }
+        })
+      }
+    } catch {
+      // best effort
+    }
   }
 }
 
@@ -1002,6 +1567,7 @@ function detachAllRemoteAudioTracks() {
 
 function stopElementStreamTracks(el: HTMLMediaElement | null) {
   if (!el) return
+  if (typeof MediaStream === 'undefined') return
   const src = el.srcObject
   if (!(src instanceof MediaStream)) return
   for (const track of src.getTracks()) {
@@ -1027,6 +1593,11 @@ function forceStopLocalCapturePreviews() {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleEscapeKey)
+  window.removeEventListener('resize', handleAnnotationWindowResize)
+  unsubscribeScreenAnnotations()
+  stopAnnotationRenderLoop()
+  stopActiveAnnotationStroke()
+  annotationDrawMode.value = false
 
   const localVid = unwrapEl(localVideoEl.value)
   const localScr = unwrapEl(localScreenEl.value)
@@ -1048,6 +1619,7 @@ onBeforeUnmount(() => {
   detachAllRemoteAudioTracks()
   detachAllRemoteCameraTracks()
   forceStopLocalCapturePreviews()
+  clearRenderedAnnotationSegments()
 })
 
 // ── Maximize / minimize ───────────────────────────────────────────────────────
@@ -1077,6 +1649,9 @@ watch([maximized, inviteDialogOpen], ([isMaximized, isInviteOpen]) => {
 
 watch(isVisible, (visible) => {
   if (visible) return
+  annotationDrawMode.value = false
+  stopActiveAnnotationStroke()
+  clearRenderedAnnotationSegments()
   forceStopLocalCapturePreviews()
 })
 
@@ -1189,6 +1764,9 @@ async function handleToggleScreenShare() {
 }
 
 async function handleLeave() {
+  annotationDrawMode.value = false
+  stopActiveAnnotationStroke()
+  clearRenderedAnnotationSegments()
   forceStopLocalCapturePreviews()
   await callStore.leaveCall()
   forceStopLocalCapturePreviews()

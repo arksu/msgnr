@@ -7,6 +7,9 @@ export default {
   darkMode: 'class',
   theme: {
     extend: {
+      fontSize: {
+        sm: '1.05rem',
+      },
       colors: {
         // Slack-inspired dark palette
         sidebar: {

@@ -16,7 +16,6 @@ body,
 body {
     @apply bg-chat-bg text-gray-100;
     font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
-    font-size: 17px;
 }
 
 /* Thin scrollbar for sidebar / chat */

@@ -15,6 +15,8 @@ import type {
   MessageEvent as ProtoMessageEvent,
   ThreadSummaryUpdatedEvent,
   ReactionUpdatedEvent,
+  MessageUpdatedEvent,
+  MessageDeletedEvent,
   BootstrapResponse,
   SyncSinceResponse,
   AckResponse,
@@ -117,6 +119,7 @@ export interface Message {
   mentionedUserIds: string[]
   mentionEveryone: boolean
   createdAt: string
+  editedAt?: string
   reactions: ReactionCount[]
   myReactions: string[]
   attachments?: MessageAttachment[]
@@ -1523,12 +1526,9 @@ export const useChatStore = defineStore('chat', () => {
       _upsertThreadMessage(root, _messageEventToMessage(evt, evt.conversationId))
     }
     const currentThreadSeq = resp.currentThreadSeq
-    const currentReplyCount = Number(currentThreadSeq)
     upsertThreadSummary(root, {
-      replyCount: Math.max(threadSummaries.value[root]?.replyCount ?? 0, currentReplyCount),
-      lastThreadSeq: threadSummaries.value[root]?.lastThreadSeq && threadSummaries.value[root].lastThreadSeq > currentThreadSeq
-        ? threadSummaries.value[root].lastThreadSeq
-        : currentThreadSeq,
+      replyCount: Math.max(0, Math.floor(Number(resp.replyCount))),
+      lastThreadSeq: currentThreadSeq,
       lastReplyAt: threadSummaries.value[root]?.lastReplyAt,
       lastReplyUserId: threadSummaries.value[root]?.lastReplyUserId,
     })
@@ -1720,6 +1720,12 @@ export const useChatStore = defineStore('chat', () => {
         break
       case 'reactionUpdated':
         _onReactionUpdated(evt.payload.value)
+        break
+      case 'messageUpdated':
+        _onMessageUpdated(evt.payload.value)
+        break
+      case 'messageDeleted':
+        _onMessageDeleted(evt.payload.value)
         break
       case 'conversationUpserted':
         applyConversationSummary(evt.payload.value.conversation)
@@ -2107,8 +2113,12 @@ export const useChatStore = defineStore('chat', () => {
       const nextLastThreadSeq = known?.lastThreadSeq && known.lastThreadSeq > evt.threadSeq
         ? known.lastThreadSeq
         : evt.threadSeq
+      const knownReplyCount = known?.replyCount ?? 0
+      const optimisticReplyCount = alreadyPresentInThread
+        ? knownReplyCount
+        : knownReplyCount + 1
       upsertThreadSummary(rootId, {
-        replyCount: Math.max(known?.replyCount ?? 0, Number(nextLastThreadSeq)),
+        replyCount: Math.max(optimisticReplyCount, 0),
         lastThreadSeq: nextLastThreadSeq,
         lastReplyAt: msg.createdAt,
         lastReplyUserId: evt.senderId,
@@ -2223,14 +2233,10 @@ export const useChatStore = defineStore('chat', () => {
 
   function _onThreadSummaryUpdated(evt: ThreadSummaryUpdatedEvent) {
     const root = evt.threadRootMessageId
-    // V1 semantics: replies are append-only (no delete/edit that would decrement totals),
-    // so reply_count can be treated as the current terminal thread_seq.
-    const eventLastSeq = BigInt(Math.max(Number(evt.replyCount), 0))
-    const knownLastSeq = threadSummaries.value[root]?.lastThreadSeq ?? 0n
-    const nextLastSeq = knownLastSeq > eventLastSeq ? knownLastSeq : eventLastSeq
+    const eventLastSeq = evt.lastThreadSeq >= 0n ? evt.lastThreadSeq : 0n
     upsertThreadSummary(root, {
-      replyCount: Number(nextLastSeq),
-      lastThreadSeq: nextLastSeq,
+      replyCount: Math.max(0, Math.floor(Number(evt.replyCount))),
+      lastThreadSeq: eventLastSeq,
       lastReplyAt: evt.lastThreadReplyAt
         ? new Date(Number(evt.lastThreadReplyAt.seconds) * 1000).toISOString()
         : undefined,
@@ -2262,6 +2268,82 @@ export const useChatStore = defineStore('chat', () => {
         msg.reactions[idx].count = evt.count
       }
     }
+  }
+
+  function _onMessageUpdated(evt: MessageUpdatedEvent) {
+    const apply = (msg: Message) => {
+      msg.body = evt.body
+      msg.mentionedUserIds = evt.mentionedUserIds ?? []
+      msg.mentionEveryone = evt.mentionEveryone ?? false
+      if (evt.editedAt) {
+        msg.editedAt = new Date(Number(evt.editedAt.seconds) * 1000).toISOString()
+      } else {
+        msg.editedAt = undefined
+      }
+    }
+
+    const list = messages.value[evt.conversationId]
+    if (list) {
+      const msg = list.find(item => item.id === evt.messageId)
+      if (msg) {
+        apply(msg)
+        void cacheMessages(evt.conversationId, list)
+      }
+    }
+    for (const rootId of Object.keys(threadMessages.value)) {
+      const msg = threadMessages.value[rootId]?.find(item => item.id === evt.messageId)
+      if (!msg) continue
+      apply(msg)
+    }
+  }
+
+  function _onMessageDeleted(evt: MessageDeletedEvent) {
+    const conversationId = evt.conversationId
+    const rootList = messages.value[conversationId]
+    let removedRoot = false
+
+    if (rootList) {
+      const idx = rootList.findIndex(item => item.id === evt.messageId)
+      if (idx !== -1) {
+        rootList.splice(idx, 1)
+        removedRoot = true
+      }
+      void cacheMessages(conversationId, rootList)
+    }
+
+    for (const rootId of Object.keys(threadMessages.value)) {
+      const list = threadMessages.value[rootId]
+      if (!list) continue
+      const idx = list.findIndex(item => item.id === evt.messageId)
+      if (idx !== -1) {
+        list.splice(idx, 1)
+      }
+    }
+
+    const shouldClearRootThread = removedRoot || activeThreadRootId.value === evt.messageId
+    if (shouldClearRootThread) {
+      const nextThreadMessages = { ...threadMessages.value }
+      delete nextThreadMessages[evt.messageId]
+      threadMessages.value = nextThreadMessages
+
+      const nextThreadSummaries = { ...threadSummaries.value }
+      delete nextThreadSummaries[evt.messageId]
+      threadSummaries.value = nextThreadSummaries
+      persistThreadSummaries()
+
+    }
+
+    if (activeThreadRootId.value === evt.messageId) {
+      closeThread()
+    }
+  }
+
+  function applyLocalMessageDeleted(conversationId: string, messageId: string, threadRootMessageId?: string) {
+    _onMessageDeleted({
+      conversationId,
+      messageId,
+      threadRootMessageId: threadRootMessageId ?? '',
+    } as MessageDeletedEvent)
   }
 
   function _upsertThreadMessage(rootId: string, msg: Message) {
@@ -2298,6 +2380,9 @@ export const useChatStore = defineStore('chat', () => {
       createdAt: evt.createdAt
         ? new Date(Number(evt.createdAt.seconds) * 1000).toISOString()
         : new Date().toISOString(),
+      editedAt: evt.editedAt
+        ? new Date(Number(evt.editedAt.seconds) * 1000).toISOString()
+        : undefined,
       reactions: [],
       myReactions: [],
       attachments: (evt.attachments ?? []).map(item => ({
@@ -2332,6 +2417,7 @@ export const useChatStore = defineStore('chat', () => {
         mentionedUserIds: [],
         mentionEveryone: item.mention_everyone,
         createdAt: item.created_at,
+        editedAt: item.edited_at || undefined,
         reactions: item.reactions ?? byId.get(item.id)?.reactions ?? [],
         myReactions: item.my_reactions ?? byId.get(item.id)?.myReactions ?? [],
         attachments: (item.attachments ?? []).map(attachment => ({
@@ -2343,13 +2429,13 @@ export const useChatStore = defineStore('chat', () => {
       })
 
       const threadReplyCount = Math.max(0, Math.floor(Number(item.thread_reply_count ?? 0)))
-      if (threadReplyCount > 0) {
-        const known = threadSummaries.value[item.id]
+      const known = threadSummaries.value[item.id]
+      if (threadReplyCount > 0 || known) {
         const eventLastSeq = BigInt(threadReplyCount)
         const knownLastSeq = known?.lastThreadSeq ?? 0n
         const nextLastSeq = knownLastSeq > eventLastSeq ? knownLastSeq : eventLastSeq
         upsertThreadSummary(item.id, {
-          replyCount: Number(nextLastSeq),
+          replyCount: threadReplyCount,
           lastThreadSeq: nextLastSeq,
           lastReplyAt: known?.lastReplyAt,
           lastReplyUserId: known?.lastReplyUserId,
@@ -2465,6 +2551,7 @@ export const useChatStore = defineStore('chat', () => {
     handlePresenceEvent,
     handleTypingEvent,
     handleServerEvent,
+    applyLocalMessageDeleted,
     handleSendMessageAck,
     handleReactionAck,
     handleSubscribeThreadResponse,

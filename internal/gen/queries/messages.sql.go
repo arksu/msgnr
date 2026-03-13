@@ -33,6 +33,42 @@ func (q *Queries) DecrementReactionCount(ctx context.Context, arg DecrementReact
 	return i, err
 }
 
+const deleteMessageByID = `-- name: DeleteMessageByID :one
+DELETE FROM messages
+WHERE id = $1
+RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          thread_root_id, thread_seq, mention_everyone, edited_at, created_at
+`
+
+func (q *Queries) DeleteMessageByID(ctx context.Context, messageID uuid.UUID) (Message, error) {
+	row := q.db.QueryRowContext(ctx, deleteMessageByID, messageID)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.ChannelSeq,
+		&i.SenderID,
+		&i.ClientMsgID,
+		&i.Body,
+		&i.ThreadRootID,
+		&i.ThreadSeq,
+		&i.MentionEveryone,
+		&i.EditedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const deleteMessageMentions = `-- name: DeleteMessageMentions :exec
+DELETE FROM message_mentions
+WHERE message_id = $1
+`
+
+func (q *Queries) DeleteMessageMentions(ctx context.Context, messageID uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, deleteMessageMentions, messageID)
+	return err
+}
+
 const deleteReaction = `-- name: DeleteReaction :one
 DELETE FROM reactions
 WHERE message_id = $1
@@ -78,7 +114,7 @@ func (q *Queries) DeleteReactionCountIfZero(ctx context.Context, arg DeleteReact
 
 const getMessageByClientMsgID = `-- name: GetMessageByClientMsgID :one
 SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
-       thread_root_id, thread_seq, mention_everyone, created_at
+       thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 FROM messages
 WHERE channel_id = $1
   AND client_msg_id = $2
@@ -103,6 +139,7 @@ func (q *Queries) GetMessageByClientMsgID(ctx context.Context, arg GetMessageByC
 		&i.ThreadRootID,
 		&i.ThreadSeq,
 		&i.MentionEveryone,
+		&i.EditedAt,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -110,7 +147,7 @@ func (q *Queries) GetMessageByClientMsgID(ctx context.Context, arg GetMessageByC
 
 const getMessageByID = `-- name: GetMessageByID :one
 SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
-       thread_root_id, thread_seq, mention_everyone, created_at
+       thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 FROM messages
 WHERE id = $1
 `
@@ -128,6 +165,7 @@ func (q *Queries) GetMessageByID(ctx context.Context, messageID uuid.UUID) (Mess
 		&i.ThreadRootID,
 		&i.ThreadSeq,
 		&i.MentionEveryone,
+		&i.EditedAt,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -165,7 +203,7 @@ func (q *Queries) GetReactionCounts(ctx context.Context, messageID uuid.UUID) ([
 
 const getThreadMessages = `-- name: GetThreadMessages :many
 SELECT m.id, m.channel_id, m.channel_seq, m.sender_id, m.client_msg_id, m.body,
-       m.thread_root_id, m.thread_seq, m.mention_everyone, m.created_at
+       m.thread_root_id, m.thread_seq, m.mention_everyone, m.edited_at, m.created_at
 FROM messages m
 WHERE m.thread_root_id = $1
   AND m.thread_seq > $2
@@ -196,6 +234,7 @@ func (q *Queries) GetThreadMessages(ctx context.Context, arg GetThreadMessagesPa
 			&i.ThreadRootID,
 			&i.ThreadSeq,
 			&i.MentionEveryone,
+			&i.EditedAt,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -278,7 +317,7 @@ VALUES ($1,
         $7,
         now())
 RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
-          thread_root_id, thread_seq, mention_everyone, created_at
+          thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 `
 
 type InsertMessageParams struct {
@@ -312,6 +351,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (M
 		&i.ThreadRootID,
 		&i.ThreadSeq,
 		&i.MentionEveryone,
+		&i.EditedAt,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -379,11 +419,43 @@ func (q *Queries) IsChannelMember(ctx context.Context, arg IsChannelMemberParams
 	return is_member, err
 }
 
+const listActiveChannelMemberIDs = `-- name: ListActiveChannelMemberIDs :many
+SELECT user_id
+FROM channel_members
+WHERE channel_id = $1
+  AND is_archived = false
+ORDER BY user_id
+`
+
+func (q *Queries) ListActiveChannelMemberIDs(ctx context.Context, channelID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveChannelMemberIDs, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConversationMessagePage = `-- name: ListConversationMessagePage :many
 SELECT m.id, m.channel_id, m.sender_id, u.display_name, m.body, m.channel_seq,
        COALESCE(m.thread_seq, 0) AS thread_seq,
        m.thread_root_id,
        COALESCE(ts.reply_count, 0) AS thread_reply_count,
+       m.edited_at,
        m.created_at,
        m.mention_everyone,
        COALESCE((
@@ -438,6 +510,7 @@ type ListConversationMessagePageRow struct {
 	ThreadSeq        int64         `json:"thread_seq"`
 	ThreadRootID     uuid.NullUUID `json:"thread_root_id"`
 	ThreadReplyCount int           `json:"thread_reply_count"`
+	EditedAt         sql.NullTime  `json:"edited_at"`
 	CreatedAt        time.Time     `json:"created_at"`
 	MentionEveryone  bool          `json:"mention_everyone"`
 	Reactions        interface{}   `json:"reactions"`
@@ -469,11 +542,65 @@ func (q *Queries) ListConversationMessagePage(ctx context.Context, arg ListConve
 			&i.ThreadSeq,
 			&i.ThreadRootID,
 			&i.ThreadReplyCount,
+			&i.EditedAt,
 			&i.CreatedAt,
 			&i.MentionEveryone,
 			&i.Reactions,
 			&i.MyReactions,
 			&i.Attachments,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessageAttachmentsForDeleteTarget = `-- name: ListMessageAttachmentsForDeleteTarget :many
+SELECT ma.id,
+       ma.conversation_id,
+       ma.message_id,
+       ma.file_name,
+       ma.file_size,
+       ma.mime_type,
+       ma.storage_key,
+       ma.uploaded_by,
+       ma.created_at
+FROM message_attachment ma
+WHERE ma.message_id IN (
+  SELECT m.id
+  FROM messages m
+  WHERE m.id = $1
+     OR m.thread_root_id = $1
+)
+ORDER BY ma.created_at, ma.id
+`
+
+func (q *Queries) ListMessageAttachmentsForDeleteTarget(ctx context.Context, messageID uuid.UUID) ([]MessageAttachment, error) {
+	rows, err := q.db.QueryContext(ctx, listMessageAttachmentsForDeleteTarget, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageAttachment
+	for rows.Next() {
+		var i MessageAttachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.MessageID,
+			&i.FileName,
+			&i.FileSize,
+			&i.MimeType,
+			&i.StorageKey,
+			&i.UploadedBy,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -587,4 +714,39 @@ func (q *Queries) ListUserChannels(ctx context.Context, userID uuid.UUID) ([]Lis
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateMessageBody = `-- name: UpdateMessageBody :one
+UPDATE messages
+SET body = $1,
+    mention_everyone = $2,
+    edited_at = now()
+WHERE id = $3
+RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          thread_root_id, thread_seq, mention_everyone, edited_at, created_at
+`
+
+type UpdateMessageBodyParams struct {
+	Body            string    `json:"body"`
+	MentionEveryone bool      `json:"mention_everyone"`
+	MessageID       uuid.UUID `json:"message_id"`
+}
+
+func (q *Queries) UpdateMessageBody(ctx context.Context, arg UpdateMessageBodyParams) (Message, error) {
+	row := q.db.QueryRowContext(ctx, updateMessageBody, arg.Body, arg.MentionEveryone, arg.MessageID)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.ChannelSeq,
+		&i.SenderID,
+		&i.ClientMsgID,
+		&i.Body,
+		&i.ThreadRootID,
+		&i.ThreadSeq,
+		&i.MentionEveryone,
+		&i.EditedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }

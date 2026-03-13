@@ -32,6 +32,7 @@ var (
 	ErrConversationArchived       = errors.New("conversation is archived")
 	ErrInviteUnsupportedTarget    = errors.New("conversation does not support invites")
 	ErrMessageNotFound            = errors.New("message not found")
+	ErrMessageNotAuthor           = errors.New("message author mismatch")
 	ErrInvalidThread              = errors.New("thread root does not belong to channel")
 	ErrInvalidDMTarget            = errors.New("invalid dm target")
 	ErrBlockedDMTarget            = errors.New("blocked dm target")
@@ -136,6 +137,7 @@ type ConversationMessage struct {
 	ThreadSeq           int64
 	ThreadRootMessageID uuid.UUID
 	ThreadReplyCount    int32
+	EditedAt            *time.Time
 	CreatedAt           time.Time
 	MentionEveryone     bool
 	Reactions           []ReactionAggregate
@@ -489,6 +491,10 @@ func (s *Service) ListMessagePage(
 			ThreadReplyCount: int32(row.ThreadReplyCount),
 			CreatedAt:        row.CreatedAt,
 			MentionEveryone:  row.MentionEveryone,
+		}
+		if row.EditedAt.Valid {
+			editedAt := row.EditedAt.Time
+			item.EditedAt = &editedAt
 		}
 		if row.ThreadRootID.Valid {
 			item.ThreadRootMessageID = row.ThreadRootID.UUID
@@ -886,6 +892,34 @@ type UpdateReadCursorResult struct {
 	DirectDeliveries []DirectDelivery
 }
 
+type EditMessageParams struct {
+	MessageID uuid.UUID
+	ActorID   uuid.UUID
+	Body      string
+}
+
+type EditMessageResult struct {
+	ChannelID        uuid.UUID
+	MessageID        uuid.UUID
+	Body             string
+	MentionEveryone  bool
+	MentionedUserIDs []uuid.UUID
+	EditedAt         *timestamppb.Timestamp
+	DirectDeliveries []DirectDelivery
+}
+
+type DeleteMessageParams struct {
+	MessageID uuid.UUID
+	ActorID   uuid.UUID
+}
+
+type DeleteMessageResult struct {
+	ChannelID        uuid.UUID
+	MessageID        uuid.UUID
+	ThreadRootID     uuid.UUID
+	DirectDeliveries []DirectDelivery
+}
+
 type DirectDelivery struct {
 	UserID string
 	Event  *packetspb.ServerEvent
@@ -1177,6 +1211,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			ReplyCount:            replyCount,
 			LastThreadReplyAt:     timestamppb.New(threadReplyAt),
 			LastThreadReplyUserId: p.SenderID.String(),
+			LastThreadSeq:         nextSeq - 1,
 		}
 		tsServerEvt := &packetspb.ServerEvent{
 			EventType:      packetspb.EventType_EVENT_TYPE_THREAD_SUMMARY_UPDATED,
@@ -1321,6 +1356,270 @@ func (s *Service) UpdateReadCursor(ctx context.Context, p UpdateReadCursorParams
 	}, nil
 }
 
+// EditMessage updates body/mentions for an existing message authored by actor.
+// The mutation emits message_updated and recalculates unread counters for members.
+func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMessageResult, error) {
+	p.Body = strings.TrimSpace(p.Body)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	target, err := s.loadMessageMutationTargetTx(ctx, tx, p.MessageID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return EditMessageResult{}, ErrMessageNotFound
+		}
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage load message: %w", err)
+	}
+
+	isMember, err := s.isChannelMemberTx(ctx, tx, target.ChannelID, p.ActorID)
+	if err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage membership check: %w", err)
+	}
+	if !isMember {
+		return EditMessageResult{}, ErrNotMember
+	}
+	if target.SenderID != p.ActorID {
+		return EditMessageResult{}, ErrMessageNotAuthor
+	}
+
+	attachmentCount, err := s.messageAttachmentCountTx(ctx, tx, p.MessageID)
+	if err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage count attachments: %w", err)
+	}
+	if p.Body == "" && attachmentCount == 0 {
+		return EditMessageResult{}, ErrEmptyMessage
+	}
+
+	mentionEveryone := strings.Contains(p.Body, "@everyone") || strings.Contains(p.Body, "@channel")
+	var editedAt time.Time
+	if err := tx.QueryRow(ctx, `
+		UPDATE messages
+		   SET body = $1,
+		       mention_everyone = $2,
+		       edited_at = now()
+		 WHERE id = $3
+		 RETURNING edited_at`,
+		p.Body, mentionEveryone, p.MessageID,
+	).Scan(&editedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return EditMessageResult{}, ErrMessageNotFound
+		}
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage update message: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM message_mentions WHERE message_id = $1`, p.MessageID); err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage clear mentions: %w", err)
+	}
+	mentionedIDs := extractMentionUUIDs(p.Body)
+	for _, uid := range mentionedIDs {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO message_mentions (message_id, user_id, created_at) VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
+			p.MessageID, uid,
+		); err != nil {
+			return EditMessageResult{}, fmt.Errorf("chat.EditMessage insert mention: %w", err)
+		}
+	}
+
+	directDeliveries, err := s.buildUnreadRecalcDeliveriesForChannelMembersTx(ctx, tx, target.ChannelID)
+	if err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage build unread deliveries: %w", err)
+	}
+
+	mentionedUserIDs := make([]string, 0, len(mentionedIDs))
+	for _, id := range mentionedIDs {
+		mentionedUserIDs = append(mentionedUserIDs, id.String())
+	}
+	updatedEvt := &packetspb.MessageUpdatedEvent{
+		ConversationId:   target.ChannelID.String(),
+		MessageId:        p.MessageID.String(),
+		Body:             p.Body,
+		MentionedUserIds: mentionedUserIDs,
+		MentionEveryone:  mentionEveryone,
+		EditedAt:         timestamppb.New(editedAt),
+	}
+	updatedServerEvt := &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_UPDATED,
+		ConversationId: target.ChannelID.String(),
+		Payload:        &packetspb.ServerEvent_MessageUpdated{MessageUpdated: updatedEvt},
+	}
+	updatedPayloadJSON, err := protojson.Marshal(updatedEvt)
+	if err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage marshal message updated: %w", err)
+	}
+	stored, err := s.eventStore.AppendEventTx(ctx, tx, events.AppendParams{
+		EventID:      uuid.New().String(),
+		EventType:    "message_updated",
+		ChannelID:    target.ChannelID.String(),
+		PayloadJSON:  updatedPayloadJSON,
+		ProtoPayload: updatedServerEvt,
+	})
+	if err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage append event: %w", err)
+	}
+	if err := s.eventStore.NotifyEventTx(ctx, tx, stored.Seq); err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage notify event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage commit: %w", err)
+	}
+
+	return EditMessageResult{
+		ChannelID:        target.ChannelID,
+		MessageID:        p.MessageID,
+		Body:             p.Body,
+		MentionEveryone:  mentionEveryone,
+		MentionedUserIDs: mentionedIDs,
+		EditedAt:         timestamppb.New(editedAt),
+		DirectDeliveries: directDeliveries,
+	}, nil
+}
+
+// DeleteMessage hard-deletes a message authored by actor and emits message_deleted.
+// Thread replies update thread summaries; deleting a root cascades to replies.
+func (s *Service) DeleteMessage(ctx context.Context, p DeleteMessageParams) (DeleteMessageResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	target, err := s.loadMessageMutationTargetTx(ctx, tx, p.MessageID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return DeleteMessageResult{}, ErrMessageNotFound
+		}
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage load message: %w", err)
+	}
+
+	isMember, err := s.isChannelMemberTx(ctx, tx, target.ChannelID, p.ActorID)
+	if err != nil {
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage membership check: %w", err)
+	}
+	if !isMember {
+		return DeleteMessageResult{}, ErrNotMember
+	}
+	if target.SenderID != p.ActorID {
+		return DeleteMessageResult{}, ErrMessageNotAuthor
+	}
+
+	attachmentsToDelete, err := s.listMessageAttachmentsForDeleteTargetTx(ctx, tx, p.MessageID)
+	if err != nil {
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage list attachments: %w", err)
+	}
+
+	var deletedMessageID uuid.UUID
+	var deletedChannelID uuid.UUID
+	var deletedThreadRootID uuid.NullUUID
+	if err := tx.QueryRow(ctx, `
+		DELETE FROM messages
+		 WHERE id = $1
+		 RETURNING id, channel_id, thread_root_id`,
+		p.MessageID,
+	).Scan(&deletedMessageID, &deletedChannelID, &deletedThreadRootID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeleteMessageResult{}, ErrMessageNotFound
+		}
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage delete message: %w", err)
+	}
+
+	threadRootID := uuid.Nil
+	if deletedThreadRootID.Valid {
+		threadRootID = deletedThreadRootID.UUID
+
+		replyCount, lastThreadSeq, lastReplyAt, lastReplyUserID, err := s.rebuildThreadSummaryAfterReplyDeleteTx(ctx, tx, threadRootID)
+		if err != nil {
+			return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage rebuild thread summary: %w", err)
+		}
+		tsEvt := &packetspb.ThreadSummaryUpdatedEvent{
+			ConversationId:      deletedChannelID.String(),
+			ThreadRootMessageId: threadRootID.String(),
+			ReplyCount:          replyCount,
+			LastThreadSeq:       lastThreadSeq,
+		}
+		if !lastReplyAt.IsZero() {
+			tsEvt.LastThreadReplyAt = timestamppb.New(lastReplyAt)
+		}
+		if lastReplyUserID != uuid.Nil {
+			tsEvt.LastThreadReplyUserId = lastReplyUserID.String()
+		}
+		tsServerEvt := &packetspb.ServerEvent{
+			EventType:      packetspb.EventType_EVENT_TYPE_THREAD_SUMMARY_UPDATED,
+			ConversationId: deletedChannelID.String(),
+			Payload:        &packetspb.ServerEvent_ThreadSummaryUpdated{ThreadSummaryUpdated: tsEvt},
+		}
+		tsPayloadJSON, err := protojson.Marshal(tsEvt)
+		if err != nil {
+			return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage marshal thread summary: %w", err)
+		}
+		tsStored, err := s.eventStore.AppendEventTx(ctx, tx, events.AppendParams{
+			EventID:      uuid.New().String(),
+			EventType:    "thread_summary_updated",
+			ChannelID:    deletedChannelID.String(),
+			PayloadJSON:  tsPayloadJSON,
+			ProtoPayload: tsServerEvt,
+		})
+		if err != nil {
+			return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage append thread summary event: %w", err)
+		}
+		if err := s.eventStore.NotifyEventTx(ctx, tx, tsStored.Seq); err != nil {
+			return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage notify thread summary event: %w", err)
+		}
+	}
+
+	directDeliveries, err := s.buildUnreadRecalcDeliveriesForChannelMembersTx(ctx, tx, deletedChannelID)
+	if err != nil {
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage build unread deliveries: %w", err)
+	}
+
+	deletedEvt := &packetspb.MessageDeletedEvent{
+		ConversationId: deletedChannelID.String(),
+		MessageId:      deletedMessageID.String(),
+	}
+	if threadRootID != uuid.Nil {
+		deletedEvt.ThreadRootMessageId = threadRootID.String()
+	}
+	deletedServerEvt := &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_DELETED,
+		ConversationId: deletedChannelID.String(),
+		Payload:        &packetspb.ServerEvent_MessageDeleted{MessageDeleted: deletedEvt},
+	}
+	deletedPayloadJSON, err := protojson.Marshal(deletedEvt)
+	if err != nil {
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage marshal message deleted: %w", err)
+	}
+	stored, err := s.eventStore.AppendEventTx(ctx, tx, events.AppendParams{
+		EventID:      uuid.New().String(),
+		EventType:    "message_deleted",
+		ChannelID:    deletedChannelID.String(),
+		PayloadJSON:  deletedPayloadJSON,
+		ProtoPayload: deletedServerEvt,
+	})
+	if err != nil {
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage append event: %w", err)
+	}
+	if err := s.eventStore.NotifyEventTx(ctx, tx, stored.Seq); err != nil {
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage notify event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return DeleteMessageResult{}, fmt.Errorf("chat.DeleteMessage commit: %w", err)
+	}
+
+	s.cleanupDeletedAttachments(attachmentsToDelete)
+
+	return DeleteMessageResult{
+		ChannelID:        deletedChannelID,
+		MessageID:        deletedMessageID,
+		ThreadRootID:     threadRootID,
+		DirectDeliveries: directDeliveries,
+	}, nil
+}
+
 // ReactionParams holds common reaction input fields.
 type ReactionParams struct {
 	ChannelID  uuid.UUID
@@ -1453,6 +1752,7 @@ type SubscribeThreadParams struct {
 // SubscribeThreadResult holds the response for SubscribeThread.
 type SubscribeThreadResult struct {
 	CurrentThreadSeq int64
+	ReplyCount       int32
 	Replay           []*packetspb.MessageEvent
 	DirectDeliveries []DirectDelivery
 }
@@ -1488,15 +1788,17 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var nextThreadSeq int64
+	var replyCount int32
 	err = tx.QueryRow(ctx,
-		`SELECT next_thread_seq
+		`SELECT next_thread_seq, reply_count
 		   FROM thread_summaries
 		  WHERE root_message_id = $1
 		  FOR UPDATE`,
 		p.ThreadRootMessageID,
-	).Scan(&nextThreadSeq)
+	).Scan(&nextThreadSeq, &replyCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		nextThreadSeq = 1
+		replyCount = 0
 	} else if err != nil {
 		return SubscribeThreadResult{}, fmt.Errorf("chat.SubscribeThread get summary: %w", err)
 	}
@@ -1505,7 +1807,7 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 
 	rows, err := tx.Query(ctx, `
 		SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
-		       thread_root_id, thread_seq, mention_everyone, created_at
+		       thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 		  FROM messages
 		 WHERE thread_root_id = $1
 		   AND thread_seq > $2
@@ -1530,6 +1832,7 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 			&m.ThreadRootID,
 			&m.ThreadSeq,
 			&m.MentionEveryone,
+			&m.EditedAt,
 			&m.CreatedAt,
 		); err != nil {
 			return SubscribeThreadResult{}, fmt.Errorf("chat.SubscribeThread scan messages: %w", err)
@@ -1560,6 +1863,9 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 			CreatedAt:      timestamppb.New(m.CreatedAt),
 			ThreadSeq:      m.ThreadSeq,
 			Attachments:    toProtoMessageAttachments(attachmentsByMessageID[m.ID]),
+		}
+		if m.EditedAt.Valid {
+			evt.EditedAt = timestamppb.New(m.EditedAt.Time)
 		}
 		if m.ThreadRootID.Valid {
 			evt.ThreadRootMessageId = m.ThreadRootID.UUID.String()
@@ -1597,6 +1903,7 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 
 	return SubscribeThreadResult{
 		CurrentThreadSeq: currentSeq,
+		ReplyCount:       replyCount,
 		Replay:           replay,
 		DirectDeliveries: directDeliveries,
 	}, nil
@@ -1897,6 +2204,251 @@ func (s *Service) messageChannelByIDTx(ctx context.Context, tx pgx.Tx, messageID
 		return uuid.Nil, err
 	}
 	return channelID, nil
+}
+
+type messageMutationTarget struct {
+	MessageID    uuid.UUID
+	ChannelID    uuid.UUID
+	SenderID     uuid.UUID
+	ThreadRootID uuid.UUID
+}
+
+func (s *Service) loadMessageMutationTargetTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) (messageMutationTarget, error) {
+	var target messageMutationTarget
+	var threadRootID uuid.NullUUID
+	err := tx.QueryRow(ctx, `
+		SELECT id, channel_id, sender_id, thread_root_id
+		  FROM messages
+		 WHERE id = $1
+		 FOR UPDATE`,
+		messageID,
+	).Scan(&target.MessageID, &target.ChannelID, &target.SenderID, &threadRootID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return messageMutationTarget{}, sql.ErrNoRows
+		}
+		return messageMutationTarget{}, err
+	}
+	if threadRootID.Valid {
+		target.ThreadRootID = threadRootID.UUID
+	}
+	return target, nil
+}
+
+func (s *Service) messageAttachmentCountTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) (int, error) {
+	var count int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)::int
+		  FROM message_attachment
+		 WHERE message_id = $1`,
+		messageID,
+	).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Service) listActiveChannelMemberIDsTx(ctx context.Context, tx pgx.Tx, channelID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT user_id
+		  FROM channel_members
+		 WHERE channel_id = $1
+		   AND is_archived = false
+		 ORDER BY user_id`,
+		channelID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	memberIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var userID uuid.UUID
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		memberIDs = append(memberIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return memberIDs, nil
+}
+
+func (s *Service) buildUnreadRecalcDeliveriesForChannelMembersTx(ctx context.Context, tx pgx.Tx, channelID uuid.UUID) ([]DirectDelivery, error) {
+	memberIDs, err := s.listActiveChannelMemberIDsTx(ctx, tx, channelID)
+	if err != nil {
+		return nil, err
+	}
+
+	deliveries := make([]DirectDelivery, 0, len(memberIDs))
+	for _, userID := range memberIDs {
+		lastReadSeq, err := s.loadLastReadSeqTx(ctx, tx, channelID, userID)
+		if err != nil {
+			return nil, err
+		}
+		counter, err := s.buildUnreadCounterTx(ctx, tx, channelID, userID, lastReadSeq)
+		if err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, s.buildReadCounterUpdatedDelivery(channelID, userID, counter))
+	}
+	return deliveries, nil
+}
+
+func (s *Service) listMessageAttachmentsForDeleteTargetTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) ([]MessageAttachment, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT ma.id,
+		       ma.conversation_id,
+		       ma.message_id,
+		       ma.file_name,
+		       ma.file_size,
+		       ma.mime_type,
+		       ma.storage_key,
+		       ma.uploaded_by,
+		       ma.created_at
+		  FROM message_attachment ma
+		 WHERE ma.message_id IN (
+		   SELECT m.id
+		     FROM messages m
+		    WHERE m.id = $1
+		       OR m.thread_root_id = $1
+		 )
+		 ORDER BY ma.created_at, ma.id`,
+		messageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]MessageAttachment, 0)
+	for rows.Next() {
+		var row MessageAttachment
+		var messageIDRaw uuid.NullUUID
+		if err := rows.Scan(
+			&row.ID,
+			&row.ConversationID,
+			&messageIDRaw,
+			&row.FileName,
+			&row.FileSize,
+			&row.MimeType,
+			&row.StorageKey,
+			&row.UploadedBy,
+			&row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if messageIDRaw.Valid {
+			row.MessageID = messageIDRaw.UUID
+		}
+		items = append(items, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *Service) rebuildThreadSummaryAfterReplyDeleteTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	threadRootID uuid.UUID,
+) (replyCount int32, lastThreadSeq int64, lastReplyAt time.Time, lastReplyUserID uuid.UUID, err error) {
+	var nextThreadSeq int64
+	if err := tx.QueryRow(ctx, `
+		SELECT next_thread_seq
+		  FROM thread_summaries
+		 WHERE root_message_id = $1
+		 FOR UPDATE`,
+		threadRootID,
+	).Scan(&nextThreadSeq); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, 0, time.Time{}, uuid.Nil, nil
+		}
+		return 0, 0, time.Time{}, uuid.Nil, err
+	}
+	// last_thread_seq is a high-watermark cursor source; it must remain monotonic.
+	lastThreadSeq = nextThreadSeq - 1
+
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)::int
+		  FROM messages
+		 WHERE thread_root_id = $1`,
+		threadRootID,
+	).Scan(&replyCount); err != nil {
+		return 0, 0, time.Time{}, uuid.Nil, err
+	}
+	if replyCount <= 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE thread_summaries
+			   SET reply_count = 0,
+			       last_reply_at = NULL,
+			       last_reply_user_id = NULL
+			 WHERE root_message_id = $1`,
+			threadRootID,
+		); err != nil {
+			return 0, 0, time.Time{}, uuid.Nil, err
+		}
+		return 0, lastThreadSeq, time.Time{}, uuid.Nil, nil
+	}
+
+	if err := tx.QueryRow(ctx, `
+		SELECT created_at, sender_id
+		  FROM messages
+		 WHERE thread_root_id = $1
+		 ORDER BY thread_seq DESC
+		 LIMIT 1`,
+		threadRootID,
+	).Scan(&lastReplyAt, &lastReplyUserID); err != nil {
+		return 0, 0, time.Time{}, uuid.Nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE thread_summaries
+		   SET reply_count = $2,
+		       last_reply_at = $3,
+		       last_reply_user_id = $4
+		 WHERE root_message_id = $1`,
+		threadRootID, replyCount, lastReplyAt, lastReplyUserID,
+	); err != nil {
+		return 0, 0, time.Time{}, uuid.Nil, err
+	}
+	return replyCount, lastThreadSeq, lastReplyAt, lastReplyUserID, nil
+}
+
+func (s *Service) cleanupDeletedAttachments(items []MessageAttachment) {
+	if s.attachmentStore == nil || len(items) == 0 {
+		return
+	}
+
+	keys := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item.StorageKey)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return
+	}
+
+	go func(storage AttachmentStorage, log *zap.Logger, objectKeys []string) {
+		for _, key := range objectKeys {
+			if err := storage.DeleteObject(context.Background(), key); err != nil {
+				log.Warn("chat.DeleteMessage attachment cleanup failed",
+					zap.String("storage_key", key),
+					zap.Error(err),
+				)
+			}
+		}
+	}(s.attachmentStore, s.log, keys)
 }
 
 func (s *Service) validateReactionTargetTx(ctx context.Context, tx pgx.Tx, p ReactionParams) error {

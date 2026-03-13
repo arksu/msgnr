@@ -41,6 +41,7 @@ export interface CachedMessage {
   mentionedUserIds: string[]
   mentionEveryone: boolean
   createdAt: string
+  editedAt?: string
   reactions: Array<{ emoji: string; count: number }>
   myReactions: string[]
   attachments?: Array<{

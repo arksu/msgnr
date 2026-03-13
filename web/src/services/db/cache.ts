@@ -154,6 +154,7 @@ function messageToCache(msg: Message): CachedMessage {
     mentionedUserIds: msg.mentionedUserIds,
     mentionEveryone: msg.mentionEveryone,
     createdAt: msg.createdAt,
+    editedAt: msg.editedAt,
     reactions: msg.reactions.map(r => ({ emoji: r.emoji, count: r.count })),
     myReactions: [...msg.myReactions],
     attachments: msg.attachments?.map(a => ({ ...a })),
@@ -174,6 +175,7 @@ function cachedToMessage(c: CachedMessage): Message {
     mentionedUserIds: c.mentionedUserIds ?? [],
     mentionEveryone: c.mentionEveryone ?? false,
     createdAt: c.createdAt,
+    editedAt: c.editedAt,
     reactions: c.reactions ?? [],
     myReactions: c.myReactions ?? [],
     attachments: c.attachments as MessageAttachment[] | undefined,
@@ -442,5 +444,4 @@ export async function deleteDatabase(): Promise<void> {
     // Non-fatal
   }
 }
-
 

@@ -119,6 +119,7 @@ type Message struct {
 	ThreadRootID    uuid.NullUUID `json:"thread_root_id"`
 	ThreadSeq       int64         `json:"thread_seq"`
 	MentionEveryone bool          `json:"mention_everyone"`
+	EditedAt        sql.NullTime  `json:"edited_at"`
 	CreatedAt       time.Time     `json:"created_at"`
 }
 

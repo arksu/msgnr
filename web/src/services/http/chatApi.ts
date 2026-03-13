@@ -88,6 +88,7 @@ export interface ConversationMessageItem {
   thread_seq: string | number
   thread_root_message_id: string
   thread_reply_count?: number
+  edited_at?: string
   mention_everyone: boolean
   created_at: string
   reactions?: Array<{ emoji: string; count: number }>
@@ -117,6 +118,11 @@ export interface ReactionUserItem {
 
 interface ReactionUsersResponse {
   users: ReactionUserItem[]
+}
+
+interface EditMessageResponse {
+  message_id: string
+  edited_at: string
 }
 
 export async function listDmCandidates(): Promise<DmCandidateItem[]> {
@@ -225,6 +231,19 @@ export async function uploadChatAttachment(
 export async function deleteChatAttachment(attachmentId: string): Promise<void> {
   try {
     await http.delete(`/api/chat/attachments/${attachmentId}`)
+  } catch (e) { handleError(e) }
+}
+
+export async function editMessage(messageId: string, body: string): Promise<EditMessageResponse> {
+  try {
+    const { data } = await http.patch<EditMessageResponse>(`/api/messages/${messageId}`, { body })
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function deleteMessage(messageId: string): Promise<void> {
+  try {
+    await http.delete(`/api/messages/${messageId}`)
   } catch (e) { handleError(e) }
 }
 

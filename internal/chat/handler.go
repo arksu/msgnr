@@ -53,7 +53,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/conversations/invite", h.requireAuth(h.inviteToConversation))
 	mux.HandleFunc("/api/messages", h.requireAuth(h.listConversationMessages))
 	mux.HandleFunc("/api/messages/reaction-users", h.requireAuth(h.listMessageReactionUsers))
-	mux.HandleFunc("/api/messages/", h.requireAuth(h.messageAttachmentDownload))
+	mux.HandleFunc("/api/messages/", h.requireAuth(h.messageItem))
 	mux.HandleFunc("/api/chat/attachments", h.requireAuth(h.chatAttachments))
 	mux.HandleFunc("/api/chat/attachments/", h.requireAuth(h.chatAttachmentItem))
 	mux.HandleFunc("/api/dm-candidates", h.requireAuth(h.listDMCandidates))
@@ -119,6 +119,7 @@ type conversationMessageResponse struct {
 	ThreadSeq           int64                       `json:"thread_seq"`
 	ThreadRootMessageID string                      `json:"thread_root_message_id"`
 	ThreadReplyCount    int32                       `json:"thread_reply_count"`
+	EditedAt            string                      `json:"edited_at,omitempty"`
 	MentionEveryone     bool                        `json:"mention_everyone"`
 	CreatedAt           string                      `json:"created_at"`
 	Reactions           []reactionAggregateResponse `json:"reactions"`
@@ -153,6 +154,10 @@ type conversationMessagesPageResponse struct {
 	HasMore              bool                          `json:"has_more"`
 	PageSize             int                           `json:"page_size"`
 	NextBeforeChannelSeq string                        `json:"next_before_channel_seq,omitempty"`
+}
+
+type editMessageRequest struct {
+	Body string `json:"body"`
 }
 
 func (h *Handler) listChannels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -403,6 +408,10 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 				MimeType: attachment.MimeType,
 			})
 		}
+		editedAt := ""
+		if msg.EditedAt != nil && !msg.EditedAt.IsZero() {
+			editedAt = msg.EditedAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
 		resp = append(resp, conversationMessageResponse{
 			ID:                  msg.ID.String(),
 			ConversationID:      msg.ConversationID.String(),
@@ -413,6 +422,7 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 			ThreadSeq:           msg.ThreadSeq,
 			ThreadRootMessageID: threadRootID,
 			ThreadReplyCount:    msg.ThreadReplyCount,
+			EditedAt:            editedAt,
 			MentionEveryone:     msg.MentionEveryone,
 			CreatedAt:           msg.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			Reactions:           reactions,
@@ -587,30 +597,123 @@ func (h *Handler) chatAttachmentItem(w http.ResponseWriter, r *http.Request, pri
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GET /api/messages/:message_id/attachments/:attachment_id/download
-func (h *Handler) messageAttachmentDownload(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
-		return
-	}
-
+func (h *Handler) messageItem(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/messages/")
 	parts := strings.Split(rest, "/")
-	if len(parts) != 4 || parts[1] != "attachments" || parts[3] != "download" {
-		writeJSON(w, http.StatusNotFound, errorBody("not found"))
-		return
+	if len(parts) == 1 {
+		messageID, err := uuid.Parse(parts[0])
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody("invalid message_id"))
+			return
+		}
+		switch r.Method {
+		case http.MethodPatch:
+			h.patchMessage(w, r, principal, messageID)
+			return
+		case http.MethodDelete:
+			h.deleteMessage(w, r, principal, messageID)
+			return
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+			return
+		}
 	}
-	messageID, err := uuid.Parse(parts[0])
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid message_id"))
-		return
-	}
-	attachmentID, err := uuid.Parse(parts[2])
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid attachment_id"))
+
+	// GET /api/messages/:message_id/attachments/:attachment_id/download
+	if len(parts) == 4 && parts[1] == "attachments" && parts[3] == "download" {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, errorBody("method not allowed"))
+			return
+		}
+		messageID, err := uuid.Parse(parts[0])
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody("invalid message_id"))
+			return
+		}
+		attachmentID, err := uuid.Parse(parts[2])
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody("invalid attachment_id"))
+			return
+		}
+		h.downloadMessageAttachment(w, r, principal, messageID, attachmentID)
 		return
 	}
 
+	writeJSON(w, http.StatusNotFound, errorBody("not found"))
+}
+
+func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal, messageID uuid.UUID) {
+	var req editMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody("invalid json"))
+		return
+	}
+	result, err := h.svc.EditMessage(r.Context(), EditMessageParams{
+		MessageID: messageID,
+		ActorID:   principal.UserID,
+		Body:      req.Body,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrMessageNotFound):
+			writeJSON(w, http.StatusNotFound, errorBody("message not found"))
+		case errors.Is(err, ErrNotMember):
+			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+		case errors.Is(err, ErrMessageNotAuthor):
+			writeJSON(w, http.StatusForbidden, errorBody("only author can edit this message"))
+		case errors.Is(err, ErrEmptyMessage):
+			writeJSON(w, http.StatusBadRequest, errorBody("message body and attachments are both empty"))
+		default:
+			h.log.Error("patchMessage error", zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+		}
+		return
+	}
+	if len(result.DirectDeliveries) > 0 && h.notifier != nil {
+		h.notifier.SendChatDirectServerEvents(result.DirectDeliveries)
+	}
+	editedAt := ""
+	if result.EditedAt != nil {
+		editedAt = result.EditedAt.AsTime().UTC().Format("2006-01-02T15:04:05Z")
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message_id": messageID.String(),
+		"edited_at":  editedAt,
+	})
+}
+
+func (h *Handler) deleteMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal, messageID uuid.UUID) {
+	result, err := h.svc.DeleteMessage(r.Context(), DeleteMessageParams{
+		MessageID: messageID,
+		ActorID:   principal.UserID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrMessageNotFound):
+			writeJSON(w, http.StatusNotFound, errorBody("message not found"))
+		case errors.Is(err, ErrNotMember):
+			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
+		case errors.Is(err, ErrMessageNotAuthor):
+			writeJSON(w, http.StatusForbidden, errorBody("only author can delete this message"))
+		default:
+			h.log.Error("deleteMessage error", zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
+		}
+		return
+	}
+	if len(result.DirectDeliveries) > 0 && h.notifier != nil {
+		h.notifier.SendChatDirectServerEvents(result.DirectDeliveries)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) downloadMessageAttachment(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal auth.Principal,
+	messageID uuid.UUID,
+	attachmentID uuid.UUID,
+) {
 	body, size, mimeType, fileName, err := h.svc.DownloadMessageAttachment(r.Context(), principal.UserID, messageID, attachmentID)
 	if err != nil {
 		switch {
@@ -619,7 +722,7 @@ func (h *Handler) messageAttachmentDownload(w http.ResponseWriter, r *http.Reque
 		case errors.Is(err, ErrNotMember):
 			writeJSON(w, http.StatusForbidden, errorBody("not a member of this conversation"))
 		default:
-			h.log.Error("messageAttachmentDownload error", zap.Error(err))
+			h.log.Error("downloadMessageAttachment error", zap.Error(err))
 			writeJSON(w, http.StatusInternalServerError, errorBody("internal error"))
 		}
 		return

@@ -130,6 +130,8 @@ enum EventType {
   EVENT_TYPE_FORCE_PASSWORD_CHANGE = 13;
   EVENT_TYPE_USER_IDENTITY_UPDATED = 14;
   EVENT_TYPE_NOTIFICATION_LEVEL_CHANGED = 15;
+  EVENT_TYPE_MESSAGE_UPDATED = 16;
+  EVENT_TYPE_MESSAGE_DELETED = 17;
 }
 
 message Envelope {
@@ -260,6 +262,7 @@ message MessageEvent {
   bool mention_everyone = 10;
   repeated ReactionAggregate reactions = 11;
   repeated MessageAttachment attachments = 12;
+  google.protobuf.Timestamp edited_at = 13;
 }
 
 message MessageAttachment {
@@ -285,6 +288,7 @@ message SubscribeThreadResponse {
   string thread_root_message_id = 2;
   int64 current_thread_seq = 3;
   repeated MessageEvent replay = 4;
+  int32 reply_count = 5;
 }
 
 message AddReactionRequest {
@@ -588,6 +592,7 @@ message ThreadSummaryUpdatedEvent {
   int32 reply_count = 3;
   google.protobuf.Timestamp last_thread_reply_at = 4;
   string last_thread_reply_user_id = 5;
+  int64 last_thread_seq = 6;
 }
 
 message ReactionUpdatedEvent {
@@ -595,6 +600,21 @@ message ReactionUpdatedEvent {
   string message_id = 2;
   string emoji = 3;
   int32 count = 4;
+}
+
+message MessageUpdatedEvent {
+  string conversation_id = 1;
+  string message_id = 2;
+  string body = 3;
+  repeated string mentioned_user_ids = 4;
+  bool mention_everyone = 5;
+  google.protobuf.Timestamp edited_at = 6;
+}
+
+message MessageDeletedEvent {
+  string conversation_id = 1;
+  string message_id = 2;
+  string thread_root_message_id = 3;
 }
 
 message ForcePasswordChangeEvent {
@@ -647,5 +667,7 @@ message ServerEvent {
     ForcePasswordChangeEvent force_password_change = 22;
     UserIdentityUpdatedEvent user_identity_updated = 23;
     NotificationLevelChangedEvent notification_level_changed = 24;
+    MessageUpdatedEvent message_updated = 25;
+    MessageDeletedEvent message_deleted = 26;
   }
 }

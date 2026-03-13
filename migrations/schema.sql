@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS messages (
   thread_seq       BIGINT  NOT NULL DEFAULT 0,
   -- true when body contains @everyone / @channel mention
   mention_everyone BOOLEAN NOT NULL DEFAULT false,
+  edited_at        TIMESTAMPTZ,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   UNIQUE (channel_id, channel_seq),
@@ -472,6 +473,8 @@ CREATE TABLE IF NOT EXISTS workspace_events (
                 'conversation_removed',
                 'membership_changed',
                 'message_created',
+                'message_updated',
+                'message_deleted',
                 'read_counter_updated',
                 'notification_added',
                 'notification_resolved',

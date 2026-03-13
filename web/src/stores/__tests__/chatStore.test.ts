@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { create } from '@bufbuild/protobuf'
-import { useChatStore } from '@/stores/chat'
+import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import {
   loadLastOpenedConversation,
@@ -19,6 +19,9 @@ import {
   NotificationAddedEventSchema,
   NotificationSummarySchema,
   ReadCounterUpdatedEventSchema,
+  MessageUpdatedEventSchema,
+  MessageDeletedEventSchema,
+  ThreadSummaryUpdatedEventSchema,
   ServerEventSchema,
   PresenceEventSchema,
   PresenceStatus,
@@ -37,6 +40,24 @@ vi.mock('@/services/http/chatApi', () => ({
   listDmCandidates: chatApiMocks.listDmCandidates,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
 }))
+
+function buildMessage(overrides: Partial<Message> = {}): Message {
+  return {
+    id: 'message-1',
+    channelId: 'channel-1',
+    senderId: 'user-2',
+    senderName: 'Bob',
+    body: 'hello',
+    channelSeq: 1n,
+    threadSeq: 0n,
+    mentionedUserIds: [],
+    mentionEveryone: false,
+    createdAt: '2026-03-06T00:00:00Z',
+    reactions: [],
+    myReactions: [],
+    ...overrides,
+  }
+}
 
 describe('chatStore phase 6 flows', () => {
   beforeEach(() => {
@@ -1101,7 +1122,7 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.lastAppliedEventSeq).toBe(5n)
   })
 
-  it('uses currentThreadSeq as authoritative thread reply total on subscribe replay', () => {
+  it('uses replyCount as thread reply total and currentThreadSeq as cursor on subscribe replay', () => {
     const chat = useChatStore()
     chat.threadSummaries = {
       'root-1': {
@@ -1114,6 +1135,7 @@ describe('chatStore phase 6 flows', () => {
       conversationId: 'channel-1',
       threadRootMessageId: 'root-1',
       currentThreadSeq: 10n,
+      replyCount: 10,
       replay: [
         create(MessageEventSchema, {
           conversationId: 'channel-1',
@@ -1274,6 +1296,184 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.channels[0].hasUnreadThreadReplies).toBe(true)
     expect(chat.threadSummaries['root-1'].replyCount).toBe(1)
     expect(chat.threadSummaries['root-1'].lastThreadSeq).toBe(1n)
+  })
+
+  it('applies message_updated and message_deleted idempotently in conversation/thread caches', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    chat.bootstrapped = true
+
+    chat.messages = {
+      'channel-1': [
+        buildMessage({ id: 'message-1', body: 'root body', channelSeq: 10n }),
+      ],
+    }
+    chat.threadMessages = {
+      'root-1': [
+        buildMessage({
+          id: 'reply-1',
+          body: 'before edit',
+          channelSeq: 11n,
+          threadSeq: 1n,
+          threadRootMessageId: 'root-1',
+        }),
+      ],
+    }
+
+    const updatedEvent = create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-message-updated-1',
+      eventType: EventType.MESSAGE_UPDATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageUpdated',
+        value: create(MessageUpdatedEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-1',
+          body: 'after edit',
+          mentionedUserIds: ['user-9'],
+          mentionEveryone: true,
+        }),
+      },
+    })
+
+    chat.handleServerEvent(updatedEvent)
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 2n,
+      eventId: 'evt-message-updated-2',
+      eventType: EventType.MESSAGE_UPDATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageUpdated',
+        value: create(MessageUpdatedEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-1',
+          body: 'after edit',
+          mentionedUserIds: ['user-9'],
+          mentionEveryone: true,
+        }),
+      },
+    }))
+
+    expect(chat.threadMessages['root-1'][0].body).toBe('after edit')
+    expect(chat.threadMessages['root-1'][0].mentionedUserIds).toEqual(['user-9'])
+    expect(chat.threadMessages['root-1'][0].mentionEveryone).toBe(true)
+
+    const deletedEvent = create(ServerEventSchema, {
+      eventSeq: 3n,
+      eventId: 'evt-message-deleted-1',
+      eventType: EventType.MESSAGE_DELETED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageDeleted',
+        value: create(MessageDeletedEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-1',
+          threadRootMessageId: 'root-1',
+        }),
+      },
+    })
+
+    chat.handleServerEvent(deletedEvent)
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 4n,
+      eventId: 'evt-message-deleted-2',
+      eventType: EventType.MESSAGE_DELETED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageDeleted',
+        value: create(MessageDeletedEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-1',
+          threadRootMessageId: 'root-1',
+        }),
+      },
+    }))
+
+    expect(chat.threadMessages['root-1']).toHaveLength(0)
+    expect(chat.messages['channel-1']).toHaveLength(1)
+  })
+
+  it('closes active thread and clears thread cache when root message is deleted', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    chat.bootstrapped = true
+
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'root-1', channelSeq: 10n })],
+    }
+    chat.threadMessages = {
+      'root-1': [
+        buildMessage({
+          id: 'reply-1',
+          channelSeq: 11n,
+          threadSeq: 1n,
+          threadRootMessageId: 'root-1',
+        }),
+      ],
+    }
+    chat.threadSummaries = {
+      'root-1': {
+        replyCount: 1,
+        lastThreadSeq: 3n,
+      },
+    }
+    chat.activeThreadConversationId = 'channel-1'
+    chat.activeThreadRootId = 'root-1'
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-root-deleted',
+      eventType: EventType.MESSAGE_DELETED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageDeleted',
+        value: create(MessageDeletedEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'root-1',
+        }),
+      },
+    }))
+
+    expect(chat.messages['channel-1']).toHaveLength(0)
+    expect(chat.threadMessages['root-1']).toBeUndefined()
+    expect(chat.threadSummaries['root-1']).toBeUndefined()
+    expect(chat.isThreadPanelOpen).toBe(false)
+    expect(chat.activeThreadRootId).toBe('')
+  })
+
+  it('uses thread_summary_updated.lastThreadSeq as cursor and allows reply_count decreases', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    chat.bootstrapped = true
+    chat.threadSummaries = {
+      'root-1': {
+        replyCount: 5,
+        lastThreadSeq: 9n,
+      },
+    }
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-thread-summary-updated',
+      eventType: EventType.THREAD_SUMMARY_UPDATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'threadSummaryUpdated',
+        value: create(ThreadSummaryUpdatedEventSchema, {
+          conversationId: 'channel-1',
+          threadRootMessageId: 'root-1',
+          replyCount: 4,
+          lastThreadSeq: 9n,
+        }),
+      },
+    }))
+
+    expect(chat.threadSummaries['root-1'].replyCount).toBe(4)
+    expect(chat.threadSummaries['root-1'].lastThreadSeq).toBe(9n)
   })
 
   it('loads conversation history when selecting a conversation with no cached messages', async () => {

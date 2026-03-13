@@ -34,6 +34,11 @@
       <div v-if="showHeader" class="flex items-baseline gap-2 mb-0.5">
         <span class="font-bold text-white text-[15px]">{{ message.senderName }}</span>
         <span class="text-xs text-gray-500">{{ formattedTime }}</span>
+        <span
+          v-if="message.editedAt"
+          data-testid="message-edited-marker"
+          class="text-[11px] text-gray-500"
+        >(edited)</span>
         <!-- Send status indicators -->
         <span v-if="message.sendStatus === 'sending'" class="inline-flex items-center gap-1 text-xs text-gray-500">
           <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -160,11 +165,32 @@
       </div>
 
       <!-- Message body -->
-      <p
-        v-if="message.body"
-        class="text-[15px] leading-relaxed break-words whitespace-pre-wrap"
-        :class="bodyTextClass"
-      >{{ message.body }}</p>
+      <div v-if="isEditing" class="mt-1">
+        <textarea
+          v-model="editBody"
+          data-testid="message-edit-textarea"
+          class="w-full min-h-[72px] rounded border border-white/10 bg-chat-input px-2.5 py-2 text-[14px] text-gray-100 outline-none focus:border-accent"
+          :disabled="editSaving"
+          @keydown="handleEditTextareaKeydown"
+        />
+        <div class="mt-1.5 flex items-center justify-between gap-2">
+          <span class="text-[11px] text-gray-500">Enter to save - Shift+Enter for new line - Esc to cancel</span>
+          <span v-if="editError" class="text-xs text-red-300">{{ editError }}</span>
+        </div>
+      </div>
+
+      <template v-else>
+        <p
+          v-if="message.body"
+          class="text-[15px] leading-relaxed break-words whitespace-pre-wrap"
+          :class="bodyTextClass"
+        >{{ message.body }}</p>
+        <p
+          v-if="!showHeader && message.editedAt"
+          data-testid="message-edited-marker"
+          class="mt-0.5 text-[11px] text-gray-500"
+        >(edited)</p>
+      </template>
 
       <!-- Failed message actions -->
       <div v-if="message.sendStatus === 'failed'" class="mt-1 flex items-center gap-2">
@@ -389,7 +415,26 @@
       @click.stop
     >
       <button
+        v-if="canModifyMessage"
+        data-testid="message-menu-edit"
         class="w-full text-left px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10 transition-colors"
+        :disabled="isDeleting"
+        @click="startEdit"
+      >
+        Edit message
+      </button>
+      <button
+        v-if="canModifyMessage"
+        data-testid="message-menu-delete"
+        class="w-full text-left px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/20 transition-colors"
+        :disabled="isDeleting"
+        @click="deleteCurrentMessage"
+      >
+        Delete message
+      </button>
+      <button
+        class="w-full text-left px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10 transition-colors"
+        :disabled="isDeleting"
         @click="copyMessage"
       >
         Copy message
@@ -426,8 +471,14 @@ import { computed, ref, watch, onBeforeUnmount, shallowRef, nextTick } from 'vue
 import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
+import { useAuthStore } from '@/stores/auth'
 import { generateId } from '@/services/id'
-import { fetchMessageAttachmentBlob, listMessageReactionUsers } from '@/services/http/chatApi'
+import {
+  fetchMessageAttachmentBlob,
+  listMessageReactionUsers,
+  editMessage as editMessageApi,
+  deleteMessage as deleteMessageApi,
+} from '@/services/http/chatApi'
 import UserAvatar from './UserAvatar.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
 
@@ -499,8 +550,14 @@ const imagePreview = ref<{ open: boolean; src: string; fileName: string }>({
   src: '',
   fileName: '',
 })
+const isEditing = ref(false)
+const editBody = ref('')
+const editSaving = ref(false)
+const editError = ref('')
+const isDeleting = ref(false)
 const ws = useWsStore()
 const chat = useChatStore()
+const auth = useAuthStore()
 const DEBUG_REACTIONS = false
 
 function debugReaction(label: string, payload?: unknown) {
@@ -537,6 +594,14 @@ const isThreadReply = computed(() => {
 
 const showThreadAction = computed(() => props.showThreadAction && !isThreadReply.value)
 const messageAttachments = computed(() => props.message.attachments ?? [])
+const selfUserId = computed(() => auth.user?.id || chat.workspace?.selfUserId || '')
+const isOwnMessage = computed(() => Boolean(selfUserId.value) && props.message.senderId === selfUserId.value)
+const isServerConfirmed = computed(() => !props.message.sendStatus && !props.message.pending)
+const canModifyMessage = computed(() => isOwnMessage.value && isServerConfirmed.value)
+const canSaveEdit = computed(() =>
+  !editSaving.value
+  && (editBody.value.trim().length > 0 || messageAttachments.value.length > 0),
+)
 
 const lastReplyAtLabel = computed(() => {
   const summary = chat.threadSummaries[props.message.id]
@@ -850,6 +915,10 @@ watch(() => props.message.id, () => {
   closeReactionUsersPopup()
   reactionUsersCache.value = {}
   reactionCountsSnapshot.value = {}
+  isEditing.value = false
+  editBody.value = ''
+  editError.value = ''
+  editSaving.value = false
 })
 
 // ── Reactions ────────────────────────────────────────────────────────────────
@@ -1023,6 +1092,10 @@ function handleDocumentClick(evt: MouseEvent) {
 
 function handleEscape(evt: KeyboardEvent) {
   if (evt.key !== 'Escape') return
+  if (isEditing.value) {
+    cancelEdit()
+    return
+  }
   if (imagePreview.value.open) {
     closeImagePreview()
   }
@@ -1033,9 +1106,9 @@ function handleEscape(evt: KeyboardEvent) {
 }
 
 watch(
-  [showEmojiPicker, showContextMenu, () => imagePreview.value.open, reactionPopupVisible],
-  ([pickerVisible, menuVisible, previewVisible, popupVisible]) => {
-  const anyOpen = pickerVisible || menuVisible || previewVisible || popupVisible
+  [showEmojiPicker, showContextMenu, () => imagePreview.value.open, reactionPopupVisible, isEditing],
+  ([pickerVisible, menuVisible, previewVisible, popupVisible, editingVisible]) => {
+  const anyOpen = pickerVisible || menuVisible || previewVisible || popupVisible || editingVisible
   if (anyOpen) {
     document.addEventListener('click', handleDocumentClick)
     document.addEventListener('keydown', handleEscape)
@@ -1099,6 +1172,71 @@ onBeforeUnmount(() => {
 })
 
 // ── Context menu ─────────────────────────────────────────────────────────────
+
+function startEdit() {
+  if (!canModifyMessage.value) return
+  showContextMenu.value = false
+  editError.value = ''
+  editBody.value = props.message.body
+  isEditing.value = true
+}
+
+function cancelEdit() {
+  if (editSaving.value) return
+  isEditing.value = false
+  editError.value = ''
+  editBody.value = ''
+}
+
+function handleEditTextareaKeydown(evt: KeyboardEvent) {
+  if (evt.key === 'Escape') {
+    evt.preventDefault()
+    cancelEdit()
+    return
+  }
+  if (evt.key !== 'Enter') return
+  if (evt.shiftKey || evt.isComposing) return
+  evt.preventDefault()
+  if (!canSaveEdit.value) return
+  void saveEdit()
+}
+
+async function saveEdit() {
+  if (!canModifyMessage.value || !canSaveEdit.value) return
+  editSaving.value = true
+  editError.value = ''
+  const nextBody = editBody.value.trim()
+  try {
+    const resp = await editMessageApi(props.message.id, nextBody)
+    props.message.body = nextBody
+    props.message.editedAt = resp.edited_at || new Date().toISOString()
+    isEditing.value = false
+    editBody.value = ''
+  } catch (error) {
+    editError.value = error instanceof Error ? error.message : 'Failed to edit message'
+  } finally {
+    editSaving.value = false
+  }
+}
+
+async function deleteCurrentMessage() {
+  if (!canModifyMessage.value || isDeleting.value) return
+  isDeleting.value = true
+  editError.value = ''
+  showContextMenu.value = false
+  try {
+    await deleteMessageApi(props.message.id)
+    chat.applyLocalMessageDeleted(
+      props.message.channelId,
+      props.message.id,
+      props.message.threadRootMessageId,
+    )
+  } catch (error) {
+    editError.value = error instanceof Error ? error.message : 'Failed to delete message'
+  } finally {
+    isDeleting.value = false
+  }
+}
 
 function toggleContextMenu() {
   if (showContextMenu.value) {

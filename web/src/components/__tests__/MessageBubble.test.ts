@@ -10,11 +10,15 @@ import { useWsStore } from '@/stores/ws'
 const chatApiMocks = vi.hoisted(() => ({
   fetchMessageAttachmentBlob: vi.fn(),
   listMessageReactionUsers: vi.fn(),
+  editMessage: vi.fn(),
+  deleteMessage: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
   fetchMessageAttachmentBlob: chatApiMocks.fetchMessageAttachmentBlob,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
+  editMessage: chatApiMocks.editMessage,
+  deleteMessage: chatApiMocks.deleteMessage,
 }))
 
 async function flushAll() {
@@ -46,6 +50,13 @@ describe('MessageBubble reactions', () => {
     chatApiMocks.fetchMessageAttachmentBlob.mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
     chatApiMocks.listMessageReactionUsers.mockReset()
     chatApiMocks.listMessageReactionUsers.mockResolvedValue([])
+    chatApiMocks.editMessage.mockReset()
+    chatApiMocks.editMessage.mockResolvedValue({
+      message_id: 'message-1',
+      edited_at: '2026-03-06T00:10:00Z',
+    })
+    chatApiMocks.deleteMessage.mockReset()
+    chatApiMocks.deleteMessage.mockResolvedValue(undefined)
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:attachment-preview')
     globalThis.URL.revokeObjectURL = vi.fn()
   })
@@ -183,6 +194,178 @@ describe('MessageBubble reactions', () => {
       minute: '2-digit',
     })
     expect(wrapper.text()).toContain(expected)
+  })
+
+  it('shows edit/delete menu items only for own confirmed messages', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const ownConfirmed = buildMessage({ senderId: 'user-1', reactions: [], myReactions: [] })
+    const ownWrapper = mount(MessageBubble, {
+      props: { message: ownConfirmed, showHeader: true },
+      attachTo: document.body,
+    })
+    await ownWrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-menu-edit"]')).toBeTruthy()
+    expect(document.body.querySelector('[data-testid="message-menu-delete"]')).toBeTruthy()
+    ownWrapper.unmount()
+
+    const otherMessage = buildMessage({ senderId: 'user-2', reactions: [], myReactions: [] })
+    const otherWrapper = mount(MessageBubble, {
+      props: { message: otherMessage, showHeader: true },
+      attachTo: document.body,
+    })
+    await otherWrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-menu-edit"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="message-menu-delete"]')).toBeNull()
+    otherWrapper.unmount()
+
+    const ownUnconfirmed = buildMessage({
+      senderId: 'user-1',
+      sendStatus: 'sending',
+      reactions: [],
+      myReactions: [],
+    })
+    const pendingWrapper = mount(MessageBubble, {
+      props: { message: ownUnconfirmed, showHeader: true },
+      attachTo: document.body,
+    })
+    await pendingWrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-menu-edit"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="message-menu-delete"]')).toBeNull()
+    pendingWrapper.unmount()
+  })
+
+  it('edits inline and renders edited marker', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+      body: 'before edit',
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
+    expect(editMenu).toBeTruthy()
+    editMenu.click()
+    await flushAll()
+
+    const textarea = wrapper.get('[data-testid="message-edit-textarea"]')
+    expect(wrapper.find('[data-testid="message-edit-save"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="message-edit-cancel"]').exists()).toBe(false)
+    await textarea.setValue('edited body')
+    await textarea.trigger('keydown', { key: 'Enter' })
+    await flushAll()
+
+    expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'edited body')
+    expect(msg.body).toBe('edited body')
+    expect(msg.editedAt).toBe('2026-03-06T00:10:00Z')
+    expect(wrapper.find('[data-testid="message-edited-marker"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('uses Shift+Enter for newline and Enter for submit while editing', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+      body: 'start',
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
+    editMenu.click()
+    await flushAll()
+
+    const textarea = wrapper.get('[data-testid="message-edit-textarea"]')
+    await textarea.setValue('line 1')
+    await textarea.trigger('keydown', { key: 'Enter', shiftKey: true })
+    await flushAll()
+    expect(chatApiMocks.editMessage).not.toHaveBeenCalled()
+
+    await textarea.setValue('line 1\nline 2')
+    await textarea.trigger('keydown', { key: 'Enter' })
+    await flushAll()
+
+    expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'line 1\nline 2')
+    wrapper.unmount()
+  })
+
+  it('deletes message via API and applies local removal on success', async () => {
+    const auth = useAuthStore()
+    const chat = useChatStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+    const applyLocalDeleteSpy = vi.spyOn(chat, 'applyLocalMessageDeleted')
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    const deleteMenu = document.body.querySelector('[data-testid="message-menu-delete"]') as HTMLButtonElement
+    expect(deleteMenu).toBeTruthy()
+    deleteMenu.click()
+    await flushAll()
+
+    expect(chatApiMocks.deleteMessage).toHaveBeenCalledWith('message-1')
+    expect(applyLocalDeleteSpy).toHaveBeenCalledWith('channel-1', 'message-1', undefined)
+    wrapper.unmount()
+  })
+
+  it('cancels inline edit when Escape is pressed', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+      body: 'before',
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
+    editMenu.click()
+    await flushAll()
+    expect(wrapper.find('[data-testid="message-edit-textarea"]').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushAll()
+
+    expect(wrapper.find('[data-testid="message-edit-textarea"]').exists()).toBe(false)
+    expect(msg.body).toBe('before')
+    wrapper.unmount()
   })
 
   it('closes image preview when Escape is pressed', async () => {

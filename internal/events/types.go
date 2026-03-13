@@ -34,6 +34,8 @@ var eventTypeToProto = map[string]packetspb.EventType{
 	"conversation_removed":   packetspb.EventType_EVENT_TYPE_CONVERSATION_REMOVED,
 	"membership_changed":     packetspb.EventType_EVENT_TYPE_MEMBERSHIP_CHANGED,
 	"message_created":        packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+	"message_updated":        packetspb.EventType_EVENT_TYPE_MESSAGE_UPDATED,
+	"message_deleted":        packetspb.EventType_EVENT_TYPE_MESSAGE_DELETED,
 	"read_counter_updated":   packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED,
 	"notification_added":     packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED,
 	"notification_resolved":  packetspb.EventType_EVENT_TYPE_NOTIFICATION_RESOLVED,
@@ -101,6 +103,14 @@ func ValidateEventTypePayload(dbText string, evt *packetspb.ServerEvent) error {
 	case packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED:
 		if evt.GetMessageCreated() == nil {
 			return fmt.Errorf("event_type %q requires message_created payload", dbText)
+		}
+	case packetspb.EventType_EVENT_TYPE_MESSAGE_UPDATED:
+		if evt.GetMessageUpdated() == nil {
+			return fmt.Errorf("event_type %q requires message_updated payload", dbText)
+		}
+	case packetspb.EventType_EVENT_TYPE_MESSAGE_DELETED:
+		if evt.GetMessageDeleted() == nil {
+			return fmt.Errorf("event_type %q requires message_deleted payload", dbText)
 		}
 	case packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED:
 		if evt.GetReadCounterUpdated() == nil {

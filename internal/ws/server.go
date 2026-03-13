@@ -1511,6 +1511,7 @@ func (s *Server) handleDomainPayload(
 					ThreadRootMessageId: req.GetThreadRootMessageId(),
 					CurrentThreadSeq:    result.CurrentThreadSeq,
 					Replay:              result.Replay,
+					ReplyCount:          result.ReplyCount,
 				},
 			},
 		})

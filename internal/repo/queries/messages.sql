@@ -18,11 +18,11 @@ VALUES (@channel_id,
         @mention_everyone,
         now())
 RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
-          thread_root_id, thread_seq, mention_everyone, created_at;
+          thread_root_id, thread_seq, mention_everyone, edited_at, created_at;
 
 -- name: GetMessageByClientMsgID :one
 SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
-       thread_root_id, thread_seq, mention_everyone, created_at
+       thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 FROM messages
 WHERE channel_id = @channel_id
   AND client_msg_id = @client_msg_id
@@ -30,9 +30,24 @@ LIMIT 1;
 
 -- name: GetMessageByID :one
 SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
-       thread_root_id, thread_seq, mention_everyone, created_at
+       thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 FROM messages
 WHERE id = @message_id;
+
+-- name: UpdateMessageBody :one
+UPDATE messages
+SET body = @body,
+    mention_everyone = @mention_everyone,
+    edited_at = now()
+WHERE id = @message_id
+RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          thread_root_id, thread_seq, mention_everyone, edited_at, created_at;
+
+-- name: DeleteMessageByID :one
+DELETE FROM messages
+WHERE id = @message_id
+RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          thread_root_id, thread_seq, mention_everyone, edited_at, created_at;
 
 -- name: InsertMessageMention :exec
 INSERT INTO message_mentions (message_id, user_id, created_at)
@@ -46,11 +61,41 @@ WHERE root_message_id = @root_message_id;
 
 -- name: GetThreadMessages :many
 SELECT m.id, m.channel_id, m.channel_seq, m.sender_id, m.client_msg_id, m.body,
-       m.thread_root_id, m.thread_seq, m.mention_everyone, m.created_at
+       m.thread_root_id, m.thread_seq, m.mention_everyone, m.edited_at, m.created_at
 FROM messages m
 WHERE m.thread_root_id = @root_message_id
   AND m.thread_seq > @after_thread_seq
 ORDER BY m.thread_seq ASC;
+
+-- name: DeleteMessageMentions :exec
+DELETE FROM message_mentions
+WHERE message_id = @message_id;
+
+-- name: ListActiveChannelMemberIDs :many
+SELECT user_id
+FROM channel_members
+WHERE channel_id = @channel_id
+  AND is_archived = false
+ORDER BY user_id;
+
+-- name: ListMessageAttachmentsForDeleteTarget :many
+SELECT ma.id,
+       ma.conversation_id,
+       ma.message_id,
+       ma.file_name,
+       ma.file_size,
+       ma.mime_type,
+       ma.storage_key,
+       ma.uploaded_by,
+       ma.created_at
+FROM message_attachment ma
+WHERE ma.message_id IN (
+  SELECT m.id
+  FROM messages m
+  WHERE m.id = @message_id
+     OR m.thread_root_id = @message_id
+)
+ORDER BY ma.created_at, ma.id;
 
 -- name: InsertReaction :one
 INSERT INTO reactions (message_id, user_id, emoji, created_at)
@@ -114,6 +159,7 @@ SELECT m.id, m.channel_id, m.sender_id, u.display_name, m.body, m.channel_seq,
        COALESCE(m.thread_seq, 0) AS thread_seq,
        m.thread_root_id,
        COALESCE(ts.reply_count, 0) AS thread_reply_count,
+       m.edited_at,
        m.created_at,
        m.mention_everyone,
        COALESCE((

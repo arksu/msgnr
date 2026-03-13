@@ -368,7 +368,7 @@ describe('MessageBubble reactions', () => {
     wrapper.unmount()
   })
 
-  it('closes image preview when Escape is pressed', async () => {
+  it('renders compact image thumbnail and restrained lightbox contract, and closes on Escape', async () => {
     const msg = buildMessage({
       reactions: [],
       myReactions: [],
@@ -387,19 +387,75 @@ describe('MessageBubble reactions', () => {
 
     await flushAll()
 
-    const previewImage = wrapper.find('img[alt="photo.png"]')
-    expect(previewImage.exists()).toBe(true)
-    await previewImage.trigger('click')
+    const thumbnailButton = wrapper.get('[data-testid="message-image-thumbnail"]')
+    expect(thumbnailButton.classes()).toContain('max-w-[180px]')
+    expect(thumbnailButton.classes()).toContain('sm:max-w-[280px]')
+    expect(thumbnailButton.classes()).toContain('cursor-pointer')
+
+    const thumbnailImage = wrapper.get('[data-testid="message-image-thumbnail-img"]')
+    expect(thumbnailImage.classes()).toContain('max-h-[180px]')
+    expect(thumbnailImage.classes()).toContain('sm:max-h-[220px]')
+    expect(thumbnailImage.classes()).toContain('object-contain')
+    expect(thumbnailImage.classes()).not.toContain('object-cover')
+
+    await thumbnailButton.trigger('click')
     await flushAll()
 
-    const beforeEscCount = document.body.querySelectorAll('img[alt="photo.png"]').length
-    expect(beforeEscCount).toBe(2)
+    const lightbox = document.body.querySelector('[data-testid="message-image-lightbox"]')
+    expect(lightbox).toBeTruthy()
+    const lightboxImage = document.body.querySelector('[data-testid="message-image-lightbox-img"]')
+    expect(lightboxImage).toBeTruthy()
+    expect(lightboxImage?.classList.contains('max-h-[60vh]')).toBe(true)
+    expect(lightboxImage?.classList.contains('sm:max-h-[70vh]')).toBe(true)
+    expect(lightboxImage?.classList.contains('max-w-[86vw]')).toBe(true)
+    expect(lightboxImage?.classList.contains('sm:max-w-[74vw]')).toBe(true)
+    expect(lightboxImage?.classList.contains('max-h-[85vh]')).toBe(false)
+    expect(lightboxImage?.classList.contains('max-w-[90vw]')).toBe(false)
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await flushAll()
 
-    const afterEscCount = document.body.querySelectorAll('img[alt="photo.png"]').length
-    expect(afterEscCount).toBe(1)
+    expect(document.body.querySelector('[data-testid="message-image-lightbox"]')).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('closes image preview on close button and backdrop click', async () => {
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      attachments: [{
+        id: 'att-1',
+        fileName: 'photo.png',
+        fileSize: 3,
+        mimeType: 'image/png',
+      }],
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await flushAll()
+
+    await wrapper.get('[data-testid="message-image-thumbnail"]').trigger('click')
+    await flushAll()
+
+    const closeButton = document.body.querySelector('[data-testid="message-image-lightbox-close"]') as HTMLButtonElement
+    expect(closeButton).toBeTruthy()
+    closeButton.click()
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-image-lightbox"]')).toBeNull()
+
+    await wrapper.get('[data-testid="message-image-thumbnail"]').trigger('click')
+    await flushAll()
+
+    const lightbox = document.body.querySelector('[data-testid="message-image-lightbox"]') as HTMLDivElement
+    expect(lightbox).toBeTruthy()
+    lightbox.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-image-lightbox"]')).toBeNull()
 
     wrapper.unmount()
   })

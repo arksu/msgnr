@@ -209,14 +209,29 @@
         <div
           v-for="attachment in messageAttachments"
           :key="attachment.id"
-          class="rounded-md border border-chat-border bg-chat-input/70 p-2"
+          :class="isImageAttachment(attachment) ? '' : 'rounded-md border border-chat-border bg-chat-input/70 p-2'"
         >
-          <div class="mb-1 flex items-center justify-between gap-2">
-            <p class="truncate text-xs text-gray-300">{{ attachment.fileName }}</p>
+          <div v-if="isImageAttachment(attachment)" class="group/image relative w-fit">
             <button
-              class="rounded p-1 text-gray-400 hover:bg-white/10 hover:text-white"
+              data-testid="message-image-thumbnail"
+              class="block max-w-[180px] overflow-hidden rounded-lg bg-chat-input/60 shadow-sm transition-colors hover:bg-chat-input/80 sm:max-w-[280px] cursor-pointer"
+              @click="openImagePreview(attachment)"
+            >
+              <img
+                v-if="attachmentUrl(attachment)"
+                data-testid="message-image-thumbnail-img"
+                :src="attachmentUrl(attachment)"
+                :alt="attachment.fileName"
+                class="max-h-[180px] w-full object-contain sm:max-h-[220px]"
+              >
+              <div v-else class="flex h-24 items-center justify-center text-xs text-gray-500">
+                {{ loadingAttachmentIds.has(attachment.id) ? 'Loading image...' : 'Preview unavailable' }}
+              </div>
+            </button>
+            <button
+              class="absolute right-2 top-2 rounded-md border border-white/20 bg-black/55 p-1 text-white/90 opacity-0 transition-opacity group-hover/image:opacity-100 hover:bg-black/75 hover:text-white"
               title="Download"
-              @click="downloadAttachment(attachment)"
+              @click.stop="downloadAttachment(attachment)"
             >
               <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -226,23 +241,23 @@
             </button>
           </div>
 
-          <button
-            v-if="isImageAttachment(attachment)"
-            class="block w-full overflow-hidden rounded border border-chat-border/70 bg-black/30"
-            @click="openImagePreview(attachment)"
-          >
-            <img
-              v-if="attachmentUrl(attachment)"
-              :src="attachmentUrl(attachment)"
-              :alt="attachment.fileName"
-              class="max-h-72 w-full object-cover"
-            >
-            <div v-else class="flex h-24 items-center justify-center text-xs text-gray-500">
-              {{ loadingAttachmentIds.has(attachment.id) ? 'Loading image...' : 'Preview unavailable' }}
+          <template v-else>
+            <div class="mb-1 flex items-center justify-between gap-2">
+              <p class="truncate text-xs text-gray-300">{{ attachment.fileName }}</p>
+              <button
+                class="rounded p-1 text-gray-400 hover:bg-white/10 hover:text-white"
+                title="Download"
+                @click="downloadAttachment(attachment)"
+              >
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7,10 12,15 17,10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              </button>
             </div>
-          </button>
 
-          <div v-else-if="isVideoAttachment(attachment)">
+            <div v-if="isVideoAttachment(attachment)">
             <video
               v-if="attachmentUrl(attachment)"
               class="w-full rounded border border-chat-border/70 bg-black/50"
@@ -253,9 +268,9 @@
             <p v-else class="text-[11px] text-gray-500">
               {{ loadingAttachmentIds.has(attachment.id) ? 'Loading video...' : 'Preview unavailable' }}
             </p>
-          </div>
+            </div>
 
-          <div v-else-if="isAudioAttachment(attachment)">
+            <div v-else-if="isAudioAttachment(attachment)">
             <audio
               v-if="attachmentUrl(attachment)"
               class="w-full"
@@ -266,11 +281,12 @@
             <p v-else class="text-[11px] text-gray-500">
               {{ loadingAttachmentIds.has(attachment.id) ? 'Loading audio...' : 'Preview unavailable' }}
             </p>
-          </div>
+            </div>
 
-          <p v-else class="text-[11px] text-gray-500">
-            {{ formatFileSize(attachment.fileSize) }}
-          </p>
+            <p v-else class="text-[11px] text-gray-500">
+              {{ formatFileSize(attachment.fileSize) }}
+            </p>
+          </template>
         </div>
       </div>
 
@@ -445,23 +461,28 @@
   <Teleport to="body">
     <div
       v-if="imagePreview.open"
-      class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/85 p-4"
+      data-testid="message-image-lightbox"
+      class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/85 p-4 sm:p-6"
       @click.self="closeImagePreview"
     >
-      <button
-        class="absolute right-4 top-4 rounded bg-black/40 p-2 text-white hover:bg-black/70"
-        @click="closeImagePreview"
-      >
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M18 6 6 18M6 6l12 12" />
-        </svg>
-      </button>
-      <img
-        v-if="imagePreview.src"
-        :src="imagePreview.src"
-        :alt="imagePreview.fileName"
-        class="max-h-[85vh] max-w-[90vw] rounded border border-white/20 object-contain"
-      >
+      <div class="relative rounded-xl bg-black/20 p-2 shadow-xl sm:p-3">
+        <button
+          data-testid="message-image-lightbox-close"
+          class="absolute right-2 top-2 rounded-md border border-white/20 bg-black/55 p-1.5 text-white/90 transition-colors hover:bg-black/75 hover:text-white"
+          @click="closeImagePreview"
+        >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+        <img
+          v-if="imagePreview.src"
+          data-testid="message-image-lightbox-img"
+          :src="imagePreview.src"
+          :alt="imagePreview.fileName"
+          class="max-h-[60vh] max-w-[86vw] rounded-lg object-contain sm:max-h-[70vh] sm:max-w-[74vw]"
+        >
+      </div>
     </div>
   </Teleport>
 </template>

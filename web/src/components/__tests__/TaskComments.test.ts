@@ -210,7 +210,65 @@ describe('TaskComments', () => {
     expect(wrapper.find('img').exists()).toBe(true)
     expect(wrapper.find('video').exists()).toBe(true)
     expect(wrapper.find('audio').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('photo.jpg')
     expect(wrapper.text()).toContain('1.0 KB')
+  })
+
+  it('uses compact image thumbnail contract and restrained lightbox for comment images', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-image',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'image',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [{
+        id: 'img-1',
+        task_id: 'task-1',
+        comment_id: 'comment-image',
+        file_name: 'photo.jpg',
+        file_size: 10,
+        mime_type: 'image/jpeg',
+        uploaded_by: 'user-1',
+        created_at: '2026-03-10T12:00:00Z',
+      }],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const thumbButton = wrapper.get('[data-testid="task-comment-image-thumbnail"]')
+    expect(thumbButton.classes()).toContain('max-w-[180px]')
+    expect(thumbButton.classes()).toContain('sm:max-w-[280px]')
+    expect(thumbButton.classes()).toContain('cursor-pointer')
+    expect(wrapper.text()).not.toContain('photo.jpg')
+
+    const thumbImage = wrapper.get('[data-testid="task-comment-image-thumbnail-img"]')
+    expect(thumbImage.classes()).toContain('max-h-[180px]')
+    expect(thumbImage.classes()).toContain('sm:max-h-[220px]')
+    expect(thumbImage.classes()).toContain('object-contain')
+    expect(thumbImage.classes()).not.toContain('object-cover')
+
+    await thumbButton.trigger('click')
+    await flushPromises()
+
+    const lightboxImage = document.body.querySelector('[data-testid="task-comment-image-lightbox-img"]')
+    expect(lightboxImage).toBeTruthy()
+    expect(lightboxImage?.classList.contains('max-h-[60vh]')).toBe(true)
+    expect(lightboxImage?.classList.contains('sm:max-h-[70vh]')).toBe(true)
+    expect(lightboxImage?.classList.contains('max-w-[86vw]')).toBe(true)
+    expect(lightboxImage?.classList.contains('sm:max-w-[74vw]')).toBe(true)
+
+    const closeButton = document.body.querySelector('[data-testid="task-comment-image-lightbox-close"]') as HTMLButtonElement
+    expect(closeButton).toBeTruthy()
+    closeButton.click()
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-comment-image-lightbox"]')).toBeNull()
+
+    wrapper.unmount()
   })
 
   it('clears drag-over state on dragleave even when dataTransfer types are unavailable', async () => {

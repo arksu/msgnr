@@ -76,7 +76,7 @@
     <!-- Body -->
     <div class="flex-1 overflow-y-auto px-6 py-4 space-y-5">
 
-      <!-- Status + template row -->
+      <!-- Status row -->
       <div class="flex items-center gap-6 flex-wrap">
         <div>
           <div class="field-label">Status</div>
@@ -97,13 +97,6 @@
           </select>
           <span v-else class="text-sm text-gray-200">
             {{ tasksStore.statusById(task.status_id)?.name ?? task.status_id }}
-          </span>
-        </div>
-
-        <div>
-          <div class="field-label">Template</div>
-          <span class="text-sm text-gray-200">
-            {{ tasksStore.templateById(task.template_id)?.prefix ?? task.template_snapshot_prefix }}
           </span>
         </div>
       </div>

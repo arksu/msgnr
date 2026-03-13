@@ -51,6 +51,7 @@ export const useTasksStore = defineStore('tasks', () => {
   const selectedTask = ref<Task | null>(null)
   const taskLoading = ref(false)
   const taskError = ref<string | null>(null)
+  const descriptionViewMode = ref<'rendered' | 'raw'>('rendered')
 
   // ---- Create dialog ----
   const createDialogOpen = ref(false)
@@ -328,6 +329,7 @@ export const useTasksStore = defineStore('tasks', () => {
     selectedTask,
     taskLoading,
     taskError,
+    descriptionViewMode,
     createDialogOpen,
     taskList,
     taskListGroups,

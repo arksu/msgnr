@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -12,7 +14,7 @@ body,
 
 body {
     @apply bg-chat-bg text-gray-100;
-    font-family: 'Lato', 'Slack-Circular-Pro', ui-sans-serif, system-ui, sans-serif;
+    font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
 }
 
 /* Thin scrollbar for sidebar / chat */

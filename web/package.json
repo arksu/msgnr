@@ -25,6 +25,7 @@
     "dexie": "^4.3.0",
     "emoji-mart-vue-fast": "^15.0.5",
     "livekit-client": "^2.15.7",
+    "marked": "^17.0.4",
     "pinia": "^3.0.4",
     "vue": "^3.5.29",
     "vue-router": "^5.0.3"
@@ -44,7 +45,7 @@
     "typescript": "^5.7.3",
     "unplugin-vue-components": "^0.27.5",
     "vite": "^6.0.11",
-    "vite-plugin-pwa": "^0.19.8",
+    "vite-plugin-pwa": "^1.2.0",
     "vitest": "^4.0.18",
     "vue-tsc": "^2.2.0"
   }

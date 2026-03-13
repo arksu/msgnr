@@ -180,11 +180,12 @@
       </div>
 
       <template v-else>
-        <p
+        <div
           v-if="message.body"
-          class="text-[15px] leading-relaxed break-words whitespace-pre-wrap"
+          class="markdown-body text-[15px]"
           :class="bodyTextClass"
-        >{{ message.body }}</p>
+          v-html="renderedMessageHtml"
+        ></div>
         <p
           v-if="!showHeader && message.editedAt"
           data-testid="message-edited-marker"
@@ -494,6 +495,7 @@ import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { generateId } from '@/services/id'
+import { renderMarkdownToHtml } from '@/utils/markdown'
 import {
   fetchMessageAttachmentBlob,
   listMessageReactionUsers,
@@ -649,6 +651,11 @@ const bodyTextClass = computed(() => {
     case 'failed': return 'text-gray-300 opacity-75'
     default: return props.message.pending ? 'text-gray-400' : 'text-gray-100'
   }
+})
+
+const renderedMessageHtml = computed(() => {
+  if (!props.message.body) return ''
+  return renderMarkdownToHtml(props.message.body)
 })
 
 // ── Send status actions ──────────────────────────────────────────────────────

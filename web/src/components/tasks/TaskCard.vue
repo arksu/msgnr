@@ -138,7 +138,7 @@
         />
         <div
           v-else-if="task.description && tasksStore.descriptionViewMode === 'rendered'"
-          class="description-markdown text-sm text-gray-200"
+          class="markdown-body text-sm text-gray-200"
           v-html="renderedDescriptionHtml"
         />
         <p v-else-if="task.description" class="text-sm text-gray-200 whitespace-pre-wrap">
@@ -335,10 +335,10 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { marked } from 'marked'
 import { useTasksStore } from '@/stores/tasks'
 import type { TaskFieldDefinition, TaskFieldValue } from '@/services/http/tasksApi'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
+import { renderMarkdownToHtml } from '@/utils/markdown'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
 import TaskComments from './TaskComments.vue'
@@ -380,17 +380,8 @@ const canSave = computed(() =>
 const renderedDescriptionHtml = computed(() => {
   const src = task.value?.description ?? ''
   if (!src) return ''
-  return String(marked.parse(escapeHtml(src)))
+  return renderMarkdownToHtml(src)
 })
-
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
 
 function isFieldMissing(id: string): boolean {
   return showValidation.value && missingFields.value.includes(id)
@@ -703,59 +694,6 @@ watch(customFields, () => {
 <style scoped>
 .field-label {
   @apply text-xs text-gray-500 uppercase tracking-wide mb-1;
-}
-
-.description-markdown :deep(p),
-.description-markdown :deep(ul),
-.description-markdown :deep(ol),
-.description-markdown :deep(blockquote),
-.description-markdown :deep(pre),
-.description-markdown :deep(h1),
-.description-markdown :deep(h2),
-.description-markdown :deep(h3),
-.description-markdown :deep(h4),
-.description-markdown :deep(h5),
-.description-markdown :deep(h6) {
-  @apply mb-2;
-}
-
-.description-markdown :deep(h1) { @apply text-xl font-semibold text-white mt-3; }
-.description-markdown :deep(h2) { @apply text-lg font-semibold text-white mt-3; }
-.description-markdown :deep(h3) { @apply text-base font-semibold text-white mt-2; }
-.description-markdown :deep(ul) { @apply list-disc pl-5; }
-.description-markdown :deep(ol) { @apply list-decimal pl-5; }
-.description-markdown :deep(li) { @apply mb-1; }
-
-.description-markdown :deep(blockquote) {
-  @apply border-l-4 border-accent/50 bg-chat-input/40 px-3 py-2 rounded-r text-gray-300;
-}
-
-.description-markdown :deep(code) {
-  @apply bg-chat-input border border-chat-border rounded px-1 py-0.5 text-xs text-orange-300;
-}
-
-.description-markdown :deep(pre) {
-  @apply bg-sky-500/10 border border-sky-400/40 text-sky-200 rounded-md p-3 overflow-x-auto;
-}
-
-.description-markdown :deep(pre code) {
-  @apply block p-0 border-0 bg-transparent text-xs text-orange-300;
-}
-
-.description-markdown :deep(a) {
-  @apply text-accent hover:text-accent-hover underline;
-}
-
-.description-markdown :deep(table) {
-  @apply w-full border-collapse border border-chat-border rounded-md overflow-hidden my-3 text-sm;
-}
-
-.description-markdown :deep(th) {
-  @apply border border-chat-border bg-chat-input text-gray-100 font-semibold px-3 py-2 text-left;
-}
-
-.description-markdown :deep(td) {
-  @apply border border-chat-border px-3 py-2 text-gray-200 align-top;
 }
 .form-label {
   @apply block text-xs text-gray-400 mb-1;

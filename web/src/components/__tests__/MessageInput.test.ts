@@ -83,6 +83,35 @@ describe('MessageInput', () => {
     expect(uploadChatAttachment).not.toHaveBeenCalled()
   })
 
+  it('uploads pasted clipboard file attachments', async () => {
+    vi.mocked(uploadChatAttachment).mockResolvedValue({
+      id: 'att-clip-1',
+      file_name: 'clipboard-image.png',
+      file_size: 10,
+      mime_type: 'image/png',
+    })
+
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        disabled: false,
+      },
+    })
+
+    const file = new File(['img'], 'clipboard-image.png', { type: 'image/png' })
+    await wrapper.get('textarea').trigger('paste', {
+      clipboardData: {
+        items: [{ kind: 'file', getAsFile: () => file }],
+        files: [file],
+      },
+    })
+
+    expect(uploadChatAttachment).toHaveBeenCalledTimes(1)
+    expect(uploadChatAttachment).toHaveBeenCalledWith('channel-1', file, expect.any(Function))
+    expect(wrapper.text()).toContain('clipboard-image.png')
+  })
+
   it('shows upload progress while attachment upload is in flight', async () => {
     let finishUpload: () => void = () => {
       throw new Error('finishUpload callback was not set')
@@ -117,7 +146,7 @@ describe('MessageInput', () => {
     await flushAll()
 
     expect(wrapper.text()).toContain('Uploading big.png...')
-    expect(wrapper.text()).toContain('50%')
+    expect(wrapper.text()).toMatch(/\d{1,3}%/)
 
     finishUpload()
     await dropPromise

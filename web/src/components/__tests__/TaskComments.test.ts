@@ -67,6 +67,36 @@ describe('TaskComments', () => {
     expect(wrapper.text()).toContain('notes.txt')
   })
 
+  it('uploads pasted clipboard files onto the comment textarea', async () => {
+    vi.mocked(tasksUploadCommentAttachment).mockResolvedValue({
+      id: 'att-paste-1',
+      task_id: 'task-1',
+      file_name: 'clipboard.png',
+      file_size: 7,
+      mime_type: 'image/png',
+      uploaded_by: 'user-1',
+      created_at: '2026-03-10T12:00:00Z',
+    })
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    const file = new File(['clip'], 'clipboard.png', { type: 'image/png' })
+    await wrapper.get('textarea').trigger('paste', {
+      clipboardData: {
+        items: [{ kind: 'file', getAsFile: () => file }],
+        files: [file],
+      },
+    })
+    await flushPromises()
+
+    expect(tasksUploadCommentAttachment).toHaveBeenCalledTimes(1)
+    expect(tasksUploadCommentAttachment).toHaveBeenCalledWith('task-1', file)
+    expect(wrapper.text()).toContain('clipboard.png')
+  })
+
   it('submits attachment-only comment with attachment_ids payload', async () => {
     vi.mocked(tasksUploadCommentAttachment).mockResolvedValue({
       id: 'att-1',

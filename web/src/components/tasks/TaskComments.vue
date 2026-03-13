@@ -164,6 +164,7 @@
           rows="1"
           @keydown.enter.exact.prevent="submit"
           @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
+          @paste="onPaste"
           @dragenter.prevent="onDragEnter"
           @dragover.prevent="onDragOver"
           @dragleave.prevent="onDragLeave"
@@ -376,6 +377,44 @@ async function onDrop(event: DragEvent) {
   const files = Array.from(event.dataTransfer?.files ?? [])
   if (files.length === 0) return
   await uploadFiles(files)
+}
+
+function clipboardFileKey(file: File): string {
+  return `${file.name}:${file.size}:${file.type}:${file.lastModified}`
+}
+
+function extractClipboardFiles(event: ClipboardEvent): File[] {
+  const data = event.clipboardData
+  if (!data) return []
+
+  const files: File[] = []
+  const seen = new Set<string>()
+  const pushFile = (file: File | null | undefined) => {
+    if (!file) return
+    const key = clipboardFileKey(file)
+    if (seen.has(key)) return
+    seen.add(key)
+    files.push(file)
+  }
+
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== 'file') continue
+    pushFile(item.getAsFile())
+  }
+  for (const file of Array.from(data.files ?? [])) {
+    pushFile(file)
+  }
+
+  return files
+}
+
+function onPaste(event: ClipboardEvent) {
+  const files = extractClipboardFiles(event)
+  if (files.length === 0) return
+  if (submitting.value || uploading.value) return
+
+  event.preventDefault()
+  void uploadFiles(files)
 }
 
 function onShiftEnter(event: KeyboardEvent) {

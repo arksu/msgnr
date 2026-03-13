@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -662,6 +663,7 @@ func (h *Handler) tasksCollection(w http.ResponseWriter, r *http.Request, p auth
 // GET /api/tasks/:id
 // PATCH /api/tasks/:id
 // PATCH /api/tasks/:id/status
+// PATCH /api/tasks/:id/fields/:field_id
 // POST /api/tasks/:id/subtasks
 // GET|POST /api/tasks/:id/attachments
 // DELETE /api/tasks/:id/attachments/:aid
@@ -694,6 +696,28 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 		}
 		h.taskStatusItem(w, r, p, id)
 		return
+	}
+
+	// Route /api/tasks/:id/fields/:field_id
+	if len(rest) > 36 && rest[36] == '/' {
+		if fieldIDRaw, ok := strings.CutPrefix(rest[36:], "/fields/"); ok {
+			if strings.Contains(fieldIDRaw, "/") || fieldIDRaw == "" {
+				writeJSON(w, http.StatusNotFound, errBody("not found"))
+				return
+			}
+			taskID, err := uuid.Parse(rest[:36])
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
+				return
+			}
+			fieldID, err := uuid.Parse(fieldIDRaw)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, errBody("invalid field id"))
+				return
+			}
+			h.taskFieldItem(w, r, p, taskID, fieldID)
+			return
+		}
 	}
 
 	// Route /api/tasks/:id/comments[/...]
@@ -785,6 +809,46 @@ func (h *Handler) taskStatusItem(w http.ResponseWriter, r *http.Request, p auth.
 	resp, err := h.svc.UpdateTaskStatus(r.Context(), id, UpdateTaskStatusParams{
 		StatusID: req.StatusID,
 		ActorID:  p.UserID,
+	})
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// PATCH /api/tasks/:id/fields/:field_id
+func (h *Handler) taskFieldItem(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID, fieldID uuid.UUID) {
+	if r.Method != http.MethodPatch {
+		methodNotAllowed(w)
+		return
+	}
+
+	var req struct {
+		ValueText        *string         `json:"value_text"`
+		ValueNumber      *string         `json:"value_number"`
+		ValueUserID      *uuid.UUID      `json:"value_user_id"`
+		ValueDate        *string         `json:"value_date"`
+		ValueDatetime    *time.Time      `json:"value_datetime"`
+		ValueJSON        json.RawMessage `json:"value_json"`
+		EnumDictionaryID *uuid.UUID      `json:"enum_dictionary_id"`
+		EnumVersion      *int32          `json:"enum_version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+		return
+	}
+
+	resp, err := h.svc.UpdateTaskFieldValue(r.Context(), taskID, fieldID, UpdateTaskFieldValueParams{
+		ValueText:        req.ValueText,
+		ValueNumber:      req.ValueNumber,
+		ValueUserID:      req.ValueUserID,
+		ValueDate:        req.ValueDate,
+		ValueDatetime:    req.ValueDatetime,
+		ValueJSON:        req.ValueJSON,
+		EnumDictionaryID: req.EnumDictionaryID,
+		EnumVersion:      req.EnumVersion,
+		ActorID:          p.UserID,
 	})
 	if err != nil {
 		h.serviceError(w, err)

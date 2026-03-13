@@ -1233,6 +1233,160 @@ func (s *Service) UpdateTaskStatus(ctx context.Context, id uuid.UUID, p UpdateTa
 	return s.GetTask(ctx, taskRow.ID)
 }
 
+// UpdateTaskFieldValueParams carries inputs for a single custom field update.
+type UpdateTaskFieldValueParams struct {
+	ValueText        *string
+	ValueNumber      *string
+	ValueUserID      *uuid.UUID
+	ValueDate        *string
+	ValueDatetime    *time.Time
+	ValueJSON        json.RawMessage
+	EnumDictionaryID *uuid.UUID
+	EnumVersion      *int32
+	ActorID          uuid.UUID
+}
+
+// UpdateTaskFieldValue updates exactly one custom field value for a task.
+func (s *Service) UpdateTaskFieldValue(
+	ctx context.Context,
+	taskID, fieldDefinitionID uuid.UUID,
+	p UpdateTaskFieldValueParams,
+) (FieldValueRow, error) {
+	task, err := s.q.TaskGet(ctx, taskID)
+	if err != nil {
+		return FieldValueRow{}, mapNotFound(err, "task")
+	}
+
+	def, err := s.q.TaskFieldGet(ctx, queries.TaskFieldGetParams{
+		TemplateID: task.TemplateID,
+		ID:         fieldDefinitionID,
+	})
+	if err != nil {
+		return FieldValueRow{}, mapNotFound(err, "field")
+	}
+
+	if err := validateSingleFieldValueInput(def.Type, p); err != nil {
+		return FieldValueRow{}, err
+	}
+	p = normalizeSingleFieldValueInput(def.Type, p)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return FieldValueRow{}, fmt.Errorf("tasks: begin update task field tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	fv, err := upsertOneFieldValue(ctx, tx, taskID, FieldValueInput{
+		FieldDefinitionID: fieldDefinitionID,
+		ValueText:         p.ValueText,
+		ValueNumber:       p.ValueNumber,
+		ValueUserID:       p.ValueUserID,
+		ValueDate:         p.ValueDate,
+		ValueDatetime:     p.ValueDatetime,
+		ValueJSON:         p.ValueJSON,
+		EnumDictionaryID:  p.EnumDictionaryID,
+		EnumVersion:       p.EnumVersion,
+	})
+	if err != nil {
+		return FieldValueRow{}, err
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE task SET updated_by = $2, updated_at = now() WHERE id = $1`,
+		taskID, p.ActorID,
+	); err != nil {
+		return FieldValueRow{}, fmt.Errorf("tasks: touch task on field update: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return FieldValueRow{}, fmt.Errorf("tasks: commit update task field tx: %w", err)
+	}
+
+	return fv, nil
+}
+
+func validateSingleFieldValueInput(fieldType string, p UpdateTaskFieldValueParams) error {
+	hasText := p.ValueText != nil
+	hasNumber := p.ValueNumber != nil
+	hasUser := p.ValueUserID != nil
+	hasDate := p.ValueDate != nil
+	hasDatetime := p.ValueDatetime != nil
+	hasJSON := len(p.ValueJSON) > 0 && !bytes.Equal(bytes.TrimSpace(p.ValueJSON), []byte("null"))
+	hasEnumMeta := p.EnumDictionaryID != nil || p.EnumVersion != nil
+
+	switch fieldType {
+	case "text":
+		if hasNumber || hasUser || hasDate || hasDatetime || hasJSON || hasEnumMeta {
+			return fmt.Errorf("%w: invalid payload for text field", ErrBadRequest)
+		}
+	case "number":
+		if hasText || hasUser || hasDate || hasDatetime || hasJSON || hasEnumMeta {
+			return fmt.Errorf("%w: invalid payload for number field", ErrBadRequest)
+		}
+	case "date":
+		if hasText || hasNumber || hasUser || hasDatetime || hasJSON || hasEnumMeta {
+			return fmt.Errorf("%w: invalid payload for date field", ErrBadRequest)
+		}
+	case "datetime":
+		if hasText || hasNumber || hasUser || hasDate || hasJSON || hasEnumMeta {
+			return fmt.Errorf("%w: invalid payload for datetime field", ErrBadRequest)
+		}
+	case "user":
+		if hasText || hasNumber || hasDate || hasDatetime || hasJSON || hasEnumMeta {
+			return fmt.Errorf("%w: invalid payload for user field", ErrBadRequest)
+		}
+	case "users":
+		if hasText || hasNumber || hasUser || hasDate || hasDatetime || hasEnumMeta {
+			return fmt.Errorf("%w: invalid payload for users field", ErrBadRequest)
+		}
+		if len(p.ValueJSON) == 0 {
+			p.ValueJSON = json.RawMessage("[]")
+		}
+		if err := validateJSONArrayOfStrings(p.ValueJSON); err != nil {
+			return err
+		}
+	case "enum":
+		if hasNumber || hasUser || hasDate || hasDatetime || hasJSON {
+			return fmt.Errorf("%w: invalid payload for enum field", ErrBadRequest)
+		}
+	case "multi_enum":
+		if hasText || hasNumber || hasUser || hasDate || hasDatetime {
+			return fmt.Errorf("%w: invalid payload for multi_enum field", ErrBadRequest)
+		}
+		if len(p.ValueJSON) == 0 {
+			p.ValueJSON = json.RawMessage("[]")
+		}
+		if err := validateJSONArrayOfStrings(p.ValueJSON); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("%w: unsupported field type %q", ErrBadRequest, fieldType)
+	}
+
+	return nil
+}
+
+func normalizeSingleFieldValueInput(fieldType string, p UpdateTaskFieldValueParams) UpdateTaskFieldValueParams {
+	switch fieldType {
+	case "users", "multi_enum":
+		if len(bytes.TrimSpace(p.ValueJSON)) == 0 || bytes.Equal(bytes.TrimSpace(p.ValueJSON), []byte("null")) {
+			p.ValueJSON = json.RawMessage("[]")
+		}
+	}
+	return p
+}
+
+func validateJSONArrayOfStrings(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("%w: value_json must be a JSON array", ErrBadRequest)
+	}
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return fmt.Errorf("%w: value_json must be an array of strings", ErrBadRequest)
+	}
+	return nil
+}
+
 // =========================================================
 // Task helpers
 // =========================================================

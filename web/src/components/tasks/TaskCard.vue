@@ -134,11 +134,11 @@
           </div>
           <TaskFieldInput
             :field="field"
-            :value="editing ? customValues[field.id] : getStoredValue(field)"
-            :mode="editing ? 'edit' : 'view'"
+            :value="fieldInputValue(field)"
+            :mode="fieldInputMode(field)"
             :users="tasksStore.users"
             :enum-items="field.enum_dictionary_id ? tasksStore.enumItemsFor(field.enum_dictionary_id) : undefined"
-            @update:value="customValues[field.id] = $event"
+            @update:value="onFieldValueChange(field, $event)"
           />
           <p v-if="isFieldMissing(field.id)" class="text-red-400 text-xs mt-1">
             This field is required
@@ -329,6 +329,8 @@ const statusSaving = ref(false)
 const saveError = ref('')
 const showValidation = ref(false)
 const viewStatusId = ref('')
+const fieldSaving = reactive<Record<string, boolean>>({})
+const inlineValues = reactive<Record<string, unknown>>({})
 
 const form = reactive({ title: '', description: '', statusId: '' })
 const customValues = reactive<Record<string, unknown>>({})
@@ -368,6 +370,103 @@ function getStoredValue(field: TaskFieldDefinition): unknown {
     case 'users':
     case 'multi_enum': return fv.value_json
     default:       return null
+  }
+}
+
+function isInlineEditableField(field: TaskFieldDefinition): boolean {
+  return field.type === 'enum' || field.type === 'multi_enum' || field.type === 'user' || field.type === 'users'
+}
+
+function fieldInputMode(field: TaskFieldDefinition): 'view' | 'edit' {
+  if (editing.value) return 'edit'
+  return isInlineEditableField(field) ? 'edit' : 'view'
+}
+
+function fieldInputValue(field: TaskFieldDefinition): unknown {
+  if (editing.value) return customValues[field.id]
+  if (isInlineEditableField(field)) return inlineValues[field.id]
+  return getStoredValue(field)
+}
+
+function normalizeInlineFieldValue(field: TaskFieldDefinition, value: unknown): unknown {
+  if (field.type === 'users' || field.type === 'multi_enum') {
+    return Array.isArray(value) ? value : []
+  }
+  if (field.type === 'enum' || field.type === 'user') {
+    if (value === '' || value === undefined) return null
+    return value as string | null
+  }
+  return value
+}
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const aa = Array.isArray(a) ? a : []
+    const bb = Array.isArray(b) ? b : []
+    if (aa.length !== bb.length) return false
+    return aa.every((v, i) => v === bb[i])
+  }
+  return a === b
+}
+
+function initInlineValues() {
+  if (!task.value) return
+  customFields.value.forEach(f => {
+    if (isInlineEditableField(f)) {
+      inlineValues[f.id] = normalizeInlineFieldValue(f, getStoredValue(f))
+    }
+  })
+}
+
+function buildInlineFieldPayload(field: TaskFieldDefinition, value: unknown): {
+  value_text?: string | null
+  value_user_id?: string | null
+  value_json?: unknown | null
+  enum_dictionary_id?: string | null
+  enum_version?: number | null
+} {
+  if (field.type === 'user') {
+    return { value_user_id: (value as string | null) ?? null }
+  }
+  if (field.type === 'users') {
+    return { value_json: (value as string[]) ?? [] }
+  }
+  if (field.type === 'enum') {
+    return {
+      value_text: (value as string | null) ?? null,
+      enum_dictionary_id: field.enum_dictionary_id ?? null,
+      enum_version: field.enum_dictionary_id ? (tasksStore.enumVersionFor(field.enum_dictionary_id) ?? null) : null,
+    }
+  }
+  return {
+    value_json: (value as string[]) ?? [],
+    enum_dictionary_id: field.enum_dictionary_id ?? null,
+    enum_version: field.enum_dictionary_id ? (tasksStore.enumVersionFor(field.enum_dictionary_id) ?? null) : null,
+  }
+}
+
+async function onFieldValueChange(field: TaskFieldDefinition, value: unknown) {
+  if (editing.value) {
+    customValues[field.id] = value
+    return
+  }
+  if (!task.value || !isInlineEditableField(field) || fieldSaving[field.id]) return
+
+  const next = normalizeInlineFieldValue(field, value)
+  const prev = normalizeInlineFieldValue(field, getStoredValue(field))
+  if (valuesEqual(prev, next)) return
+
+  inlineValues[field.id] = next
+  fieldSaving[field.id] = true
+  saveError.value = ''
+  try {
+    await tasksStore.updateTaskFieldValue(task.value.id, field.id, buildInlineFieldPayload(field, next))
+    inlineValues[field.id] = normalizeInlineFieldValue(field, getStoredValue(field))
+  } catch (e) {
+    inlineValues[field.id] = prev
+    saveError.value = e instanceof Error ? e.message : 'Failed to update field'
+  } finally {
+    fieldSaving[field.id] = false
   }
 }
 
@@ -531,6 +630,15 @@ function formatDatetime(v: string): string {
 
 // Exit edit mode and close subtask form when task changes
 watch(task, () => {
+  Object.keys(inlineValues).forEach(k => delete inlineValues[k])
+  Object.keys(fieldSaving).forEach(k => delete fieldSaving[k])
+  initInlineValues()
+  if (customFields.value.some(f => f.type === 'user' || f.type === 'users')) {
+    tasksStore.loadUsers()
+  }
+  customFields.value
+    .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
+    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
   viewStatusId.value = task.value?.status_id ?? ''
   editing.value = false
   saveError.value = ''
@@ -539,6 +647,16 @@ watch(task, () => {
   subtaskError.value = ''
   showSubtaskValidation.value = false
 }, { immediate: true })
+
+watch(customFields, () => {
+  initInlineValues()
+  if (customFields.value.some(f => f.type === 'user' || f.type === 'users')) {
+    tasksStore.loadUsers()
+  }
+  customFields.value
+    .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
+    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
+})
 </script>
 
 <style scoped>

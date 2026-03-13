@@ -368,6 +368,17 @@ export interface UpdateTaskStatusPayload {
   status_id: string
 }
 
+export interface UpdateTaskFieldValuePayload {
+  value_text?: string | null
+  value_number?: string | null
+  value_user_id?: string | null
+  value_date?: string | null
+  value_datetime?: string | null
+  value_json?: unknown | null
+  enum_dictionary_id?: string | null
+  enum_version?: number | null
+}
+
 export async function tasksCreate(payload: CreateTaskPayload): Promise<Task> {
   try {
     const { data } = await http.post<Task>('/api/tasks', payload)
@@ -392,6 +403,17 @@ export async function tasksUpdate(id: string, payload: UpdateTaskPayload): Promi
 export async function tasksUpdateTaskStatus(id: string, payload: UpdateTaskStatusPayload): Promise<Task> {
   try {
     const { data } = await http.patch<Task>(`/api/tasks/${id}/status`, payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksUpdateTaskFieldValue(
+  taskId: string,
+  fieldId: string,
+  payload: UpdateTaskFieldValuePayload,
+): Promise<TaskFieldValue> {
+  try {
+    const { data } = await http.patch<TaskFieldValue>(`/api/tasks/${taskId}/fields/${fieldId}`, payload)
     return data
   } catch (e) { handleError(e) }
 }

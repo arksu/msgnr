@@ -11,6 +11,7 @@ import {
   tasksGet,
   tasksUpdate,
   tasksUpdateTaskStatus,
+  tasksUpdateTaskFieldValue,
   tasksCreateSubtask,
   tasksListTasks,
   type TaskTemplate,
@@ -19,6 +20,7 @@ import {
   type TaskUser,
   type EnumDictionaryVersionItem,
   type Task,
+  type TaskFieldValue,
   type TaskListItem,
   type TaskListGroup,
   type TaskListParams,
@@ -217,6 +219,32 @@ export const useTasksStore = defineStore('tasks', () => {
     return updated
   }
 
+  async function updateTaskFieldValue(
+    taskId: string,
+    fieldId: string,
+    payload: {
+      value_text?: string | null
+      value_number?: string | null
+      value_user_id?: string | null
+      value_date?: string | null
+      value_datetime?: string | null
+      value_json?: unknown | null
+      enum_dictionary_id?: string | null
+      enum_version?: number | null
+    },
+  ): Promise<TaskFieldValue> {
+    const updated = await tasksUpdateTaskFieldValue(taskId, fieldId, payload)
+    if (selectedTask.value?.id === taskId) {
+      const idx = selectedTask.value.field_values.findIndex(v => v.field_definition_id === fieldId)
+      if (idx >= 0) {
+        selectedTask.value.field_values[idx] = updated
+      } else {
+        selectedTask.value.field_values.push(updated)
+      }
+    }
+    return updated
+  }
+
   async function createSubtask(parentId: string, payload: CreateTaskPayload): Promise<Task> {
     const subtask = await tasksCreateSubtask(parentId, payload)
     // Force-refresh the parent so its subtasks list reflects the new entry,
@@ -329,6 +357,7 @@ export const useTasksStore = defineStore('tasks', () => {
     selectTask,
     updateTask,
     updateTaskStatus,
+    updateTaskFieldValue,
     createSubtask,
     clearSelectedTask,
     loadTaskList,

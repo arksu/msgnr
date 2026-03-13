@@ -297,7 +297,7 @@ describe('CallDock input device selector', () => {
       const toggle = wrapper.get('[data-testid="calldock-input-device-toggle"]')
       await toggle.trigger('click')
       await flushAll()
-      expect(wrapper.get('[data-testid="calldock-input-device-menu"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="calldock-input-device-menu"]').exists()).toBe(true)
 
       const option = wrapper.get('[data-testid="calldock-input-device-option-mic-2"]')
       await option.trigger('click')

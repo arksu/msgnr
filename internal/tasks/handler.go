@@ -661,6 +661,7 @@ func (h *Handler) tasksCollection(w http.ResponseWriter, r *http.Request, p auth
 
 // GET /api/tasks/:id
 // PATCH /api/tasks/:id
+// PATCH /api/tasks/:id/status
 // POST /api/tasks/:id/subtasks
 // GET|POST /api/tasks/:id/attachments
 // DELETE /api/tasks/:id/attachments/:aid
@@ -681,6 +682,17 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 			return
 		}
 		h.subtasksCollection(w, r, p, id)
+		return
+	}
+
+	// Route /api/tasks/:id/status
+	if rawID, ok := strings.CutSuffix(rest, "/status"); ok {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
+			return
+		}
+		h.taskStatusItem(w, r, p, id)
 		return
 	}
 
@@ -753,6 +765,32 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+// PATCH /api/tasks/:id/status
+func (h *Handler) taskStatusItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {
+	if r.Method != http.MethodPatch {
+		methodNotAllowed(w)
+		return
+	}
+
+	var req struct {
+		StatusID uuid.UUID `json:"status_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+		return
+	}
+
+	resp, err := h.svc.UpdateTaskStatus(r.Context(), id, UpdateTaskStatusParams{
+		StatusID: req.StatusID,
+		ActorID:  p.UserID,
+	})
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // POST /api/tasks/:id/subtasks

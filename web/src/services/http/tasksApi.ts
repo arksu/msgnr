@@ -364,6 +364,10 @@ export interface UpdateTaskPayload {
   field_values?: TaskFieldValueInput[]
 }
 
+export interface UpdateTaskStatusPayload {
+  status_id: string
+}
+
 export async function tasksCreate(payload: CreateTaskPayload): Promise<Task> {
   try {
     const { data } = await http.post<Task>('/api/tasks', payload)
@@ -381,6 +385,13 @@ export async function tasksGet(id: string): Promise<Task> {
 export async function tasksUpdate(id: string, payload: UpdateTaskPayload): Promise<Task> {
   try {
     const { data } = await http.patch<Task>(`/api/tasks/${id}`, payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksUpdateTaskStatus(id: string, payload: UpdateTaskStatusPayload): Promise<Task> {
+  try {
+    const { data } = await http.patch<Task>(`/api/tasks/${id}/status`, payload)
     return data
   } catch (e) { handleError(e) }
 }

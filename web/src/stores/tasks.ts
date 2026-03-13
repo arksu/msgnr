@@ -10,6 +10,7 @@ import {
   tasksCreate,
   tasksGet,
   tasksUpdate,
+  tasksUpdateTaskStatus,
   tasksCreateSubtask,
   tasksListTasks,
   type TaskTemplate,
@@ -210,6 +211,12 @@ export const useTasksStore = defineStore('tasks', () => {
     return updated
   }
 
+  async function updateTaskStatus(id: string, statusId: string): Promise<Task> {
+    const updated = await tasksUpdateTaskStatus(id, { status_id: statusId })
+    selectedTask.value = updated
+    return updated
+  }
+
   async function createSubtask(parentId: string, payload: CreateTaskPayload): Promise<Task> {
     const subtask = await tasksCreateSubtask(parentId, payload)
     // Force-refresh the parent so its subtasks list reflects the new entry,
@@ -321,6 +328,7 @@ export const useTasksStore = defineStore('tasks', () => {
     createTask,
     selectTask,
     updateTask,
+    updateTaskStatus,
     createSubtask,
     clearSelectedTask,
     loadTaskList,

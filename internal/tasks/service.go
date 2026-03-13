@@ -1207,6 +1207,32 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 	return s.GetTask(ctx, taskRow.ID)
 }
 
+// UpdateTaskStatusParams carries inputs for a status-only task update.
+type UpdateTaskStatusParams struct {
+	StatusID uuid.UUID
+	ActorID  uuid.UUID
+}
+
+// UpdateTaskStatus updates only a task status (plus audit/system fields).
+func (s *Service) UpdateTaskStatus(ctx context.Context, id uuid.UUID, p UpdateTaskStatusParams) (TaskResponse, error) {
+	if _, err := s.q.TaskGet(ctx, id); err != nil {
+		return TaskResponse{}, mapNotFound(err, "task")
+	}
+
+	taskRow, err := scanTask(s.pool.QueryRow(ctx,
+		`UPDATE task
+		 SET status_id = $2, updated_by = $3, updated_at = now()
+		 WHERE id = $1
+		 RETURNING `+taskColumns,
+		id, p.StatusID, p.ActorID,
+	))
+	if err != nil {
+		return TaskResponse{}, mapTaskWriteError(err)
+	}
+
+	return s.GetTask(ctx, taskRow.ID)
+}
+
 // =========================================================
 // Task helpers
 // =========================================================

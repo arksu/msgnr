@@ -80,7 +80,16 @@
       <div class="flex items-center gap-6 flex-wrap">
         <div>
           <div class="field-label">Status</div>
-          <select v-if="editing" v-model="form.statusId" class="field-select">
+          <span v-if="editing" class="text-sm text-gray-200">
+            {{ tasksStore.statusById(task.status_id)?.name ?? task.status_id }}
+          </span>
+          <select
+            v-else
+            v-model="viewStatusId"
+            class="field-select"
+            :disabled="statusSaving"
+            @change="onViewStatusChange"
+          >
             <!--
               Render all statuses so a task with a soft-deleted status still has
               a visible selection. Deleted entries are disabled so the user is
@@ -95,9 +104,6 @@
               {{ s.name }}{{ s.deleted_at ? ' (deleted)' : '' }}
             </option>
           </select>
-          <span v-else class="text-sm text-gray-200">
-            {{ tasksStore.statusById(task.status_id)?.name ?? task.status_id }}
-          </span>
         </div>
       </div>
 
@@ -319,8 +325,10 @@ const tasksStore = useTasksStore()
 // ---- Edit mode ----
 const editing = ref(false)
 const saving = ref(false)
+const statusSaving = ref(false)
 const saveError = ref('')
 const showValidation = ref(false)
+const viewStatusId = ref('')
 
 const form = reactive({ title: '', description: '', statusId: '' })
 const customValues = reactive<Record<string, unknown>>({})
@@ -406,6 +414,24 @@ async function save() {
     saveError.value = e instanceof Error ? e.message : 'Failed to save task'
   } finally {
     saving.value = false
+  }
+}
+
+async function onViewStatusChange() {
+  if (!task.value || editing.value || statusSaving.value) return
+  const prev = task.value.status_id
+  const next = viewStatusId.value
+  if (!next || next === prev) return
+  statusSaving.value = true
+  saveError.value = ''
+  try {
+    await tasksStore.updateTaskStatus(task.value.id, next)
+    viewStatusId.value = next
+  } catch (e) {
+    viewStatusId.value = prev
+    saveError.value = e instanceof Error ? e.message : 'Failed to update status'
+  } finally {
+    statusSaving.value = false
   }
 }
 
@@ -505,13 +531,14 @@ function formatDatetime(v: string): string {
 
 // Exit edit mode and close subtask form when task changes
 watch(task, () => {
+  viewStatusId.value = task.value?.status_id ?? ''
   editing.value = false
   saveError.value = ''
   showValidation.value = false
   showSubtaskForm.value = false
   subtaskError.value = ''
   showSubtaskValidation.value = false
-})
+}, { immediate: true })
 </script>
 
 <style scoped>

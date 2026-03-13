@@ -68,10 +68,7 @@
             title="Add reaction"
             @click.stop="togglePickerButton"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
-            </svg>
+            <span class="text-sm leading-none font-semibold">+</span>
           </button>
 
           <!-- 💬 Reply in thread: hide when thread already has replies -->
@@ -110,10 +107,7 @@
           title="Add reaction"
           @click.stop="togglePickerButton"
         >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
-          </svg>
+          <span class="text-sm leading-none font-semibold">+</span>
         </button>
         <button
           v-if="!threadReplyCount && showThreadAction && !isThreadReply"
@@ -273,13 +267,13 @@
         <button
           v-for="r in message.reactions"
           :key="r.emoji"
-          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm border transition-colors"
           :class="reactionChipClass(r.emoji)"
           :title="`${r.count} ${r.count === 1 ? 'reaction' : 'reactions'}`"
           :disabled="chat.isReactionOpPending(message.channelId, message.id, r.emoji)"
           @click="toggleReaction(r.emoji)"
         >
-          <span>{{ r.emoji }}</span>
+          <span class="text-lg leading-none">{{ r.emoji }}</span>
           <span class="font-medium">{{ r.count }}</span>
         </button>
 
@@ -287,14 +281,11 @@
         <div ref="pickerRoot" class="relative inline-flex">
           <button
             ref="pickerToggleButton"
-            class="inline-flex items-center justify-center w-7 h-6 rounded-full text-xs border border-white/10 bg-transparent text-gray-500 hover:text-gray-300 hover:bg-white/10 transition-colors opacity-0 group-hover:opacity-100"
+            class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs border border-white/10 bg-transparent text-gray-300 hover:text-gray-100 hover:bg-white/10 transition-colors opacity-0 group-hover:opacity-100"
             title="Add reaction"
             @click.stop="togglePickerButton"
           >
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
-            </svg>
+            <span class="text-sm leading-none font-semibold">+</span>
           </button>
         </div>
       </div>
@@ -306,7 +297,7 @@
     <div
       v-if="showEmojiPicker"
       ref="pickerRoot"
-      class="z-20"
+      class="z-20 emoji-picker-dark"
       :style="emojiPickerStyle"
       @click.stop
     >
@@ -878,3 +869,81 @@ function reactionChipClass(emoji: string): string {
     : 'border-white/10 bg-white/5 hover:bg-white/10 text-gray-300'
 }
 </script>
+
+<style>
+.emoji-picker-dark .emoji-mart {
+  background-color: #1e1e2e !important;
+  border-color: #313244 !important;
+  color: #cdd6f4 !important;
+}
+
+.emoji-picker-dark .emoji-mart * {
+  color: #cdd6f4 !important;
+}
+
+.emoji-picker-dark .emoji-mart-search input {
+  background-color: #313244 !important;
+  border-color: #45475a !important;
+  color: #cdd6f4;
+}
+
+.emoji-picker-dark .emoji-mart-search input::placeholder {
+  color: #6c7086;
+}
+
+.emoji-picker-dark .emoji-mart-bar {
+  border-color: #313244 !important;
+}
+
+.emoji-picker-dark .emoji-mart-anchors {
+  color: #cdd6f4 !important;
+}
+
+.emoji-picker-dark .emoji-mart-category-label span {
+  background-color: #1e1e2e !important;
+  color: #6c7086 !important;
+}
+
+.emoji-picker-dark .emoji-mart-category-label h3 {
+  background-color: #1e1e2e !important;
+  color: #cdd6f4 !important;
+}
+
+.emoji-picker-dark .emoji-mart-category .emoji-mart-emoji:hover:before,
+.emoji-picker-dark .emoji-mart-emoji-selected:before {
+  background-color: #45475a !important;
+}
+
+.emoji-picker-dark .emoji-mart-bar {
+  border-color: #313244;
+}
+
+.emoji-picker-dark .emoji-mart-anchor:hover,
+.emoji-picker-dark .emoji-mart-anchor-selected {
+  color: #cba6f7;
+}
+
+.emoji-picker-dark .emoji-mart-anchor-bar {
+  background-color: #cba6f7 !important;
+}
+
+.emoji-picker-dark .emoji-mart-preview-name,
+.emoji-picker-dark .emoji-mart-preview-shortname,
+.emoji-picker-dark .emoji-mart-preview-emoticon,
+.emoji-picker-dark .emoji-mart-title-label {
+  color: #cdd6f4 !important;
+}
+
+.emoji-picker-dark .emoji-mart-skin-swatches {
+  background-color: #313244 !important;
+  border-color: #45475a !important;
+}
+
+.emoji-picker-dark .emoji-mart-preview-emoji {
+  color: #cdd6f4 !important;
+}
+
+.emoji-picker-dark .emoji-mart-no-results {
+  color: #cdd6f4 !important;
+}
+</style>

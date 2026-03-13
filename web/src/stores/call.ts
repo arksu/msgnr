@@ -12,6 +12,93 @@ import { getPlatformOrNull } from '@/platform'
 // cycles. Fetching + Blob-URL creation is expensive (~network round trip + WASM
 // compilation inside the worklet) so we cache the result at module scope.
 let rnnoiseBlobUrlPromise: Promise<string> | null = null
+let displayCaptureTrackerInstalled = false
+const trackedDisplayCaptureTracks = new Set<MediaStreamTrack>()
+let captureTeardownSeq = 0
+const DISPLAY_CAPTURE_STOP_RETRY_MS = 250
+const DISPLAY_CAPTURE_STOP_MAX_RETRIES = 3
+
+function toErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+function describeMediaTrack(track: MediaStreamTrack | null | undefined): Record<string, unknown> {
+  if (!track) {
+    return { exists: false }
+  }
+  let settings: MediaTrackSettings | undefined
+  try {
+    settings = track.getSettings()
+  } catch {
+    settings = undefined
+  }
+  return {
+    exists: true,
+    id: track.id,
+    kind: track.kind,
+    label: track.label,
+    enabled: track.enabled,
+    muted: track.muted,
+    readyState: track.readyState,
+    settings,
+  }
+}
+
+function describeTrackedDisplayCaptureTracks(): Array<Record<string, unknown>> {
+  return Array.from(trackedDisplayCaptureTracks).map(track => describeMediaTrack(track))
+}
+
+function getTrackMediaVariants(trackLike: unknown): Array<{ role: string; track: MediaStreamTrack }> {
+  if (!trackLike || typeof trackLike !== 'object') return []
+  const candidate = trackLike as {
+    mediaStreamTrack?: MediaStreamTrack | null
+    _mediaStreamTrack?: MediaStreamTrack | null
+    sender?: { track?: MediaStreamTrack | null } | null
+  }
+  const variants: Array<{ role: string; track: MediaStreamTrack | null | undefined }> = [
+    { role: 'mediaStreamTrack', track: candidate.mediaStreamTrack },
+    { role: '_mediaStreamTrack', track: candidate._mediaStreamTrack },
+    { role: 'sender.track', track: candidate.sender?.track },
+  ]
+  const deduped = new Set<MediaStreamTrack>()
+  const result: Array<{ role: string; track: MediaStreamTrack }> = []
+  for (const item of variants) {
+    if (!item.track) continue
+    if (deduped.has(item.track)) continue
+    deduped.add(item.track)
+    result.push({ role: item.role, track: item.track })
+  }
+  return result
+}
+
+function logTrackedDisplayCaptureState(stage: string, extra: Record<string, unknown> = {}) {
+  logScreenShare(`tracked display capture tracks (${stage})`, {
+    ...extra,
+    count: trackedDisplayCaptureTracks.size,
+    tracks: describeTrackedDisplayCaptureTracks(),
+  })
+}
+
+function rememberDisplayCaptureTrack(track: MediaStreamTrack, context: Record<string, unknown> = {}) {
+  if (trackedDisplayCaptureTracks.has(track)) {
+    return
+  }
+  trackedDisplayCaptureTracks.add(track)
+  logScreenShare('tracked display capture track remembered', {
+    ...context,
+    track: describeMediaTrack(track),
+  })
+  const forget = () => {
+    logScreenShare('tracked display capture track ended', {
+      ...context,
+      track: describeMediaTrack(track),
+    })
+    trackedDisplayCaptureTracks.delete(track)
+    track.removeEventListener('ended', forget)
+    logTrackedDisplayCaptureState('track-ended', context)
+  }
+  track.addEventListener('ended', forget, { once: true })
+}
 
 function getRnnoiseBlobUrl(): Promise<string> {
   if (!rnnoiseBlobUrlPromise) {
@@ -35,6 +122,103 @@ function getRnnoiseBlobUrl(): Promise<string> {
     })
   }
   return rnnoiseBlobUrlPromise
+}
+
+function rememberDisplayCaptureStream(stream: MediaStream) {
+  logScreenShare('display capture stream received', {
+    streamId: stream.id,
+    active: stream.active,
+    tracks: stream.getTracks().map(track => describeMediaTrack(track)),
+  })
+  for (const track of stream.getTracks()) {
+    rememberDisplayCaptureTrack(track, {
+      source: 'getDisplayMedia',
+      streamId: stream.id,
+    })
+  }
+  logTrackedDisplayCaptureState('stream-remembered', { streamId: stream.id })
+}
+
+function installDisplayCaptureTracker() {
+  if (displayCaptureTrackerInstalled) return
+  const devices = getMediaDevices() as (MediaDevices & {
+    getDisplayMedia?: (constraints?: DisplayMediaStreamOptions) => Promise<MediaStream>
+  }) | null
+  if (!devices || typeof devices.getDisplayMedia !== 'function') return
+
+  const originalGetDisplayMedia = devices.getDisplayMedia.bind(devices)
+  devices.getDisplayMedia = async (constraints?: DisplayMediaStreamOptions) => {
+    logScreenShare('getDisplayMedia called', { constraints })
+    try {
+      const stream = await originalGetDisplayMedia(constraints)
+      rememberDisplayCaptureStream(stream)
+      return stream
+    } catch (err) {
+      logScreenShare('getDisplayMedia failed', {
+        error: toErrorMessage(err),
+      })
+      throw err
+    }
+  }
+  displayCaptureTrackerInstalled = true
+  logScreenShare('display capture tracker installed')
+}
+
+function stopTrackedDisplayCaptureTracks(reason = 'unspecified') {
+  logTrackedDisplayCaptureState('stop-start', { reason })
+  for (const track of Array.from(trackedDisplayCaptureTracks)) {
+    const stopTrack = (attempt: number) => {
+      const before = describeMediaTrack(track)
+      try {
+        track.enabled = false
+      } catch {
+        // best effort
+      }
+      try {
+        track.stop()
+      } catch (err) {
+        logScreenShare('tracked display capture track stop failed', {
+          reason,
+          attempt,
+          before,
+          error: toErrorMessage(err),
+        })
+      }
+      const after = describeMediaTrack(track)
+      const ended = track.readyState === 'ended'
+      logScreenShare('tracked display capture track stop requested', {
+        reason,
+        attempt,
+        ended,
+        before,
+        after,
+      })
+      if (ended) {
+        trackedDisplayCaptureTracks.delete(track)
+        return
+      }
+      if (attempt >= DISPLAY_CAPTURE_STOP_MAX_RETRIES) {
+        logScreenShare('tracked display capture track still live after max stop retries', {
+          reason,
+          attempt,
+          track: after,
+        })
+        trackedDisplayCaptureTracks.delete(track)
+        return
+      }
+      setTimeout(() => {
+        if (!trackedDisplayCaptureTracks.has(track)) return
+        stopTrack(attempt + 1)
+      }, DISPLAY_CAPTURE_STOP_RETRY_MS)
+    }
+    stopTrack(0)
+  }
+  logTrackedDisplayCaptureState('stop-end', { reason })
+  if (trackedDisplayCaptureTracks.size > 0) {
+    setTimeout(() => {
+      logTrackedDisplayCaptureState('stop-end-post-retry', { reason })
+    }, DISPLAY_CAPTURE_STOP_RETRY_MS * (DISPLAY_CAPTURE_STOP_MAX_RETRIES + 1))
+  }
 }
 
 const JOIN_TOKEN_TIMEOUT_MS = 8000
@@ -143,6 +327,8 @@ function logScreenShare(message: string, payload?: unknown) {
 }
 
 export const useCallStore = defineStore('call', () => {
+  installDisplayCaptureTracker()
+
   const room = shallowRef<Room | null>(null)
   const activeConversationId = ref('')
   const activeConversationKind = ref<'dm' | 'channel'>('channel')
@@ -191,6 +377,7 @@ export const useCallStore = defineStore('call', () => {
   let audioProcessingCleanup: (() => void) | null = null
   let knownRemoteParticipantSids = new Set<string>()
   let suppressParticipantChangeSounds = false
+  let localScreenShareUsedInSession = false
 
   const activeConversationTitle = computed(() => {
     const channel = chatStore.channels.find(item => item.id === activeConversationId.value)
@@ -338,6 +525,76 @@ export const useCallStore = defineStore('call', () => {
     logScreenShare(`remote video publications (${stage})`, publications)
   }
 
+  function describeLocalPublication(publication: {
+    trackSid: string
+    source: unknown
+    kind: unknown
+    isMuted: boolean
+    track?: {
+      sid?: string
+      kind?: string
+      mediaStreamTrack?: MediaStreamTrack | null
+    } | null
+  }): Record<string, unknown> {
+    return {
+      trackSid: publication.trackSid,
+      source: publication.source,
+      kind: publication.kind,
+      muted: publication.isMuted,
+      hasTrack: Boolean(publication.track),
+      liveKitTrackSid: publication.track?.sid ?? null,
+      liveKitTrackKind: publication.track?.kind ?? null,
+      mediaTracks: getTrackMediaVariants(publication.track).map(item => ({
+        role: item.role,
+        track: describeMediaTrack(item.track),
+      })),
+    }
+  }
+
+  function logLocalCaptureState(current: Room, stage: string, extra: Record<string, unknown> = {}) {
+    const local = current.localParticipant
+    const publications = [
+      ...Array.from(local.videoTrackPublications.values()),
+      ...Array.from(local.audioTrackPublications.values()),
+    ].map(publication => describeLocalPublication(publication))
+    logScreenShare(`local capture snapshot (${stage})`, {
+      ...extra,
+      room: current.name,
+      participant: local.identity,
+      publicationCount: publications.length,
+      publications,
+    })
+  }
+
+  function trackLocalScreenCapturePublications(current: Room, stage: string, extra: Record<string, unknown> = {}) {
+    const local = current.localParticipant
+    const publications = [
+      ...Array.from(local.videoTrackPublications.values()),
+      ...Array.from(local.audioTrackPublications.values()),
+    ]
+    for (const publication of publications) {
+      if (!isScreenSource(publication.source)) continue
+      const variants = getTrackMediaVariants(publication.track)
+      for (const variant of variants) {
+        rememberDisplayCaptureTrack(variant.track, {
+          source: 'local-publication',
+          stage,
+          room: current.name,
+          participant: local.identity,
+          publicationSource: publication.source,
+          trackSid: publication.trackSid,
+          trackRole: variant.role,
+          ...extra,
+        })
+      }
+    }
+    logTrackedDisplayCaptureState(`after trackLocalScreenCapturePublications (${stage})`, {
+      room: current.name,
+      participant: local.identity,
+      ...extra,
+    })
+  }
+
   function buildAudioCaptureOptions(): AudioCaptureOptions {
     const prefs = loadAudioPrefs()
     const opts: AudioCaptureOptions = {
@@ -472,6 +729,8 @@ export const useCallStore = defineStore('call', () => {
         room: next.name,
         canPlaybackAudio: next.canPlaybackAudio,
       })
+      trackLocalScreenCapturePublications(next, 'room-event-disconnected')
+      logLocalCaptureState(next, 'room-event-disconnected')
       stopRemoteAudioStatsLoop()
       connected.value = false
       connecting.value = false
@@ -488,6 +747,7 @@ export const useCallStore = defineStore('call', () => {
       activeConversationKind.value = 'channel'
       activeConversationVisibility.value = 'public'
       room.value = null
+      stopTrackedDisplayCaptureTracks('room-event-disconnected')
       clearEmptyCallAutoCloseTimer()
       knownRemoteParticipantSids.clear()
       suppressParticipantChangeSounds = false
@@ -672,6 +932,23 @@ export const useCallStore = defineStore('call', () => {
     next.on(RoomEvent.LocalTrackPublished, (publication) => {
       mediaVersion.value += 1
       if (isScreenSource(publication.source)) {
+        localScreenShareUsedInSession = true
+        const variants = getTrackMediaVariants(publication.track)
+        for (const variant of variants) {
+          rememberDisplayCaptureTrack(variant.track, {
+            source: 'local-track-published',
+            room: next.name,
+            participant: next.localParticipant.identity,
+            publicationSource: publication.source,
+            trackSid: publication.trackSid,
+            trackRole: variant.role,
+          })
+        }
+        logTrackedDisplayCaptureState('local-track-published', {
+          room: next.name,
+          trackSid: publication.trackSid,
+          variantCount: variants.length,
+        })
         logScreenShare('local screen track published', {
           trackSid: publication.trackSid,
           source: publication.source,
@@ -701,7 +978,24 @@ export const useCallStore = defineStore('call', () => {
         screenShareEnabled.value = false
         const audioPublication = next.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)
         if (audioPublication?.track) {
-          next.localParticipant.unpublishTrack(audioPublication.track)
+          const audioTrackStateBefore = describeMediaTrack(audioPublication.track.mediaStreamTrack ?? null)
+          Promise.resolve(next.localParticipant.unpublishTrack(audioPublication.track))
+            .then(() => {
+              logScreenShare('screen share companion audio unpublished after screen stop', {
+                room: next.name,
+                trackSid: audioPublication.trackSid,
+                mediaTrackBefore: audioTrackStateBefore,
+                mediaTrackAfter: describeMediaTrack(audioPublication.track?.mediaStreamTrack ?? null),
+              })
+            })
+            .catch((err) => {
+              logScreenShare('screen share companion audio unpublish failed', {
+                room: next.name,
+                trackSid: audioPublication.trackSid,
+                mediaTrackBefore: audioTrackStateBefore,
+                error: toErrorMessage(err),
+              })
+            })
         }
       }
     })
@@ -766,13 +1060,31 @@ export const useCallStore = defineStore('call', () => {
 
   async function ensureDisconnected() {
     suppressParticipantChangeSounds = true
+    const teardownId = `leave-${Date.now()}-${++captureTeardownSeq}`
+    logScreenShare('ensureDisconnected start', {
+      teardownId,
+      hasRoom: Boolean(room.value),
+      room: room.value?.name ?? null,
+      conversationId: activeConversationId.value || null,
+      activeCallId: activeCallId.value || null,
+      remoteParticipantCount: remoteParticipantCount.value,
+    })
     audioProcessingCleanup?.()
     audioProcessingCleanup = null
+    stopTrackedDisplayCaptureTracks(`ensureDisconnected:pre-room:${teardownId}`)
     const current = room.value
     clearPendingJoin()
     stopRemoteAudioStatsLoop()
     clearEmptyCallAutoCloseTimer()
-    if (!current) return
+    if (!current) {
+      suppressParticipantChangeSounds = false
+      logScreenShare('ensureDisconnected skipped: no active room', { teardownId })
+      return
+    }
+    trackLocalScreenCapturePublications(current, 'ensureDisconnected:pre-stop', { teardownId })
+    logLocalCaptureState(current, 'ensureDisconnected:before-stop', { teardownId })
+    await stopAllLocalCaptureTracks(current, teardownId)
+    logLocalCaptureState(current, 'ensureDisconnected:after-stop', { teardownId })
     try {
       console.info('[call-leave] disconnecting room', {
         room: current.name,
@@ -784,12 +1096,230 @@ export const useCallStore = defineStore('call', () => {
       console.info('[call-leave] disconnect resolved', {
         room: current.name,
       })
-    } catch {
-      // best effort
+    } catch (err) {
+      logScreenShare('room disconnect failed', {
+        teardownId,
+        room: current.name,
+        error: toErrorMessage(err),
+      })
     }
     room.value = null
     knownRemoteParticipantSids.clear()
     suppressParticipantChangeSounds = false
+    logTrackedDisplayCaptureState('ensureDisconnected:end', { teardownId })
+  }
+
+  async function stopAllLocalCaptureTracks(current: Room, teardownId: string) {
+    const local = current.localParticipant
+    if (!local) {
+      logScreenShare('stopAllLocalCaptureTracks skipped: local participant missing', {
+        teardownId,
+        room: current.name,
+      })
+      return
+    }
+
+    logLocalCaptureState(current, 'stopAllLocalCaptureTracks:start', { teardownId })
+
+    const disableOps: Array<{ op: string; promise: Promise<unknown> }> = []
+    if (typeof local.setScreenShareEnabled === 'function') {
+      disableOps.push({ op: 'setScreenShareEnabled(false)', promise: local.setScreenShareEnabled(false) })
+    }
+    if (typeof local.setCameraEnabled === 'function') {
+      disableOps.push({ op: 'setCameraEnabled(false)', promise: local.setCameraEnabled(false) })
+    }
+    if (typeof local.setMicrophoneEnabled === 'function') {
+      disableOps.push({ op: 'setMicrophoneEnabled(false)', promise: local.setMicrophoneEnabled(false) })
+    }
+    if (disableOps.length > 0) {
+      const disableResults = await Promise.allSettled(disableOps.map(item => item.promise))
+      logScreenShare('local capture disable operations settled', {
+        teardownId,
+        room: current.name,
+        results: disableResults.map((result, index) => (
+          result.status === 'fulfilled'
+            ? { op: disableOps[index].op, status: result.status }
+            : { op: disableOps[index].op, status: result.status, reason: toErrorMessage(result.reason) }
+        )),
+      })
+    }
+
+    const unpublishOps: Array<{ publication: Record<string, unknown>; promise: Promise<unknown> }> = []
+    const videoPublications = Array.from(local.videoTrackPublications.values())
+    const audioPublications = Array.from(local.audioTrackPublications.values())
+    for (const publication of [...videoPublications, ...audioPublications]) {
+      const publicationSummary = describeLocalPublication(publication)
+      const publicationTrack = publication.track
+      const track = publicationTrack as unknown as {
+        stop?: () => void
+        mediaStreamTrack?: MediaStreamTrack | null
+        _mediaStreamTrack?: MediaStreamTrack | null
+        sender?: { track?: MediaStreamTrack | null } | null
+      } | null
+      if (!track) {
+        logScreenShare('local publication teardown skipped (no track)', {
+          teardownId,
+          room: current.name,
+          publication: publicationSummary,
+        })
+        continue
+      }
+      const mediaVariants = getTrackMediaVariants(track)
+      const beforeMediaTracks = mediaVariants.map(item => ({
+        role: item.role,
+        track: describeMediaTrack(item.track),
+      }))
+      try {
+        if (publicationTrack) {
+          unpublishOps.push({
+            publication: publicationSummary,
+            promise: Promise.resolve(local.unpublishTrack(publicationTrack, true)),
+          })
+        }
+      } catch (err) {
+        logScreenShare('local publication unpublish enqueue failed', {
+          teardownId,
+          room: current.name,
+          publication: publicationSummary,
+          error: toErrorMessage(err),
+        })
+      }
+      try {
+        track.stop?.()
+      } catch (err) {
+        logScreenShare('local track.stop() failed', {
+          teardownId,
+          room: current.name,
+          publication: publicationSummary,
+          error: toErrorMessage(err),
+        })
+      }
+      for (const variant of mediaVariants) {
+        try {
+          variant.track.enabled = false
+        } catch {
+          // best effort
+        }
+        try {
+          variant.track.stop()
+        } catch (err) {
+          logScreenShare('local media variant stop() failed', {
+            teardownId,
+            room: current.name,
+            publication: publicationSummary,
+            trackRole: variant.role,
+            error: toErrorMessage(err),
+          })
+        }
+      }
+      logScreenShare('local publication teardown attempted', {
+        teardownId,
+        room: current.name,
+        publication: publicationSummary,
+        mediaTracksBefore: beforeMediaTracks,
+        mediaTracksAfter: mediaVariants.map(item => ({
+          role: item.role,
+          track: describeMediaTrack(item.track),
+        })),
+      })
+    }
+    if (unpublishOps.length > 0) {
+      const unpublishResults = await Promise.allSettled(unpublishOps.map(item => item.promise))
+      logScreenShare('local publication unpublish settled', {
+        teardownId,
+        room: current.name,
+        results: unpublishResults.map((result, index) => (
+          result.status === 'fulfilled'
+            ? { publication: unpublishOps[index].publication, status: result.status }
+            : { publication: unpublishOps[index].publication, status: result.status, reason: toErrorMessage(result.reason) }
+        )),
+      })
+    }
+    await stopPublisherSenderTracks(current, teardownId)
+    stopTrackedDisplayCaptureTracks(`stopAllLocalCaptureTracks:${teardownId}`)
+    logLocalCaptureState(current, 'stopAllLocalCaptureTracks:end', { teardownId })
+  }
+
+  async function stopPublisherSenderTracks(current: Room, teardownId: string) {
+    const publisher = (current as unknown as {
+      engine?: { pcManager?: { publisher?: RTCPeerConnection } }
+    }).engine?.pcManager?.publisher
+    if (!publisher || typeof publisher.getSenders !== 'function') {
+      logScreenShare('publisher senders unavailable', {
+        teardownId,
+        room: current.name,
+      })
+      return
+    }
+
+    const senders = publisher.getSenders()
+    logScreenShare('publisher sender snapshot before stop', {
+      teardownId,
+      room: current.name,
+      senderCount: senders.length,
+      senders: senders.map((sender, index) => ({
+        index,
+        track: describeMediaTrack(sender.track ?? null),
+      })),
+    })
+
+    const replaceOps: Array<{ index: number; kind: string; promise: Promise<void> }> = []
+    for (const [index, sender] of senders.entries()) {
+      const senderTrack = sender.track
+      if (!senderTrack) continue
+      const beforeTrack = describeMediaTrack(senderTrack)
+      try {
+        senderTrack.stop()
+      } catch (err) {
+        logScreenShare('publisher sender track.stop() failed', {
+          teardownId,
+          room: current.name,
+          senderIndex: index,
+          track: beforeTrack,
+          error: toErrorMessage(err),
+        })
+      }
+      try {
+        replaceOps.push({
+          index,
+          kind: senderTrack.kind,
+          promise: Promise.resolve(sender.replaceTrack(null)),
+        })
+      } catch (err) {
+        logScreenShare('publisher sender replaceTrack(null) enqueue failed', {
+          teardownId,
+          room: current.name,
+          senderIndex: index,
+          track: beforeTrack,
+          error: toErrorMessage(err),
+        })
+      }
+      logScreenShare('publisher sender stop attempted', {
+        teardownId,
+        room: current.name,
+        senderIndex: index,
+        beforeTrack,
+        afterTrack: describeMediaTrack(senderTrack),
+      })
+    }
+
+    if (replaceOps.length > 0) {
+      const replaceResults = await Promise.allSettled(replaceOps.map(item => item.promise))
+      logScreenShare('publisher sender replaceTrack(null) settled', {
+        teardownId,
+        room: current.name,
+        results: replaceResults.map((result, index) => (
+          result.status === 'fulfilled'
+            ? { senderIndex: replaceOps[index].index, kind: replaceOps[index].kind, status: result.status }
+            : {
+                senderIndex: replaceOps[index].index,
+                kind: replaceOps[index].kind,
+                status: result.status,
+                reason: toErrorMessage(result.reason),
+              }
+        )),
+      })
+    }
   }
 
   async function requestJoinToken(conversationId: string, kind: 'dm' | 'channel', visibility: 'public' | 'private' | 'dm') {
@@ -898,6 +1428,7 @@ export const useCallStore = defineStore('call', () => {
 
     errorMessage.value = ''
     connecting.value = true
+    localScreenShareUsedInSession = false
     clearEmptyCallAutoCloseTimer()
 
     try {
@@ -1035,10 +1566,24 @@ export const useCallStore = defineStore('call', () => {
       remoteParticipantCount: remoteParticipantCount.value,
     })
     await ensureDisconnected()
+    if (platform?.type === 'tauri' && localScreenShareUsedInSession) {
+      logScreenShare('requesting tauri app restart after screen share teardown', {
+        reason: 'post-leave-screen-share-used',
+      })
+      localScreenShareUsedInSession = false
+      try {
+        await platform.system.invokeNative?.('request_app_restart')
+      } catch (err) {
+        logScreenShare('tauri app restart request failed', {
+          error: toErrorMessage(err),
+        })
+      }
+    }
   }
 
   async function resetRuntimeState() {
     await ensureDisconnected()
+    localScreenShareUsedInSession = false
     clearPendingInviteMembers()
     clearEmptyCallAutoCloseTimer()
     stopRemoteAudioStatsLoop()
@@ -1108,43 +1653,61 @@ export const useCallStore = defineStore('call', () => {
       throw new Error(mediaUnavailableMessage())
     }
     const next = !screenShareEnabled.value
+    const toggleId = `toggle-${Date.now()}-${++captureTeardownSeq}`
     logScreenShare('toggle requested', {
+      toggleId,
       enabled: next,
       room: current.name,
     })
+    logTrackedDisplayCaptureState('toggle:before', { toggleId, room: current.name, enabling: next })
     logLocalVideoPublications(current, 'before-toggle')
-    if (next) {
-      if (remoteScreenShareActive.value) {
-        throw new Error('Another participant is already sharing their screen')
+    try {
+      if (next) {
+        if (remoteScreenShareActive.value) {
+          throw new Error('Another participant is already sharing their screen')
+        }
+        // Capture options: match fps to encoding target (avoids capturing 30 fps
+        // only to drop to 15 at the encoder), and hint the encoder to preserve
+        // spatial sharpness — critical for text, code, and UI content.
+        const captureOptions: ScreenShareCaptureOptions = {
+          // resolution.frameRate constrains getDisplayMedia capture fps to match
+          // the encoding target — avoids capturing 30 fps only to discard half.
+          resolution: { ...ScreenSharePresets.h1080fps15.resolution, frameRate: 15 },
+          contentHint: 'detail',
+        }
+        // Publish options: VP9 gives ~40% better quality than VP8 at the same
+        // bitrate for screen content (sharp edges, text). VP8 fallback ensures
+        // compatibility with any receiver that doesn't support VP9.
+        // simulcast is disabled: for text/UI a single high-quality layer is
+        // preferable — the lower simulcast layer (~960×540) degrades text
+        // legibility and adaptiveStream already handles receiver-side adaptation.
+        const publishOptions: TrackPublishOptions = {
+          videoCodec: 'vp9',
+          backupCodec: { codec: 'vp8' },
+          screenShareEncoding: ScreenSharePresets.h1080fps15.encoding,
+          simulcast: false,
+        }
+        await current.localParticipant.setScreenShareEnabled(true, captureOptions, publishOptions)
+        localScreenShareUsedInSession = true
+        trackLocalScreenCapturePublications(current, 'toggle:on:after-set-enabled', { toggleId })
+      } else {
+        await current.localParticipant.setScreenShareEnabled(false)
+        trackLocalScreenCapturePublications(current, 'toggle:off:after-set-disabled', { toggleId })
+        stopTrackedDisplayCaptureTracks(`toggle:off:${toggleId}`)
       }
-      // Capture options: match fps to encoding target (avoids capturing 30 fps
-      // only to drop to 15 at the encoder), and hint the encoder to preserve
-      // spatial sharpness — critical for text, code, and UI content.
-      const captureOptions: ScreenShareCaptureOptions = {
-        // resolution.frameRate constrains getDisplayMedia capture fps to match
-        // the encoding target — avoids capturing 30 fps only to discard half.
-        resolution: { ...ScreenSharePresets.h1080fps15.resolution, frameRate: 15 },
-        contentHint: 'detail',
-      }
-      // Publish options: VP9 gives ~40% better quality than VP8 at the same
-      // bitrate for screen content (sharp edges, text). VP8 fallback ensures
-      // compatibility with any receiver that doesn't support VP9.
-      // simulcast is disabled: for text/UI a single high-quality layer is
-      // preferable — the lower simulcast layer (~960×540) degrades text
-      // legibility and adaptiveStream already handles receiver-side adaptation.
-      const publishOptions: TrackPublishOptions = {
-        videoCodec: 'vp9',
-        backupCodec: { codec: 'vp8' },
-        screenShareEncoding: ScreenSharePresets.h1080fps15.encoding,
-        simulcast: false,
-      }
-      await current.localParticipant.setScreenShareEnabled(true, captureOptions, publishOptions)
-    } else {
-      await current.localParticipant.setScreenShareEnabled(false)
+    } catch (err) {
+      logScreenShare('toggle failed', {
+        toggleId,
+        room: current.name,
+        enabled: next,
+        error: toErrorMessage(err),
+      })
+      throw err
     }
     screenShareEnabled.value = next
     logLocalVideoPublications(current, 'after-toggle')
     logRemoteVideoPublications(current, 'after-toggle')
+    logTrackedDisplayCaptureState('toggle:after', { toggleId, room: current.name, enabled: next })
     callDebug('toggle screen share', {
       enabled: next,
       room: current.name,

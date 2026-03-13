@@ -71,6 +71,12 @@ fn keyring_delete(key: String) -> Result<(), String> {
   }
 }
 
+#[tauri::command]
+fn request_app_restart(app: AppHandle) -> Result<(), String> {
+  app.request_restart();
+  Ok(())
+}
+
 fn show_main_window(app: &AppHandle) {
   if let Some(window) = app.get_webview_window("main") {
     let _ = window.show();
@@ -131,7 +137,8 @@ pub fn run() {
       set_tray_tooltip,
       keyring_get,
       keyring_set,
-      keyring_delete
+      keyring_delete,
+      request_app_restart
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

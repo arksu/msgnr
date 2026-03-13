@@ -1000,6 +1000,29 @@ function detachAllRemoteAudioTracks() {
   }
 }
 
+function stopElementStreamTracks(el: HTMLMediaElement | null) {
+  if (!el) return
+  const src = el.srcObject
+  if (!(src instanceof MediaStream)) return
+  for (const track of src.getTracks()) {
+    try {
+      track.stop()
+    } catch {
+      // best effort
+    }
+  }
+  el.srcObject = null
+}
+
+function forceStopLocalCapturePreviews() {
+  stopElementStreamTracks(unwrapEl(localVideoEl.value))
+  stopElementStreamTracks(unwrapEl(localScreenEl.value))
+  // If local participant is pinned, also clear the pinned stage stream.
+  if (pinnedSid.value && pinnedSid.value === localTile.value?.sid) {
+    stopElementStreamTracks(unwrapEl(pinnedVideoEl.value))
+  }
+}
+
 // ── Cleanup on unmount ────────────────────────────────────────────────────────
 
 onBeforeUnmount(() => {
@@ -1024,6 +1047,7 @@ onBeforeUnmount(() => {
   detachRemoteScreenTrack()
   detachAllRemoteAudioTracks()
   detachAllRemoteCameraTracks()
+  forceStopLocalCapturePreviews()
 })
 
 // ── Maximize / minimize ───────────────────────────────────────────────────────
@@ -1049,6 +1073,11 @@ watch([maximized, inviteDialogOpen], ([isMaximized, isInviteOpen]) => {
   if (shouldListen) {
     document.addEventListener('keydown', handleEscapeKey)
   }
+})
+
+watch(isVisible, (visible) => {
+  if (visible) return
+  forceStopLocalCapturePreviews()
 })
 
 function toggleMaximized() {
@@ -1160,7 +1189,9 @@ async function handleToggleScreenShare() {
 }
 
 async function handleLeave() {
+  forceStopLocalCapturePreviews()
   await callStore.leaveCall()
+  forceStopLocalCapturePreviews()
   maximized.value = false
   pinnedSid.value = null
   inviteDialogOpen.value = false

@@ -58,3 +58,75 @@ describe('callStore syncWithActiveCalls', () => {
     consoleInfoSpy.mockRestore()
   })
 })
+
+describe('callStore leaveCall media cleanup', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('stops local screen/camera/microphone capture tracks before disconnecting', async () => {
+    const callStore = useCallStore()
+
+    const cameraMediaTrackStop = vi.fn()
+    const screenMediaTrackStop = vi.fn()
+    const micMediaTrackStop = vi.fn()
+    const cameraTrackStop = vi.fn()
+    const screenTrackStop = vi.fn()
+    const micTrackStop = vi.fn()
+
+    const cameraPublication = {
+      track: {
+        stop: cameraTrackStop,
+        mediaStreamTrack: { stop: cameraMediaTrackStop },
+      },
+    }
+    const screenPublication = {
+      track: {
+        stop: screenTrackStop,
+        mediaStreamTrack: { stop: screenMediaTrackStop },
+      },
+    }
+    const micPublication = {
+      track: {
+        stop: micTrackStop,
+        mediaStreamTrack: { stop: micMediaTrackStop },
+      },
+    }
+
+    const localParticipant = {
+      setScreenShareEnabled: vi.fn().mockResolvedValue(undefined),
+      setCameraEnabled: vi.fn().mockResolvedValue(undefined),
+      setMicrophoneEnabled: vi.fn().mockResolvedValue(undefined),
+      unpublishTrack: vi.fn(),
+      videoTrackPublications: new Map([
+        ['camera', cameraPublication],
+        ['screen', screenPublication],
+      ]),
+      audioTrackPublications: new Map([
+        ['mic', micPublication],
+      ]),
+    }
+
+    const room = {
+      name: 'room-1',
+      localParticipant,
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    }
+
+    callStore.room = room as never
+    callStore.activeConversationId = 'channel-1'
+    await callStore.leaveCall()
+
+    expect(localParticipant.setScreenShareEnabled).toHaveBeenCalledWith(false)
+    expect(localParticipant.setCameraEnabled).toHaveBeenCalledWith(false)
+    expect(localParticipant.setMicrophoneEnabled).toHaveBeenCalledWith(false)
+    expect(localParticipant.unpublishTrack).toHaveBeenCalledTimes(3)
+    expect(screenTrackStop).toHaveBeenCalledTimes(1)
+    expect(screenMediaTrackStop).toHaveBeenCalledTimes(1)
+    expect(cameraTrackStop).toHaveBeenCalledTimes(1)
+    expect(cameraMediaTrackStop).toHaveBeenCalledTimes(1)
+    expect(micTrackStop).toHaveBeenCalledTimes(1)
+    expect(micMediaTrackStop).toHaveBeenCalledTimes(1)
+    expect(room.disconnect).toHaveBeenCalledTimes(1)
+  })
+})

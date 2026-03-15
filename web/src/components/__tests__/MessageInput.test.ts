@@ -1,8 +1,32 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, ref, shallowRef } from 'vue'
 import MessageInput from '@/components/MessageInput.vue'
 import { uploadChatAttachment } from '@/services/http/chatApi'
+
+vi.mock('@/composables/useComposerEmojiPicker', () => ({
+  useComposerEmojiPicker: ({ onSelect }: { onSelect: (emoji: string) => void }) => {
+    const showEmojiPicker = ref(false)
+    return {
+      showEmojiPicker,
+      pickerRoot: ref(null),
+      pickerToggleButton: ref(null),
+      pickerComponent: shallowRef({
+        template: '<button data-testid="emoji-picker-option" @click="$emit(\'select\', { native: \'🙂\' })">emoji</button>',
+      }),
+      emojiIndex: shallowRef({}),
+      emojiPickerStyle: ref({}),
+      toggleEmojiPicker: () => { showEmojiPicker.value = !showEmojiPicker.value },
+      closeEmojiPicker: () => { showEmojiPicker.value = false },
+      onSelectEmoji: (emoji: { native?: string; colons?: string; id?: string }) => {
+        const value = emoji.native ?? emoji.colons ?? emoji.id
+        if (!value) return
+        onSelect(value)
+        showEmojiPicker.value = false
+      },
+    }
+  },
+}))
 
 vi.mock('@/services/http/chatApi', () => ({
   uploadChatAttachment: vi.fn(),
@@ -34,6 +58,58 @@ describe('MessageInput', () => {
 
     const typingEvents = wrapper.emitted('typing') ?? []
     expect(typingEvents).toEqual([[true]])
+  })
+
+  it('renders composer controls row below textarea', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        disabled: false,
+      },
+    })
+
+    const textarea = wrapper.get('textarea')
+    const controls = wrapper.get('[data-testid="composer-controls-row"]')
+    const position = textarea.element.compareDocumentPosition(controls.element)
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('inserts selected emoji at cursor and closes picker', async () => {
+    const wrapper = mount(MessageInput, {
+      attachTo: document.body,
+      props: {
+        channelName: 'general',
+        disabled: false,
+      },
+    })
+
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('hello')
+    const el = textarea.element as HTMLTextAreaElement
+    el.focus()
+    el.setSelectionRange(2, 2)
+
+    await wrapper.get('[data-testid="composer-emoji-button"]').trigger('click')
+    await flushAll()
+
+    const emojiOption = document.body.querySelector('[data-testid="emoji-picker-option"]') as HTMLButtonElement | null
+    expect(emojiOption).toBeTruthy()
+    emojiOption?.click()
+    await flushAll()
+
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('he🙂llo')
+    expect(document.body.querySelector('[data-testid="emoji-picker-option"]')).toBeNull()
+  })
+
+  it('disables emoji button when composer is disabled', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        disabled: true,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="composer-emoji-button"]').attributes('disabled')).toBeDefined()
   })
 
   it('uploads dropped files from textarea as attachments', async () => {

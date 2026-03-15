@@ -27,7 +27,7 @@
     </div>
 
     <div
-      class="flex items-end gap-2 rounded-lg border px-3 py-2 transition-colors"
+      class="flex flex-col gap-2 rounded-lg border px-3 py-2 transition-colors"
       :class="isDragOver ? 'border-accent bg-chat-input/90' : 'border-chat-border bg-chat-input'"
     >
       <input
@@ -37,16 +37,6 @@
         multiple
         @change="onFileInputChange"
       >
-      <button
-        class="text-gray-400 hover:text-gray-200 transition-colors shrink-0 mb-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
-        :disabled="disabled || uploading || !conversationId || attachments.length >= MAX_ATTACHMENTS"
-        :title="attachButtonTitle"
-        @click="openFilePicker"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M12 5v14M5 12h14"/>
-        </svg>
-      </button>
 
       <!-- Text area -->
       <textarea
@@ -66,20 +56,80 @@
         @drop.prevent="onDrop"
       />
 
-      <!-- Send button -->
-      <button
-        class="shrink-0 mb-0.5 p-1.5 rounded transition-colors"
-        :class="canSend
-          ? 'bg-accent hover:bg-accent-hover text-white'
-          : 'text-gray-600 cursor-not-allowed'"
-        :disabled="!canSend"
-        @click="submit"
-      >
-        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"/>
-        </svg>
-      </button>
+      <div data-testid="composer-controls-row" class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <button
+            data-testid="composer-attach-button"
+            class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="disabled || uploading || !conversationId || attachments.length >= MAX_ATTACHMENTS"
+            :title="attachButtonTitle"
+            @click="openFilePicker"
+          >
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+          </button>
+
+          <button
+            ref="pickerToggleButton"
+            data-testid="composer-emoji-button"
+            class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="disabled"
+            title="Add emoji"
+            @click.stop="toggleEmojiPicker"
+          >
+            <span class="text-lg leading-none">🙂</span>
+          </button>
+        </div>
+
+        <button
+          data-testid="composer-send-button"
+          class="shrink-0 rounded p-1.5 transition-colors"
+          :class="canSend
+            ? 'bg-accent hover:bg-accent-hover text-white'
+            : 'text-gray-600 cursor-not-allowed'"
+          :disabled="!canSend"
+          @click="submit"
+        >
+          <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"/>
+          </svg>
+        </button>
+      </div>
     </div>
+    <Teleport to="body">
+      <div
+        v-if="showEmojiPicker"
+        ref="pickerRoot"
+        class="z-20 emoji-picker-dark"
+        :style="emojiPickerStyle"
+        @click.stop
+      >
+        <component
+          :is="pickerComponent"
+          v-if="pickerComponent && emojiIndex"
+          :data="emojiIndex"
+          :native="true"
+          set="apple"
+          title="Add emoji"
+          emoji="slightly_smiling_face"
+          :show-preview="true"
+          :show-skin-tones="false"
+          :infinite-scroll="true"
+          :emoji-size="26"
+          :per-line="9"
+          color="#ae65c5"
+          @select="onSelectEmoji"
+          @selected="onSelectEmoji"
+        />
+        <div
+          v-else
+          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+        >
+          Loading emoji...
+        </div>
+      </div>
+    </Teleport>
     <p class="mt-1 flex items-center justify-between gap-2 text-xs text-gray-600 pl-1">
       <span class="truncate text-gray-500">{{ typingLabel || '' }}</span>
       <span class="whitespace-nowrap">
@@ -108,6 +158,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { uploadChatAttachment, deleteChatAttachment } from '@/services/http/chatApi'
+import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 
 interface ComposerAttachment {
   id: string
@@ -144,6 +195,20 @@ const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
 let dragDepth = 0
 
+const {
+  showEmojiPicker,
+  pickerRoot,
+  pickerToggleButton,
+  pickerComponent,
+  emojiIndex,
+  emojiPickerStyle,
+  toggleEmojiPicker,
+  closeEmojiPicker,
+  onSelectEmoji,
+} = useComposerEmojiPicker({
+  onSelect: insertEmojiAtCursor,
+})
+
 const attachmentWarning = computed(() => {
   if (attachments.value.length > 0 && props.online === false) {
     return 'Reconnect to send attachments'
@@ -175,11 +240,33 @@ function submit() {
   text.value = ''
   attachments.value = []
   attachmentError.value = ''
+  closeEmojiPicker()
   emitTyping(false)
   nextTick(() => {
     if (inputEl.value) {
       inputEl.value.style.height = 'auto'
     }
+  })
+}
+
+function insertEmojiAtCursor(emoji: string) {
+  const el = inputEl.value
+  if (!el) {
+    text.value += emoji
+    nextTick(() => autoResize())
+    return
+  }
+
+  const start = el.selectionStart ?? text.value.length
+  const end = el.selectionEnd ?? start
+  text.value = `${text.value.slice(0, start)}${emoji}${text.value.slice(end)}`
+
+  nextTick(() => {
+    const cursor = start + emoji.length
+    el.focus()
+    el.selectionStart = cursor
+    el.selectionEnd = cursor
+    autoResize()
   })
 }
 
@@ -370,12 +457,14 @@ async function cleanupStagedAttachments() {
 }
 
 watch(() => props.conversationId, (next, prev) => {
+  closeEmojiPicker()
   if (prev && prev !== next && attachments.value.length > 0) {
     void cleanupStagedAttachments()
   }
 })
 
 onBeforeUnmount(() => {
+  closeEmojiPicker()
   if (attachments.value.length > 0) {
     void cleanupStagedAttachments()
   }

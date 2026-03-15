@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { ref, shallowRef } from 'vue'
 import TaskComments from '@/components/tasks/TaskComments.vue'
 import {
   tasksCreateComment,
@@ -8,6 +9,30 @@ import {
   tasksListComments,
   tasksUploadCommentAttachment,
 } from '@/services/http/tasksApi'
+
+vi.mock('@/composables/useComposerEmojiPicker', () => ({
+  useComposerEmojiPicker: ({ onSelect }: { onSelect: (emoji: string) => void }) => {
+    const showEmojiPicker = ref(false)
+    return {
+      showEmojiPicker,
+      pickerRoot: ref(null),
+      pickerToggleButton: ref(null),
+      pickerComponent: shallowRef({
+        template: '<button data-testid="emoji-picker-option" @click="$emit(\'select\', { native: \'🙂\' })">emoji</button>',
+      }),
+      emojiIndex: shallowRef({}),
+      emojiPickerStyle: ref({}),
+      toggleEmojiPicker: () => { showEmojiPicker.value = !showEmojiPicker.value },
+      closeEmojiPicker: () => { showEmojiPicker.value = false },
+      onSelectEmoji: (emoji: { native?: string; colons?: string; id?: string }) => {
+        const value = emoji.native ?? emoji.colons ?? emoji.id
+        if (!value) return
+        onSelect(value)
+        showEmojiPicker.value = false
+      },
+    }
+  },
+}))
 
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListComments: vi.fn(),
@@ -95,6 +120,43 @@ describe('TaskComments', () => {
     expect(tasksUploadCommentAttachment).toHaveBeenCalledTimes(1)
     expect(tasksUploadCommentAttachment).toHaveBeenCalledWith('task-1', file)
     expect(wrapper.text()).toContain('clipboard.png')
+  })
+
+  it('renders comment controls row below textarea', async () => {
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    const textarea = wrapper.get('textarea')
+    const controls = wrapper.get('[data-testid="task-comment-controls-row"]')
+    const position = textarea.element.compareDocumentPosition(controls.element)
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('inserts selected emoji at cursor into comment textarea', async () => {
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('world')
+    const el = textarea.element as HTMLTextAreaElement
+    el.focus()
+    el.setSelectionRange(0, 0)
+
+    await wrapper.get('[data-testid="task-comment-emoji-button"]').trigger('click')
+    await flushPromises()
+
+    const emojiOption = document.body.querySelector('[data-testid="emoji-picker-option"]') as HTMLButtonElement | null
+    expect(emojiOption).toBeTruthy()
+    emojiOption?.click()
+    await flushPromises()
+
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('🙂world')
+    expect(document.body.querySelector('[data-testid="emoji-picker-option"]')).toBeNull()
   })
 
   it('submits attachment-only comment with attachment_ids payload', async () => {

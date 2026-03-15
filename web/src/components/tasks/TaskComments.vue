@@ -151,7 +151,7 @@
       </div>
 
       <div
-        class="flex items-end gap-2 rounded-lg border px-3 py-2 transition-colors"
+        class="flex flex-col gap-2 rounded-lg border px-3 py-2 transition-colors"
         :class="isDragOver ? 'border-accent bg-chat-input/90' : 'border-chat-border bg-chat-input'"
       >
         <input
@@ -161,18 +161,8 @@
           multiple
           @change="onFileInputChange"
         >
-        <button
-          class="mb-0.5 shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="submitting || uploading || stagedAttachments.length >= MAX_ATTACHMENTS"
-          :title="attachButtonTitle"
-          @click="openFilePicker"
-        >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
-        </button>
-
         <textarea
+          ref="inputEl"
           v-model="newBody"
           class="min-h-[24px] max-h-40 flex-1 resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
           placeholder="Add a comment…"
@@ -187,18 +177,46 @@
           @drop.prevent="onDrop"
         />
 
-        <button
-          class="mb-0.5 shrink-0 rounded p-1.5 transition-colors"
-          :class="canSubmit
-            ? 'bg-accent text-white hover:bg-accent-hover'
-            : 'cursor-not-allowed text-gray-600'"
-          :disabled="!canSubmit"
-          @click="submit"
-        >
-          <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"/>
-          </svg>
-        </button>
+        <div data-testid="task-comment-controls-row" class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <button
+              data-testid="task-comment-attach-button"
+              class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="submitting || uploading || stagedAttachments.length >= MAX_ATTACHMENTS"
+              :title="attachButtonTitle"
+              @click="openFilePicker"
+            >
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </button>
+
+            <button
+              ref="pickerToggleButton"
+              data-testid="task-comment-emoji-button"
+              class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="submitting"
+              title="Add emoji"
+              @click.stop="toggleEmojiPicker"
+            >
+              <span class="text-lg leading-none">🙂</span>
+            </button>
+          </div>
+
+          <button
+            data-testid="task-comment-send-button"
+            class="shrink-0 rounded p-1.5 transition-colors"
+            :class="canSubmit
+              ? 'bg-accent text-white hover:bg-accent-hover'
+              : 'cursor-not-allowed text-gray-600'"
+            :disabled="!canSubmit"
+            @click="submit"
+          >
+            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div class="flex items-center justify-between">
@@ -208,6 +226,40 @@
         <span class="text-xs text-gray-500">{{ submitting ? 'Posting…' : '' }}</span>
       </div>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="showEmojiPicker"
+        ref="pickerRoot"
+        class="z-20 emoji-picker-dark"
+        :style="emojiPickerStyle"
+        @click.stop
+      >
+        <component
+          :is="pickerComponent"
+          v-if="pickerComponent && emojiIndex"
+          :data="emojiIndex"
+          :native="true"
+          set="apple"
+          title="Add emoji"
+          emoji="slightly_smiling_face"
+          :show-preview="true"
+          :show-skin-tones="false"
+          :infinite-scroll="true"
+          :emoji-size="26"
+          :per-line="9"
+          color="#ae65c5"
+          @select="onSelectEmoji"
+          @selected="onSelectEmoji"
+        />
+        <div
+          v-else
+          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+        >
+          Loading emoji...
+        </div>
+      </div>
+    </Teleport>
 
     <div
       v-if="imagePreview.open"
@@ -242,6 +294,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick, reactive } from 'vue'
 import { useTasksStore } from '@/stores/tasks'
 import UserAvatar from '@/components/UserAvatar.vue'
+import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 import {
   tasksListComments,
   tasksCreateComment,
@@ -269,6 +322,7 @@ const uploading = ref(false)
 const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
+const inputEl = ref<HTMLTextAreaElement | null>(null)
 let dragDepth = 0
 
 const attachmentUrls = ref<Record<string, string>>({})
@@ -278,6 +332,20 @@ const imagePreview = reactive({
   open: false,
   src: '',
   fileName: '',
+})
+
+const {
+  showEmojiPicker,
+  pickerRoot,
+  pickerToggleButton,
+  pickerComponent,
+  emojiIndex,
+  emojiPickerStyle,
+  toggleEmojiPicker,
+  closeEmojiPicker,
+  onSelectEmoji,
+} = useComposerEmojiPicker({
+  onSelect: insertEmojiAtCursor,
 })
 
 const canSubmit = computed(() => {
@@ -449,6 +517,25 @@ function onShiftEnter(event: KeyboardEvent) {
   })
 }
 
+function insertEmojiAtCursor(emoji: string) {
+  const el = inputEl.value
+  if (!el) {
+    newBody.value += emoji
+    return
+  }
+
+  const start = el.selectionStart ?? newBody.value.length
+  const end = el.selectionEnd ?? start
+  newBody.value = `${newBody.value.slice(0, start)}${emoji}${newBody.value.slice(end)}`
+
+  nextTick(() => {
+    const cursor = start + emoji.length
+    el.focus()
+    el.selectionStart = cursor
+    el.selectionEnd = cursor
+  })
+}
+
 async function submit() {
   const body = newBody.value.trim()
   if ((!body && stagedAttachments.value.length === 0) || submitting.value || uploading.value) return
@@ -463,6 +550,7 @@ async function submit() {
     comments.value.push(comment)
     newBody.value = ''
     stagedAttachments.value = []
+    closeEmojiPicker()
     preloadAttachmentUrls()
     tasksStore.loadUsers()
   } catch (e) {
@@ -585,6 +673,7 @@ watch(comments, () => {
 }, { deep: true })
 
 watch(() => props.taskId, (next, prev) => {
+  closeEmojiPicker()
   if (prev && prev !== next) {
     void cleanupStagedAttachments(prev)
     revokeAllAttachmentUrls()
@@ -600,6 +689,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  closeEmojiPicker()
   if (stagedAttachments.value.length > 0) {
     void cleanupStagedAttachments()
   }

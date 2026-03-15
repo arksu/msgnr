@@ -42,12 +42,12 @@
       <textarea
         ref="inputEl"
         v-model="text"
-        class="flex-1 bg-transparent text-gray-100 placeholder-gray-500 resize-none outline-none leading-relaxed max-h-40 min-h-[24px]"
+        class="bg-transparent text-gray-100 placeholder-gray-500 resize-none outline-none leading-relaxed min-h-[24px]"
         :placeholder="`Message #${channelName}`"
         :disabled="disabled"
         rows="1"
         @keydown.enter.exact.prevent="submit"
-        @keydown.enter.shift.exact="addNewline"
+        @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
         @input="autoResize"
         @paste="onPaste"
         @dragenter.prevent="onDragEnter"
@@ -156,7 +156,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { uploadChatAttachment, deleteChatAttachment } from '@/services/http/chatApi'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 
@@ -174,6 +174,7 @@ interface ComposerSendPayload {
 }
 
 const MAX_ATTACHMENTS = 5
+const MAX_TEXTAREA_LINES = 8
 const props = defineProps<{
   channelName: string
   conversationId?: string
@@ -270,17 +271,39 @@ function insertEmojiAtCursor(emoji: string) {
   })
 }
 
-function addNewline() {
-  text.value += '\n'
-  nextTick(() => autoResize())
+function onShiftEnter(event: KeyboardEvent) {
+  const el = event.target as HTMLTextAreaElement
+  const start = el.selectionStart ?? text.value.length
+  const end = el.selectionEnd ?? start
+  text.value = text.value.slice(0, start) + '\n' + text.value.slice(end)
+  nextTick(() => {
+    const cursor = start + 1
+    el.selectionStart = cursor
+    el.selectionEnd = cursor
+    autoResize()
+  })
 }
 
 function autoResize() {
+  emitTyping(text.value.trim().length > 0)
+  resizeTextarea()
+}
+
+function resizeTextarea() {
   const el = inputEl.value
   if (!el) return
-  emitTyping(text.value.trim().length > 0)
-  el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  const style = window.getComputedStyle(el)
+  const fontSize = Number.parseFloat(style.fontSize) || 16
+  const lineHeight = Number.parseFloat(style.lineHeight) || (fontSize * 1.5)
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
+  const maxHeight = Math.ceil((lineHeight * MAX_TEXTAREA_LINES) + paddingTop + paddingBottom)
+
+  el.style.maxHeight = `${maxHeight}px`
+  el.style.height = '0px'
+  const nextHeight = Math.min(el.scrollHeight, maxHeight)
+  el.style.height = `${nextHeight}px`
+  el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
 }
 
 function emitTyping(active: boolean) {
@@ -463,12 +486,21 @@ watch(() => props.conversationId, (next, prev) => {
   }
 })
 
+watch(text, () => {
+  nextTick(() => resizeTextarea())
+})
+
 onBeforeUnmount(() => {
   closeEmojiPicker()
   if (attachments.value.length > 0) {
     void cleanupStagedAttachments()
   }
 })
+
+onMounted(() => {
+  nextTick(() => resizeTextarea())
+})
+
 
 function formatFileSize(size: number): string {
   if (size < 1024) return `${size} B`

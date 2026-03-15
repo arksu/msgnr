@@ -164,12 +164,13 @@
         <textarea
           ref="inputEl"
           v-model="newBody"
-          class="min-h-[24px] max-h-40 flex-1 resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
+          class="min-h-[24px] resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
           placeholder="Add a comment…"
           :disabled="submitting"
           rows="1"
           @keydown.enter.exact.prevent="submit"
           @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
+          @input="autoResize"
           @paste="onPaste"
           @dragenter.prevent="onDragEnter"
           @dragover.prevent="onDragOver"
@@ -306,6 +307,7 @@ import {
 } from '@/services/http/tasksApi'
 
 const MAX_ATTACHMENTS = 5
+const MAX_TEXTAREA_LINES = 8
 
 const props = defineProps<{ taskId: string }>()
 
@@ -514,6 +516,7 @@ function onShiftEnter(event: KeyboardEvent) {
   newBody.value = newBody.value.slice(0, start) + '\n' + newBody.value.slice(end)
   nextTick(() => {
     el.selectionStart = el.selectionEnd = start + 1
+    autoResize()
   })
 }
 
@@ -533,7 +536,26 @@ function insertEmojiAtCursor(emoji: string) {
     el.focus()
     el.selectionStart = cursor
     el.selectionEnd = cursor
+    autoResize()
   })
+}
+
+function autoResize() {
+  const el = inputEl.value
+  if (!el) return
+
+  const style = window.getComputedStyle(el)
+  const fontSize = Number.parseFloat(style.fontSize) || 16
+  const lineHeight = Number.parseFloat(style.lineHeight) || (fontSize * 1.5)
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
+  const maxHeight = Math.ceil((lineHeight * MAX_TEXTAREA_LINES) + paddingTop + paddingBottom)
+
+  el.style.maxHeight = `${maxHeight}px`
+  el.style.height = '0px'
+  const nextHeight = Math.min(el.scrollHeight, maxHeight)
+  el.style.height = `${nextHeight}px`
+  el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
 }
 
 async function submit() {
@@ -550,6 +572,7 @@ async function submit() {
     comments.value.push(comment)
     newBody.value = ''
     stagedAttachments.value = []
+    nextTick(() => autoResize())
     closeEmojiPicker()
     preloadAttachmentUrls()
     tasksStore.loadUsers()
@@ -672,12 +695,17 @@ watch(comments, () => {
   preloadAttachmentUrls()
 }, { deep: true })
 
+watch(newBody, () => {
+  nextTick(() => autoResize())
+})
+
 watch(() => props.taskId, (next, prev) => {
   closeEmojiPicker()
   if (prev && prev !== next) {
     void cleanupStagedAttachments(prev)
     revokeAllAttachmentUrls()
     newBody.value = ''
+    nextTick(() => autoResize())
     closeImagePreview()
     void load()
   }
@@ -686,6 +714,7 @@ watch(() => props.taskId, (next, prev) => {
 onMounted(() => {
   void load()
   void tasksStore.loadUsers()
+  nextTick(() => autoResize())
 })
 
 onBeforeUnmount(() => {

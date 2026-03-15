@@ -354,4 +354,24 @@ describe('TaskComments', () => {
     await textarea.trigger('dragleave')
     expect(dropZone.className).toContain('border-chat-border')
   })
+
+  it('auto-grows comment textarea and caps at 8 lines', async () => {
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => 420,
+    })
+
+    await wrapper.get('textarea').setValue('line')
+    await flushPromises()
+
+    expect(Number.parseInt(textarea.style.maxHeight, 10)).toBeGreaterThan(0)
+    expect(textarea.style.height).toBe(textarea.style.maxHeight)
+    expect(textarea.style.overflowY).toBe('auto')
+  })
 })

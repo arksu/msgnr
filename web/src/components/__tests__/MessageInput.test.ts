@@ -230,4 +230,25 @@ describe('MessageInput', () => {
 
     expect(wrapper.text()).not.toContain('Uploading big.png...')
   })
+
+  it('auto-grows textarea and caps at 8 lines', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        disabled: false,
+      },
+    })
+
+    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => 400,
+    })
+
+    await wrapper.get('textarea').setValue('line')
+
+    expect(Number.parseInt(textarea.style.maxHeight, 10)).toBeGreaterThan(0)
+    expect(textarea.style.height).toBe(textarea.style.maxHeight)
+    expect(textarea.style.overflowY).toBe('auto')
+  })
 })

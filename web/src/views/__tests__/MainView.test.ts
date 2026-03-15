@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
-import { PresenceStatus } from '@/shared/proto/packets_pb'
+import { NotificationLevel, PresenceStatus } from '@/shared/proto/packets_pb'
 import { useAuthStore } from '@/stores/auth'
 import { useTasksStore } from '@/stores/tasks'
 import { useWsStore } from '@/stores/ws'
@@ -193,6 +193,94 @@ describe('MainView server unavailable state', () => {
     expect(router.currentRoute.value.name).toBe('tasks-list')
     expect(wrapper.find('[data-testid=\"task-tracker\"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid=\"task-list-view\"]').exists()).toBe(true)
+  })
+
+  it('hides chat mode unread badge while chat mode is active', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const chatStore = useChatStore()
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'General',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 4,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="mode-chat-unread-badge"]').exists()).toBe(false)
+  })
+
+  it('shows chat mode unread badge in task tracker mode when unread exists', async () => {
+    const router = createMainRouter()
+    router.push('/tasks')
+    await router.isReady()
+
+    const chatStore = useChatStore()
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'General',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 7,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    const badge = wrapper.find('[data-testid="mode-chat-unread-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toBe('7')
+  })
+
+  it('caps chat mode unread badge text at 99+', async () => {
+    const router = createMainRouter()
+    router.push('/tasks')
+    await router.isReady()
+
+    const chatStore = useChatStore()
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'General',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 120,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    const badge = wrapper.find('[data-testid="mode-chat-unread-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toBe('99+')
+  })
+
+  it('does not render chat mode unread badge in task tracker mode when unread is zero', async () => {
+    const router = createMainRouter()
+    router.push('/tasks')
+    await router.isReady()
+
+    const chatStore = useChatStore()
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'General',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="mode-chat-unread-badge"]').exists()).toBe(false)
   })
 
   it('opens remembered task route when task tracker button is clicked', async () => {

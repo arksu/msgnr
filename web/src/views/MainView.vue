@@ -15,6 +15,13 @@
             <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
           </svg>
         </button>
+        <span
+          v-if="showChatModeUnreadBadge"
+          data-testid="mode-chat-unread-badge"
+          class="pointer-events-none absolute -top-1 -right-1 z-10 inline-flex min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold leading-[18px] text-white"
+        >
+          {{ chatModeUnreadBadgeLabel }}
+        </span>
         <span class="pointer-events-none absolute left-12 top-1/2 -translate-y-1/2 rounded border border-chat-border bg-chat-header px-2 py-1 text-xs text-gray-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
           Chat
         </span>
@@ -342,6 +349,8 @@ const tasksStore = useTasksStore()
 const isTaskTrackerRoute = computed(() => route.name === 'tasks-list' || route.name === 'tasks-card')
 const isTaskCardRoute = computed(() => route.name === 'tasks-card')
 const appMode = computed<'chat' | 'task-tracker'>(() => (isTaskTrackerRoute.value ? 'task-tracker' : 'chat'))
+const showChatModeUnreadBadge = computed(() => appMode.value !== 'chat' && chatStore.totalUnreadCount > 0)
+const chatModeUnreadBadgeLabel = computed(() => (chatStore.totalUnreadCount > 99 ? '99+' : String(chatStore.totalUnreadCount)))
 const routeTaskId = computed(() =>
   typeof route.params.taskId === 'string' ? route.params.taskId : '',
 )

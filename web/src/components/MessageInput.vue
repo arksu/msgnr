@@ -52,7 +52,7 @@
       <textarea
         ref="inputEl"
         v-model="text"
-        class="flex-1 bg-transparent text-gray-100 placeholder-gray-500 text-[15px] resize-none outline-none leading-relaxed max-h-40 min-h-[24px]"
+        class="flex-1 bg-transparent text-gray-100 placeholder-gray-500 resize-none outline-none leading-relaxed max-h-40 min-h-[24px]"
         :placeholder="`Message #${channelName}`"
         :disabled="disabled"
         rows="1"

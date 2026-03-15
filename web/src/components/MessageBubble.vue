@@ -32,7 +32,7 @@
 
       <!-- Header row: name + timestamp + hover actions -->
       <div v-if="showHeader" class="flex items-baseline gap-2 mb-0.5">
-        <span class="font-bold text-white text-[15px]">{{ message.senderName }}</span>
+        <span class="font-bold text-white">{{ message.senderName }}</span>
         <span class="text-xs text-gray-500">{{ formattedTime }}</span>
         <span
           v-if="message.editedAt"
@@ -182,7 +182,7 @@
       <template v-else>
         <div
           v-if="message.body"
-          class="markdown-body text-[15px]"
+          class="markdown-body"
           :class="bodyTextClass"
           v-html="renderedMessageHtml"
         ></div>

@@ -174,7 +174,7 @@
 
         <textarea
           v-model="newBody"
-          class="min-h-[24px] max-h-40 flex-1 resize-none bg-transparent text-[15px] leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
+          class="min-h-[24px] max-h-40 flex-1 resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
           placeholder="Add a comment…"
           :disabled="submitting"
           rows="1"

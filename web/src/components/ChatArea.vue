@@ -4,7 +4,7 @@
 
     <!-- Top bar -->
     <header class="flex items-center gap-3 px-4 py-3 border-b border-chat-border bg-chat-header shrink-0">
-      <div class="flex items-center gap-1.5 font-bold text-white text-[15px] truncate">
+      <div class="flex items-center gap-1.5 font-bold text-white truncate">
         <span class="text-gray-400 font-normal text-lg">{{ conversationPrefix }}</span>
         {{ conversation?.title ?? '…' }}
       </div>

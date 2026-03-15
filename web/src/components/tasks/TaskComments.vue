@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div ref="rootEl">
     <div class="mb-3">
       <span class="text-xs text-gray-500 uppercase tracking-wide">
         Comments ({{ comments.length }})
@@ -325,7 +325,9 @@ const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
+const rootEl = ref<HTMLElement | null>(null)
 let dragDepth = 0
+let lastTextareaHeight = 0
 
 const attachmentUrls = ref<Record<string, string>>({})
 const loadingAttachmentIds = ref(new Set<string>())
@@ -543,6 +545,7 @@ function insertEmojiAtCursor(emoji: string) {
 function autoResize() {
   const el = inputEl.value
   if (!el) return
+  const previousHeight = lastTextareaHeight
 
   const style = window.getComputedStyle(el)
   const fontSize = Number.parseFloat(style.fontSize) || 16
@@ -556,6 +559,33 @@ function autoResize() {
   const nextHeight = Math.min(el.scrollHeight, maxHeight)
   el.style.height = `${nextHeight}px`
   el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  lastTextareaHeight = nextHeight
+  if (previousHeight > 0 && previousHeight !== nextHeight) {
+    preserveScrollOnComposerResize(nextHeight - previousHeight)
+  }
+}
+
+function findNearestScrollContainer(start: HTMLElement | null): HTMLElement | null {
+  let node: HTMLElement | null = start?.parentElement ?? null
+  while (node) {
+    const style = window.getComputedStyle(node)
+    const overflowY = style.overflowY
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
+      return node
+    }
+    node = node.parentElement
+  }
+  return null
+}
+
+function preserveScrollOnComposerResize(deltaPx: number) {
+  if (deltaPx === 0) return
+  const container = findNearestScrollContainer(rootEl.value)
+  if (!container) return
+  const nearBottom = container.scrollHeight - (container.scrollTop + container.clientHeight) <= 72
+  if (nearBottom) {
+    container.scrollTop = container.scrollHeight
+  }
 }
 
 async function submit() {

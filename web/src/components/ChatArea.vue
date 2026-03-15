@@ -1,6 +1,6 @@
 <template>
-  <div class="flex h-full bg-chat-bg">
-    <div class="flex min-w-0 flex-1 flex-col">
+  <div class="flex h-full min-h-0 bg-chat-bg">
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 
     <!-- Top bar -->
     <header class="flex items-center gap-3 px-4 py-3 border-b border-chat-border bg-chat-header shrink-0">
@@ -124,6 +124,7 @@
       :online="wsStore.state !== 'DISCONNECTED' && wsStore.state !== 'CONNECTING'"
       @send="handleSend"
       @typing="handleTyping"
+      @resize="handleComposerResize"
     />
     </div>
 
@@ -232,15 +233,24 @@ const scrollEl = ref<HTMLElement | null>(null)
 const openRenderProbe = ref<{ conversationId: string; startedAt: number } | null>(null)
 const loadingOlderHistory = ref(false)
 const forceScrollToBottomOnNextRender = ref(false)
+const composerBottomStickArmed = ref(false)
 let forceScrollResetTimer: ReturnType<typeof setTimeout> | null = null
 const TOP_PRELOAD_THRESHOLD_PX = 120
 const TOP_PRELOAD_REARM_GAP_PX = 72
 const BOTTOM_STICK_THRESHOLD_PX = 72
+const DEBUG_CHAT_COMPOSER_SCROLL = import.meta.env.DEV
 const topPreloadArmed = ref(true)
 
 interface ScrollAnchor {
   messageId: string
   offsetFromViewportTop: number
+}
+
+interface ScrollMetrics {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+  distanceFromBottom: number
 }
 
 const conversation = computed(() => chatStore.activeConversation)
@@ -295,6 +305,20 @@ const statusLabel = computed(() => {
 const showConversationLoadingOverlay = computed(() =>
   chatStore.isConversationInitialLoading(chatStore.activeChannelId)
 )
+
+function chatComposerScrollDebug(event: string, payload: Record<string, unknown>) {
+  if (!DEBUG_CHAT_COMPOSER_SCROLL) return
+  console.debug(`[debug][chat-composer-scroll] ${event}`, payload)
+}
+
+function getScrollMetrics(el: HTMLElement): ScrollMetrics {
+  return {
+    scrollTop: el.scrollTop,
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    distanceFromBottom: el.scrollHeight - (el.scrollTop + el.clientHeight),
+  }
+}
 
 function shouldShowHeader(idx: number): boolean {
   if (idx === 0) return true
@@ -532,6 +556,56 @@ function scrollToBottom() {
   el.scrollTop = el.scrollHeight
 }
 
+function stickToBottomAfterComposerResize() {
+  scrollToBottom()
+  void nextTick(() => {
+    scrollToBottom()
+    requestAnimationFrame(() => {
+      scrollToBottom()
+      const current = scrollEl.value
+      if (!current) return
+      chatComposerScrollDebug('post-layout-stick', {
+        conversationId: chatStore.activeChannelId,
+        metrics: getScrollMetrics(current),
+      })
+    })
+  })
+}
+
+function handleComposerResize(deltaPx: number) {
+  const el = scrollEl.value
+  if (!el || deltaPx === 0) return
+  const before = getScrollMetrics(el)
+  const nearBottomNow = before.distanceFromBottom <= BOTTOM_STICK_THRESHOLD_PX
+  const estimatedDistanceBeforeResize = before.distanceFromBottom - deltaPx
+  const nearBottomBeforeResize = estimatedDistanceBeforeResize <= BOTTOM_STICK_THRESHOLD_PX
+  const shouldStickToBottom = composerBottomStickArmed.value
+    || nearBottomBeforeResize
+    || nearBottomNow
+    || forceScrollToBottomOnNextRender.value
+  chatComposerScrollDebug('before-resize-handler', {
+    conversationId: chatStore.activeChannelId,
+    deltaPx,
+    nearBottomNow,
+    nearBottomBeforeResize,
+    composerBottomStickArmed: composerBottomStickArmed.value,
+    shouldStickToBottom,
+    forceScrollToBottomOnNextRender: forceScrollToBottomOnNextRender.value,
+    metrics: before,
+  })
+  if (shouldStickToBottom) {
+    composerBottomStickArmed.value = true
+    stickToBottomAfterComposerResize()
+  }
+  const after = getScrollMetrics(el)
+  chatComposerScrollDebug('after-resize-handler', {
+    conversationId: chatStore.activeChannelId,
+    deltaPx,
+    composerBottomStickArmed: composerBottomStickArmed.value,
+    metrics: after,
+  })
+}
+
 function isNearBottom(thresholdPx = BOTTOM_STICK_THRESHOLD_PX): boolean {
   const el = scrollEl.value
   if (!el) return true
@@ -565,6 +639,7 @@ async function preloadOlderHistory() {
 function handleScroll() {
   const el = scrollEl.value
   if (!el) return
+  composerBottomStickArmed.value = isNearBottom()
   if (el.scrollTop > TOP_PRELOAD_THRESHOLD_PX + TOP_PRELOAD_REARM_GAP_PX) {
     topPreloadArmed.value = true
   }
@@ -637,6 +712,7 @@ watch(() => {
 watch(() => chatStore.activeChannelId, async (conversationId) => {
   const startedAt = performance.now()
   openRenderProbe.value = { conversationId, startedAt }
+  composerBottomStickArmed.value = true
   topPreloadArmed.value = true
   scheduleGuaranteedBottomScroll()
   console.debug('[perf][conversation-open] render:active-channel-changed', {

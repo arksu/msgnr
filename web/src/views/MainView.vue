@@ -47,7 +47,7 @@
       </div>
     </aside>
     <AppSidebar v-if="appMode === 'chat'" @profile="openSettings" @settings="openAudioSettings" />
-    <main class="flex-1 min-w-0">
+    <main class="flex-1 min-w-0 min-h-0">
       <div
         v-if="showServerUnavailableAlert"
         class="mx-4 mt-4 flex items-center gap-3 rounded-md border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"

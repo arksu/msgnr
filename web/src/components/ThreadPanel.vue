@@ -1,5 +1,5 @@
 <template>
-  <aside class="w-[360px] max-w-[42vw] border-l border-chat-border bg-chat-header flex flex-col">
+  <aside class="w-[360px] max-w-[42vw] h-full min-h-0 border-l border-chat-border bg-chat-header flex flex-col">
     <!-- Header -->
     <header class="flex items-center justify-between px-4 py-3 border-b border-chat-border shrink-0">
       <div class="flex items-center gap-2">
@@ -20,7 +20,7 @@
     </header>
 
     <!-- Scrollable body -->
-    <div class="flex-1 overflow-y-auto">
+    <div ref="scrollEl" class="flex-1 min-h-0 overflow-y-auto">
       <div v-if="!rootMessage" class="px-4 py-6 text-xs text-gray-400">
         Root message not available.
       </div>
@@ -67,12 +67,13 @@
       :disabled="!chat.activeThreadConversationId"
       :online="ws.state !== 'DISCONNECTED' && ws.state !== 'CONNECTING'"
       @send="sendReply"
+      @resize="handleComposerResize"
     />
   </aside>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from './MessageBubble.vue'
@@ -89,9 +90,63 @@ const replyCount = computed(() =>
   chat.threadSummaries[rootMessage.value?.id ?? '']?.replyCount
   ?? replies.value.length
 )
+const scrollEl = ref<HTMLElement | null>(null)
+const forceScrollToBottomOnNextRender = ref(false)
+let forceScrollResetTimer: ReturnType<typeof setTimeout> | null = null
+
+function scrollToBottom() {
+  const el = scrollEl.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
+function scheduleGuaranteedBottomScroll() {
+  forceScrollToBottomOnNextRender.value = true
+  if (forceScrollResetTimer) {
+    clearTimeout(forceScrollResetTimer)
+    forceScrollResetTimer = null
+  }
+
+  const runScroll = () => {
+    scrollToBottom()
+  }
+
+  runScroll()
+  void nextTick(() => {
+    runScroll()
+    requestAnimationFrame(() => {
+      runScroll()
+      requestAnimationFrame(() => {
+        runScroll()
+      })
+    })
+  })
+
+  setTimeout(runScroll, 60)
+  setTimeout(runScroll, 140)
+  forceScrollResetTimer = setTimeout(() => {
+    forceScrollToBottomOnNextRender.value = false
+    forceScrollResetTimer = null
+  }, 260)
+}
+
+function isNearBottom(thresholdPx = 72): boolean {
+  const el = scrollEl.value
+  if (!el) return true
+  return el.scrollHeight - (el.scrollTop + el.clientHeight) <= thresholdPx
+}
+
+function handleComposerResize(deltaPx: number) {
+  const el = scrollEl.value
+  if (!el || deltaPx === 0) return
+  if (isNearBottom() || forceScrollToBottomOnNextRender.value) {
+    scrollToBottom()
+  }
+}
 
 function sendReply(payload: { body: string; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> }) {
   chat.sendThreadReply(payload.body, payload.attachmentIds, payload.attachments)
+  scheduleGuaranteedBottomScroll()
 }
 
 function shouldShowHeader(idx: number): boolean {
@@ -103,4 +158,21 @@ function shouldShowHeader(idx: number): boolean {
   const currTime = new Date(curr.createdAt).getTime()
   return currTime - prevTime > 5 * 60 * 1000
 }
+
+watch(() => {
+  const list = replies.value
+  const last = list[list.length - 1]
+  return `${list.length}|${last?.id ?? ''}`
+}, async () => {
+  if (!forceScrollToBottomOnNextRender.value) return
+  await nextTick()
+  scrollToBottom()
+})
+
+onBeforeUnmount(() => {
+  if (forceScrollResetTimer) {
+    clearTimeout(forceScrollResetTimer)
+    forceScrollResetTimer = null
+  }
+})
 </script>

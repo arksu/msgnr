@@ -175,6 +175,7 @@ interface ComposerSendPayload {
 
 const MAX_ATTACHMENTS = 5
 const MAX_TEXTAREA_LINES = 8
+const DEBUG_COMPOSER_AUTOGROW = import.meta.env.DEV
 const props = defineProps<{
   channelName: string
   conversationId?: string
@@ -182,7 +183,11 @@ const props = defineProps<{
   typingLabel?: string
   online?: boolean
 }>()
-const emit = defineEmits<{ send: [payload: ComposerSendPayload]; typing: [active: boolean] }>()
+const emit = defineEmits<{
+  send: [payload: ComposerSendPayload]
+  typing: [active: boolean]
+  resize: [deltaPx: number]
+}>()
 
 const text = ref('')
 const inputEl = ref<HTMLTextAreaElement | null>(null)
@@ -195,6 +200,12 @@ const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
 let dragDepth = 0
+let lastTextareaHeight = 0
+
+function logComposerAutogrow(event: string, payload: Record<string, unknown>) {
+  if (!DEBUG_COMPOSER_AUTOGROW) return
+  console.debug(`[debug][composer-autogrow] ${event}`, payload)
+}
 
 const {
   showEmojiPicker,
@@ -244,9 +255,7 @@ function submit() {
   closeEmojiPicker()
   emitTyping(false)
   nextTick(() => {
-    if (inputEl.value) {
-      inputEl.value.style.height = 'auto'
-    }
+    resizeTextarea()
   })
 }
 
@@ -292,6 +301,7 @@ function autoResize() {
 function resizeTextarea() {
   const el = inputEl.value
   if (!el) return
+  const previousHeight = lastTextareaHeight
   const style = window.getComputedStyle(el)
   const fontSize = Number.parseFloat(style.fontSize) || 16
   const lineHeight = Number.parseFloat(style.lineHeight) || (fontSize * 1.5)
@@ -304,6 +314,21 @@ function resizeTextarea() {
   const nextHeight = Math.min(el.scrollHeight, maxHeight)
   el.style.height = `${nextHeight}px`
   el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  lastTextareaHeight = nextHeight
+  const delta = nextHeight - previousHeight
+  logComposerAutogrow('resize', {
+    conversationId: props.conversationId ?? '',
+    previousHeight,
+    nextHeight,
+    delta,
+    maxHeight,
+    scrollHeight: el.scrollHeight,
+    overflowY: el.style.overflowY,
+    textLength: text.value.length,
+  })
+  if (previousHeight > 0 && previousHeight !== nextHeight) {
+    emit('resize', delta)
+  }
 }
 
 function emitTyping(active: boolean) {

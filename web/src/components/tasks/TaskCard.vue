@@ -107,46 +107,6 @@
         </div>
       </div>
 
-      <!-- Description -->
-      <div>
-        <div class="field-label flex items-center justify-between gap-2">
-          <span>Description</span>
-          <div v-if="!editing" class="inline-flex rounded border border-chat-border overflow-hidden text-[11px] normal-case tracking-normal">
-            <button
-              type="button"
-              class="px-2 py-0.5"
-              :class="tasksStore.descriptionViewMode === 'rendered' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
-              @click="tasksStore.descriptionViewMode = 'rendered'"
-            >
-              Rendered
-            </button>
-            <button
-              type="button"
-              class="px-2 py-0.5 border-l border-chat-border"
-              :class="tasksStore.descriptionViewMode === 'raw' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
-              @click="tasksStore.descriptionViewMode = 'raw'"
-            >
-              Raw
-            </button>
-          </div>
-        </div>
-        <textarea
-          v-if="editing"
-          v-model="form.description"
-          class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent resize-y min-h-[80px]"
-          placeholder="Description"
-        />
-        <div
-          v-else-if="task.description && tasksStore.descriptionViewMode === 'rendered'"
-          class="markdown-body text-sm text-gray-200"
-          v-html="renderedDescriptionHtml"
-        />
-        <p v-else-if="task.description" class="text-sm text-gray-200 whitespace-pre-wrap">
-          {{ task.description }}
-        </p>
-        <span v-else class="text-sm text-gray-500 italic">—</span>
-      </div>
-
       <!-- Custom fields -->
       <div v-if="customFields.length > 0" class="border-t border-chat-border pt-4 space-y-4">
         <div v-for="field in customFields" :key="field.id">
@@ -306,6 +266,46 @@
             </button>
           </div>
         </div>
+      </div>
+
+      <!-- Description -->
+      <div class="border-t border-chat-border pt-4">
+        <div class="field-label flex items-center justify-between gap-2">
+          <span>Description</span>
+          <div v-if="!editing" class="inline-flex rounded border border-chat-border overflow-hidden text-[11px] normal-case tracking-normal">
+            <button
+              type="button"
+              class="px-2 py-0.5"
+              :class="tasksStore.descriptionViewMode === 'rendered' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
+              @click="tasksStore.descriptionViewMode = 'rendered'"
+            >
+              Rendered
+            </button>
+            <button
+              type="button"
+              class="px-2 py-0.5 border-l border-chat-border"
+              :class="tasksStore.descriptionViewMode === 'raw' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
+              @click="tasksStore.descriptionViewMode = 'raw'"
+            >
+              Raw
+            </button>
+          </div>
+        </div>
+        <textarea
+          v-if="editing"
+          v-model="form.description"
+          class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent resize-y min-h-[80px]"
+          placeholder="Description"
+        />
+        <div
+          v-else-if="task.description && tasksStore.descriptionViewMode === 'rendered'"
+          class="markdown-body text-sm text-gray-200"
+          v-html="renderedDescriptionHtml"
+        />
+        <p v-else-if="task.description" class="text-sm text-gray-200 whitespace-pre-wrap">
+          {{ task.description }}
+        </p>
+        <span v-else class="text-sm text-gray-500 italic">—</span>
       </div>
 
       <!-- Attachments -->

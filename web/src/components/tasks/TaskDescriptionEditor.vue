@@ -26,158 +26,211 @@
       class="border border-chat-border rounded bg-chat-input p-2 space-y-2"
       data-testid="task-description-rendered"
     >
-      <div class="flex flex-wrap gap-1">
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('paragraph') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().setParagraph().run()"
-        >
-          P
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('heading', { level: 1 }) ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleHeading({ level: 1 }).run()"
-        >
-          H1
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('heading', { level: 2 }) ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleHeading({ level: 2 }).run()"
-        >
-          H2
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('heading', { level: 3 }) ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleHeading({ level: 3 }).run()"
-        >
-          H3
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('bold') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleBold().run()"
-        >
-          Bold
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('italic') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleItalic().run()"
-        >
-          Italic
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('strike') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleStrike().run()"
-        >
-          Strike
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('bulletList') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleBulletList().run()"
-        >
-          UL
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('orderedList') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleOrderedList().run()"
-        >
-          OL
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('blockquote') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleBlockquote().run()"
-        >
-          Quote
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('code') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleCode().run()"
-        >
-          Code
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('codeBlock') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="editor?.chain().focus().toggleCodeBlock().run()"
-        >
-          Code Block
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('link') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="toggleLink"
-        >
-          Link
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="isActive('table') ? 'toolbar-btn-active' : ''"
-          :disabled="!editable"
-          @click="insertTable"
-        >
-          Table
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :disabled="!editable || !isActive('table')"
-          @click="editor?.chain().focus().addRowAfter().run()"
-        >
-          +row
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :disabled="!editable || !isActive('table')"
-          @click="editor?.chain().focus().addColumnAfter().run()"
-        >
-          +col
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :disabled="!editable || !isActive('table')"
-          @click="editor?.chain().focus().deleteTable().run()"
-        >
-          Del table
-        </button>
-      </div>
+      <BubbleMenu
+        v-if="editor && editable"
+        :editor="editor"
+        :tippy-options="{ placement: 'top', duration: 120, maxWidth: 'none' }"
+        class="task-editor-floating-menu"
+        data-testid="task-description-bubble-menu"
+      >
+        <div class="task-editor-menu-panel">
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('paragraph') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().setParagraph().run()"
+          >
+            P
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('heading', { level: 1 }) ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleHeading({ level: 1 }).run()"
+          >
+            H1
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('heading', { level: 2 }) ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleHeading({ level: 2 }).run()"
+          >
+            H2
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('heading', { level: 3 }) ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleHeading({ level: 3 }).run()"
+          >
+            H3
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('bold') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleBold().run()"
+          >
+            Bold
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('italic') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleItalic().run()"
+          >
+            Italic
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('strike') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleStrike().run()"
+          >
+            Strike
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('code') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleCode().run()"
+          >
+            Code
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('link') ? 'toolbar-btn-active' : ''"
+            @click="toggleLink"
+          >
+            Link
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :disabled="!isActive('table')"
+            @click="editor?.chain().focus().addRowAfter().run()"
+          >
+            +row
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :disabled="!isActive('table')"
+            @click="editor?.chain().focus().deleteRow().run()"
+          >
+            -row
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :disabled="!isActive('table')"
+            @click="editor?.chain().focus().addColumnAfter().run()"
+          >
+            +col
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :disabled="!isActive('table')"
+            @click="editor?.chain().focus().deleteColumn().run()"
+          >
+            -col
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :disabled="!isActive('table')"
+            @click="editor?.chain().focus().deleteTable().run()"
+          >
+            Del table
+          </button>
+        </div>
+      </BubbleMenu>
+
+      <FloatingMenu
+        v-if="editor && editable"
+        :editor="editor"
+        :tippy-options="{ placement: 'top-start', duration: 120, maxWidth: 'none' }"
+        class="task-editor-floating-menu"
+        data-testid="task-description-floating-menu"
+      >
+        <div class="task-editor-menu-panel">
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('paragraph') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().setParagraph().run()"
+          >
+            P
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('heading', { level: 1 }) ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleHeading({ level: 1 }).run()"
+          >
+            H1
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('heading', { level: 2 }) ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleHeading({ level: 2 }).run()"
+          >
+            H2
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('heading', { level: 3 }) ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleHeading({ level: 3 }).run()"
+          >
+            H3
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('bulletList') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleBulletList().run()"
+          >
+            UL
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('orderedList') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleOrderedList().run()"
+          >
+            OL
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('blockquote') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleBlockquote().run()"
+          >
+            Quote
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('codeBlock') ? 'toolbar-btn-active' : ''"
+            @click="editor?.chain().focus().toggleCodeBlock().run()"
+          >
+            Code Block
+          </button>
+          <button
+            type="button"
+            class="toolbar-btn"
+            :class="isActive('table') ? 'toolbar-btn-active' : ''"
+            @click="insertTable"
+          >
+            Table
+          </button>
+        </div>
+      </FloatingMenu>
 
       <EditorContent :editor="editor" class="task-description-editor-content markdown-body" data-testid="task-description-editor-content" />
     </div>
@@ -207,6 +260,7 @@ import TableRow from '@tiptap/extension-table-row'
 import TableHeader from '@tiptap/extension-table-header'
 import TableCell from '@tiptap/extension-table-cell'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
+import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 
@@ -460,6 +514,10 @@ defineExpose<{ editor: typeof editor }>({
 
 .toolbar-btn-active {
   @apply border-accent text-white bg-accent/20;
+}
+
+.task-editor-menu-panel {
+  @apply flex flex-wrap gap-1 rounded border border-chat-border bg-chat-bg/95 p-1 shadow-lg;
 }
 
 .task-description-editor-content :deep(.ProseMirror) {

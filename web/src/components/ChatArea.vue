@@ -207,7 +207,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
@@ -234,7 +234,12 @@ const openRenderProbe = ref<{ conversationId: string; startedAt: number } | null
 const loadingOlderHistory = ref(false)
 const forceScrollToBottomOnNextRender = ref(false)
 const composerBottomStickArmed = ref(false)
+const pendingSwitchAutoScrollConversationId = ref('')
+const pendingSwitchAutoScrollAttempts = ref(0)
+const switchFollowConversationId = ref('')
 let forceScrollResetTimer: ReturnType<typeof setTimeout> | null = null
+let switchFollowInterval: ReturnType<typeof setInterval> | null = null
+let switchFollowStopTimer: ReturnType<typeof setTimeout> | null = null
 const TOP_PRELOAD_THRESHOLD_PX = 120
 const TOP_PRELOAD_REARM_GAP_PX = 72
 const BOTTOM_STICK_THRESHOLD_PX = 72
@@ -318,6 +323,48 @@ function getScrollMetrics(el: HTMLElement): ScrollMetrics {
     clientHeight: el.clientHeight,
     distanceFromBottom: el.scrollHeight - (el.scrollTop + el.clientHeight),
   }
+}
+
+function hasPendingSwitchAutoScroll(conversationId: string = chatStore.activeChannelId): boolean {
+  return conversationId !== '' && pendingSwitchAutoScrollConversationId.value === conversationId
+}
+
+function stopSwitchFollowWindow(reason: string) {
+  if (switchFollowInterval) {
+    clearInterval(switchFollowInterval)
+    switchFollowInterval = null
+  }
+  if (switchFollowStopTimer) {
+    clearTimeout(switchFollowStopTimer)
+    switchFollowStopTimer = null
+  }
+  if (switchFollowConversationId.value) {
+    chatComposerScrollDebug('switch-follow-stop', {
+      reason,
+      conversationId: switchFollowConversationId.value,
+    })
+  }
+  switchFollowConversationId.value = ''
+}
+
+function startSwitchFollowWindow(conversationId: string, durationMs = 2600) {
+  stopSwitchFollowWindow('restart')
+  if (!conversationId) return
+  switchFollowConversationId.value = conversationId
+  switchFollowInterval = setInterval(() => {
+    if (switchFollowConversationId.value !== chatStore.activeChannelId) {
+      stopSwitchFollowWindow('conversation-changed')
+      return
+    }
+    scrollToBottom()
+  }, 80)
+  switchFollowStopTimer = setTimeout(() => {
+    stopSwitchFollowWindow('timeout')
+  }, durationMs)
+  chatComposerScrollDebug('switch-follow-start', {
+    conversationId,
+    durationMs,
+  })
 }
 
 function shouldShowHeader(idx: number): boolean {
@@ -415,7 +462,8 @@ function handleSend(
   }
 }
 
-function scheduleGuaranteedBottomScroll() {
+function scheduleGuaranteedBottomScroll(options: { persistForce?: boolean } = {}) {
+  const persistForce = options.persistForce === true
   forceScrollToBottomOnNextRender.value = true
   if (forceScrollResetTimer) {
     clearTimeout(forceScrollResetTimer)
@@ -438,17 +486,69 @@ function scheduleGuaranteedBottomScroll() {
 
   setTimeout(runScroll, 60)
   setTimeout(runScroll, 140)
-  forceScrollResetTimer = setTimeout(() => {
-    forceScrollToBottomOnNextRender.value = false
+  if (!persistForce) {
+    forceScrollResetTimer = setTimeout(() => {
+      forceScrollToBottomOnNextRender.value = false
+      forceScrollResetTimer = null
+    }, 260)
+  }
+}
+
+async function flushPendingSwitchAutoScroll(trigger: string) {
+  const targetConversationId = pendingSwitchAutoScrollConversationId.value
+  if (!targetConversationId) return
+  if (targetConversationId !== chatStore.activeChannelId) return
+  if (chatStore.isConversationInitialLoading(targetConversationId)) return
+
+  scrollToBottom()
+  await nextTick()
+  scrollToBottom()
+  await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
+  scrollToBottom()
+  await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
+  scrollToBottom()
+
+  const current = scrollEl.value
+  if (!current) return
+  const metrics = getScrollMetrics(current)
+  const atBottom = metrics.distanceFromBottom <= BOTTOM_STICK_THRESHOLD_PX
+  chatComposerScrollDebug('switch-auto-scroll-flush', {
+    trigger,
+    conversationId: targetConversationId,
+    attempts: pendingSwitchAutoScrollAttempts.value,
+    atBottom,
+    metrics,
+  })
+
+  if (!atBottom && pendingSwitchAutoScrollAttempts.value < 8) {
+    pendingSwitchAutoScrollAttempts.value += 1
+    setTimeout(() => {
+      void flushPendingSwitchAutoScroll('retry')
+    }, 90)
+    return
+  }
+
+  pendingSwitchAutoScrollConversationId.value = ''
+  pendingSwitchAutoScrollAttempts.value = 0
+  startSwitchFollowWindow(targetConversationId)
+  forceScrollToBottomOnNextRender.value = false
+  if (forceScrollResetTimer) {
+    clearTimeout(forceScrollResetTimer)
     forceScrollResetTimer = null
-  }, 260)
+  }
 }
 
 // When ChatArea remounts (e.g. returning from task-tracker mode), the active
 // channel hasn't changed so the channel-switch watcher won't fire. Scroll to
 // the bottom explicitly so the user lands at the latest message.
 onMounted(() => {
-  scheduleGuaranteedBottomScroll()
+  const activeConversationId = chatStore.activeChannelId
+  if (activeConversationId) {
+    pendingSwitchAutoScrollConversationId.value = activeConversationId
+    pendingSwitchAutoScrollAttempts.value = 0
+  }
+  scheduleGuaranteedBottomScroll({ persistForce: Boolean(activeConversationId) })
+  void flushPendingSwitchAutoScroll('mounted')
 })
 
 function handleTyping(active: boolean) {
@@ -616,6 +716,7 @@ async function preloadOlderHistory() {
   const conversationId = chatStore.activeChannelId
   const el = scrollEl.value
   if (!conversationId || !el || loadingOlderHistory.value) return
+  if (hasPendingSwitchAutoScroll(conversationId) && showConversationLoadingOverlay.value) return
   if (el.scrollTop > TOP_PRELOAD_THRESHOLD_PX) return
 
   loadingOlderHistory.value = true
@@ -639,11 +740,16 @@ async function preloadOlderHistory() {
 function handleScroll() {
   const el = scrollEl.value
   if (!el) return
-  composerBottomStickArmed.value = isNearBottom()
+  const nearBottom = isNearBottom()
+  composerBottomStickArmed.value = nearBottom
+  if (!hasPendingSwitchAutoScroll() && switchFollowConversationId.value && !nearBottom) {
+    stopSwitchFollowWindow('user-scrolled-away')
+  }
   if (el.scrollTop > TOP_PRELOAD_THRESHOLD_PX + TOP_PRELOAD_REARM_GAP_PX) {
     topPreloadArmed.value = true
   }
   if (loadingOlderHistory.value || !topPreloadArmed.value) return
+  if (hasPendingSwitchAutoScroll() && showConversationLoadingOverlay.value) return
   if (el.scrollTop <= TOP_PRELOAD_THRESHOLD_PX) {
     topPreloadArmed.value = false
     void preloadOlderHistory()
@@ -707,14 +813,18 @@ watch(() => {
       })
     })
   }
+  void flushPendingSwitchAutoScroll('messages-watch')
 })
 
 watch(() => chatStore.activeChannelId, async (conversationId) => {
   const startedAt = performance.now()
   openRenderProbe.value = { conversationId, startedAt }
   composerBottomStickArmed.value = true
+  pendingSwitchAutoScrollConversationId.value = conversationId
+  pendingSwitchAutoScrollAttempts.value = 0
+  startSwitchFollowWindow(conversationId, 3200)
   topPreloadArmed.value = true
-  scheduleGuaranteedBottomScroll()
+  scheduleGuaranteedBottomScroll({ persistForce: true })
   console.debug('[perf][conversation-open] render:active-channel-changed', {
     conversationId,
     at: new Date().toISOString(),
@@ -730,5 +840,20 @@ watch(() => chatStore.activeChannelId, async (conversationId) => {
       elapsedMs,
     })
   })
+  void flushPendingSwitchAutoScroll('active-channel-watch')
+})
+
+watch(() => showConversationLoadingOverlay.value, (loading) => {
+  if (!loading) {
+    void flushPendingSwitchAutoScroll('loading-overlay-watch')
+  }
+})
+
+onBeforeUnmount(() => {
+  if (forceScrollResetTimer) {
+    clearTimeout(forceScrollResetTimer)
+    forceScrollResetTimer = null
+  }
+  stopSwitchFollowWindow('unmount')
 })
 </script>

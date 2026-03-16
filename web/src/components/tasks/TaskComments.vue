@@ -33,7 +33,11 @@
             <span class="text-xs text-gray-500">{{ formatDatetime(comment.created_at) }}</span>
           </div>
 
-          <p v-if="comment.body" class="break-words whitespace-pre-wrap text-sm text-gray-300">{{ comment.body }}</p>
+          <div
+            v-if="comment.body"
+            class="markdown-body break-words text-sm text-gray-300"
+            v-html="renderCommentBody(comment.body)"
+          />
 
           <div v-if="comment.attachments?.length" class="mt-2 space-y-2">
             <div
@@ -296,6 +300,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick, reactive } 
 import { useTasksStore } from '@/stores/tasks'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
+import { renderMarkdownToHtml } from '@/utils/markdown'
 import {
   tasksListComments,
   tasksCreateComment,
@@ -357,6 +362,10 @@ const canSubmit = computed(() => {
   if (newBody.value.trim().length > 0) return true
   return stagedAttachments.value.length > 0
 })
+
+function renderCommentBody(body: string): string {
+  return renderMarkdownToHtml(body)
+}
 
 const attachButtonTitle = computed(() => {
   if (stagedAttachments.value.length >= MAX_ATTACHMENTS) return `Max ${MAX_ATTACHMENTS} attachments per comment`

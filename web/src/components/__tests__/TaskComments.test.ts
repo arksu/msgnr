@@ -374,4 +374,26 @@ describe('TaskComments', () => {
     expect(textarea.style.height).toBe(textarea.style.maxHeight)
     expect(textarea.style.overflowY).toBe('auto')
   })
+
+  it('renders comment bodies as markdown html (marked path)', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-markdown',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: '**bold** and [link](https://example.com)',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.markdown-body strong').exists()).toBe(true)
+    const link = wrapper.find('.markdown-body a')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('https://example.com')
+  })
 })

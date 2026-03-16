@@ -230,9 +230,8 @@
           <!-- Description -->
           <div>
             <label class="form-label">Description</label>
-            <textarea
+            <TaskDescriptionEditor
               v-model="subtaskForm.description"
-              class="w-full bg-chat-bg border border-chat-border rounded px-3 py-1.5 text-white text-sm outline-none focus:border-accent resize-y min-h-[60px] transition-colors"
               placeholder="Optional"
             />
           </div>
@@ -309,17 +308,16 @@
             <button
               type="button"
               class="px-2 py-0.5 border-l border-chat-border"
-              :class="tasksStore.descriptionViewMode === 'raw' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
-              @click="tasksStore.descriptionViewMode = 'raw'"
+              :class="tasksStore.descriptionViewMode === 'markdown' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
+              @click="tasksStore.descriptionViewMode = 'markdown'"
             >
-              Raw
+              Markdown
             </button>
           </div>
         </div>
-        <textarea
+        <TaskDescriptionEditor
           v-if="editing"
           v-model="form.description"
-          class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent resize-y min-h-[80px]"
           placeholder="Description"
         />
         <div
@@ -365,6 +363,7 @@ import { useTasksStore } from '@/stores/tasks'
 import { useChatStore } from '@/stores/chat'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
 import { renderMarkdownToHtml } from '@/utils/markdown'
+import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
 import TaskComments from './TaskComments.vue'

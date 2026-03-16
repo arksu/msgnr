@@ -99,6 +99,47 @@ function serializeList(node: JSONContent, depth: number): string {
     .join('\n')
 }
 
+function renderTableRow(cells: string[]): string {
+  return `| ${cells.join(' | ')} |`
+}
+
+function serializeTableCell(node: JSONContent): string {
+  const raw = serializeBlocks(node.content ?? []).trim()
+  if (!raw) return ''
+  return raw
+    .replace(/\n{2,}/g, '<br>')
+    .replace(/\n/g, '<br>')
+    .replace(/\|/g, '\\|')
+}
+
+function serializeTable(node: JSONContent): string {
+  const rows = (node.content ?? [])
+    .filter(row => row.type === 'tableRow')
+    .map((row) => {
+      const cells = (row.content ?? []).filter(cell => cell.type === 'tableHeader' || cell.type === 'tableCell')
+      return cells.map(cell => serializeTableCell(cell))
+    })
+    .filter(row => row.length > 0)
+
+  if (rows.length === 0) return ''
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
+  if (columnCount === 0) return ''
+
+  const normalizedRows = rows.map(row => Array.from({ length: columnCount }, (_, idx) => row[idx] ?? ''))
+  const firstRowNodes = (node.content?.[0]?.content ?? []).filter(cell => cell.type === 'tableHeader' || cell.type === 'tableCell')
+  const hasHeader = firstRowNodes.length > 0 && firstRowNodes.every(cell => cell.type === 'tableHeader')
+  const header = normalizedRows[0]
+  const bodyRows = normalizedRows.slice(hasHeader ? 1 : 1)
+
+  const lines = [
+    renderTableRow(header),
+    renderTableRow(Array.from({ length: columnCount }, () => '---')),
+    ...bodyRows.map(renderTableRow),
+  ]
+
+  return lines.join('\n')
+}
+
 function serializeBlock(node: JSONContent, depth = 0): string {
   if (node.type === 'paragraph') {
     return serializeInline(node.content ?? [])
@@ -113,6 +154,10 @@ function serializeBlock(node: JSONContent, depth = 0): string {
 
   if (node.type === 'bulletList' || node.type === 'orderedList') {
     return serializeList(node, depth)
+  }
+
+  if (node.type === 'table') {
+    return serializeTable(node)
   }
 
   if (node.type === 'blockquote') {

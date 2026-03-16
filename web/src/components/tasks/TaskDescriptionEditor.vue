@@ -131,6 +131,38 @@
         >
           Link
         </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :class="isActive('table') ? 'toolbar-btn-active' : ''"
+          @click="insertTable"
+        >
+          Table
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :disabled="!isActive('table')"
+          @click="editor?.chain().focus().addRowAfter().run()"
+        >
+          +row
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :disabled="!isActive('table')"
+          @click="editor?.chain().focus().addColumnAfter().run()"
+        >
+          +col
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :disabled="!isActive('table')"
+          @click="editor?.chain().focus().deleteTable().run()"
+        >
+          Del table
+        </button>
       </div>
 
       <EditorContent :editor="editor" class="task-description-editor-content markdown-body" data-testid="task-description-editor-content" />
@@ -149,6 +181,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import StarterKit from '@tiptap/starter-kit'
+import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { renderMarkdownToHtml } from '@/utils/markdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
@@ -179,6 +212,12 @@ const editor = useEditor({
         openOnClick: false,
       },
     }),
+    Table.configure({
+      resizable: true,
+    }),
+    TableRow,
+    TableHeader,
+    TableCell,
   ],
   content: renderMarkdownToHtml(markdownDraft.value),
   editorProps: {
@@ -227,6 +266,12 @@ function toggleLink() {
   editor.value.chain().focus().setLink({ href }).run()
 }
 
+function insertTable() {
+  if (!editor.value) return
+  if (editor.value.isActive('table')) return
+  editor.value.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+}
+
 watch(
   () => props.modelValue,
   (next) => {
@@ -257,6 +302,10 @@ defineExpose<{ editor: typeof editor }>({
 <style scoped>
 .toolbar-btn {
   @apply px-2 py-1 rounded border border-chat-border text-xs text-gray-300 hover:text-white hover:border-accent/60 bg-chat-bg transition-colors;
+}
+
+.toolbar-btn:disabled {
+  @apply opacity-50 cursor-not-allowed hover:text-gray-300 hover:border-chat-border;
 }
 
 .toolbar-btn-active {

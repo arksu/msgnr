@@ -62,4 +62,20 @@ describe('TaskDescriptionEditor', () => {
     expect(editor.getHTML()).toContain('<h2>Updated</h2>')
     expect(editor.getHTML()).toContain('<p>Body text</p>')
   })
+
+  it('renders markdown tables and serializes table edits back to markdown', async () => {
+    const wrapper = mountHost('| Feature | Works? |\n| --- | --- |\n| Bold | yes |')
+    await nextTick()
+
+    const editor = getEditorInstance(wrapper)
+    expect(editor.getHTML()).toContain('<table')
+    expect(editor.getHTML()).toContain('<th')
+
+    editor.commands.setContent('<table><tbody><tr><th>Feature</th><th>Works?</th></tr><tr><td>Table cell edit</td><td>yes</td></tr></tbody></table>')
+    await nextTick()
+
+    const vm = wrapper.vm as { value: string }
+    expect(vm.value).toContain('| Feature | Works? |')
+    expect(vm.value).toContain('| Table cell edit | yes |')
+  })
 })

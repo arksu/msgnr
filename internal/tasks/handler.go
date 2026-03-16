@@ -662,6 +662,7 @@ func (h *Handler) tasksCollection(w http.ResponseWriter, r *http.Request, p auth
 
 // GET /api/tasks/:id
 // PATCH /api/tasks/:id
+// PATCH /api/tasks/:id/title
 // PATCH /api/tasks/:id/status
 // PATCH /api/tasks/:id/fields/:field_id
 // POST /api/tasks/:id/subtasks
@@ -695,6 +696,17 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 			return
 		}
 		h.taskStatusItem(w, r, p, id)
+		return
+	}
+
+	// Route /api/tasks/:id/title
+	if rawID, ok := strings.CutSuffix(rest, "/title"); ok {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
+			return
+		}
+		h.taskTitleItem(w, r, p, id)
 		return
 	}
 
@@ -789,6 +801,48 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+// PATCH /api/tasks/:id/title
+func (h *Handler) taskTitleItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {
+	if r.Method != http.MethodPatch {
+		methodNotAllowed(w)
+		return
+	}
+
+	var req struct {
+		Title             string `json:"title"`
+		IfUnmodifiedSince string `json:"if_unmodified_since"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+		return
+	}
+
+	lockToken := strings.TrimSpace(req.IfUnmodifiedSince)
+	if lockToken == "" {
+		lockToken = strings.TrimSpace(r.Header.Get("If-Unmodified-Since"))
+	}
+	if lockToken == "" {
+		writeJSON(w, http.StatusBadRequest, errBody("if_unmodified_since is required"))
+		return
+	}
+	ifUnmodifiedSince, err := parseRFC3339Timestamp(lockToken)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid if_unmodified_since"))
+		return
+	}
+
+	resp, err := h.svc.UpdateTaskTitle(r.Context(), id, UpdateTaskTitleParams{
+		Title:             req.Title,
+		IfUnmodifiedSince: ifUnmodifiedSince,
+		ActorID:           p.UserID,
+	})
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // PATCH /api/tasks/:id/status
@@ -1405,8 +1459,24 @@ func parseUUID(w http.ResponseWriter, r *http.Request, prefix string) (uuid.UUID
 	return id, true
 }
 
+func parseRFC3339Timestamp(raw string) (time.Time, error) {
+	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return ts, nil
+	}
+	return time.Parse(time.RFC3339, raw)
+}
+
 func (h *Handler) serviceError(w http.ResponseWriter, err error) {
+	var titleConflict *TaskTitleConflictError
 	switch {
+	case errors.As(err, &titleConflict):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": titleConflict.Error(),
+			"latest": map[string]any{
+				"title":      titleConflict.LatestTitle,
+				"updated_at": titleConflict.LatestUpdatedAt,
+			},
+		})
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, errBody(err.Error()))
 	case errors.Is(err, ErrForbidden):

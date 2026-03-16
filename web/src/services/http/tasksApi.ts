@@ -17,9 +17,19 @@ export class TasksApiError extends Error {
   }
 }
 
+export class TasksApiConflictError<T = unknown> extends TasksApiError {
+  constructor(message: string, status: number, public readonly details: T) {
+    super(message, status)
+    this.name = 'TasksApiConflictError'
+  }
+}
+
 function handleError(e: unknown): never {
   if (e instanceof AxiosError && e.response) {
     const msg: string = e.response.data?.error ?? e.response.statusText
+    if (e.response.status === 409) {
+      throw new TasksApiConflictError(msg, e.response.status, e.response.data)
+    }
     throw new TasksApiError(msg, e.response.status)
   }
   throw new TasksApiError('Network error', 0)
@@ -364,6 +374,19 @@ export interface UpdateTaskPayload {
   field_values?: TaskFieldValueInput[]
 }
 
+export interface UpdateTaskTitlePayload {
+  title: string
+  if_unmodified_since: string
+}
+
+export interface TaskTitleConflictResponse {
+  error: string
+  latest: {
+    title: string
+    updated_at: string
+  }
+}
+
 export interface UpdateTaskStatusPayload {
   status_id: string
 }
@@ -396,6 +419,17 @@ export async function tasksGet(id: string): Promise<Task> {
 export async function tasksUpdate(id: string, payload: UpdateTaskPayload): Promise<Task> {
   try {
     const { data } = await http.patch<Task>(`/api/tasks/${id}`, payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksUpdateTaskTitle(id: string, payload: UpdateTaskTitlePayload): Promise<Task> {
+  try {
+    const { data } = await http.patch<Task>(`/api/tasks/${id}/title`, payload, {
+      headers: {
+        'If-Unmodified-Since': payload.if_unmodified_since,
+      },
+    })
     return data
   } catch (e) { handleError(e) }
 }

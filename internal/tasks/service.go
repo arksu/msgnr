@@ -33,6 +33,21 @@ var (
 	ErrForbidden  = errors.New("forbidden")
 )
 
+// TaskTitleConflictError carries the latest server title state when a title
+// update fails optimistic-lock validation.
+type TaskTitleConflictError struct {
+	LatestTitle     string
+	LatestUpdatedAt time.Time
+}
+
+func (e *TaskTitleConflictError) Error() string {
+	return "conflict: task was modified"
+}
+
+func (e *TaskTitleConflictError) Unwrap() error {
+	return ErrConflict
+}
+
 const prefixMaxLen = 32
 const maxCommentAttachments = 5
 
@@ -320,6 +335,13 @@ type UpdateTaskParams struct {
 	StatusID    uuid.UUID
 	FieldValues []FieldValueInput
 	ActorID     uuid.UUID
+}
+
+// UpdateTaskTitleParams carries inputs for a title-only task update.
+type UpdateTaskTitleParams struct {
+	Title             string
+	IfUnmodifiedSince time.Time
+	ActorID           uuid.UUID
 }
 
 // ---- Service ----
@@ -1204,6 +1226,40 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 	}
 
 	// Re-fetch the committed state from DB to return an accurate post-commit snapshot.
+	return s.GetTask(ctx, taskRow.ID)
+}
+
+// UpdateTaskTitle updates a task title with optimistic-lock validation based
+// on the last seen updated_at token.
+func (s *Service) UpdateTaskTitle(ctx context.Context, id uuid.UUID, p UpdateTaskTitleParams) (TaskResponse, error) {
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		return TaskResponse{}, fmt.Errorf("%w: title is required", ErrBadRequest)
+	}
+	if p.IfUnmodifiedSince.IsZero() {
+		return TaskResponse{}, fmt.Errorf("%w: if_unmodified_since is required", ErrBadRequest)
+	}
+
+	taskRow, err := scanTask(s.pool.QueryRow(ctx,
+		`UPDATE task
+		 SET title = $2, updated_by = $3, updated_at = now()
+		 WHERE id = $1 AND updated_at = $4
+		 RETURNING `+taskColumns,
+		id, title, p.ActorID, p.IfUnmodifiedSince,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			latest, getErr := s.q.TaskGet(ctx, id)
+			if getErr != nil {
+				return TaskResponse{}, mapNotFound(getErr, "task")
+			}
+			return TaskResponse{}, &TaskTitleConflictError{
+				LatestTitle:     latest.Title,
+				LatestUpdatedAt: latest.UpdatedAt,
+			}
+		}
+		return TaskResponse{}, mapTaskWriteError(err)
+	}
 	return s.GetTask(ctx, taskRow.ID)
 }
 

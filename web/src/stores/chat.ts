@@ -2558,6 +2558,7 @@ export const useChatStore = defineStore('chat', () => {
     registerWsHandlers,
     queueReactionOp,
     isReactionOpPending,
+    showToast,
     isConversationHistoryLoading,
     isConversationInitialLoading,
     conversationHasMoreHistory,

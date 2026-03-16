@@ -5,9 +5,11 @@ package tasks_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -898,6 +900,42 @@ func TestIntegration_Task_UpdateSystemFields(t *testing.T) {
 	assert.Equal(t, s2.ID, updated.StatusID)
 	// public_id must not change on update.
 	assert.Equal(t, resp.PublicID, updated.PublicID)
+}
+
+func TestIntegration_Task_UpdateTitle_OptimisticConflict(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "OTL", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID, Title: "original", StatusID: status.ID, ActorID: actor,
+	})
+	require.NoError(t, err)
+
+	updated, err := svc.UpdateTaskTitle(ctx, created.ID, tasks.UpdateTaskTitleParams{
+		Title:             "server update",
+		IfUnmodifiedSince: created.UpdatedAt,
+		ActorID:           actor,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "server update", updated.Title)
+
+	_, err = svc.UpdateTaskTitle(ctx, created.ID, tasks.UpdateTaskTitleParams{
+		Title:             "stale client update",
+		IfUnmodifiedSince: created.UpdatedAt,
+		ActorID:           actor,
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, tasks.ErrConflict)
+
+	var conflictErr *tasks.TaskTitleConflictError
+	require.True(t, errors.As(err, &conflictErr))
+	require.Equal(t, "server update", conflictErr.LatestTitle)
+	require.True(t, conflictErr.LatestUpdatedAt.After(created.UpdatedAt) || conflictErr.LatestUpdatedAt.Equal(created.UpdatedAt))
+	require.WithinDuration(t, updated.UpdatedAt, conflictErr.LatestUpdatedAt, 2*time.Second)
 }
 
 func TestIntegration_Task_UpdateFieldValues_ReplaceAll(t *testing.T) {

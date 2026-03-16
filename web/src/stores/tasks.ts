@@ -10,6 +10,7 @@ import {
   tasksCreate,
   tasksGet,
   tasksUpdate,
+  tasksUpdateTaskTitle,
   tasksUpdateTaskStatus,
   tasksUpdateTaskFieldValue,
   tasksCreateSubtask,
@@ -27,6 +28,7 @@ import {
   type SortOrder,
   type CreateTaskPayload,
   type UpdateTaskPayload,
+  type UpdateTaskTitlePayload,
 } from '@/services/http/tasksApi'
 
 export const useTasksStore = defineStore('tasks', () => {
@@ -214,6 +216,12 @@ export const useTasksStore = defineStore('tasks', () => {
     return updated
   }
 
+  async function updateTaskTitle(id: string, payload: UpdateTaskTitlePayload): Promise<Task> {
+    const updated = await tasksUpdateTaskTitle(id, payload)
+    selectedTask.value = updated
+    return updated
+  }
+
   async function updateTaskStatus(id: string, statusId: string): Promise<Task> {
     const updated = await tasksUpdateTaskStatus(id, { status_id: statusId })
     selectedTask.value = updated
@@ -358,6 +366,7 @@ export const useTasksStore = defineStore('tasks', () => {
     createTask,
     selectTask,
     updateTask,
+    updateTaskTitle,
     updateTaskStatus,
     updateTaskFieldValue,
     createSubtask,

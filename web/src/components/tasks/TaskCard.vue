@@ -50,7 +50,32 @@
           class="flex-1 min-w-0 bg-chat-input border border-chat-border rounded px-3 py-1 text-white text-sm outline-none focus:border-accent"
           placeholder="Task title"
         />
-        <h1 v-else class="text-base font-semibold text-white truncate">{{ task.title }}</h1>
+        <input
+          v-else-if="titleEditing"
+          ref="titleInputRef"
+          v-model="titleDraft"
+          type="text"
+          class="flex-1 min-w-0 bg-chat-input border border-chat-border rounded px-3 py-1 text-white text-sm outline-none focus:border-accent"
+          :disabled="titleSaving"
+          placeholder="Task title"
+          @keydown.enter.prevent="saveTitle"
+          @keydown.esc.prevent="cancelTitleEdit"
+          @blur="saveTitle"
+        />
+        <div v-else class="flex min-w-0 items-center gap-1.5">
+          <h1 class="text-base font-semibold text-white truncate">{{ task.title }}</h1>
+          <button
+            class="shrink-0 rounded p-1 text-gray-500 hover:text-white transition-colors"
+            type="button"
+            title="Edit title"
+            @click="startTitleEdit"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
@@ -64,7 +89,7 @@
             {{ saving ? 'Saving...' : 'Save' }}
           </button>
         </template>
-        <button v-else class="btn-secondary text-sm" @click="startEdit">Edit</button>
+        <button v-else class="btn-secondary text-sm" :disabled="titleEditing || titleSaving" @click="startEdit">Edit</button>
       </div>
     </div>
 
@@ -334,9 +359,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { TasksApiConflictError, type TaskFieldDefinition, type TaskFieldValue, type TaskTitleConflictResponse } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
-import type { TaskFieldDefinition, TaskFieldValue } from '@/services/http/tasksApi'
+import { useChatStore } from '@/stores/chat'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
 import { renderMarkdownToHtml } from '@/utils/markdown'
 import TaskFieldInput from './TaskFieldInput.vue'
@@ -347,10 +373,17 @@ defineProps<{ templateFilter: string | null }>()
 const emit = defineEmits<{ back: [] }>()
 
 const tasksStore = useTasksStore()
+const chatStore = useChatStore()
 
 // ---- Edit mode ----
 const editing = ref(false)
 const saving = ref(false)
+const titleEditing = ref(false)
+const titleSaving = ref(false)
+const titleDraft = ref('')
+const titleLockToken = ref('')
+const reopenTitleEditAfterRefresh = ref(false)
+const titleInputRef = ref<HTMLInputElement | null>(null)
 const statusSaving = ref(false)
 const saveError = ref('')
 const showValidation = ref(false)
@@ -502,8 +535,79 @@ async function onFieldValueChange(field: TaskFieldDefinition, value: unknown) {
   }
 }
 
+function isTaskTitleConflictResponse(v: unknown): v is TaskTitleConflictResponse {
+  if (!v || typeof v !== 'object') return false
+  const rec = v as Record<string, unknown>
+  if (!rec.latest || typeof rec.latest !== 'object') return false
+  const latest = rec.latest as Record<string, unknown>
+  return typeof latest.title === 'string' && typeof latest.updated_at === 'string'
+}
+
+async function startTitleEdit() {
+  if (!task.value || editing.value || titleSaving.value) return
+  titleDraft.value = task.value.title
+  titleLockToken.value = task.value.updated_at
+  saveError.value = ''
+  titleEditing.value = true
+  await nextTick()
+  titleInputRef.value?.focus()
+  titleInputRef.value?.select()
+}
+
+function cancelTitleEdit() {
+  if (titleSaving.value) return
+  titleEditing.value = false
+  titleDraft.value = ''
+  titleLockToken.value = ''
+  saveError.value = ''
+}
+
+async function saveTitle() {
+  if (!task.value || !titleEditing.value || titleSaving.value) return
+  const title = titleDraft.value.trim()
+  if (title === '') {
+    saveError.value = 'Title is required'
+    return
+  }
+  if (title === task.value.title) {
+    cancelTitleEdit()
+    return
+  }
+  const lockToken = titleLockToken.value || task.value.updated_at
+  if (!lockToken) {
+    saveError.value = 'Missing optimistic lock token'
+    return
+  }
+
+  const taskID = task.value.id
+  reopenTitleEditAfterRefresh.value = false
+  titleSaving.value = true
+  saveError.value = ''
+  try {
+    await tasksStore.updateTaskTitle(taskID, {
+      title,
+      if_unmodified_since: lockToken,
+    })
+    titleEditing.value = false
+  } catch (e) {
+    if (e instanceof TasksApiConflictError && e.status === 409 && isTaskTitleConflictResponse(e.details)) {
+      chatStore.showToast('Title changed on server. Loaded latest value.')
+      reopenTitleEditAfterRefresh.value = true
+      await tasksStore.selectTask(taskID, true)
+      titleEditing.value = false
+      return
+    }
+    saveError.value = e instanceof Error ? e.message : 'Failed to update title'
+  } finally {
+    titleSaving.value = false
+  }
+}
+
 function startEdit() {
   if (!task.value) return
+  titleEditing.value = false
+  titleDraft.value = ''
+  titleLockToken.value = ''
   form.title = task.value.title
   form.description = task.value.description ?? ''
   form.statusId = task.value.status_id
@@ -673,11 +777,19 @@ watch(task, () => {
     .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
   viewStatusId.value = task.value?.status_id ?? ''
   editing.value = false
+  titleEditing.value = false
+  titleSaving.value = false
+  titleDraft.value = ''
+  titleLockToken.value = ''
   saveError.value = ''
   showValidation.value = false
   showSubtaskForm.value = false
   subtaskError.value = ''
   showSubtaskValidation.value = false
+  if (reopenTitleEditAfterRefresh.value && task.value) {
+    reopenTitleEditAfterRefresh.value = false
+    void startTitleEdit()
+  }
 }, { immediate: true })
 
 watch(customFields, () => {

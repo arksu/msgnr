@@ -1,19 +1,30 @@
 import { defineComponent, nextTick, ref } from 'vue'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import { Awareness } from 'y-protocols/awareness'
+import * as Y from 'yjs'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 
-function mountHost(initialValue = '') {
+function mountHost(initialValue = '', options?: { collab?: boolean }) {
+  const collabDoc = options?.collab ? new Y.Doc() : null
+  const collabProvider = collabDoc ? { awareness: new Awareness(collabDoc) } : null
   const Host = defineComponent({
     components: { TaskDescriptionEditor },
     setup() {
       const value = ref(initialValue)
-      return { value }
+      return { value, collabDoc, collabProvider }
     },
-    template: '<TaskDescriptionEditor v-model="value" />',
+    template: '<TaskDescriptionEditor v-model="value" :collab-doc="collabDoc" :collab-provider="collabProvider" />',
   })
 
-  return mount(Host)
+  return mount(Host, {
+    global: {
+      stubs: {
+        BubbleMenu: { template: '<div><slot /></div>' },
+        FloatingMenu: { template: '<div><slot /></div>' },
+      },
+    },
+  })
 }
 
 function getEditorInstance(wrapper: ReturnType<typeof mountHost>) {
@@ -77,5 +88,30 @@ describe('TaskDescriptionEditor', () => {
     const vm = wrapper.vm as { value: string }
     expect(vm.value).toContain('| Feature | Works? |')
     expect(vm.value).toContain('| Table cell edit | yes |')
+  })
+
+  it('keeps markdown content when switching to rendered in collab mode', async () => {
+    const wrapper = mountHost('', { collab: true })
+    await nextTick()
+
+    await wrapper.get('[data-testid="task-description-tab-markdown"]').trigger('click')
+    await wrapper.get('[data-testid="task-description-markdown-input"]').setValue('333ffss')
+    await wrapper.get('[data-testid="task-description-tab-rendered"]').trigger('click')
+    await nextTick()
+
+    const editor = getEditorInstance(wrapper)
+    expect(editor.getHTML()).toContain('333ffss')
+    const vm = wrapper.vm as { value: string }
+    expect(vm.value).toContain('333ffss')
+  })
+
+  it('seeds initial rendered content from modelValue in collab mode', async () => {
+    const wrapper = mountHost('seed-on-load', { collab: true })
+    await nextTick()
+
+    const editor = getEditorInstance(wrapper)
+    expect(editor.getHTML()).toContain('seed-on-load')
+    const vm = wrapper.vm as { value: string }
+    expect(vm.value).toContain('seed-on-load')
   })
 })

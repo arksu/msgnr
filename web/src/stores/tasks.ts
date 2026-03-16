@@ -266,7 +266,15 @@ export const useTasksStore = defineStore('tasks', () => {
       response: descriptionSignature(updated.description),
       updatedAt: updated.updated_at,
     })
-    selectedTask.value = updated
+    if (selectedTask.value?.id === id) {
+      selectedTask.value = updated
+    } else {
+      tasksDescLog('updateTaskDescription:stale-response-ignored', {
+        id,
+        selectedTaskId: selectedTask.value?.id ?? null,
+        response: descriptionSignature(updated.description),
+      })
+    }
     return updated
   }
 

@@ -22,8 +22,8 @@
     </div>
 
     <div
-      v-if="tab === 'rendered'"
-      class="border border-chat-border rounded bg-chat-input p-2 space-y-2"
+      v-show="tab === 'rendered'"
+      class="rounded bg-chat-input p-2 space-y-2"
       data-testid="task-description-rendered"
     >
       <BubbleMenu
@@ -236,7 +236,7 @@
     </div>
 
     <textarea
-      v-else
+      v-show="tab === 'markdown'"
       v-model="markdownDraft"
       class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent resize-y min-h-[100px]"
       :placeholder="placeholder"
@@ -259,6 +259,8 @@ import { Table } from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableHeader from '@tiptap/extension-table-header'
 import TableCell from '@tiptap/extension-table-cell'
+import { DOMParser as ProseMirrorDOMParser } from '@tiptap/pm/model'
+import { Selection } from '@tiptap/pm/state'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
@@ -319,6 +321,25 @@ function descLog(event: string, payload: Record<string, unknown>) {
   console.debug('[task-desc-editor]', event, payload)
 }
 
+function editorStateSnapshot() {
+  if (!editor.value) {
+    return { mounted: false }
+  }
+  const state = editor.value.state
+  const selection = state.selection
+  return {
+    mounted: true,
+    from: selection.from,
+    to: selection.to,
+    empty: selection.empty,
+    anchorParent: selection.$anchor.parent.type.name,
+    headParent: selection.$head.parent.type.name,
+    docChildCount: state.doc.childCount,
+    docSize: state.doc.content.size,
+    htmlLength: editor.value.getHTML().length,
+  }
+}
+
 const extensions = computed(() => {
   const list: AnyExtension[] = [
     StarterKit.configure({
@@ -377,7 +398,15 @@ const editor = useEditor({
       tab: tab.value,
       next: markdownSignature(nextMarkdown),
       current: markdownSignature(markdownDraft.value),
+      snapshot: editorStateSnapshot(),
     })
+    if (collabEnabled.value && nextMarkdown.trim() === '' && markdownDraft.value.trim() !== '') {
+      descLog('onUpdate:unexpected-empty', {
+        tab: tab.value,
+        previousDraft: markdownSignature(markdownDraft.value),
+        snapshot: editorStateSnapshot(),
+      })
+    }
     if (nextMarkdown === markdownDraft.value) return
     syncingFromEditor.value = true
     markdownDraft.value = nextMarkdown
@@ -390,31 +419,105 @@ function isActive(name: string, attrs?: Record<string, unknown>) {
   return editor.value?.isActive(name, attrs) ?? false
 }
 
+function setContentWithSafeSelection(html: string): boolean {
+  if (!editor.value?.view) return false
+  const view = editor.value.view
+  const wrapper = document.createElement('div')
+  wrapper.innerHTML = html
+  const parsedDoc = ProseMirrorDOMParser.fromSchema(view.state.schema).parse(wrapper)
+  let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, parsedDoc.content)
+  tr = tr.setSelection(Selection.atStart(tr.doc))
+  view.dispatch(tr)
+  return true
+}
+
 function setEditorContentFromMarkdown(markdown: string, emitUpdate: boolean, reason: string) {
   if (!editor.value) return
+  const beforeSnapshot = editorStateSnapshot()
   descLog('setEditorContentFromMarkdown', {
     reason,
     collab: collabEnabled.value,
     tab: tab.value,
     emitUpdate,
     markdown: markdownSignature(markdown),
+    beforeSnapshot,
   })
   const html = renderTaskMarkdownToHtml(markdown)
-  if (!emitUpdate) {
-    suppressEditorSync.value = true
+  try {
+    if (!emitUpdate) {
+      suppressEditorSync.value = true
+    }
+    const strategy = collabEnabled.value ? 'safe-transaction' : 'setContent'
+    const ok = collabEnabled.value
+      ? setContentWithSafeSelection(html)
+      : editor.value.commands.setContent(html, { emitUpdate })
+    descLog('setEditorContentFromMarkdown:done', {
+      reason,
+      collab: collabEnabled.value,
+      tab: tab.value,
+      emitUpdate,
+      strategy,
+      ok,
+      htmlLength: html.length,
+      afterSnapshot: editorStateSnapshot(),
+      afterMarkdown: markdownSignature(tiptapJsonToMarkdown(editor.value.getJSON())),
+    })
+  } catch (error) {
+    descLog('setEditorContentFromMarkdown:error', {
+      reason,
+      collab: collabEnabled.value,
+      tab: tab.value,
+      emitUpdate,
+      htmlLength: html.length,
+      error: error instanceof Error ? error.message : String(error),
+      afterSnapshot: editorStateSnapshot(),
+    })
+    throw error
+  } finally {
+    if (!emitUpdate) {
+      suppressEditorSync.value = false
+    }
   }
-  editor.value.commands.setContent(html, { emitUpdate })
-  if (!emitUpdate) {
-    suppressEditorSync.value = false
-  }
+}
+
+function isEditorEffectivelyEmpty(): boolean {
+  if (!editor.value) return true
+  const currentMarkdown = tiptapJsonToMarkdown(editor.value.getJSON()).trim()
+  return currentMarkdown.length === 0
+}
+
+function maybeSeedCollabEditorFromDraft(reason: string) {
+  if (!collabEnabled.value || !editor.value) return
+  const draft = markdownDraft.value
+  const empty = isEditorEffectivelyEmpty()
+  descLog('maybeSeedCollabEditorFromDraft', {
+    reason,
+    tab: tab.value,
+    draft: markdownSignature(draft),
+    empty,
+    snapshot: editorStateSnapshot(),
+  })
+  if (tab.value !== 'rendered') return
+  if (draft.trim() === '') return
+  if (!empty) return
+  setEditorContentFromMarkdown(draft, false, reason)
 }
 
 function switchTab(nextTab: DescriptionTab) {
   if (tab.value === nextTab) return
-  descLog('switchTab', { from: tab.value, to: nextTab, collab: collabEnabled.value })
+  descLog('switchTab', {
+    from: tab.value,
+    to: nextTab,
+    collab: collabEnabled.value,
+    snapshot: editorStateSnapshot(),
+  })
   tab.value = nextTab
-  if (nextTab === 'rendered' && !collabEnabled.value) {
-    setEditorContentFromMarkdown(markdownDraft.value, false, 'switch-tab-rendered')
+  if (nextTab === 'rendered') {
+    if (!collabEnabled.value) {
+      setEditorContentFromMarkdown(markdownDraft.value, false, 'switch-tab-rendered')
+      return
+    }
+    maybeSeedCollabEditorFromDraft('switch-tab-rendered-collab-empty-seed')
   }
 }
 
@@ -454,6 +557,9 @@ watch(
       syncingFromModel.value = Math.max(0, syncingFromModel.value - 1)
     })
     if (collabEnabled.value) {
+      queueMicrotask(() => {
+        maybeSeedCollabEditorFromDraft('watch-modelValue-collab-seed')
+      })
       return
     }
     if (tab.value === 'rendered') {
@@ -471,13 +577,22 @@ watch(markdownDraft, (next) => {
     next: markdownSignature(next),
     modelValue: markdownSignature(props.modelValue ?? ''),
   })
-  if (syncingFromModel.value > 0) return
+  if (syncingFromModel.value > 0) {
+    queueMicrotask(() => {
+      maybeSeedCollabEditorFromDraft('watch-markdownDraft-syncingFromModel-collab-seed')
+    })
+    return
+  }
   if (next !== props.modelValue) {
     emit('update:modelValue', next)
   }
   if (syncingFromEditor.value) return
-  if (!collabEnabled.value || tab.value !== 'markdown') return
-  setEditorContentFromMarkdown(next, true, 'watch-markdownDraft-markdown-tab')
+  if (!collabEnabled.value) return
+  if (tab.value === 'markdown') {
+    setEditorContentFromMarkdown(next, false, 'watch-markdownDraft-markdown-tab')
+    return
+  }
+  maybeSeedCollabEditorFromDraft('watch-markdownDraft-rendered-collab-seed')
 })
 
 watch(
@@ -489,8 +604,18 @@ watch(
 
 watch(editor, (next) => {
   if (!next) return
+  next.on('transaction', ({ transaction }) => {
+    descLog('transaction', {
+      collab: collabEnabled.value,
+      tab: tab.value,
+      docChanged: transaction.docChanged,
+      selectionSet: transaction.selectionSet,
+      snapshot: editorStateSnapshot(),
+    })
+  })
   if (collabEnabled.value) {
-    descLog('watch:editor', { collab: true, skip: true })
+    descLog('watch:editor', { collab: true, skip: true, tab: tab.value })
+    maybeSeedCollabEditorFromDraft('watch-editor-collab-initial-seed')
     return
   }
   if (tab.value === 'rendered') {
@@ -521,7 +646,7 @@ defineExpose<{ editor: typeof editor }>({
 }
 
 .task-description-editor-content :deep(.ProseMirror) {
-  @apply min-h-[140px] rounded border border-chat-border bg-chat-bg px-3 py-2 text-sm text-gray-100 leading-relaxed;
+  @apply min-h-[140px] bg-chat-bg px-3 py-2 text-sm text-gray-100 leading-relaxed;
 }
 
 .task-description-editor-content :deep(.collaboration-carets__caret) {

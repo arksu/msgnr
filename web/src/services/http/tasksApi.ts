@@ -2,6 +2,23 @@ import { AxiosError } from 'axios'
 import { createAuthenticatedClient } from './client'
 
 const http = createAuthenticatedClient()
+const DEBUG_TASKS_API_DESC = true
+
+function descriptionSignature(value: string | null | undefined): string {
+  if (value == null) return 'null'
+  let hash = 0
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(i)
+    hash |= 0
+  }
+  const preview = value.slice(0, 80).replace(/\n/g, '\\n')
+  return `len=${value.length},hash=${hash},preview="${preview}"`
+}
+
+function tasksApiDescLog(event: string, payload: Record<string, unknown>) {
+  if (!DEBUG_TASKS_API_DESC) return
+  console.debug('[tasks-api-desc]', event, payload)
+}
 
 // Base URL used to construct direct download links.
 // The download endpoint streams through the backend so the Bearer token is
@@ -391,6 +408,10 @@ export interface UpdateTaskStatusPayload {
   status_id: string
 }
 
+export interface UpdateTaskDescriptionPayload {
+  description?: string | null
+}
+
 export interface UpdateTaskFieldValuePayload {
   value_text?: string | null
   value_number?: string | null
@@ -437,6 +458,22 @@ export async function tasksUpdateTaskTitle(id: string, payload: UpdateTaskTitleP
 export async function tasksUpdateTaskStatus(id: string, payload: UpdateTaskStatusPayload): Promise<Task> {
   try {
     const { data } = await http.patch<Task>(`/api/tasks/${id}/status`, payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksUpdateTaskDescription(id: string, payload: UpdateTaskDescriptionPayload): Promise<Task> {
+  try {
+    tasksApiDescLog('patch:start', {
+      id,
+      request: descriptionSignature(payload.description),
+    })
+    const { data } = await http.patch<Task>(`/api/tasks/${id}/description`, payload)
+    tasksApiDescLog('patch:response', {
+      id,
+      response: descriptionSignature(data.description),
+      updatedAt: data.updated_at,
+    })
     return data
   } catch (e) { handleError(e) }
 }

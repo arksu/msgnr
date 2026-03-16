@@ -12,6 +12,7 @@ import {
   tasksUpdate,
   tasksUpdateTaskTitle,
   tasksUpdateTaskStatus,
+  tasksUpdateTaskDescription,
   tasksUpdateTaskFieldValue,
   tasksCreateSubtask,
   tasksListTasks,
@@ -30,6 +31,24 @@ import {
   type UpdateTaskPayload,
   type UpdateTaskTitlePayload,
 } from '@/services/http/tasksApi'
+
+const DEBUG_TASKS_DESC = true
+
+function descriptionSignature(value: string | null | undefined): string {
+  if (value == null) return 'null'
+  let hash = 0
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(i)
+    hash |= 0
+  }
+  const preview = value.slice(0, 80).replace(/\n/g, '\\n')
+  return `len=${value.length},hash=${hash},preview="${preview}"`
+}
+
+function tasksDescLog(event: string, payload: Record<string, unknown>) {
+  if (!DEBUG_TASKS_DESC) return
+  console.debug('[tasks-store-desc]', event, payload)
+}
 
 export const useTasksStore = defineStore('tasks', () => {
   // ---- Config (templates, statuses, fields) ----
@@ -53,7 +72,6 @@ export const useTasksStore = defineStore('tasks', () => {
   const selectedTask = ref<Task | null>(null)
   const taskLoading = ref(false)
   const taskError = ref<string | null>(null)
-  const descriptionViewMode = ref<'rendered' | 'markdown'>('rendered')
 
   // ---- Create dialog ----
   const createDialogOpen = ref(false)
@@ -202,6 +220,12 @@ export const useTasksStore = defineStore('tasks', () => {
     taskError.value = null
     try {
       selectedTask.value = await tasksGet(id)
+      tasksDescLog('selectTask:loaded', {
+        id,
+        forceRefresh,
+        description: descriptionSignature(selectedTask.value.description),
+        updatedAt: selectedTask.value.updated_at,
+      })
       await loadFieldsFor(selectedTask.value.template_id)
     } catch (e) {
       taskError.value = e instanceof Error ? e.message : 'Failed to load task'
@@ -224,6 +248,24 @@ export const useTasksStore = defineStore('tasks', () => {
 
   async function updateTaskStatus(id: string, statusId: string): Promise<Task> {
     const updated = await tasksUpdateTaskStatus(id, { status_id: statusId })
+    selectedTask.value = updated
+    return updated
+  }
+
+  async function updateTaskDescription(id: string, description: string | null): Promise<Task> {
+    tasksDescLog('updateTaskDescription:start', {
+      id,
+      request: descriptionSignature(description),
+      beforeSelected: selectedTask.value?.id === id
+        ? descriptionSignature(selectedTask.value.description)
+        : 'not-selected',
+    })
+    const updated = await tasksUpdateTaskDescription(id, { description })
+    tasksDescLog('updateTaskDescription:response', {
+      id,
+      response: descriptionSignature(updated.description),
+      updatedAt: updated.updated_at,
+    })
     selectedTask.value = updated
     return updated
   }
@@ -337,7 +379,6 @@ export const useTasksStore = defineStore('tasks', () => {
     selectedTask,
     taskLoading,
     taskError,
-    descriptionViewMode,
     createDialogOpen,
     taskList,
     taskListGroups,
@@ -368,6 +409,7 @@ export const useTasksStore = defineStore('tasks', () => {
     updateTask,
     updateTaskTitle,
     updateTaskStatus,
+    updateTaskDescription,
     updateTaskFieldValue,
     createSubtask,
     clearSelectedTask,

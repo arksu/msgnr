@@ -82,7 +82,7 @@ func main() {
 	bootstrapSvc := bootstrap.NewService(db.Pool, cfg)
 	syncSvc := syncsvc.NewService(db.Pool, cfg, eventStore)
 
-	wsServer := ws.NewServer(db, cfg, authSvc, bootstrapSvc, callSvc, chatSvc, syncSvc, eventBus)
+	wsServer := ws.NewServer(db, cfg, authSvc, bootstrapSvc, callSvc, chatSvc, nil, syncSvc, eventBus)
 	chatHandler.SetNotifier(wsServer)
 
 	// Push notifications (Web Push / VAPID)
@@ -172,6 +172,7 @@ func main() {
 
 	tasksSvc := tasks.NewService(db.Pool, storageClient)
 	tasksHandler := tasks.NewHandler(tasksSvc, authSvc, log, cfg.AttachmentMaxSizeMB)
+	wsServer.SetTasksService(tasksSvc)
 
 	// --- main HTTP mux ---
 	mux := http.NewServeMux()

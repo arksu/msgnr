@@ -746,6 +746,55 @@ func (FeatureCapability) EnumDescriptor() ([]byte, []int) {
 	return file_api_proto_packets_proto_rawDescGZIP(), []int{12}
 }
 
+type TaskDescriptionCollabMessageKind int32
+
+const (
+	TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_UNSPECIFIED TaskDescriptionCollabMessageKind = 0
+	TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC        TaskDescriptionCollabMessageKind = 1
+	TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS   TaskDescriptionCollabMessageKind = 2
+)
+
+// Enum value maps for TaskDescriptionCollabMessageKind.
+var (
+	TaskDescriptionCollabMessageKind_name = map[int32]string{
+		0: "TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_UNSPECIFIED",
+		1: "TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC",
+		2: "TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS",
+	}
+	TaskDescriptionCollabMessageKind_value = map[string]int32{
+		"TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_UNSPECIFIED": 0,
+		"TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC":        1,
+		"TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS":   2,
+	}
+)
+
+func (x TaskDescriptionCollabMessageKind) Enum() *TaskDescriptionCollabMessageKind {
+	p := new(TaskDescriptionCollabMessageKind)
+	*p = x
+	return p
+}
+
+func (x TaskDescriptionCollabMessageKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TaskDescriptionCollabMessageKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_api_proto_packets_proto_enumTypes[13].Descriptor()
+}
+
+func (TaskDescriptionCollabMessageKind) Type() protoreflect.EnumType {
+	return &file_api_proto_packets_proto_enumTypes[13]
+}
+
+func (x TaskDescriptionCollabMessageKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TaskDescriptionCollabMessageKind.Descriptor instead.
+func (TaskDescriptionCollabMessageKind) EnumDescriptor() ([]byte, []int) {
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{13}
+}
+
 type EventType int32
 
 const (
@@ -824,11 +873,11 @@ func (x EventType) String() string {
 }
 
 func (EventType) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_proto_packets_proto_enumTypes[13].Descriptor()
+	return file_api_proto_packets_proto_enumTypes[14].Descriptor()
 }
 
 func (EventType) Type() protoreflect.EnumType {
-	return &file_api_proto_packets_proto_enumTypes[13]
+	return &file_api_proto_packets_proto_enumTypes[14]
 }
 
 func (x EventType) Number() protoreflect.EnumNumber {
@@ -837,7 +886,7 @@ func (x EventType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EventType.Descriptor instead.
 func (EventType) EnumDescriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{13}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{14}
 }
 
 type Envelope struct {
@@ -885,6 +934,10 @@ type Envelope struct {
 	//	*Envelope_SetNotificationLevelRequest
 	//	*Envelope_SetNotificationLevelResponse
 	//	*Envelope_SetClientWindowActivityRequest
+	//	*Envelope_TaskDescriptionCollabSubscribeRequest
+	//	*Envelope_TaskDescriptionCollabSubscribeResponse
+	//	*Envelope_TaskDescriptionCollabUnsubscribeRequest
+	//	*Envelope_TaskDescriptionCollabMessage
 	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1290,6 +1343,42 @@ func (x *Envelope) GetSetClientWindowActivityRequest() *ClientWindowActivityRequ
 	return nil
 }
 
+func (x *Envelope) GetTaskDescriptionCollabSubscribeRequest() *TaskDescriptionCollabSubscribeRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_TaskDescriptionCollabSubscribeRequest); ok {
+			return x.TaskDescriptionCollabSubscribeRequest
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetTaskDescriptionCollabSubscribeResponse() *TaskDescriptionCollabSubscribeResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_TaskDescriptionCollabSubscribeResponse); ok {
+			return x.TaskDescriptionCollabSubscribeResponse
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetTaskDescriptionCollabUnsubscribeRequest() *TaskDescriptionCollabUnsubscribeRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_TaskDescriptionCollabUnsubscribeRequest); ok {
+			return x.TaskDescriptionCollabUnsubscribeRequest
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetTaskDescriptionCollabMessage() *TaskDescriptionCollabMessage {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_TaskDescriptionCollabMessage); ok {
+			return x.TaskDescriptionCollabMessage
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Payload interface {
 	isEnvelope_Payload()
 }
@@ -1446,6 +1535,22 @@ type Envelope_SetClientWindowActivityRequest struct {
 	SetClientWindowActivityRequest *ClientWindowActivityRequest `protobuf:"bytes,60,opt,name=set_client_window_activity_request,json=setClientWindowActivityRequest,proto3,oneof"`
 }
 
+type Envelope_TaskDescriptionCollabSubscribeRequest struct {
+	TaskDescriptionCollabSubscribeRequest *TaskDescriptionCollabSubscribeRequest `protobuf:"bytes,61,opt,name=task_description_collab_subscribe_request,json=taskDescriptionCollabSubscribeRequest,proto3,oneof"`
+}
+
+type Envelope_TaskDescriptionCollabSubscribeResponse struct {
+	TaskDescriptionCollabSubscribeResponse *TaskDescriptionCollabSubscribeResponse `protobuf:"bytes,62,opt,name=task_description_collab_subscribe_response,json=taskDescriptionCollabSubscribeResponse,proto3,oneof"`
+}
+
+type Envelope_TaskDescriptionCollabUnsubscribeRequest struct {
+	TaskDescriptionCollabUnsubscribeRequest *TaskDescriptionCollabUnsubscribeRequest `protobuf:"bytes,63,opt,name=task_description_collab_unsubscribe_request,json=taskDescriptionCollabUnsubscribeRequest,proto3,oneof"`
+}
+
+type Envelope_TaskDescriptionCollabMessage struct {
+	TaskDescriptionCollabMessage *TaskDescriptionCollabMessage `protobuf:"bytes,64,opt,name=task_description_collab_message,json=taskDescriptionCollabMessage,proto3,oneof"`
+}
+
 func (*Envelope_ClientHello) isEnvelope_Payload() {}
 
 func (*Envelope_ServerHello) isEnvelope_Payload() {}
@@ -1521,6 +1626,14 @@ func (*Envelope_SetNotificationLevelRequest) isEnvelope_Payload() {}
 func (*Envelope_SetNotificationLevelResponse) isEnvelope_Payload() {}
 
 func (*Envelope_SetClientWindowActivityRequest) isEnvelope_Payload() {}
+
+func (*Envelope_TaskDescriptionCollabSubscribeRequest) isEnvelope_Payload() {}
+
+func (*Envelope_TaskDescriptionCollabSubscribeResponse) isEnvelope_Payload() {}
+
+func (*Envelope_TaskDescriptionCollabUnsubscribeRequest) isEnvelope_Payload() {}
+
+func (*Envelope_TaskDescriptionCollabMessage) isEnvelope_Payload() {}
 
 type ClientHello struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -5711,6 +5824,206 @@ func (x *SetNotificationLevelResponse) GetLevel() NotificationLevel {
 	return NotificationLevel_NOTIFICATION_LEVEL_ALL
 }
 
+type TaskDescriptionCollabSubscribeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskDescriptionCollabSubscribeRequest) Reset() {
+	*x = TaskDescriptionCollabSubscribeRequest{}
+	mi := &file_api_proto_packets_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskDescriptionCollabSubscribeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskDescriptionCollabSubscribeRequest) ProtoMessage() {}
+
+func (x *TaskDescriptionCollabSubscribeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_packets_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskDescriptionCollabSubscribeRequest.ProtoReflect.Descriptor instead.
+func (*TaskDescriptionCollabSubscribeRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *TaskDescriptionCollabSubscribeRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+type TaskDescriptionCollabSubscribeResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	TaskId            string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	PersistedMarkdown string                 `protobuf:"bytes,2,opt,name=persisted_markdown,json=persistedMarkdown,proto3" json:"persisted_markdown,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *TaskDescriptionCollabSubscribeResponse) Reset() {
+	*x = TaskDescriptionCollabSubscribeResponse{}
+	mi := &file_api_proto_packets_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskDescriptionCollabSubscribeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskDescriptionCollabSubscribeResponse) ProtoMessage() {}
+
+func (x *TaskDescriptionCollabSubscribeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_packets_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskDescriptionCollabSubscribeResponse.ProtoReflect.Descriptor instead.
+func (*TaskDescriptionCollabSubscribeResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *TaskDescriptionCollabSubscribeResponse) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *TaskDescriptionCollabSubscribeResponse) GetPersistedMarkdown() string {
+	if x != nil {
+		return x.PersistedMarkdown
+	}
+	return ""
+}
+
+type TaskDescriptionCollabUnsubscribeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskDescriptionCollabUnsubscribeRequest) Reset() {
+	*x = TaskDescriptionCollabUnsubscribeRequest{}
+	mi := &file_api_proto_packets_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskDescriptionCollabUnsubscribeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskDescriptionCollabUnsubscribeRequest) ProtoMessage() {}
+
+func (x *TaskDescriptionCollabUnsubscribeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_packets_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskDescriptionCollabUnsubscribeRequest.ProtoReflect.Descriptor instead.
+func (*TaskDescriptionCollabUnsubscribeRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *TaskDescriptionCollabUnsubscribeRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+type TaskDescriptionCollabMessage struct {
+	state         protoimpl.MessageState           `protogen:"open.v1"`
+	TaskId        string                           `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Kind          TaskDescriptionCollabMessageKind `protobuf:"varint,2,opt,name=kind,proto3,enum=packets.v1.TaskDescriptionCollabMessageKind" json:"kind,omitempty"`
+	Payload       []byte                           `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskDescriptionCollabMessage) Reset() {
+	*x = TaskDescriptionCollabMessage{}
+	mi := &file_api_proto_packets_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskDescriptionCollabMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskDescriptionCollabMessage) ProtoMessage() {}
+
+func (x *TaskDescriptionCollabMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_packets_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskDescriptionCollabMessage.ProtoReflect.Descriptor instead.
+func (*TaskDescriptionCollabMessage) Descriptor() ([]byte, []int) {
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *TaskDescriptionCollabMessage) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *TaskDescriptionCollabMessage) GetKind() TaskDescriptionCollabMessageKind {
+	if x != nil {
+		return x.Kind
+	}
+	return TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_UNSPECIFIED
+}
+
+func (x *TaskDescriptionCollabMessage) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
 type NotificationLevelChangedEvent struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
@@ -5721,7 +6034,7 @@ type NotificationLevelChangedEvent struct {
 
 func (x *NotificationLevelChangedEvent) Reset() {
 	*x = NotificationLevelChangedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[64]
+	mi := &file_api_proto_packets_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5733,7 +6046,7 @@ func (x *NotificationLevelChangedEvent) String() string {
 func (*NotificationLevelChangedEvent) ProtoMessage() {}
 
 func (x *NotificationLevelChangedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[64]
+	mi := &file_api_proto_packets_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5746,7 +6059,7 @@ func (x *NotificationLevelChangedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationLevelChangedEvent.ProtoReflect.Descriptor instead.
 func (*NotificationLevelChangedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{64}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *NotificationLevelChangedEvent) GetConversationId() string {
@@ -5799,7 +6112,7 @@ type ServerEvent struct {
 
 func (x *ServerEvent) Reset() {
 	*x = ServerEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[65]
+	mi := &file_api_proto_packets_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5811,7 +6124,7 @@ func (x *ServerEvent) String() string {
 func (*ServerEvent) ProtoMessage() {}
 
 func (x *ServerEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[65]
+	mi := &file_api_proto_packets_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5824,7 +6137,7 @@ func (x *ServerEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerEvent.ProtoReflect.Descriptor instead.
 func (*ServerEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{65}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ServerEvent) GetEventSeq() int64 {
@@ -6133,7 +6446,7 @@ var File_api_proto_packets_proto protoreflect.FileDescriptor
 const file_api_proto_packets_proto_rawDesc = "" +
 	"\n" +
 	"\x17api/proto/packets.proto\x12\n" +
-	"packets.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb1\x19\n" +
+	"packets.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xdd\x1d\n" +
 	"\bEnvelope\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
@@ -6178,7 +6491,11 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x0epresence_event\x187 \x01(\v2\x19.packets.v1.PresenceEventH\x00R\rpresenceEvent\x12n\n" +
 	"\x1eset_notification_level_request\x18: \x01(\v2'.packets.v1.SetNotificationLevelRequestH\x00R\x1bsetNotificationLevelRequest\x12q\n" +
 	"\x1fset_notification_level_response\x18; \x01(\v2(.packets.v1.SetNotificationLevelResponseH\x00R\x1csetNotificationLevelResponse\x12u\n" +
-	"\"set_client_window_activity_request\x18< \x01(\v2'.packets.v1.ClientWindowActivityRequestH\x00R\x1esetClientWindowActivityRequestB\t\n" +
+	"\"set_client_window_activity_request\x18< \x01(\v2'.packets.v1.ClientWindowActivityRequestH\x00R\x1esetClientWindowActivityRequest\x12\x8d\x01\n" +
+	")task_description_collab_subscribe_request\x18= \x01(\v21.packets.v1.TaskDescriptionCollabSubscribeRequestH\x00R%taskDescriptionCollabSubscribeRequest\x12\x90\x01\n" +
+	"*task_description_collab_subscribe_response\x18> \x01(\v22.packets.v1.TaskDescriptionCollabSubscribeResponseH\x00R&taskDescriptionCollabSubscribeResponse\x12\x93\x01\n" +
+	"+task_description_collab_unsubscribe_request\x18? \x01(\v23.packets.v1.TaskDescriptionCollabUnsubscribeRequestH\x00R'taskDescriptionCollabUnsubscribeRequest\x12q\n" +
+	"\x1ftask_description_collab_message\x18@ \x01(\v2(.packets.v1.TaskDescriptionCollabMessageH\x00R\x1ctaskDescriptionCollabMessageB\t\n" +
 	"\apayload\"\x8f\x01\n" +
 	"\vClientHello\x12\x16\n" +
 	"\x06client\x18\x01 \x01(\tR\x06client\x12%\n" +
@@ -6514,7 +6831,18 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x123\n" +
 	"\x05level\x18\x02 \x01(\x0e2\x1d.packets.v1.NotificationLevelR\x05level\"S\n" +
 	"\x1cSetNotificationLevelResponse\x123\n" +
-	"\x05level\x18\x01 \x01(\x0e2\x1d.packets.v1.NotificationLevelR\x05level\"}\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x1d.packets.v1.NotificationLevelR\x05level\"@\n" +
+	"%TaskDescriptionCollabSubscribeRequest\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"p\n" +
+	"&TaskDescriptionCollabSubscribeResponse\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12-\n" +
+	"\x12persisted_markdown\x18\x02 \x01(\tR\x11persistedMarkdown\"B\n" +
+	"'TaskDescriptionCollabUnsubscribeRequest\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\x93\x01\n" +
+	"\x1cTaskDescriptionCollabMessage\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12@\n" +
+	"\x04kind\x18\x02 \x01(\x0e2,.packets.v1.TaskDescriptionCollabMessageKindR\x04kind\x12\x18\n" +
+	"\apayload\x18\x03 \x01(\fR\apayload\"}\n" +
 	"\x1dNotificationLevelChangedEvent\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x123\n" +
 	"\x05level\x18\x02 \x01(\x0e2\x1d.packets.v1.NotificationLevelR\x05level\"\xb9\r\n" +
@@ -6627,7 +6955,11 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"'FEATURE_CAPABILITY_BOOTSTRAP_PAGINATION\x10\x05\x12!\n" +
 	"\x1dFEATURE_CAPABILITY_SYNC_SINCE\x10\x06\x12#\n" +
 	"\x1fFEATURE_CAPABILITY_CALL_INVITES\x10\a\x12%\n" +
-	"!FEATURE_CAPABILITY_INVITE_ACTIONS\x10\b*\x8f\x05\n" +
+	"!FEATURE_CAPABILITY_INVITE_ACTIONS\x10\b*\xbb\x01\n" +
+	" TaskDescriptionCollabMessageKind\x124\n" +
+	"0TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_UNSPECIFIED\x10\x00\x12-\n" +
+	")TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC\x10\x01\x122\n" +
+	".TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS\x10\x02*\x8f\x05\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12$\n" +
 	" EVENT_TYPE_CONVERSATION_UPSERTED\x10\x01\x12#\n" +
@@ -6661,211 +6993,221 @@ func file_api_proto_packets_proto_rawDescGZIP() []byte {
 	return file_api_proto_packets_proto_rawDescData
 }
 
-var file_api_proto_packets_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
-var file_api_proto_packets_proto_msgTypes = make([]protoimpl.MessageInfo, 66)
+var file_api_proto_packets_proto_enumTypes = make([]protoimpl.EnumInfo, 15)
+var file_api_proto_packets_proto_msgTypes = make([]protoimpl.MessageInfo, 70)
 var file_api_proto_packets_proto_goTypes = []any{
-	(ConversationType)(0),                 // 0: packets.v1.ConversationType
-	(CallStatus)(0),                       // 1: packets.v1.CallStatus
-	(PresenceStatus)(0),                   // 2: packets.v1.PresenceStatus
-	(ErrorCode)(0),                        // 3: packets.v1.ErrorCode
-	(SyncBootstrapReason)(0),              // 4: packets.v1.SyncBootstrapReason
-	(InviteState)(0),                      // 5: packets.v1.InviteState
-	(InviteCancelReason)(0),               // 6: packets.v1.InviteCancelReason
-	(MembershipAction)(0),                 // 7: packets.v1.MembershipAction
-	(ConversationRemovedReason)(0),        // 8: packets.v1.ConversationRemovedReason
-	(NotificationType)(0),                 // 9: packets.v1.NotificationType
-	(NotificationLevel)(0),                // 10: packets.v1.NotificationLevel
-	(WorkspaceRole)(0),                    // 11: packets.v1.WorkspaceRole
-	(FeatureCapability)(0),                // 12: packets.v1.FeatureCapability
-	(EventType)(0),                        // 13: packets.v1.EventType
-	(*Envelope)(nil),                      // 14: packets.v1.Envelope
-	(*ClientHello)(nil),                   // 15: packets.v1.ClientHello
-	(*ServerHello)(nil),                   // 16: packets.v1.ServerHello
-	(*AuthRequest)(nil),                   // 17: packets.v1.AuthRequest
-	(*AuthResponse)(nil),                  // 18: packets.v1.AuthResponse
-	(*Error)(nil),                         // 19: packets.v1.Error
-	(*RateLimitPolicy)(nil),               // 20: packets.v1.RateLimitPolicy
-	(*SendMessageRequest)(nil),            // 21: packets.v1.SendMessageRequest
-	(*SendMessageAck)(nil),                // 22: packets.v1.SendMessageAck
-	(*MessageEvent)(nil),                  // 23: packets.v1.MessageEvent
-	(*MessageAttachment)(nil),             // 24: packets.v1.MessageAttachment
-	(*ReactionAggregate)(nil),             // 25: packets.v1.ReactionAggregate
-	(*SubscribeThreadRequest)(nil),        // 26: packets.v1.SubscribeThreadRequest
-	(*SubscribeThreadResponse)(nil),       // 27: packets.v1.SubscribeThreadResponse
-	(*AddReactionRequest)(nil),            // 28: packets.v1.AddReactionRequest
-	(*RemoveReactionRequest)(nil),         // 29: packets.v1.RemoveReactionRequest
-	(*ReactionAck)(nil),                   // 30: packets.v1.ReactionAck
-	(*TypingRequest)(nil),                 // 31: packets.v1.TypingRequest
-	(*TypingEvent)(nil),                   // 32: packets.v1.TypingEvent
-	(*SetPresenceRequest)(nil),            // 33: packets.v1.SetPresenceRequest
-	(*ClientWindowActivityRequest)(nil),   // 34: packets.v1.ClientWindowActivityRequest
-	(*PresenceEvent)(nil),                 // 35: packets.v1.PresenceEvent
-	(*UpdateReadCursorRequest)(nil),       // 36: packets.v1.UpdateReadCursorRequest
-	(*ReadCursorAck)(nil),                 // 37: packets.v1.ReadCursorAck
-	(*CreateCallRequest)(nil),             // 38: packets.v1.CreateCallRequest
-	(*CreateCallResponse)(nil),            // 39: packets.v1.CreateCallResponse
-	(*InviteCallMembersRequest)(nil),      // 40: packets.v1.InviteCallMembersRequest
-	(*InviteCallMembersResponse)(nil),     // 41: packets.v1.InviteCallMembersResponse
-	(*JoinCallTokenRequest)(nil),          // 42: packets.v1.JoinCallTokenRequest
-	(*JoinCallTokenResponse)(nil),         // 43: packets.v1.JoinCallTokenResponse
-	(*AcceptCallInviteRequest)(nil),       // 44: packets.v1.AcceptCallInviteRequest
-	(*RejectCallInviteRequest)(nil),       // 45: packets.v1.RejectCallInviteRequest
-	(*CancelCallInviteRequest)(nil),       // 46: packets.v1.CancelCallInviteRequest
-	(*CallInviteActionAck)(nil),           // 47: packets.v1.CallInviteActionAck
-	(*WorkspaceSummary)(nil),              // 48: packets.v1.WorkspaceSummary
-	(*UserSummary)(nil),                   // 49: packets.v1.UserSummary
-	(*ConversationSummary)(nil),           // 50: packets.v1.ConversationSummary
-	(*UnreadCounter)(nil),                 // 51: packets.v1.UnreadCounter
-	(*ActiveCallSummary)(nil),             // 52: packets.v1.ActiveCallSummary
-	(*CallInviteSummary)(nil),             // 53: packets.v1.CallInviteSummary
-	(*NotificationSummary)(nil),           // 54: packets.v1.NotificationSummary
-	(*BootstrapRequest)(nil),              // 55: packets.v1.BootstrapRequest
-	(*BootstrapResponse)(nil),             // 56: packets.v1.BootstrapResponse
-	(*SyncSinceRequest)(nil),              // 57: packets.v1.SyncSinceRequest
-	(*SyncSinceResponse)(nil),             // 58: packets.v1.SyncSinceResponse
-	(*AckRequest)(nil),                    // 59: packets.v1.AckRequest
-	(*AckResponse)(nil),                   // 60: packets.v1.AckResponse
-	(*ConversationUpsertedEvent)(nil),     // 61: packets.v1.ConversationUpsertedEvent
-	(*ConversationRemovedEvent)(nil),      // 62: packets.v1.ConversationRemovedEvent
-	(*MembershipChangedEvent)(nil),        // 63: packets.v1.MembershipChangedEvent
-	(*ReadCounterUpdatedEvent)(nil),       // 64: packets.v1.ReadCounterUpdatedEvent
-	(*NotificationAddedEvent)(nil),        // 65: packets.v1.NotificationAddedEvent
-	(*NotificationResolvedEvent)(nil),     // 66: packets.v1.NotificationResolvedEvent
-	(*CallInviteCreatedEvent)(nil),        // 67: packets.v1.CallInviteCreatedEvent
-	(*CallInviteCancelledEvent)(nil),      // 68: packets.v1.CallInviteCancelledEvent
-	(*CallStateChangedEvent)(nil),         // 69: packets.v1.CallStateChangedEvent
-	(*ThreadSummaryUpdatedEvent)(nil),     // 70: packets.v1.ThreadSummaryUpdatedEvent
-	(*ReactionUpdatedEvent)(nil),          // 71: packets.v1.ReactionUpdatedEvent
-	(*MessageUpdatedEvent)(nil),           // 72: packets.v1.MessageUpdatedEvent
-	(*MessageDeletedEvent)(nil),           // 73: packets.v1.MessageDeletedEvent
-	(*ForcePasswordChangeEvent)(nil),      // 74: packets.v1.ForcePasswordChangeEvent
-	(*UserIdentityUpdatedEvent)(nil),      // 75: packets.v1.UserIdentityUpdatedEvent
-	(*SetNotificationLevelRequest)(nil),   // 76: packets.v1.SetNotificationLevelRequest
-	(*SetNotificationLevelResponse)(nil),  // 77: packets.v1.SetNotificationLevelResponse
-	(*NotificationLevelChangedEvent)(nil), // 78: packets.v1.NotificationLevelChangedEvent
-	(*ServerEvent)(nil),                   // 79: packets.v1.ServerEvent
-	(*timestamppb.Timestamp)(nil),         // 80: google.protobuf.Timestamp
+	(ConversationType)(0),                           // 0: packets.v1.ConversationType
+	(CallStatus)(0),                                 // 1: packets.v1.CallStatus
+	(PresenceStatus)(0),                             // 2: packets.v1.PresenceStatus
+	(ErrorCode)(0),                                  // 3: packets.v1.ErrorCode
+	(SyncBootstrapReason)(0),                        // 4: packets.v1.SyncBootstrapReason
+	(InviteState)(0),                                // 5: packets.v1.InviteState
+	(InviteCancelReason)(0),                         // 6: packets.v1.InviteCancelReason
+	(MembershipAction)(0),                           // 7: packets.v1.MembershipAction
+	(ConversationRemovedReason)(0),                  // 8: packets.v1.ConversationRemovedReason
+	(NotificationType)(0),                           // 9: packets.v1.NotificationType
+	(NotificationLevel)(0),                          // 10: packets.v1.NotificationLevel
+	(WorkspaceRole)(0),                              // 11: packets.v1.WorkspaceRole
+	(FeatureCapability)(0),                          // 12: packets.v1.FeatureCapability
+	(TaskDescriptionCollabMessageKind)(0),           // 13: packets.v1.TaskDescriptionCollabMessageKind
+	(EventType)(0),                                  // 14: packets.v1.EventType
+	(*Envelope)(nil),                                // 15: packets.v1.Envelope
+	(*ClientHello)(nil),                             // 16: packets.v1.ClientHello
+	(*ServerHello)(nil),                             // 17: packets.v1.ServerHello
+	(*AuthRequest)(nil),                             // 18: packets.v1.AuthRequest
+	(*AuthResponse)(nil),                            // 19: packets.v1.AuthResponse
+	(*Error)(nil),                                   // 20: packets.v1.Error
+	(*RateLimitPolicy)(nil),                         // 21: packets.v1.RateLimitPolicy
+	(*SendMessageRequest)(nil),                      // 22: packets.v1.SendMessageRequest
+	(*SendMessageAck)(nil),                          // 23: packets.v1.SendMessageAck
+	(*MessageEvent)(nil),                            // 24: packets.v1.MessageEvent
+	(*MessageAttachment)(nil),                       // 25: packets.v1.MessageAttachment
+	(*ReactionAggregate)(nil),                       // 26: packets.v1.ReactionAggregate
+	(*SubscribeThreadRequest)(nil),                  // 27: packets.v1.SubscribeThreadRequest
+	(*SubscribeThreadResponse)(nil),                 // 28: packets.v1.SubscribeThreadResponse
+	(*AddReactionRequest)(nil),                      // 29: packets.v1.AddReactionRequest
+	(*RemoveReactionRequest)(nil),                   // 30: packets.v1.RemoveReactionRequest
+	(*ReactionAck)(nil),                             // 31: packets.v1.ReactionAck
+	(*TypingRequest)(nil),                           // 32: packets.v1.TypingRequest
+	(*TypingEvent)(nil),                             // 33: packets.v1.TypingEvent
+	(*SetPresenceRequest)(nil),                      // 34: packets.v1.SetPresenceRequest
+	(*ClientWindowActivityRequest)(nil),             // 35: packets.v1.ClientWindowActivityRequest
+	(*PresenceEvent)(nil),                           // 36: packets.v1.PresenceEvent
+	(*UpdateReadCursorRequest)(nil),                 // 37: packets.v1.UpdateReadCursorRequest
+	(*ReadCursorAck)(nil),                           // 38: packets.v1.ReadCursorAck
+	(*CreateCallRequest)(nil),                       // 39: packets.v1.CreateCallRequest
+	(*CreateCallResponse)(nil),                      // 40: packets.v1.CreateCallResponse
+	(*InviteCallMembersRequest)(nil),                // 41: packets.v1.InviteCallMembersRequest
+	(*InviteCallMembersResponse)(nil),               // 42: packets.v1.InviteCallMembersResponse
+	(*JoinCallTokenRequest)(nil),                    // 43: packets.v1.JoinCallTokenRequest
+	(*JoinCallTokenResponse)(nil),                   // 44: packets.v1.JoinCallTokenResponse
+	(*AcceptCallInviteRequest)(nil),                 // 45: packets.v1.AcceptCallInviteRequest
+	(*RejectCallInviteRequest)(nil),                 // 46: packets.v1.RejectCallInviteRequest
+	(*CancelCallInviteRequest)(nil),                 // 47: packets.v1.CancelCallInviteRequest
+	(*CallInviteActionAck)(nil),                     // 48: packets.v1.CallInviteActionAck
+	(*WorkspaceSummary)(nil),                        // 49: packets.v1.WorkspaceSummary
+	(*UserSummary)(nil),                             // 50: packets.v1.UserSummary
+	(*ConversationSummary)(nil),                     // 51: packets.v1.ConversationSummary
+	(*UnreadCounter)(nil),                           // 52: packets.v1.UnreadCounter
+	(*ActiveCallSummary)(nil),                       // 53: packets.v1.ActiveCallSummary
+	(*CallInviteSummary)(nil),                       // 54: packets.v1.CallInviteSummary
+	(*NotificationSummary)(nil),                     // 55: packets.v1.NotificationSummary
+	(*BootstrapRequest)(nil),                        // 56: packets.v1.BootstrapRequest
+	(*BootstrapResponse)(nil),                       // 57: packets.v1.BootstrapResponse
+	(*SyncSinceRequest)(nil),                        // 58: packets.v1.SyncSinceRequest
+	(*SyncSinceResponse)(nil),                       // 59: packets.v1.SyncSinceResponse
+	(*AckRequest)(nil),                              // 60: packets.v1.AckRequest
+	(*AckResponse)(nil),                             // 61: packets.v1.AckResponse
+	(*ConversationUpsertedEvent)(nil),               // 62: packets.v1.ConversationUpsertedEvent
+	(*ConversationRemovedEvent)(nil),                // 63: packets.v1.ConversationRemovedEvent
+	(*MembershipChangedEvent)(nil),                  // 64: packets.v1.MembershipChangedEvent
+	(*ReadCounterUpdatedEvent)(nil),                 // 65: packets.v1.ReadCounterUpdatedEvent
+	(*NotificationAddedEvent)(nil),                  // 66: packets.v1.NotificationAddedEvent
+	(*NotificationResolvedEvent)(nil),               // 67: packets.v1.NotificationResolvedEvent
+	(*CallInviteCreatedEvent)(nil),                  // 68: packets.v1.CallInviteCreatedEvent
+	(*CallInviteCancelledEvent)(nil),                // 69: packets.v1.CallInviteCancelledEvent
+	(*CallStateChangedEvent)(nil),                   // 70: packets.v1.CallStateChangedEvent
+	(*ThreadSummaryUpdatedEvent)(nil),               // 71: packets.v1.ThreadSummaryUpdatedEvent
+	(*ReactionUpdatedEvent)(nil),                    // 72: packets.v1.ReactionUpdatedEvent
+	(*MessageUpdatedEvent)(nil),                     // 73: packets.v1.MessageUpdatedEvent
+	(*MessageDeletedEvent)(nil),                     // 74: packets.v1.MessageDeletedEvent
+	(*ForcePasswordChangeEvent)(nil),                // 75: packets.v1.ForcePasswordChangeEvent
+	(*UserIdentityUpdatedEvent)(nil),                // 76: packets.v1.UserIdentityUpdatedEvent
+	(*SetNotificationLevelRequest)(nil),             // 77: packets.v1.SetNotificationLevelRequest
+	(*SetNotificationLevelResponse)(nil),            // 78: packets.v1.SetNotificationLevelResponse
+	(*TaskDescriptionCollabSubscribeRequest)(nil),   // 79: packets.v1.TaskDescriptionCollabSubscribeRequest
+	(*TaskDescriptionCollabSubscribeResponse)(nil),  // 80: packets.v1.TaskDescriptionCollabSubscribeResponse
+	(*TaskDescriptionCollabUnsubscribeRequest)(nil), // 81: packets.v1.TaskDescriptionCollabUnsubscribeRequest
+	(*TaskDescriptionCollabMessage)(nil),            // 82: packets.v1.TaskDescriptionCollabMessage
+	(*NotificationLevelChangedEvent)(nil),           // 83: packets.v1.NotificationLevelChangedEvent
+	(*ServerEvent)(nil),                             // 84: packets.v1.ServerEvent
+	(*timestamppb.Timestamp)(nil),                   // 85: google.protobuf.Timestamp
 }
 var file_api_proto_packets_proto_depIdxs = []int32{
-	15,  // 0: packets.v1.Envelope.client_hello:type_name -> packets.v1.ClientHello
-	16,  // 1: packets.v1.Envelope.server_hello:type_name -> packets.v1.ServerHello
-	17,  // 2: packets.v1.Envelope.auth_request:type_name -> packets.v1.AuthRequest
-	18,  // 3: packets.v1.Envelope.auth_response:type_name -> packets.v1.AuthResponse
-	19,  // 4: packets.v1.Envelope.error:type_name -> packets.v1.Error
-	21,  // 5: packets.v1.Envelope.send_message_request:type_name -> packets.v1.SendMessageRequest
-	22,  // 6: packets.v1.Envelope.send_message_ack:type_name -> packets.v1.SendMessageAck
-	36,  // 7: packets.v1.Envelope.update_read_cursor_request:type_name -> packets.v1.UpdateReadCursorRequest
-	37,  // 8: packets.v1.Envelope.read_cursor_ack:type_name -> packets.v1.ReadCursorAck
-	38,  // 9: packets.v1.Envelope.create_call_request:type_name -> packets.v1.CreateCallRequest
-	39,  // 10: packets.v1.Envelope.create_call_response:type_name -> packets.v1.CreateCallResponse
-	42,  // 11: packets.v1.Envelope.join_call_token_request:type_name -> packets.v1.JoinCallTokenRequest
-	43,  // 12: packets.v1.Envelope.join_call_token_response:type_name -> packets.v1.JoinCallTokenResponse
-	44,  // 13: packets.v1.Envelope.accept_call_invite_request:type_name -> packets.v1.AcceptCallInviteRequest
-	45,  // 14: packets.v1.Envelope.reject_call_invite_request:type_name -> packets.v1.RejectCallInviteRequest
-	46,  // 15: packets.v1.Envelope.cancel_call_invite_request:type_name -> packets.v1.CancelCallInviteRequest
-	47,  // 16: packets.v1.Envelope.call_invite_action_ack:type_name -> packets.v1.CallInviteActionAck
-	40,  // 17: packets.v1.Envelope.invite_call_members_request:type_name -> packets.v1.InviteCallMembersRequest
-	41,  // 18: packets.v1.Envelope.invite_call_members_response:type_name -> packets.v1.InviteCallMembersResponse
-	55,  // 19: packets.v1.Envelope.bootstrap_request:type_name -> packets.v1.BootstrapRequest
-	56,  // 20: packets.v1.Envelope.bootstrap_response:type_name -> packets.v1.BootstrapResponse
-	57,  // 21: packets.v1.Envelope.sync_since_request:type_name -> packets.v1.SyncSinceRequest
-	58,  // 22: packets.v1.Envelope.sync_since_response:type_name -> packets.v1.SyncSinceResponse
-	79,  // 23: packets.v1.Envelope.server_event:type_name -> packets.v1.ServerEvent
-	59,  // 24: packets.v1.Envelope.ack_request:type_name -> packets.v1.AckRequest
-	60,  // 25: packets.v1.Envelope.ack_response:type_name -> packets.v1.AckResponse
-	26,  // 26: packets.v1.Envelope.subscribe_thread_request:type_name -> packets.v1.SubscribeThreadRequest
-	27,  // 27: packets.v1.Envelope.subscribe_thread_response:type_name -> packets.v1.SubscribeThreadResponse
-	28,  // 28: packets.v1.Envelope.add_reaction_request:type_name -> packets.v1.AddReactionRequest
-	29,  // 29: packets.v1.Envelope.remove_reaction_request:type_name -> packets.v1.RemoveReactionRequest
-	30,  // 30: packets.v1.Envelope.reaction_ack:type_name -> packets.v1.ReactionAck
-	31,  // 31: packets.v1.Envelope.typing_request:type_name -> packets.v1.TypingRequest
-	32,  // 32: packets.v1.Envelope.typing_event:type_name -> packets.v1.TypingEvent
-	33,  // 33: packets.v1.Envelope.set_presence_request:type_name -> packets.v1.SetPresenceRequest
-	35,  // 34: packets.v1.Envelope.presence_event:type_name -> packets.v1.PresenceEvent
-	76,  // 35: packets.v1.Envelope.set_notification_level_request:type_name -> packets.v1.SetNotificationLevelRequest
-	77,  // 36: packets.v1.Envelope.set_notification_level_response:type_name -> packets.v1.SetNotificationLevelResponse
-	34,  // 37: packets.v1.Envelope.set_client_window_activity_request:type_name -> packets.v1.ClientWindowActivityRequest
-	12,  // 38: packets.v1.ClientHello.capabilities:type_name -> packets.v1.FeatureCapability
-	20,  // 39: packets.v1.ServerHello.rate_limit_policy:type_name -> packets.v1.RateLimitPolicy
-	12,  // 40: packets.v1.ServerHello.accepted_capabilities:type_name -> packets.v1.FeatureCapability
-	11,  // 41: packets.v1.AuthResponse.user_role:type_name -> packets.v1.WorkspaceRole
-	3,   // 42: packets.v1.Error.code:type_name -> packets.v1.ErrorCode
-	0,   // 43: packets.v1.SendMessageRequest.conversation_type:type_name -> packets.v1.ConversationType
-	80,  // 44: packets.v1.SendMessageAck.created_at:type_name -> google.protobuf.Timestamp
-	80,  // 45: packets.v1.MessageEvent.created_at:type_name -> google.protobuf.Timestamp
-	25,  // 46: packets.v1.MessageEvent.reactions:type_name -> packets.v1.ReactionAggregate
-	24,  // 47: packets.v1.MessageEvent.attachments:type_name -> packets.v1.MessageAttachment
-	80,  // 48: packets.v1.MessageEvent.edited_at:type_name -> google.protobuf.Timestamp
-	23,  // 49: packets.v1.SubscribeThreadResponse.replay:type_name -> packets.v1.MessageEvent
-	80,  // 50: packets.v1.TypingEvent.expires_at:type_name -> google.protobuf.Timestamp
-	2,   // 51: packets.v1.SetPresenceRequest.desired_presence:type_name -> packets.v1.PresenceStatus
-	2,   // 52: packets.v1.PresenceEvent.effective_presence:type_name -> packets.v1.PresenceStatus
-	80,  // 53: packets.v1.PresenceEvent.last_active_at:type_name -> google.protobuf.Timestamp
-	0,   // 54: packets.v1.CreateCallRequest.conversation_type:type_name -> packets.v1.ConversationType
-	1,   // 55: packets.v1.CreateCallResponse.status:type_name -> packets.v1.CallStatus
-	0,   // 56: packets.v1.InviteCallMembersRequest.conversation_type:type_name -> packets.v1.ConversationType
-	0,   // 57: packets.v1.JoinCallTokenRequest.conversation_type:type_name -> packets.v1.ConversationType
-	5,   // 58: packets.v1.CallInviteActionAck.resulting_state:type_name -> packets.v1.InviteState
-	49,  // 59: packets.v1.WorkspaceSummary.self_user:type_name -> packets.v1.UserSummary
-	11,  // 60: packets.v1.WorkspaceSummary.self_role:type_name -> packets.v1.WorkspaceRole
-	0,   // 61: packets.v1.ConversationSummary.conversation_type:type_name -> packets.v1.ConversationType
-	10,  // 62: packets.v1.ConversationSummary.notification_level:type_name -> packets.v1.NotificationLevel
-	80,  // 63: packets.v1.ConversationSummary.last_activity_at:type_name -> google.protobuf.Timestamp
-	2,   // 64: packets.v1.ConversationSummary.presence:type_name -> packets.v1.PresenceStatus
-	1,   // 65: packets.v1.ActiveCallSummary.status:type_name -> packets.v1.CallStatus
-	80,  // 66: packets.v1.CallInviteSummary.created_at:type_name -> google.protobuf.Timestamp
-	80,  // 67: packets.v1.CallInviteSummary.expires_at:type_name -> google.protobuf.Timestamp
-	5,   // 68: packets.v1.CallInviteSummary.state:type_name -> packets.v1.InviteState
-	9,   // 69: packets.v1.NotificationSummary.type:type_name -> packets.v1.NotificationType
-	80,  // 70: packets.v1.NotificationSummary.created_at:type_name -> google.protobuf.Timestamp
-	48,  // 71: packets.v1.BootstrapResponse.workspace:type_name -> packets.v1.WorkspaceSummary
-	50,  // 72: packets.v1.BootstrapResponse.conversations:type_name -> packets.v1.ConversationSummary
-	51,  // 73: packets.v1.BootstrapResponse.unread:type_name -> packets.v1.UnreadCounter
-	52,  // 74: packets.v1.BootstrapResponse.active_calls:type_name -> packets.v1.ActiveCallSummary
-	53,  // 75: packets.v1.BootstrapResponse.pending_invites:type_name -> packets.v1.CallInviteSummary
-	54,  // 76: packets.v1.BootstrapResponse.notifications:type_name -> packets.v1.NotificationSummary
-	80,  // 77: packets.v1.BootstrapResponse.bootstrap_expires_at:type_name -> google.protobuf.Timestamp
-	35,  // 78: packets.v1.BootstrapResponse.presence:type_name -> packets.v1.PresenceEvent
-	11,  // 79: packets.v1.BootstrapResponse.user_role:type_name -> packets.v1.WorkspaceRole
-	79,  // 80: packets.v1.SyncSinceResponse.events:type_name -> packets.v1.ServerEvent
-	4,   // 81: packets.v1.SyncSinceResponse.need_full_bootstrap_reason:type_name -> packets.v1.SyncBootstrapReason
-	50,  // 82: packets.v1.ConversationUpsertedEvent.conversation:type_name -> packets.v1.ConversationSummary
-	8,   // 83: packets.v1.ConversationRemovedEvent.reason:type_name -> packets.v1.ConversationRemovedReason
-	7,   // 84: packets.v1.MembershipChangedEvent.action:type_name -> packets.v1.MembershipAction
-	51,  // 85: packets.v1.ReadCounterUpdatedEvent.counter:type_name -> packets.v1.UnreadCounter
-	54,  // 86: packets.v1.NotificationAddedEvent.notification:type_name -> packets.v1.NotificationSummary
-	53,  // 87: packets.v1.CallInviteCreatedEvent.invite:type_name -> packets.v1.CallInviteSummary
-	6,   // 88: packets.v1.CallInviteCancelledEvent.reason:type_name -> packets.v1.InviteCancelReason
-	1,   // 89: packets.v1.CallStateChangedEvent.status:type_name -> packets.v1.CallStatus
-	80,  // 90: packets.v1.ThreadSummaryUpdatedEvent.last_thread_reply_at:type_name -> google.protobuf.Timestamp
-	80,  // 91: packets.v1.MessageUpdatedEvent.edited_at:type_name -> google.protobuf.Timestamp
-	10,  // 92: packets.v1.SetNotificationLevelRequest.level:type_name -> packets.v1.NotificationLevel
-	10,  // 93: packets.v1.SetNotificationLevelResponse.level:type_name -> packets.v1.NotificationLevel
-	10,  // 94: packets.v1.NotificationLevelChangedEvent.level:type_name -> packets.v1.NotificationLevel
-	80,  // 95: packets.v1.ServerEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	13,  // 96: packets.v1.ServerEvent.event_type:type_name -> packets.v1.EventType
-	61,  // 97: packets.v1.ServerEvent.conversation_upserted:type_name -> packets.v1.ConversationUpsertedEvent
-	62,  // 98: packets.v1.ServerEvent.conversation_removed:type_name -> packets.v1.ConversationRemovedEvent
-	63,  // 99: packets.v1.ServerEvent.membership_changed:type_name -> packets.v1.MembershipChangedEvent
-	23,  // 100: packets.v1.ServerEvent.message_created:type_name -> packets.v1.MessageEvent
-	64,  // 101: packets.v1.ServerEvent.read_counter_updated:type_name -> packets.v1.ReadCounterUpdatedEvent
-	65,  // 102: packets.v1.ServerEvent.notification_added:type_name -> packets.v1.NotificationAddedEvent
-	66,  // 103: packets.v1.ServerEvent.notification_resolved:type_name -> packets.v1.NotificationResolvedEvent
-	67,  // 104: packets.v1.ServerEvent.call_invite_created:type_name -> packets.v1.CallInviteCreatedEvent
-	68,  // 105: packets.v1.ServerEvent.call_invite_cancelled:type_name -> packets.v1.CallInviteCancelledEvent
-	69,  // 106: packets.v1.ServerEvent.call_state_changed:type_name -> packets.v1.CallStateChangedEvent
-	70,  // 107: packets.v1.ServerEvent.thread_summary_updated:type_name -> packets.v1.ThreadSummaryUpdatedEvent
-	71,  // 108: packets.v1.ServerEvent.reaction_updated:type_name -> packets.v1.ReactionUpdatedEvent
-	74,  // 109: packets.v1.ServerEvent.force_password_change:type_name -> packets.v1.ForcePasswordChangeEvent
-	75,  // 110: packets.v1.ServerEvent.user_identity_updated:type_name -> packets.v1.UserIdentityUpdatedEvent
-	78,  // 111: packets.v1.ServerEvent.notification_level_changed:type_name -> packets.v1.NotificationLevelChangedEvent
-	72,  // 112: packets.v1.ServerEvent.message_updated:type_name -> packets.v1.MessageUpdatedEvent
-	73,  // 113: packets.v1.ServerEvent.message_deleted:type_name -> packets.v1.MessageDeletedEvent
-	114, // [114:114] is the sub-list for method output_type
-	114, // [114:114] is the sub-list for method input_type
-	114, // [114:114] is the sub-list for extension type_name
-	114, // [114:114] is the sub-list for extension extendee
-	0,   // [0:114] is the sub-list for field type_name
+	16,  // 0: packets.v1.Envelope.client_hello:type_name -> packets.v1.ClientHello
+	17,  // 1: packets.v1.Envelope.server_hello:type_name -> packets.v1.ServerHello
+	18,  // 2: packets.v1.Envelope.auth_request:type_name -> packets.v1.AuthRequest
+	19,  // 3: packets.v1.Envelope.auth_response:type_name -> packets.v1.AuthResponse
+	20,  // 4: packets.v1.Envelope.error:type_name -> packets.v1.Error
+	22,  // 5: packets.v1.Envelope.send_message_request:type_name -> packets.v1.SendMessageRequest
+	23,  // 6: packets.v1.Envelope.send_message_ack:type_name -> packets.v1.SendMessageAck
+	37,  // 7: packets.v1.Envelope.update_read_cursor_request:type_name -> packets.v1.UpdateReadCursorRequest
+	38,  // 8: packets.v1.Envelope.read_cursor_ack:type_name -> packets.v1.ReadCursorAck
+	39,  // 9: packets.v1.Envelope.create_call_request:type_name -> packets.v1.CreateCallRequest
+	40,  // 10: packets.v1.Envelope.create_call_response:type_name -> packets.v1.CreateCallResponse
+	43,  // 11: packets.v1.Envelope.join_call_token_request:type_name -> packets.v1.JoinCallTokenRequest
+	44,  // 12: packets.v1.Envelope.join_call_token_response:type_name -> packets.v1.JoinCallTokenResponse
+	45,  // 13: packets.v1.Envelope.accept_call_invite_request:type_name -> packets.v1.AcceptCallInviteRequest
+	46,  // 14: packets.v1.Envelope.reject_call_invite_request:type_name -> packets.v1.RejectCallInviteRequest
+	47,  // 15: packets.v1.Envelope.cancel_call_invite_request:type_name -> packets.v1.CancelCallInviteRequest
+	48,  // 16: packets.v1.Envelope.call_invite_action_ack:type_name -> packets.v1.CallInviteActionAck
+	41,  // 17: packets.v1.Envelope.invite_call_members_request:type_name -> packets.v1.InviteCallMembersRequest
+	42,  // 18: packets.v1.Envelope.invite_call_members_response:type_name -> packets.v1.InviteCallMembersResponse
+	56,  // 19: packets.v1.Envelope.bootstrap_request:type_name -> packets.v1.BootstrapRequest
+	57,  // 20: packets.v1.Envelope.bootstrap_response:type_name -> packets.v1.BootstrapResponse
+	58,  // 21: packets.v1.Envelope.sync_since_request:type_name -> packets.v1.SyncSinceRequest
+	59,  // 22: packets.v1.Envelope.sync_since_response:type_name -> packets.v1.SyncSinceResponse
+	84,  // 23: packets.v1.Envelope.server_event:type_name -> packets.v1.ServerEvent
+	60,  // 24: packets.v1.Envelope.ack_request:type_name -> packets.v1.AckRequest
+	61,  // 25: packets.v1.Envelope.ack_response:type_name -> packets.v1.AckResponse
+	27,  // 26: packets.v1.Envelope.subscribe_thread_request:type_name -> packets.v1.SubscribeThreadRequest
+	28,  // 27: packets.v1.Envelope.subscribe_thread_response:type_name -> packets.v1.SubscribeThreadResponse
+	29,  // 28: packets.v1.Envelope.add_reaction_request:type_name -> packets.v1.AddReactionRequest
+	30,  // 29: packets.v1.Envelope.remove_reaction_request:type_name -> packets.v1.RemoveReactionRequest
+	31,  // 30: packets.v1.Envelope.reaction_ack:type_name -> packets.v1.ReactionAck
+	32,  // 31: packets.v1.Envelope.typing_request:type_name -> packets.v1.TypingRequest
+	33,  // 32: packets.v1.Envelope.typing_event:type_name -> packets.v1.TypingEvent
+	34,  // 33: packets.v1.Envelope.set_presence_request:type_name -> packets.v1.SetPresenceRequest
+	36,  // 34: packets.v1.Envelope.presence_event:type_name -> packets.v1.PresenceEvent
+	77,  // 35: packets.v1.Envelope.set_notification_level_request:type_name -> packets.v1.SetNotificationLevelRequest
+	78,  // 36: packets.v1.Envelope.set_notification_level_response:type_name -> packets.v1.SetNotificationLevelResponse
+	35,  // 37: packets.v1.Envelope.set_client_window_activity_request:type_name -> packets.v1.ClientWindowActivityRequest
+	79,  // 38: packets.v1.Envelope.task_description_collab_subscribe_request:type_name -> packets.v1.TaskDescriptionCollabSubscribeRequest
+	80,  // 39: packets.v1.Envelope.task_description_collab_subscribe_response:type_name -> packets.v1.TaskDescriptionCollabSubscribeResponse
+	81,  // 40: packets.v1.Envelope.task_description_collab_unsubscribe_request:type_name -> packets.v1.TaskDescriptionCollabUnsubscribeRequest
+	82,  // 41: packets.v1.Envelope.task_description_collab_message:type_name -> packets.v1.TaskDescriptionCollabMessage
+	12,  // 42: packets.v1.ClientHello.capabilities:type_name -> packets.v1.FeatureCapability
+	21,  // 43: packets.v1.ServerHello.rate_limit_policy:type_name -> packets.v1.RateLimitPolicy
+	12,  // 44: packets.v1.ServerHello.accepted_capabilities:type_name -> packets.v1.FeatureCapability
+	11,  // 45: packets.v1.AuthResponse.user_role:type_name -> packets.v1.WorkspaceRole
+	3,   // 46: packets.v1.Error.code:type_name -> packets.v1.ErrorCode
+	0,   // 47: packets.v1.SendMessageRequest.conversation_type:type_name -> packets.v1.ConversationType
+	85,  // 48: packets.v1.SendMessageAck.created_at:type_name -> google.protobuf.Timestamp
+	85,  // 49: packets.v1.MessageEvent.created_at:type_name -> google.protobuf.Timestamp
+	26,  // 50: packets.v1.MessageEvent.reactions:type_name -> packets.v1.ReactionAggregate
+	25,  // 51: packets.v1.MessageEvent.attachments:type_name -> packets.v1.MessageAttachment
+	85,  // 52: packets.v1.MessageEvent.edited_at:type_name -> google.protobuf.Timestamp
+	24,  // 53: packets.v1.SubscribeThreadResponse.replay:type_name -> packets.v1.MessageEvent
+	85,  // 54: packets.v1.TypingEvent.expires_at:type_name -> google.protobuf.Timestamp
+	2,   // 55: packets.v1.SetPresenceRequest.desired_presence:type_name -> packets.v1.PresenceStatus
+	2,   // 56: packets.v1.PresenceEvent.effective_presence:type_name -> packets.v1.PresenceStatus
+	85,  // 57: packets.v1.PresenceEvent.last_active_at:type_name -> google.protobuf.Timestamp
+	0,   // 58: packets.v1.CreateCallRequest.conversation_type:type_name -> packets.v1.ConversationType
+	1,   // 59: packets.v1.CreateCallResponse.status:type_name -> packets.v1.CallStatus
+	0,   // 60: packets.v1.InviteCallMembersRequest.conversation_type:type_name -> packets.v1.ConversationType
+	0,   // 61: packets.v1.JoinCallTokenRequest.conversation_type:type_name -> packets.v1.ConversationType
+	5,   // 62: packets.v1.CallInviteActionAck.resulting_state:type_name -> packets.v1.InviteState
+	50,  // 63: packets.v1.WorkspaceSummary.self_user:type_name -> packets.v1.UserSummary
+	11,  // 64: packets.v1.WorkspaceSummary.self_role:type_name -> packets.v1.WorkspaceRole
+	0,   // 65: packets.v1.ConversationSummary.conversation_type:type_name -> packets.v1.ConversationType
+	10,  // 66: packets.v1.ConversationSummary.notification_level:type_name -> packets.v1.NotificationLevel
+	85,  // 67: packets.v1.ConversationSummary.last_activity_at:type_name -> google.protobuf.Timestamp
+	2,   // 68: packets.v1.ConversationSummary.presence:type_name -> packets.v1.PresenceStatus
+	1,   // 69: packets.v1.ActiveCallSummary.status:type_name -> packets.v1.CallStatus
+	85,  // 70: packets.v1.CallInviteSummary.created_at:type_name -> google.protobuf.Timestamp
+	85,  // 71: packets.v1.CallInviteSummary.expires_at:type_name -> google.protobuf.Timestamp
+	5,   // 72: packets.v1.CallInviteSummary.state:type_name -> packets.v1.InviteState
+	9,   // 73: packets.v1.NotificationSummary.type:type_name -> packets.v1.NotificationType
+	85,  // 74: packets.v1.NotificationSummary.created_at:type_name -> google.protobuf.Timestamp
+	49,  // 75: packets.v1.BootstrapResponse.workspace:type_name -> packets.v1.WorkspaceSummary
+	51,  // 76: packets.v1.BootstrapResponse.conversations:type_name -> packets.v1.ConversationSummary
+	52,  // 77: packets.v1.BootstrapResponse.unread:type_name -> packets.v1.UnreadCounter
+	53,  // 78: packets.v1.BootstrapResponse.active_calls:type_name -> packets.v1.ActiveCallSummary
+	54,  // 79: packets.v1.BootstrapResponse.pending_invites:type_name -> packets.v1.CallInviteSummary
+	55,  // 80: packets.v1.BootstrapResponse.notifications:type_name -> packets.v1.NotificationSummary
+	85,  // 81: packets.v1.BootstrapResponse.bootstrap_expires_at:type_name -> google.protobuf.Timestamp
+	36,  // 82: packets.v1.BootstrapResponse.presence:type_name -> packets.v1.PresenceEvent
+	11,  // 83: packets.v1.BootstrapResponse.user_role:type_name -> packets.v1.WorkspaceRole
+	84,  // 84: packets.v1.SyncSinceResponse.events:type_name -> packets.v1.ServerEvent
+	4,   // 85: packets.v1.SyncSinceResponse.need_full_bootstrap_reason:type_name -> packets.v1.SyncBootstrapReason
+	51,  // 86: packets.v1.ConversationUpsertedEvent.conversation:type_name -> packets.v1.ConversationSummary
+	8,   // 87: packets.v1.ConversationRemovedEvent.reason:type_name -> packets.v1.ConversationRemovedReason
+	7,   // 88: packets.v1.MembershipChangedEvent.action:type_name -> packets.v1.MembershipAction
+	52,  // 89: packets.v1.ReadCounterUpdatedEvent.counter:type_name -> packets.v1.UnreadCounter
+	55,  // 90: packets.v1.NotificationAddedEvent.notification:type_name -> packets.v1.NotificationSummary
+	54,  // 91: packets.v1.CallInviteCreatedEvent.invite:type_name -> packets.v1.CallInviteSummary
+	6,   // 92: packets.v1.CallInviteCancelledEvent.reason:type_name -> packets.v1.InviteCancelReason
+	1,   // 93: packets.v1.CallStateChangedEvent.status:type_name -> packets.v1.CallStatus
+	85,  // 94: packets.v1.ThreadSummaryUpdatedEvent.last_thread_reply_at:type_name -> google.protobuf.Timestamp
+	85,  // 95: packets.v1.MessageUpdatedEvent.edited_at:type_name -> google.protobuf.Timestamp
+	10,  // 96: packets.v1.SetNotificationLevelRequest.level:type_name -> packets.v1.NotificationLevel
+	10,  // 97: packets.v1.SetNotificationLevelResponse.level:type_name -> packets.v1.NotificationLevel
+	13,  // 98: packets.v1.TaskDescriptionCollabMessage.kind:type_name -> packets.v1.TaskDescriptionCollabMessageKind
+	10,  // 99: packets.v1.NotificationLevelChangedEvent.level:type_name -> packets.v1.NotificationLevel
+	85,  // 100: packets.v1.ServerEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	14,  // 101: packets.v1.ServerEvent.event_type:type_name -> packets.v1.EventType
+	62,  // 102: packets.v1.ServerEvent.conversation_upserted:type_name -> packets.v1.ConversationUpsertedEvent
+	63,  // 103: packets.v1.ServerEvent.conversation_removed:type_name -> packets.v1.ConversationRemovedEvent
+	64,  // 104: packets.v1.ServerEvent.membership_changed:type_name -> packets.v1.MembershipChangedEvent
+	24,  // 105: packets.v1.ServerEvent.message_created:type_name -> packets.v1.MessageEvent
+	65,  // 106: packets.v1.ServerEvent.read_counter_updated:type_name -> packets.v1.ReadCounterUpdatedEvent
+	66,  // 107: packets.v1.ServerEvent.notification_added:type_name -> packets.v1.NotificationAddedEvent
+	67,  // 108: packets.v1.ServerEvent.notification_resolved:type_name -> packets.v1.NotificationResolvedEvent
+	68,  // 109: packets.v1.ServerEvent.call_invite_created:type_name -> packets.v1.CallInviteCreatedEvent
+	69,  // 110: packets.v1.ServerEvent.call_invite_cancelled:type_name -> packets.v1.CallInviteCancelledEvent
+	70,  // 111: packets.v1.ServerEvent.call_state_changed:type_name -> packets.v1.CallStateChangedEvent
+	71,  // 112: packets.v1.ServerEvent.thread_summary_updated:type_name -> packets.v1.ThreadSummaryUpdatedEvent
+	72,  // 113: packets.v1.ServerEvent.reaction_updated:type_name -> packets.v1.ReactionUpdatedEvent
+	75,  // 114: packets.v1.ServerEvent.force_password_change:type_name -> packets.v1.ForcePasswordChangeEvent
+	76,  // 115: packets.v1.ServerEvent.user_identity_updated:type_name -> packets.v1.UserIdentityUpdatedEvent
+	83,  // 116: packets.v1.ServerEvent.notification_level_changed:type_name -> packets.v1.NotificationLevelChangedEvent
+	73,  // 117: packets.v1.ServerEvent.message_updated:type_name -> packets.v1.MessageUpdatedEvent
+	74,  // 118: packets.v1.ServerEvent.message_deleted:type_name -> packets.v1.MessageDeletedEvent
+	119, // [119:119] is the sub-list for method output_type
+	119, // [119:119] is the sub-list for method input_type
+	119, // [119:119] is the sub-list for extension type_name
+	119, // [119:119] is the sub-list for extension extendee
+	0,   // [0:119] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_packets_proto_init() }
@@ -6912,8 +7254,12 @@ func file_api_proto_packets_proto_init() {
 		(*Envelope_SetNotificationLevelRequest)(nil),
 		(*Envelope_SetNotificationLevelResponse)(nil),
 		(*Envelope_SetClientWindowActivityRequest)(nil),
+		(*Envelope_TaskDescriptionCollabSubscribeRequest)(nil),
+		(*Envelope_TaskDescriptionCollabSubscribeResponse)(nil),
+		(*Envelope_TaskDescriptionCollabUnsubscribeRequest)(nil),
+		(*Envelope_TaskDescriptionCollabMessage)(nil),
 	}
-	file_api_proto_packets_proto_msgTypes[65].OneofWrappers = []any{
+	file_api_proto_packets_proto_msgTypes[69].OneofWrappers = []any{
 		(*ServerEvent_ConversationUpserted)(nil),
 		(*ServerEvent_ConversationRemoved)(nil),
 		(*ServerEvent_MembershipChanged)(nil),
@@ -6937,8 +7283,8 @@ func file_api_proto_packets_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_packets_proto_rawDesc), len(file_api_proto_packets_proto_rawDesc)),
-			NumEnums:      14,
-			NumMessages:   66,
+			NumEnums:      15,
+			NumMessages:   70,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

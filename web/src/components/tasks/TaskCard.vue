@@ -44,14 +44,7 @@
           {{ task.public_id }}
         </span>
         <input
-          v-if="editing"
-          v-model="form.title"
-          type="text"
-          class="flex-1 min-w-0 bg-chat-input border border-chat-border rounded px-3 py-1 text-white text-sm outline-none focus:border-accent"
-          placeholder="Task title"
-        />
-        <input
-          v-else-if="titleEditing"
+          v-if="titleEditing"
           ref="titleInputRef"
           v-model="titleDraft"
           type="text"
@@ -78,19 +71,7 @@
         </div>
       </div>
 
-      <div class="flex items-center gap-2 shrink-0">
-        <template v-if="editing">
-          <button class="btn-secondary text-sm" :disabled="saving" @click="cancelEdit">Cancel</button>
-          <button
-            class="btn-primary text-sm"
-            :disabled="!canSave || saving"
-            @click="save"
-          >
-            {{ saving ? 'Saving...' : 'Save' }}
-          </button>
-        </template>
-        <button v-else class="btn-secondary text-sm" :disabled="titleEditing || titleSaving" @click="startEdit">Edit</button>
-      </div>
+      <div class="flex items-center gap-2 shrink-0" />
     </div>
 
     <!-- Save error -->
@@ -105,11 +86,7 @@
       <div class="flex items-center gap-6 flex-wrap">
         <div>
           <div class="field-label">Status</div>
-          <span v-if="editing" class="text-sm text-gray-200">
-            {{ tasksStore.statusById(task.status_id)?.name ?? task.status_id }}
-          </span>
           <select
-            v-else
             v-model="viewStatusId"
             class="field-select"
             :disabled="statusSaving"
@@ -145,7 +122,7 @@
           <TaskFieldInput
             :field="field"
             :value="fieldInputValue(field)"
-            :mode="fieldInputMode(field)"
+            mode="edit"
             :users="tasksStore.users"
             :enum-items="field.enum_dictionary_id ? tasksStore.enumItemsFor(field.enum_dictionary_id) : undefined"
             @update:value="onFieldValueChange(field, $event)"
@@ -296,39 +273,24 @@
       <div class="border-t border-chat-border pt-4">
         <div class="field-label flex items-center justify-between gap-2">
           <span>Description</span>
-          <div v-if="!editing" class="inline-flex rounded border border-chat-border overflow-hidden text-[11px] normal-case tracking-normal">
-            <button
-              type="button"
-              class="px-2 py-0.5"
-              :class="tasksStore.descriptionViewMode === 'rendered' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
-              @click="tasksStore.descriptionViewMode = 'rendered'"
-            >
-              Rendered
-            </button>
-            <button
-              type="button"
-              class="px-2 py-0.5 border-l border-chat-border"
-              :class="tasksStore.descriptionViewMode === 'markdown' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
-              @click="tasksStore.descriptionViewMode = 'markdown'"
-            >
-              Markdown
-            </button>
-          </div>
+          <span v-if="descriptionSaving" class="text-[11px] text-gray-500 normal-case tracking-normal">Saving...</span>
         </div>
         <TaskDescriptionEditor
-          v-if="editing"
-          v-model="form.description"
+          v-if="taskDescriptionDoc"
+          v-model="descriptionDraft"
+          :collab-doc="taskDescriptionDoc"
+          :collab-provider="taskDescriptionProvider"
+          :collab-user="collabUser"
           placeholder="Description"
+          @blur="flushDescriptionNow"
         />
-        <div
-          v-else-if="task.description && tasksStore.descriptionViewMode === 'rendered'"
-          class="markdown-body text-sm text-gray-200"
-          v-html="renderedDescriptionHtml"
-        />
-        <p v-else-if="task.description" class="text-sm text-gray-200 whitespace-pre-wrap">
-          {{ task.description }}
+        <p v-else class="text-sm text-gray-500 italic">Preparing realtime editor...</p>
+        <p v-if="descriptionSaveError" class="text-xs text-amber-300 mt-2">
+          {{ descriptionSaveError }}
         </p>
-        <span v-else class="text-sm text-gray-500 italic">—</span>
+        <p v-if="taskDescriptionCollabError" class="text-xs text-amber-300 mt-1">
+          {{ taskDescriptionCollabError }}
+        </p>
       </div>
 
       <!-- Attachments -->
@@ -357,12 +319,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { TasksApiConflictError, type TaskFieldDefinition, type TaskFieldValue, type TaskTitleConflictResponse } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
 import { useChatStore } from '@/stores/chat'
+import { useAuthStore } from '@/stores/auth'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
-import { renderMarkdownToHtml } from '@/utils/markdown'
+import { useTaskDescriptionCollab, type TaskDescriptionCollabUser } from '@/composables/useTaskDescriptionCollab'
 import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
@@ -373,10 +336,8 @@ const emit = defineEmits<{ back: [] }>()
 
 const tasksStore = useTasksStore()
 const chatStore = useChatStore()
+const authStore = useAuthStore()
 
-// ---- Edit mode ----
-const editing = ref(false)
-const saving = ref(false)
 const titleEditing = ref(false)
 const titleSaving = ref(false)
 const titleDraft = ref('')
@@ -385,13 +346,20 @@ const reopenTitleEditAfterRefresh = ref(false)
 const titleInputRef = ref<HTMLInputElement | null>(null)
 const statusSaving = ref(false)
 const saveError = ref('')
-const showValidation = ref(false)
 const viewStatusId = ref('')
 const fieldSaving = reactive<Record<string, boolean>>({})
 const inlineValues = reactive<Record<string, unknown>>({})
-
-const form = reactive({ title: '', description: '', statusId: '' })
-const customValues = reactive<Record<string, unknown>>({})
+const fieldRequiredErrors = reactive<Record<string, boolean>>({})
+const descriptionDraft = ref('')
+const descriptionSaving = ref(false)
+const descriptionSaveError = ref('')
+const lastSavedDescription = ref<string | null>(null)
+const hydratingDescription = ref(false)
+let descriptionDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let descriptionMaxFlushTimer: ReturnType<typeof setTimeout> | null = null
+let descriptionRetryTimer: ReturnType<typeof setTimeout> | null = null
+let descriptionRetryDelayMs = 1000
+const DEBUG_TASK_CARD_DESC = true
 
 const task = computed(() => tasksStore.selectedTask)
 
@@ -399,24 +367,48 @@ const customFields = computed<TaskFieldDefinition[]>(() =>
   task.value ? tasksStore.activeFieldsFor(task.value.template_id) : [],
 )
 
-const missingFields = computed(() =>
-  missingRequiredFields(customFields.value, customValues),
-)
-
-const canSave = computed(() =>
-  form.title.trim() !== '' &&
-  form.statusId !== '' &&
-  missingFields.value.length === 0,
-)
-
-const renderedDescriptionHtml = computed(() => {
-  const src = task.value?.description ?? ''
-  if (!src) return ''
-  return renderMarkdownToHtml(src)
+const collabTaskId = computed(() => task.value?.id ?? null)
+const collabUser = computed<TaskDescriptionCollabUser | null>(() => {
+  const user = authStore.user
+  if (!user) return null
+  const palette = ['#60a5fa', '#f97316', '#f43f5e', '#22c55e', '#8b5cf6', '#06b6d4', '#eab308', '#14b8a6']
+  let hash = 0
+  for (let i = 0; i < user.id.length; i += 1) {
+    hash = ((hash << 5) - hash) + user.id.charCodeAt(i)
+    hash |= 0
+  }
+  const color = palette[Math.abs(hash) % palette.length]
+  return {
+    id: user.id,
+    name: user.displayName || user.email,
+    color,
+  }
 })
+const descriptionCollab = useTaskDescriptionCollab({
+  taskId: collabTaskId,
+  user: collabUser,
+})
+const taskDescriptionDoc = computed(() => descriptionCollab.doc.value)
+const taskDescriptionProvider = computed(() => descriptionCollab.provider.value)
+const taskDescriptionCollabError = computed(() => descriptionCollab.subscribeError.value)
+
+function markdownSignature(input: string): string {
+  let hash = 0
+  for (let i = 0; i < input.length; i += 1) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(i)
+    hash |= 0
+  }
+  const preview = input.slice(0, 80).replace(/\n/g, '\\n')
+  return `len=${input.length},hash=${hash},preview="${preview}"`
+}
+
+function descLog(event: string, payload: Record<string, unknown>) {
+  if (!DEBUG_TASK_CARD_DESC) return
+  console.debug('[task-card-desc]', event, payload)
+}
 
 function isFieldMissing(id: string): boolean {
-  return showValidation.value && missingFields.value.includes(id)
+  return !!fieldRequiredErrors[id]
 }
 
 function getStoredValue(field: TaskFieldDefinition): unknown {
@@ -437,22 +429,26 @@ function getStoredValue(field: TaskFieldDefinition): unknown {
   }
 }
 
-function isInlineEditableField(field: TaskFieldDefinition): boolean {
-  return field.type === 'enum' || field.type === 'multi_enum' || field.type === 'user' || field.type === 'users'
-}
-
-function fieldInputMode(field: TaskFieldDefinition): 'view' | 'edit' {
-  if (editing.value) return 'edit'
-  return isInlineEditableField(field) ? 'edit' : 'view'
-}
-
 function fieldInputValue(field: TaskFieldDefinition): unknown {
-  if (editing.value) return customValues[field.id]
-  if (isInlineEditableField(field)) return inlineValues[field.id]
-  return getStoredValue(field)
+  return inlineValues[field.id]
 }
 
 function normalizeInlineFieldValue(field: TaskFieldDefinition, value: unknown): unknown {
+  if (field.type === 'text' || field.type === 'number' || field.type === 'date') {
+    if (value === '' || value === undefined) return null
+    return value as string | null
+  }
+  if (field.type === 'datetime') {
+    if (value === '' || value === undefined) return null
+    const input = String(value)
+    if (input.length === 16) {
+      const asDate = new Date(input)
+      if (!Number.isNaN(asDate.getTime())) {
+        return asDate.toISOString()
+      }
+    }
+    return input
+  }
   if (field.type === 'users' || field.type === 'multi_enum') {
     return Array.isArray(value) ? value : []
   }
@@ -461,6 +457,14 @@ function normalizeInlineFieldValue(field: TaskFieldDefinition, value: unknown): 
     return value as string | null
   }
   return value
+}
+
+function isEmptyFieldValue(field: TaskFieldDefinition, value: unknown): boolean {
+  if (value === null || value === undefined || value === '') return true
+  if ((field.type === 'users' || field.type === 'multi_enum') && Array.isArray(value)) {
+    return value.length === 0
+  }
+  return false
 }
 
 function valuesEqual(a: unknown, b: unknown): boolean {
@@ -476,19 +480,32 @@ function valuesEqual(a: unknown, b: unknown): boolean {
 function initInlineValues() {
   if (!task.value) return
   customFields.value.forEach(f => {
-    if (isInlineEditableField(f)) {
-      inlineValues[f.id] = normalizeInlineFieldValue(f, getStoredValue(f))
-    }
+    inlineValues[f.id] = normalizeInlineFieldValue(f, getStoredValue(f))
   })
 }
 
 function buildInlineFieldPayload(field: TaskFieldDefinition, value: unknown): {
   value_text?: string | null
+  value_number?: string | null
+  value_date?: string | null
+  value_datetime?: string | null
   value_user_id?: string | null
   value_json?: unknown | null
   enum_dictionary_id?: string | null
   enum_version?: number | null
 } {
+  if (field.type === 'text') {
+    return { value_text: (value as string | null) ?? null }
+  }
+  if (field.type === 'number') {
+    return { value_number: (value as string | null) ?? null }
+  }
+  if (field.type === 'date') {
+    return { value_date: (value as string | null) ?? null }
+  }
+  if (field.type === 'datetime') {
+    return { value_datetime: (value as string | null) ?? null }
+  }
   if (field.type === 'user') {
     return { value_user_id: (value as string | null) ?? null }
   }
@@ -510,14 +527,18 @@ function buildInlineFieldPayload(field: TaskFieldDefinition, value: unknown): {
 }
 
 async function onFieldValueChange(field: TaskFieldDefinition, value: unknown) {
-  if (editing.value) {
-    customValues[field.id] = value
-    return
-  }
-  if (!task.value || !isInlineEditableField(field) || fieldSaving[field.id]) return
+  if (!task.value || fieldSaving[field.id]) return
 
   const next = normalizeInlineFieldValue(field, value)
   const prev = normalizeInlineFieldValue(field, getStoredValue(field))
+
+  if (field.required && isEmptyFieldValue(field, next)) {
+    inlineValues[field.id] = prev
+    fieldRequiredErrors[field.id] = true
+    return
+  }
+
+  fieldRequiredErrors[field.id] = false
   if (valuesEqual(prev, next)) return
 
   inlineValues[field.id] = next
@@ -543,7 +564,7 @@ function isTaskTitleConflictResponse(v: unknown): v is TaskTitleConflictResponse
 }
 
 async function startTitleEdit() {
-  if (!task.value || editing.value || titleSaving.value) return
+  if (!task.value || titleSaving.value) return
   titleDraft.value = task.value.title
   titleLockToken.value = task.value.updated_at
   saveError.value = ''
@@ -602,57 +623,119 @@ async function saveTitle() {
   }
 }
 
-function startEdit() {
-  if (!task.value) return
-  titleEditing.value = false
-  titleDraft.value = ''
-  titleLockToken.value = ''
-  form.title = task.value.title
-  form.description = task.value.description ?? ''
-  form.statusId = task.value.status_id
-  customFields.value.forEach(f => { customValues[f.id] = getStoredValue(f) })
-  saveError.value = ''
-  showValidation.value = false
-  editing.value = true
+function normalizeDescription(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed === '' ? null : trimmed
+}
 
-  // Preload supporting data for edit inputs
-  if (customFields.value.some(f => f.type === 'user' || f.type === 'users')) {
-    tasksStore.loadUsers()
+function clearDescriptionTimers() {
+  if (descriptionDebounceTimer) {
+    clearTimeout(descriptionDebounceTimer)
+    descriptionDebounceTimer = null
   }
-  customFields.value
-    .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
-    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
+  if (descriptionMaxFlushTimer) {
+    clearTimeout(descriptionMaxFlushTimer)
+    descriptionMaxFlushTimer = null
+  }
 }
 
-function cancelEdit() {
-  editing.value = false
-  saveError.value = ''
-  showValidation.value = false
-}
+async function persistDescription(taskID: string, source: string, force = false) {
+  const normalized = normalizeDescription(source)
+  descLog('persist:start', {
+    taskID,
+    force,
+    source: markdownSignature(source),
+    normalized: normalized === null ? 'null' : markdownSignature(normalized),
+    lastSaved: lastSavedDescription.value === null ? 'null' : markdownSignature(lastSavedDescription.value),
+    isSaving: descriptionSaving.value,
+  })
+  if (!force && task.value?.id === taskID && normalized === lastSavedDescription.value) {
+    descLog('persist:skip-unchanged', { taskID })
+    return
+  }
+  if (descriptionSaving.value) return
 
-async function save() {
-  showValidation.value = true
-  if (!task.value || !canSave.value || saving.value) return
-  saving.value = true
-  saveError.value = ''
+  descriptionSaving.value = true
   try {
-    await tasksStore.updateTask(task.value.id, {
-      title: form.title.trim(),
-      description: form.description.trim() || null,
-      status_id: form.statusId,
-      field_values: buildFieldValues(customFields.value, customValues, tasksStore.enumVersionFor),
-    })
-    editing.value = false
-    showValidation.value = false
+    await tasksStore.updateTaskDescription(taskID, normalized)
+    if (task.value?.id === taskID) {
+      lastSavedDescription.value = normalized
+      descriptionSaveError.value = ''
+      if (descriptionRetryTimer) {
+        clearTimeout(descriptionRetryTimer)
+        descriptionRetryTimer = null
+      }
+      descriptionRetryDelayMs = 1000
+      descLog('persist:success', {
+        taskID,
+        saved: normalized === null ? 'null' : markdownSignature(normalized),
+      })
+    }
   } catch (e) {
-    saveError.value = e instanceof Error ? e.message : 'Failed to save task'
+    if (task.value?.id === taskID) {
+      descriptionSaveError.value = (e instanceof Error ? e.message : 'Failed to save description') + '. Retrying...'
+      descLog('persist:error', {
+        taskID,
+        error: e instanceof Error ? e.message : 'unknown',
+        retryDelayMs: descriptionRetryDelayMs,
+      })
+      if (!descriptionRetryTimer) {
+        const retryTaskID = taskID
+        descriptionRetryTimer = setTimeout(() => {
+          descriptionRetryTimer = null
+          descLog('persist:retry-fire', {
+            taskID: retryTaskID,
+            draft: markdownSignature(descriptionDraft.value),
+          })
+          void persistDescription(retryTaskID, descriptionDraft.value, true)
+          descriptionRetryDelayMs = Math.min(descriptionRetryDelayMs * 2, 15000)
+        }, descriptionRetryDelayMs)
+      }
+    }
   } finally {
-    saving.value = false
+    descriptionSaving.value = false
   }
+}
+
+function scheduleDescriptionAutosave() {
+  if (!task.value) return
+  const taskID = task.value.id
+  descLog('autosave:schedule', {
+    taskID,
+    draft: markdownSignature(descriptionDraft.value),
+  })
+  if (descriptionDebounceTimer) {
+    clearTimeout(descriptionDebounceTimer)
+  }
+  descriptionDebounceTimer = setTimeout(() => {
+    descriptionDebounceTimer = null
+    void persistDescription(taskID, descriptionDraft.value)
+  }, 800)
+
+  if (!descriptionMaxFlushTimer) {
+    descriptionMaxFlushTimer = setTimeout(() => {
+      descriptionMaxFlushTimer = null
+      if (descriptionDebounceTimer) {
+        clearTimeout(descriptionDebounceTimer)
+        descriptionDebounceTimer = null
+      }
+      void persistDescription(taskID, descriptionDraft.value, true)
+    }, 10_000)
+  }
+}
+
+function flushDescriptionNow() {
+  if (!task.value) return
+  descLog('autosave:flushNow', {
+    taskID: task.value.id,
+    draft: markdownSignature(descriptionDraft.value),
+  })
+  clearDescriptionTimers()
+  void persistDescription(task.value.id, descriptionDraft.value, true)
 }
 
 async function onViewStatusChange() {
-  if (!task.value || editing.value || statusSaving.value) return
+  if (!task.value || statusSaving.value) return
   const prev = task.value.status_id
   const next = viewStatusId.value
   if (!next || next === prev) return
@@ -763,10 +846,26 @@ function formatDatetime(v: string): string {
   return v ? new Date(v).toLocaleString() : ''
 }
 
-// Exit edit mode and close subtask form when task changes
-watch(task, () => {
+function handleBeforeUnload() {
+  if (!task.value) return
+  clearDescriptionTimers()
+  void persistDescription(task.value.id, descriptionDraft.value, true)
+}
+
+watch(() => task.value?.id, (_nextTaskID, prevTaskID) => {
+  descLog('watch:taskId', {
+    prevTaskID,
+    nextTaskID: task.value?.id ?? null,
+    selectedDescription: task.value?.description ? markdownSignature(task.value.description) : 'null',
+  })
+  if (prevTaskID) {
+    clearDescriptionTimers()
+    void persistDescription(prevTaskID, descriptionDraft.value, true)
+  }
+
   Object.keys(inlineValues).forEach(k => delete inlineValues[k])
   Object.keys(fieldSaving).forEach(k => delete fieldSaving[k])
+  Object.keys(fieldRequiredErrors).forEach(k => delete fieldRequiredErrors[k])
   initInlineValues()
   if (customFields.value.some(f => f.type === 'user' || f.type === 'users')) {
     tasksStore.loadUsers()
@@ -775,13 +874,17 @@ watch(task, () => {
     .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
     .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
   viewStatusId.value = task.value?.status_id ?? ''
-  editing.value = false
+  hydratingDescription.value = true
+  descriptionDraft.value = task.value?.description ?? ''
+  lastSavedDescription.value = normalizeDescription(descriptionDraft.value)
+  hydratingDescription.value = false
   titleEditing.value = false
   titleSaving.value = false
   titleDraft.value = ''
   titleLockToken.value = ''
   saveError.value = ''
-  showValidation.value = false
+  descriptionSaveError.value = ''
+  descriptionRetryDelayMs = 1000
   showSubtaskForm.value = false
   subtaskError.value = ''
   showSubtaskValidation.value = false
@@ -791,6 +894,30 @@ watch(task, () => {
   }
 }, { immediate: true })
 
+watch(() => descriptionCollab.serverMarkdown.value, (next) => {
+  if (next === null) return
+  descLog('watch:serverMarkdown', {
+    taskID: task.value?.id ?? null,
+    next: markdownSignature(next),
+    currentDraft: markdownSignature(descriptionDraft.value),
+  })
+  hydratingDescription.value = true
+  descriptionDraft.value = next
+  lastSavedDescription.value = normalizeDescription(next)
+  hydratingDescription.value = false
+  descriptionCollab.serverMarkdown.value = null
+})
+
+watch(descriptionDraft, () => {
+  descLog('watch:descriptionDraft', {
+    taskID: task.value?.id ?? null,
+    hydrating: hydratingDescription.value,
+    draft: markdownSignature(descriptionDraft.value),
+  })
+  if (hydratingDescription.value || !task.value) return
+  scheduleDescriptionAutosave()
+}, { flush: 'sync' })
+
 watch(customFields, () => {
   initInlineValues()
   if (customFields.value.some(f => f.type === 'user' || f.type === 'users')) {
@@ -799,6 +926,18 @@ watch(customFields, () => {
   customFields.value
     .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
     .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
+})
+
+onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  if (task.value) {
+    clearDescriptionTimers()
+    void persistDescription(task.value.id, descriptionDraft.value, true)
+  }
 })
 </script>
 

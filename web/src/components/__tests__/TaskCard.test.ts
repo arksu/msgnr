@@ -1,4 +1,4 @@
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskCard from '@/components/tasks/TaskCard.vue'
@@ -26,7 +26,6 @@ const tasksStoreMock = reactive({
   selectedTask,
   taskLoading: false,
   taskError: null as string | null,
-  descriptionViewMode: 'rendered' as 'rendered' | 'markdown',
   users: [],
   activeTemplates: [
     {
@@ -73,6 +72,7 @@ const tasksStoreMock = reactive({
   updateTask: vi.fn(async () => selectedTask),
   updateTaskTitle: vi.fn(async () => selectedTask),
   updateTaskStatus: vi.fn(async () => selectedTask),
+  updateTaskDescription: vi.fn(async () => selectedTask),
   updateTaskFieldValue: vi.fn(async () => ({})),
   createSubtask: vi.fn(async () => ({})),
   selectTask: vi.fn(async () => {}),
@@ -90,6 +90,25 @@ vi.mock('@/stores/chat', () => ({
   useChatStore: () => chatStoreMock,
 }))
 
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({
+    user: {
+      id: 'u-1',
+      email: 'u-1@example.com',
+      displayName: 'User 1',
+    },
+  }),
+}))
+
+vi.mock('@/composables/useTaskDescriptionCollab', () => ({
+  useTaskDescriptionCollab: () => ({
+    doc: ref({}),
+    provider: ref({ awareness: { states: new Map() } }),
+    subscribeError: ref(''),
+    serverMarkdown: ref<string | null>(null),
+  }),
+}))
+
 describe('TaskCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -98,10 +117,9 @@ describe('TaskCard', () => {
       description: '**old** description',
       subtasks: [],
     }
-    tasksStoreMock.descriptionViewMode = 'rendered'
   })
 
-  it('shows Markdown label for non-edit description toggle', async () => {
+  it('shows rendered/markdown tabs in always-on description editor', async () => {
     const wrapper = mount(TaskCard, {
       props: { templateFilter: null },
       global: {
@@ -109,7 +127,9 @@ describe('TaskCard', () => {
           TaskFieldInput: true,
           TaskAttachments: true,
           TaskComments: true,
-          TaskDescriptionEditor: true,
+          TaskDescriptionEditor: {
+            template: '<div>Rendered Markdown</div>',
+          },
         },
       },
     })
@@ -117,10 +137,11 @@ describe('TaskCard', () => {
 
     expect(wrapper.text()).toContain('Rendered')
     expect(wrapper.text()).toContain('Markdown')
-    expect(wrapper.text()).not.toContain('Raw')
+    expect(wrapper.text()).not.toContain('Edit')
   })
 
-  it('saves trimmed markdown description in edit mode', async () => {
+  it('autosaves trimmed markdown description without edit mode', async () => {
+    vi.useFakeTimers()
     const wrapper = mount(TaskCard, {
       props: { templateFilter: null },
       global: {
@@ -138,19 +159,39 @@ describe('TaskCard', () => {
     })
     await flushPromises()
 
-    const editButton = wrapper.findAll('button').find(button => button.text() === 'Edit')
-    expect(editButton).toBeTruthy()
-    await editButton!.trigger('click')
-
     await wrapper.get('[data-testid="description-stub"]').setValue('  ## Edited\\n\\nBody  ')
-    const saveButton = wrapper.findAll('button').find(button => button.text() === 'Save')
-    expect(saveButton).toBeTruthy()
-    await saveButton!.trigger('click')
+    vi.advanceTimersByTime(900)
     await flushPromises()
 
-    expect(tasksStoreMock.updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({
-      description: '## Edited\\n\\nBody',
-    }))
+    expect(tasksStoreMock.updateTaskDescription).toHaveBeenCalledWith('task-1', '## Edited\\n\\nBody')
+    vi.useRealTimers()
+  })
+
+  it('sends null description when markdown is empty', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: {
+            props: ['modelValue'],
+            emits: ['update:modelValue'],
+            template: '<textarea data-testid="description-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="description-stub"]').setValue('   ')
+    vi.advanceTimersByTime(900)
+    await flushPromises()
+
+    expect(tasksStoreMock.updateTaskDescription).toHaveBeenCalledWith('task-1', null)
+    vi.useRealTimers()
   })
 
   it('creates subtask with trimmed markdown description', async () => {

@@ -19,11 +19,14 @@ import {
   type JoinCallTokenResponse,
   type CallInviteActionAck,
   type SetNotificationLevelResponse,
+  type TaskDescriptionCollabSubscribeResponse,
+  type TaskDescriptionCollabMessage,
   FeatureCapability,
   ErrorCode,
   ConversationType,
   WorkspaceRole,
   NotificationLevel,
+  TaskDescriptionCollabMessageKind,
 } from '@/shared/proto/packets_pb'
 import { generateId } from '@/services/id'
 
@@ -42,6 +45,8 @@ export type InviteCallMembersResponseHandler = (resp: InviteCallMembersResponse,
 export type JoinCallTokenResponseHandler = (resp: JoinCallTokenResponse) => void
 export type CallInviteActionAckHandler = (ack: CallInviteActionAck) => void
 export type SetNotificationLevelResponseHandler = (resp: SetNotificationLevelResponse) => void
+export type TaskDescriptionCollabSubscribeResponseHandler = (resp: TaskDescriptionCollabSubscribeResponse) => void
+export type TaskDescriptionCollabMessageHandler = (msg: TaskDescriptionCollabMessage) => void
 export type ProtocolErrorHandler = (err: { requestId: string; code: ErrorCode; message: string; retryAfterMs: number }) => void
 
 export type WsState =
@@ -139,6 +144,8 @@ export const useWsStore = defineStore('ws', () => {
   let onJoinCallTokenResponseCallback: JoinCallTokenResponseHandler | null = null
   let onCallInviteActionAckCallback: CallInviteActionAckHandler | null = null
   let onSetNotificationLevelResponseCallback: SetNotificationLevelResponseHandler | null = null
+  let onTaskDescriptionCollabSubscribeResponseCallback: TaskDescriptionCollabSubscribeResponseHandler | null = null
+  let onTaskDescriptionCollabMessageCallback: TaskDescriptionCollabMessageHandler | null = null
   let onProtocolErrorCallback: ProtocolErrorHandler | null = null
 
   function onAuthFail(cb: (kind: WsErrorKind) => void) {
@@ -219,6 +226,14 @@ export const useWsStore = defineStore('ws', () => {
 
   function onSetNotificationLevelResponse(cb: SetNotificationLevelResponseHandler) {
     onSetNotificationLevelResponseCallback = cb
+  }
+
+  function onTaskDescriptionCollabSubscribeResponse(cb: TaskDescriptionCollabSubscribeResponseHandler) {
+    onTaskDescriptionCollabSubscribeResponseCallback = cb
+  }
+
+  function onTaskDescriptionCollabMessage(cb: TaskDescriptionCollabMessageHandler) {
+    onTaskDescriptionCollabMessageCallback = cb
   }
 
   function onProtocolError(cb: ProtocolErrorHandler) {
@@ -344,6 +359,8 @@ export const useWsStore = defineStore('ws', () => {
     onJoinCallTokenResponseCallback = null
     onCallInviteActionAckCallback = null
     onSetNotificationLevelResponseCallback = null
+    onTaskDescriptionCollabSubscribeResponseCallback = null
+    onTaskDescriptionCollabMessageCallback = null
     onProtocolErrorCallback = null
   }
 
@@ -580,6 +597,50 @@ export const useWsStore = defineStore('ws', () => {
     return requestId
   }
 
+  function sendTaskDescriptionCollabSubscribe(taskId: string): string {
+    const requestId = generateId()
+    sendEnvelope(create(EnvelopeSchema, {
+      requestId,
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'taskDescriptionCollabSubscribeRequest',
+        value: { taskId },
+      },
+    }))
+    return requestId
+  }
+
+  function sendTaskDescriptionCollabUnsubscribe(taskId: string): string {
+    const requestId = generateId()
+    sendEnvelope(create(EnvelopeSchema, {
+      requestId,
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'taskDescriptionCollabUnsubscribeRequest',
+        value: { taskId },
+      },
+    }))
+    return requestId
+  }
+
+  function sendTaskDescriptionCollabMessage(
+    taskId: string,
+    kind: TaskDescriptionCollabMessageKind,
+    payload: Uint8Array,
+  ): boolean {
+    return sendEnvelope(create(EnvelopeSchema, {
+      requestId: generateId(),
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'taskDescriptionCollabMessage',
+        value: { taskId, kind, payload },
+      },
+    }))
+  }
+
   function sendCreateCall(conversationId: string, conversationType: ConversationType, inviteeUserIds: string[] = []) {
     sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
@@ -786,6 +847,14 @@ export const useWsStore = defineStore('ws', () => {
         onSetNotificationLevelResponseCallback?.(envelope.payload.value)
         break
 
+      case 'taskDescriptionCollabSubscribeResponse':
+        onTaskDescriptionCollabSubscribeResponseCallback?.(envelope.payload.value)
+        break
+
+      case 'taskDescriptionCollabMessage':
+        onTaskDescriptionCollabMessageCallback?.(envelope.payload.value)
+        break
+
       case 'error': {
         const err = envelope.payload.value
         onProtocolErrorCallback?.({
@@ -847,6 +916,9 @@ export const useWsStore = defineStore('ws', () => {
     sendSetPresence,
     sendSetClientWindowActivity,
     sendSetNotificationLevel,
+    sendTaskDescriptionCollabSubscribe,
+    sendTaskDescriptionCollabUnsubscribe,
+    sendTaskDescriptionCollabMessage,
     sendCreateCall,
     sendInviteCallMembers,
     sendJoinCallToken,
@@ -876,6 +948,8 @@ export const useWsStore = defineStore('ws', () => {
     onJoinCallTokenResponse,
     onCallInviteActionAck,
     onSetNotificationLevelResponse,
+    onTaskDescriptionCollabSubscribeResponse,
+    onTaskDescriptionCollabMessage,
     onProtocolError,
   }
 })

@@ -902,6 +902,37 @@ func TestIntegration_Task_UpdateSystemFields(t *testing.T) {
 	assert.Equal(t, resp.PublicID, updated.PublicID)
 }
 
+func TestIntegration_Task_UpdateDescriptionOnly(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "UDS", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID, Title: "desc-only", StatusID: status.ID, ActorID: actor,
+	})
+	require.NoError(t, err)
+	require.Nil(t, created.Description)
+
+	next := "## Realtime\n\nBody"
+	updated, err := svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &next,
+		ActorID:     actor,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated.Description)
+	assert.Equal(t, next, *updated.Description)
+
+	cleared, err := svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: nil,
+		ActorID:     actor,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, cleared.Description)
+}
+
 func TestIntegration_Task_UpdateTitle_OptimisticConflict(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

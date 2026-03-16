@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,9 +29,21 @@ import (
 	"msgnr/internal/logger"
 	"msgnr/internal/metrics"
 	syncsvc "msgnr/internal/sync"
+	"msgnr/internal/tasks"
 )
 
 const protocolVersion uint32 = 1
+
+func markdownSignatureForLog(input string) string {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(input))
+	preview := input
+	if len(preview) > 80 {
+		preview = preview[:80]
+	}
+	preview = strings.ReplaceAll(preview, "\n", "\\n")
+	return fmt.Sprintf("len=%d,hash=%d,preview=%q", len(input), hasher.Sum32(), preview)
+}
 
 var supportedCapabilities = map[packetspb.FeatureCapability]struct{}{
 	packetspb.FeatureCapability_FEATURE_CAPABILITY_THREADS:              {},
@@ -62,26 +76,30 @@ type PushNotifier interface {
 // Server handles WebSocket connections and wires each authenticated session
 // to the event Bus for async server-push delivery.
 type Server struct {
-	db             *database.DB
-	config         *config.Config
-	authSvc        *auth.Service
-	bootstrapSvc   *bootstrap.Service
-	callSvc        *calls.Service
-	chatSvc        *chat.Service
-	syncSvc        *syncsvc.Service
-	bus            *events.Bus
-	authorizeEvent func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool
-	log            *zap.Logger
-	sessionMu      sync.RWMutex
-	sessionsByUser map[string]map[chan outboundMsg]*sessionState
-	typingMu       sync.Mutex
-	typingExpiry   map[string]time.Time
-	pushNotifier   PushNotifier // optional; nil means push disabled
+	db                       *database.DB
+	config                   *config.Config
+	authSvc                  *auth.Service
+	bootstrapSvc             *bootstrap.Service
+	callSvc                  *calls.Service
+	chatSvc                  *chat.Service
+	tasksSvc                 *tasks.Service
+	syncSvc                  *syncsvc.Service
+	bus                      *events.Bus
+	authorizeEvent           func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool
+	log                      *zap.Logger
+	sessionMu                sync.RWMutex
+	sessionsByUser           map[string]map[chan outboundMsg]*sessionState
+	typingMu                 sync.Mutex
+	typingExpiry             map[string]time.Time
+	taskCollabMu             sync.RWMutex
+	taskCollabSubscribers    map[string]map[chan outboundMsg]struct{}
+	taskCollabTasksBySession map[chan outboundMsg]map[string]struct{}
+	pushNotifier             PushNotifier // optional; nil means push disabled
 }
 
 // NewServer creates a Server. bus may be nil during tests that don't exercise
 // the fanout path.
-func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bootstrapSvc *bootstrap.Service, callSvc *calls.Service, chatSvc *chat.Service, syncSvc *syncsvc.Service, bus *events.Bus) *Server {
+func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bootstrapSvc *bootstrap.Service, callSvc *calls.Service, chatSvc *chat.Service, tasksSvc *tasks.Service, syncSvc *syncsvc.Service, bus *events.Bus) *Server {
 	return &Server{
 		db:           db,
 		config:       cfg,
@@ -89,14 +107,17 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, boots
 		bootstrapSvc: bootstrapSvc,
 		callSvc:      callSvc,
 		chatSvc:      chatSvc,
+		tasksSvc:     tasksSvc,
 		syncSvc:      syncSvc,
 		bus:          bus,
 		authorizeEvent: func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool {
 			return authSvc.CanReceiveEvent(ctx, principal, evt)
 		},
-		log:            logger.Logger,
-		sessionsByUser: make(map[string]map[chan outboundMsg]*sessionState),
-		typingExpiry:   make(map[string]time.Time),
+		log:                      logger.Logger,
+		sessionsByUser:           make(map[string]map[chan outboundMsg]*sessionState),
+		typingExpiry:             make(map[string]time.Time),
+		taskCollabSubscribers:    make(map[string]map[chan outboundMsg]struct{}),
+		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
 	}
 }
 
@@ -175,6 +196,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if unregisterSession != nil {
 			unregisterSession()
 		}
+		s.removeTaskCollabSession(outboundCh)
 		if authComplete {
 			presenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if err := s.setPresenceState(presenceCtx, principal.UserID, packetspb.PresenceStatus_PRESENCE_STATUS_OFFLINE); err == nil {
@@ -491,6 +513,11 @@ func (s *Server) SetPushNotifier(pn PushNotifier) {
 	s.pushNotifier = pn
 }
 
+// SetTasksService configures the task service used by task-description collab.
+func (s *Server) SetTasksService(tasksSvc *tasks.Service) {
+	s.tasksSvc = tasksSvc
+}
+
 // HasActiveSessions returns true if the given user has at least one
 // authenticated WebSocket session connected right now.
 func (s *Server) HasActiveSessions(userID string) bool {
@@ -528,6 +555,99 @@ func (s *Server) sendDirectEnvelope(userIDs []string, env *packetspb.Envelope) {
 		default:
 		}
 	}
+}
+
+func (s *Server) joinTaskCollabRoom(taskID string, session chan outboundMsg) {
+	s.taskCollabMu.Lock()
+	defer s.taskCollabMu.Unlock()
+
+	if s.taskCollabSubscribers[taskID] == nil {
+		s.taskCollabSubscribers[taskID] = make(map[chan outboundMsg]struct{})
+	}
+	s.taskCollabSubscribers[taskID][session] = struct{}{}
+
+	if s.taskCollabTasksBySession[session] == nil {
+		s.taskCollabTasksBySession[session] = make(map[string]struct{})
+	}
+	s.taskCollabTasksBySession[session][taskID] = struct{}{}
+}
+
+func (s *Server) leaveTaskCollabRoom(taskID string, session chan outboundMsg) {
+	s.taskCollabMu.Lock()
+	defer s.taskCollabMu.Unlock()
+
+	subscribers := s.taskCollabSubscribers[taskID]
+	if subscribers != nil {
+		delete(subscribers, session)
+		if len(subscribers) == 0 {
+			delete(s.taskCollabSubscribers, taskID)
+		}
+	}
+
+	taskSet := s.taskCollabTasksBySession[session]
+	if taskSet != nil {
+		delete(taskSet, taskID)
+		if len(taskSet) == 0 {
+			delete(s.taskCollabTasksBySession, session)
+		}
+	}
+}
+
+func (s *Server) removeTaskCollabSession(session chan outboundMsg) {
+	s.taskCollabMu.Lock()
+	defer s.taskCollabMu.Unlock()
+
+	taskSet := s.taskCollabTasksBySession[session]
+	if taskSet == nil {
+		return
+	}
+
+	for taskID := range taskSet {
+		subscribers := s.taskCollabSubscribers[taskID]
+		if subscribers == nil {
+			continue
+		}
+		delete(subscribers, session)
+		if len(subscribers) == 0 {
+			delete(s.taskCollabSubscribers, taskID)
+		}
+	}
+	delete(s.taskCollabTasksBySession, session)
+}
+
+func (s *Server) isTaskCollabSubscribed(taskID string, session chan outboundMsg) bool {
+	s.taskCollabMu.RLock()
+	defer s.taskCollabMu.RUnlock()
+	subscribers := s.taskCollabSubscribers[taskID]
+	if subscribers == nil {
+		return false
+	}
+	_, ok := subscribers[session]
+	return ok
+}
+
+func (s *Server) taskCollabRecipients(taskID string, exclude chan outboundMsg) []chan outboundMsg {
+	s.taskCollabMu.RLock()
+	defer s.taskCollabMu.RUnlock()
+
+	subscribers := s.taskCollabSubscribers[taskID]
+	if subscribers == nil {
+		return nil
+	}
+	out := make([]chan outboundMsg, 0, len(subscribers))
+	for session := range subscribers {
+		if session == exclude {
+			continue
+		}
+		out = append(out, session)
+	}
+	return out
+}
+
+func (s *Server) taskCollabSubscriberCount(taskID string) int {
+	s.taskCollabMu.RLock()
+	defer s.taskCollabMu.RUnlock()
+	return len(s.taskCollabSubscribers[taskID])
 }
 
 func (s *Server) sendDirectServerEvents(deliveries []chat.DirectDelivery) {
@@ -1559,6 +1679,117 @@ func (s *Server) handleDomainPayload(
 			},
 		})
 		s.sendDirectServerEvents(result.DirectDeliveries)
+
+	case *packetspb.Envelope_TaskDescriptionCollabSubscribeRequest:
+		req := p.TaskDescriptionCollabSubscribeRequest
+		if req == nil || s.tasksSvc == nil {
+			badReq("task_description_collab_subscribe_request: missing payload")
+			return
+		}
+		taskID, err := uuid.Parse(req.GetTaskId())
+		if err != nil {
+			badReq("task_description_collab_subscribe_request: invalid task_id")
+			return
+		}
+		description, err := s.tasksSvc.GetTaskDescription(ctx, taskID)
+		if err != nil {
+			if errors.Is(err, tasks.ErrNotFound) {
+				forbidden("task not found")
+				return
+			}
+			s.log.Error("ws: TaskDescriptionCollabSubscribe error", zap.Error(err), zap.String("user_id", principal.UserID.String()))
+			badReq("task_description_collab_subscribe_request: internal error")
+			return
+		}
+		s.joinTaskCollabRoom(taskID.String(), outboundCh)
+		persistedMarkdown := ""
+		if description != nil {
+			persistedMarkdown = *description
+		}
+		s.log.Info("ws task collab subscribe",
+			zap.String("task_id", taskID.String()),
+			zap.String("user_id", principal.UserID.String()),
+			zap.String("session_id", principal.SessionID.String()),
+			zap.String("persisted_sig", markdownSignatureForLog(persistedMarkdown)),
+			zap.Int("subscribers", s.taskCollabSubscriberCount(taskID.String())),
+		)
+		enqueue(&packetspb.Envelope{
+			RequestId:       reqID,
+			TraceId:         traceID,
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_TaskDescriptionCollabSubscribeResponse{
+				TaskDescriptionCollabSubscribeResponse: &packetspb.TaskDescriptionCollabSubscribeResponse{
+					TaskId:            taskID.String(),
+					PersistedMarkdown: persistedMarkdown,
+				},
+			},
+		})
+
+	case *packetspb.Envelope_TaskDescriptionCollabUnsubscribeRequest:
+		req := p.TaskDescriptionCollabUnsubscribeRequest
+		if req == nil {
+			badReq("task_description_collab_unsubscribe_request: missing payload")
+			return
+		}
+		taskID, err := uuid.Parse(req.GetTaskId())
+		if err != nil {
+			badReq("task_description_collab_unsubscribe_request: invalid task_id")
+			return
+		}
+		s.leaveTaskCollabRoom(taskID.String(), outboundCh)
+		s.log.Info("ws task collab unsubscribe",
+			zap.String("task_id", taskID.String()),
+			zap.String("user_id", principal.UserID.String()),
+			zap.String("session_id", principal.SessionID.String()),
+			zap.Int("subscribers", s.taskCollabSubscriberCount(taskID.String())),
+		)
+
+	case *packetspb.Envelope_TaskDescriptionCollabMessage:
+		req := p.TaskDescriptionCollabMessage
+		if req == nil {
+			badReq("task_description_collab_message: missing payload")
+			return
+		}
+		taskID, err := uuid.Parse(req.GetTaskId())
+		if err != nil {
+			badReq("task_description_collab_message: invalid task_id")
+			return
+		}
+		if req.GetKind() != packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC &&
+			req.GetKind() != packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS {
+			badReq("task_description_collab_message: invalid kind")
+			return
+		}
+		taskIDText := taskID.String()
+		if !s.isTaskCollabSubscribed(taskIDText, outboundCh) {
+			forbidden("not subscribed to task")
+			return
+		}
+		outEnv := &packetspb.Envelope{
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_TaskDescriptionCollabMessage{
+				TaskDescriptionCollabMessage: &packetspb.TaskDescriptionCollabMessage{
+					TaskId:  taskIDText,
+					Kind:    req.GetKind(),
+					Payload: req.GetPayload(),
+				},
+			},
+		}
+		recipients := s.taskCollabRecipients(taskIDText, outboundCh)
+		s.log.Info("ws task collab relay",
+			zap.String("task_id", taskIDText),
+			zap.String("user_id", principal.UserID.String()),
+			zap.String("session_id", principal.SessionID.String()),
+			zap.String("kind", req.GetKind().String()),
+			zap.Int("payload_bytes", len(req.GetPayload())),
+			zap.Int("recipients", len(recipients)),
+		)
+		for _, recipient := range recipients {
+			select {
+			case recipient <- outboundMsg{env: outEnv}:
+			default:
+			}
+		}
 
 	default:
 		enqueue(s.buildErrorEnvelope(reqID, traceID, packetspb.ErrorCode_ERROR_CODE_BAD_REQUEST, "unsupported payload type", 0))

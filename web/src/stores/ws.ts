@@ -305,8 +305,7 @@ export const useWsStore = defineStore('ws', () => {
       if (
         !suppressTransportDrop &&
         wasConnected &&
-        lastErrorKind.value !== 'UNAUTHENTICATED' &&
-        lastErrorKind.value !== 'FORBIDDEN'
+        lastErrorKind.value !== 'UNAUTHENTICATED'
       ) {
         console.log('[ws:onclose] firing onTransportDropCallback')
         onTransportDropCallback?.()
@@ -866,7 +865,14 @@ export const useWsStore = defineStore('ws', () => {
         const kind = mapErrorCode(err.code)
         lastError.value = err.message || `Protocol error: ${err.code}`
         lastErrorKind.value = kind
-        if (kind === 'UNAUTHENTICATED' || kind === 'FORBIDDEN') {
+        const inAuthHandshake =
+          state.value === 'HELLO_SENT' ||
+          state.value === 'HELLO_COMPLETE' ||
+          state.value === 'AUTH_SENT'
+        const shouldFailAuth =
+          kind === 'UNAUTHENTICATED' ||
+          (kind === 'FORBIDDEN' && inAuthHandshake)
+        if (shouldFailAuth) {
           state.value = 'DISCONNECTED'
           socket?.close()
           onAuthFailCallback?.(kind)

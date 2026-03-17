@@ -1,25 +1,19 @@
 import axios, { AxiosError } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  clearAccessToken,
-  clearRefreshToken,
-  getAccessToken,
-  getRefreshToken,
-  setAccessToken,
-  setRefreshToken,
-} from '@/services/storage/tokenStorage'
 
 describe('createAuthenticatedClient', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks()
     vi.resetModules()
-    clearAccessToken()
-    clearRefreshToken()
+    const tokenStorage = await import('@/services/storage/tokenStorage')
+    tokenStorage.clearAccessToken()
+    tokenStorage.clearRefreshToken()
   })
 
   it('refreshes access token on 401 and retries request once', async () => {
-    setAccessToken('expired-token')
-    setRefreshToken('refresh-token-1')
+    const tokenStorage = await import('@/services/storage/tokenStorage')
+    tokenStorage.setAccessToken('expired-token')
+    tokenStorage.setRefreshToken('refresh-token-1')
 
     const { createAuthenticatedClient } = await import('@/services/http/client')
     const http = createAuthenticatedClient()
@@ -70,7 +64,57 @@ describe('createAuthenticatedClient', () => {
     expect(response.data).toEqual({ ok: true })
     expect(axios.post).toHaveBeenCalledTimes(1)
     expect(authHeaders).toEqual(['Bearer expired-token', 'Bearer fresh-token'])
-    expect(getAccessToken()).toBe('fresh-token')
-    expect(getRefreshToken()).toBe('refresh-token-2')
+    expect(tokenStorage.getAccessToken()).toBe('fresh-token')
+    expect(tokenStorage.getRefreshToken()).toBe('refresh-token-2')
+  })
+
+  it('dispatches auth-expired event when refresh cannot recover 401', async () => {
+    const tokenStorage = await import('@/services/storage/tokenStorage')
+    tokenStorage.setAccessToken('expired-token')
+    tokenStorage.setRefreshToken('expired-refresh-token')
+
+    const { createAuthenticatedClient, AUTH_EXPIRED_EVENT } = await import('@/services/http/client')
+    const http = createAuthenticatedClient()
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      throw new AxiosError(
+        'Unauthorized',
+        'ERR_BAD_REQUEST',
+        config,
+        undefined,
+        {
+          data: { error: 'unauthorized' },
+          status: 401,
+          statusText: 'Unauthorized',
+          headers: {},
+          config,
+        },
+      )
+    })
+
+    const authExpiredListener = vi.fn()
+    globalThis.addEventListener(AUTH_EXPIRED_EVENT, authExpiredListener as EventListener)
+
+    vi.spyOn(axios, 'post').mockRejectedValue(new AxiosError(
+      'Unauthorized',
+      'ERR_BAD_REQUEST',
+      undefined,
+      undefined,
+      {
+        data: { error: 'unauthorized' },
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: {},
+        config: {} as any,
+      },
+    ))
+
+    await expect(http.get('/api/tasks')).rejects.toBeInstanceOf(AxiosError)
+
+    expect(authExpiredListener).toHaveBeenCalledTimes(1)
+    expect(tokenStorage.getAccessToken()).toBeNull()
+    expect(tokenStorage.getRefreshToken()).toBeNull()
+
+    globalThis.removeEventListener(AUTH_EXPIRED_EVENT, authExpiredListener as EventListener)
   })
 })

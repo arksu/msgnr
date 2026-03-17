@@ -152,7 +152,7 @@ export function useSessionOrchestrator() {
     ws.onAuthFail(async (kind: WsErrorKind) => {
       if (kind === 'FORBIDDEN') {
         _stopReconnect(true)
-        await auth.logout()
+        await logout()
         return
       }
 
@@ -164,11 +164,11 @@ export function useSessionOrchestrator() {
           await connectAndAuthenticate(newToken, { resetRecovery: false })
         } catch {
           _stopReconnect(true)
-          await auth.logout()
+          await logout()
         }
       } else {
         _stopReconnect(true)
-        await auth.logout()
+        await logout()
       }
     })
   }

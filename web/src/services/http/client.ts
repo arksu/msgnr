@@ -19,6 +19,13 @@ interface RetriableRequestConfig extends InternalAxiosRequestConfig {
 }
 
 let refreshInFlight: Promise<string | null> | null = null
+export const AUTH_EXPIRED_EVENT = 'msgnr:auth-expired'
+
+function notifyAuthExpired() {
+  const target = globalThis as EventTarget
+  if (typeof target.dispatchEvent !== 'function') return
+  target.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+}
 
 function shouldSkipAuthRefresh(url: string | undefined) {
   if (!url) return false
@@ -87,6 +94,7 @@ export function createAuthenticatedClient() {
         if (!nextToken) {
           clearAccessToken()
           clearRefreshToken()
+          notifyAuthExpired()
           throw error
         }
         config.headers = config.headers ?? {}

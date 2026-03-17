@@ -314,16 +314,6 @@ export function useTaskDescriptionCollab(params: {
     provider.value = { awareness }
     subscribeError.value = null
 
-    const user = params.user.value
-    if (user) {
-      awareness.setLocalStateField('user', {
-        id: user.id,
-        name: user.name,
-        color: user.color,
-      })
-    }
-    refreshRemotePeerPresence('setup-doc', taskId)
-
     docListener = (update: Uint8Array, origin: unknown) => {
       if (origin !== 'remote') {
         hasLocalEdits = true
@@ -361,6 +351,18 @@ export function useTaskDescriptionCollab(params: {
       })
     }
     awareness.on('update', awarenessListener)
+
+    const user = params.user.value
+    if (user) {
+      // Register listener first, then set the initial user state so peers
+      // receive the first awareness broadcast for leader election.
+      awareness.setLocalStateField('user', {
+        id: user.id,
+        name: user.name,
+        color: user.color,
+      })
+    }
+    refreshRemotePeerPresence('setup-doc', taskId)
 
     subscribe(taskId)
     collabLog('setupDoc:done', { taskId })

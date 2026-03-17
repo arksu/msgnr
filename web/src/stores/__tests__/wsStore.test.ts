@@ -313,7 +313,7 @@ describe('wsStore state machine', () => {
     expect(onFail).toHaveBeenCalledWith('UNAUTHENTICATED')
   })
 
-  it('transitions to DISCONNECTED on FORBIDDEN error and calls onAuthFail', () => {
+  it('transitions to DISCONNECTED on FORBIDDEN during auth handshake and calls onAuthFail', () => {
     const store = useWsStore()
     const onFail = vi.fn()
     store.onAuthFail(onFail)
@@ -327,6 +327,23 @@ describe('wsStore state machine', () => {
     expect(store.state).toBe('DISCONNECTED')
     expect(store.lastErrorKind).toBe('FORBIDDEN')
     expect(onFail).toHaveBeenCalledWith('FORBIDDEN')
+  })
+
+  it('keeps session on FORBIDDEN after auth is complete', () => {
+    const store = useWsStore()
+    const onFail = vi.fn()
+    store.onAuthFail(onFail)
+
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeServerHelloEnvelope())
+    store.sendAuth('good-token')
+    mockSocket.simulateMessage(makeAuthResponseEnvelope(true))
+    mockSocket.simulateMessage(makeErrorEnvelope(ErrorCode.FORBIDDEN, 'task collab forbidden'))
+
+    expect(store.state).toBe('AUTH_COMPLETE')
+    expect(store.lastErrorKind).toBe('FORBIDDEN')
+    expect(onFail).not.toHaveBeenCalled()
   })
 
   it('transport error transitions to DISCONNECTED', () => {

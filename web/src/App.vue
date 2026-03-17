@@ -73,10 +73,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { AuthApiError } from '@/services/http/authApi'
+import { AUTH_EXPIRED_EVENT } from '@/services/http/client'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import PwaUpdateBanner from '@/components/PwaUpdateBanner.vue'
 import { isTauriRuntime } from '@/platform/runtime'
@@ -92,6 +93,37 @@ onMounted(() => {
     routerReady.value = true
   })
 })
+
+function handleAuthExpired() {
+  if (authStore.authState !== 'ANON') {
+    authStore.clearSession()
+  }
+  if (!router.currentRoute.value.meta.public) {
+    void router.replace({ name: 'login' })
+  }
+}
+
+onMounted(() => {
+  window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired as EventListener)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired as EventListener)
+})
+
+watch(
+  () => authStore.authState,
+  (state) => {
+    if (state !== 'ANON') return
+    // On hard reload, auth starts as ANON before router/orchestrator attempts
+    // session restore from refresh token. Do not force-login redirect yet.
+    if (authStore.loadPersistedRefreshToken()) return
+    if (!router.currentRoute.value.meta.public) {
+      void router.replace({ name: 'login' })
+    }
+  },
+  { immediate: true },
+)
 
 const showStartupLoader = computed(() => !routerReady.value || isStartupLoading.value)
 const startupLoaderMessage = computed(() => {

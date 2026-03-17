@@ -837,7 +837,7 @@ func (s *Service) reorderInTx(ctx context.Context, ids []uuid.UUID, table reorde
 
 // mapNotFound converts sql.ErrNoRows to ErrNotFound.
 func mapNotFound(err error, entity string) error {
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: %s", ErrNotFound, entity)
 	}
 	return fmt.Errorf("tasks: %s: %w", entity, err)
@@ -963,6 +963,15 @@ func mapStatuses(rows []queries.TaskStatus) []StatusRow {
 		out[i] = mapStatus(r)
 	}
 	return out
+}
+
+func mapTaskListStatusSummary(r queries.TaskStatus) TaskListStatusSummary {
+	return TaskListStatusSummary{
+		ID:        r.ID,
+		Code:      r.Code,
+		Name:      r.Name,
+		SortOrder: r.SortOrder,
+	}
 }
 
 func mapDictionary(r queries.EnumDictionary) DictionaryRow {
@@ -1156,6 +1165,24 @@ func (s *Service) GetTask(ctx context.Context, id uuid.UUID) (TaskResponse, erro
 	}
 
 	return resp, nil
+}
+
+// GetTaskByPublicID fetches a task by public ID.
+func (s *Service) GetTaskByPublicID(ctx context.Context, publicID string) (TaskResponse, error) {
+	publicID = strings.TrimSpace(publicID)
+	if publicID == "" {
+		return TaskResponse{}, fmt.Errorf("%w: public_id is required", ErrBadRequest)
+	}
+
+	var id uuid.UUID
+	if err := s.pool.QueryRow(
+		ctx,
+		`SELECT id FROM task WHERE public_id = $1`,
+		publicID,
+	).Scan(&id); err != nil {
+		return TaskResponse{}, mapNotFound(err, "task")
+	}
+	return s.GetTask(ctx, id)
 }
 
 // GetTaskDescription fetches only a task description field.
@@ -1840,6 +1867,56 @@ type ListTasksResponse struct {
 	GrandTotal int         `json:"grand_total"`
 }
 
+// TaskListStatusSummary is the status shape used by grouped list endpoints.
+type TaskListStatusSummary struct {
+	ID        uuid.UUID `json:"id"`
+	Code      string    `json:"code"`
+	Name      string    `json:"name"`
+	SortOrder int       `json:"sort_order"`
+}
+
+// TaskListItemCreator is the inline public creator payload for grouped items.
+type TaskListItemCreator struct {
+	ID          uuid.UUID `json:"id"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   string    `json:"avatar_url"`
+}
+
+// TaskGroupedItem is the lightweight item payload returned by grouped endpoints.
+type TaskGroupedItem struct {
+	PublicID  string              `json:"public_id"`
+	Title     string              `json:"title"`
+	StatusID  uuid.UUID           `json:"status_id"`
+	CreatedAt time.Time           `json:"created_at"`
+	CreatedBy TaskListItemCreator `json:"created_by"`
+}
+
+// TaskGroupedStatusBucket contains one status section in grouped response payloads.
+type TaskGroupedStatusBucket struct {
+	Status TaskListStatusSummary `json:"status"`
+	Items  []TaskGroupedItem     `json:"items"`
+	Total  int                   `json:"total"`
+}
+
+// ListTasksGroupedResponse is the response for GET /api/tasks/grouped.
+type ListTasksGroupedResponse struct {
+	StatusOrder    []string                           `json:"status_order"`
+	GroupsByStatus map[string]TaskGroupedStatusBucket `json:"groups_by_status"`
+	GrandTotal     int                                `json:"grand_total"`
+	Limit          int                                `json:"limit"`
+}
+
+// ListTasksStatusPortionResponse is the response for GET /api/tasks/status/:id/portion.
+type ListTasksStatusPortionResponse struct {
+	StatusID   uuid.UUID         `json:"status_id"`
+	Items      []TaskGroupedItem `json:"items"`
+	Total      int               `json:"total"`
+	Offset     int               `json:"offset"`
+	Limit      int               `json:"limit"`
+	NextOffset int               `json:"next_offset"`
+	HasMore    bool              `json:"has_more"`
+}
+
 // ListTasks returns tasks grouped by status with optional search, filters,
 // sorting and per-group pagination.
 //
@@ -1944,6 +2021,204 @@ func (s *Service) ListTasks(ctx context.Context, p ListTasksParams) (ListTasksRe
 	return ListTasksResponse{Groups: groups, GrandTotal: grandTotal}, nil
 }
 
+// ListTasksGrouped returns status buckets with a first portion of items
+// per status and totals for every status in one call.
+func (s *Service) ListTasksGrouped(ctx context.Context, p ListTasksParams, limit int) (ListTasksGroupedResponse, error) {
+	if limit < 1 {
+		limit = 1
+	}
+
+	statusRows, err := s.q.TaskStatusList(ctx, true)
+	if err != nil {
+		return ListTasksGroupedResponse{}, fmt.Errorf("tasks: list statuses for grouped payload: %w", err)
+	}
+
+	statusOrder := make([]string, 0, len(statusRows))
+	groups := make(map[string]TaskGroupedStatusBucket, len(statusRows))
+	for _, sr := range statusRows {
+		statusID := sr.ID.String()
+		statusOrder = append(statusOrder, statusID)
+		groups[statusID] = TaskGroupedStatusBucket{
+			Status: mapTaskListStatusSummary(sr),
+			Items:  []TaskGroupedItem{},
+			Total:  0,
+		}
+	}
+
+	q, args := buildGroupedInitialQuery(p, limit)
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return ListTasksGroupedResponse{}, fmt.Errorf("tasks: list grouped task rows: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			item        TaskGroupedItem
+			creatorID   uuid.UUID
+			rowNum      int
+			statusTotal int
+		)
+		if err := rows.Scan(
+			&item.PublicID,
+			&item.Title,
+			&item.StatusID,
+			&item.CreatedAt,
+			&creatorID,
+			&item.CreatedBy.DisplayName,
+			&item.CreatedBy.AvatarURL,
+			&rowNum,
+			&statusTotal,
+		); err != nil {
+			return ListTasksGroupedResponse{}, fmt.Errorf("tasks: scan grouped task row: %w", err)
+		}
+		item.CreatedBy.ID = creatorID
+
+		statusKey := item.StatusID.String()
+		bucket, ok := groups[statusKey]
+		if !ok {
+			bucket = TaskGroupedStatusBucket{
+				Status: TaskListStatusSummary{ID: item.StatusID},
+				Items:  []TaskGroupedItem{},
+			}
+			statusOrder = append(statusOrder, statusKey)
+		}
+		bucket.Total = statusTotal
+		bucket.Items = append(bucket.Items, item)
+		groups[statusKey] = bucket
+	}
+	if err := rows.Err(); err != nil {
+		return ListTasksGroupedResponse{}, fmt.Errorf("tasks: iterate grouped task rows: %w", err)
+	}
+
+	grandTotal := 0
+	for _, bucket := range groups {
+		grandTotal += bucket.Total
+	}
+
+	return ListTasksGroupedResponse{
+		StatusOrder:    statusOrder,
+		GroupsByStatus: groups,
+		GrandTotal:     grandTotal,
+		Limit:          limit,
+	}, nil
+}
+
+// ListTasksStatusPortion returns the next paginated slice for one status bucket.
+func (s *Service) ListTasksStatusPortion(
+	ctx context.Context,
+	p ListTasksParams,
+	statusID uuid.UUID,
+	offset int,
+	limit int,
+) (ListTasksStatusPortionResponse, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit < 1 {
+		limit = 1
+	}
+
+	args := &argList{}
+	where := buildWhereClause(p, args)
+	statusPH := args.add(statusID)
+	offsetPH := args.add(offset)
+	limitPH := args.add(limit)
+	whereWithStatus := where + fmt.Sprintf(" AND t.status_id = %s", statusPH)
+
+	query := fmt.Sprintf(
+		`WITH filtered AS (`+
+			` SELECT t.id AS task_id, t.public_id, t.title, t.status_id, t.created_at,`+
+			` u.id AS created_by_id, u.display_name, u.avatar_url`+
+			` FROM task t`+
+			` JOIN task_status ts ON ts.id = t.status_id`+
+			` JOIN users u ON u.id = t.created_by`+
+			` %s`+
+			`),`+
+			` paged AS (`+
+			` SELECT * FROM filtered`+
+			` ORDER BY created_at DESC, task_id DESC`+
+			` OFFSET %s LIMIT %s`+
+			`),`+
+			` totals AS (`+
+			` SELECT COUNT(*)::int AS total FROM filtered`+
+			`)`+
+			` SELECT totals.total, paged.public_id, paged.title, paged.status_id, paged.created_at,`+
+			` paged.created_by_id, paged.display_name, paged.avatar_url`+
+			` FROM totals LEFT JOIN paged ON TRUE`,
+		whereWithStatus, offsetPH, limitPH,
+	)
+	rows, err := s.pool.Query(ctx, query, args.values...)
+	if err != nil {
+		return ListTasksStatusPortionResponse{}, fmt.Errorf("tasks: list grouped status portion rows: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]TaskGroupedItem, 0, limit)
+	total := 0
+	for rows.Next() {
+		var (
+			item       TaskGroupedItem
+			totalRow   int
+			publicID   sql.NullString
+			title      sql.NullString
+			statusIDDB uuid.NullUUID
+			createdAt  sql.NullTime
+			creatorID  uuid.NullUUID
+			display    sql.NullString
+			avatar     sql.NullString
+		)
+		if err := rows.Scan(
+			&totalRow,
+			&publicID,
+			&title,
+			&statusIDDB,
+			&createdAt,
+			&creatorID,
+			&display,
+			&avatar,
+		); err != nil {
+			return ListTasksStatusPortionResponse{}, fmt.Errorf("tasks: scan grouped status portion row: %w", err)
+		}
+		total = totalRow
+		if !publicID.Valid {
+			continue
+		}
+		item.PublicID = publicID.String
+		item.Title = title.String
+		if statusIDDB.Valid {
+			item.StatusID = statusIDDB.UUID
+		}
+		if createdAt.Valid {
+			item.CreatedAt = createdAt.Time
+		}
+		if creatorID.Valid {
+			item.CreatedBy.ID = creatorID.UUID
+		}
+		item.CreatedBy.DisplayName = display.String
+		item.CreatedBy.AvatarURL = avatar.String
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ListTasksStatusPortionResponse{}, fmt.Errorf("tasks: iterate grouped status portion rows: %w", err)
+	}
+
+	nextOffset := offset + len(items)
+	if nextOffset > total {
+		nextOffset = total
+	}
+
+	return ListTasksStatusPortionResponse{
+		StatusID:   statusID,
+		Items:      items,
+		Total:      total,
+		Offset:     offset,
+		Limit:      limit,
+		NextOffset: nextOffset,
+		HasMore:    nextOffset < total,
+	}, nil
+}
+
 // =========================================================
 // ListTasks helpers
 // =========================================================
@@ -1981,6 +2256,34 @@ func buildTaskQuery(p ListTasksParams) (string, []any) {
 			` %s`+
 			` ORDER BY %s`,
 		taskSelectColumns, join, where, sortCol,
+	)
+	return sql, args.values
+}
+
+// buildGroupedInitialQuery returns the grouped initial payload query and args.
+// It keeps newest-first ordering within each status and limits each status
+// bucket via ROW_NUMBER() windowing.
+func buildGroupedInitialQuery(p ListTasksParams, limit int) (string, []any) {
+	args := &argList{}
+	where := buildWhereClause(p, args)
+	limitPH := args.add(limit)
+
+	sql := fmt.Sprintf(
+		`WITH ranked AS (`+
+			` SELECT t.public_id, t.title, t.status_id, t.created_at,`+
+			` u.id AS created_by_id, u.display_name, u.avatar_url,`+
+			` ROW_NUMBER() OVER (PARTITION BY t.status_id ORDER BY t.created_at DESC, t.id DESC) AS rn,`+
+			` COUNT(*) OVER (PARTITION BY t.status_id) AS status_total`+
+			` FROM task t`+
+			` JOIN task_status ts ON ts.id = t.status_id`+
+			` JOIN users u ON u.id = t.created_by`+
+			` %s`+
+			` )`+
+			` SELECT public_id, title, status_id, created_at, created_by_id, display_name, avatar_url, rn, status_total`+
+			` FROM ranked`+
+			` WHERE rn <= %s`+
+			` ORDER BY status_id ASC, rn ASC`,
+		where, limitPH,
 	)
 	return sql, args.values
 }

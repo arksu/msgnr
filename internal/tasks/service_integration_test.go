@@ -5,6 +5,7 @@ package tasks_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1015,6 +1016,28 @@ func TestIntegration_Task_GetNotFound(t *testing.T) {
 	require.ErrorIs(t, err, tasks.ErrNotFound)
 }
 
+func TestIntegration_Task_GetByPublicID(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "PUB", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "by public id",
+		StatusID:   status.ID,
+		ActorID:    actor,
+	})
+	require.NoError(t, err)
+
+	got, err := svc.GetTaskByPublicID(ctx, created.PublicID)
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, got.ID)
+	assert.Equal(t, created.PublicID, got.PublicID)
+}
+
 func TestIntegration_Task_UpdateNotFound(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -1619,6 +1642,159 @@ func TestIntegration_ListTasks_MultipleFilters(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, resp.GrandTotal)
 	assert.Equal(t, target.ID, resp.Groups[0].Tasks[0].ID)
+}
+
+func TestIntegration_ListTasksGrouped_ReturnsMapForAllStatuses(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "GRM", actor)
+	st1 := seedStatus(t, ctx, svc, actor)
+	st2 := seedStatus(t, ctx, svc, actor)
+
+	seedTask(t, ctx, svc, tpl.ID, st1.ID, actor, "Task A")
+	seedTask(t, ctx, svc, tpl.ID, st1.ID, actor, "Task B")
+	seedTask(t, ctx, svc, tpl.ID, st1.ID, actor, "Task C")
+	seedTask(t, ctx, svc, tpl.ID, st2.ID, actor, "Task D")
+
+	resp, err := svc.ListTasksGrouped(ctx, tasks.ListTasksParams{}, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 2, resp.Limit)
+	assert.Equal(t, 4, resp.GrandTotal)
+	require.Contains(t, resp.GroupsByStatus, st1.ID.String())
+	require.Contains(t, resp.GroupsByStatus, st2.ID.String())
+
+	g1 := resp.GroupsByStatus[st1.ID.String()]
+	assert.Equal(t, 3, g1.Total)
+	assert.Len(t, g1.Items, 2)
+	assert.Equal(t, st1.ID, g1.Status.ID)
+	assert.Equal(t, st1.Code, g1.Status.Code)
+	assert.NotEmpty(t, g1.Items[0].PublicID)
+	assert.NotEmpty(t, g1.Items[0].CreatedBy.ID)
+
+	g2 := resp.GroupsByStatus[st2.ID.String()]
+	assert.Equal(t, 1, g2.Total)
+	assert.Len(t, g2.Items, 1)
+}
+
+func TestIntegration_ListTasksGrouped_ZeroTotalsStillPresent(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	st1 := seedStatus(t, ctx, svc, actor)
+	st2 := seedStatus(t, ctx, svc, actor)
+
+	resp, err := svc.ListTasksGrouped(ctx, tasks.ListTasksParams{}, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 0, resp.GrandTotal)
+	require.Contains(t, resp.GroupsByStatus, st1.ID.String())
+	require.Contains(t, resp.GroupsByStatus, st2.ID.String())
+	assert.Equal(t, 0, resp.GroupsByStatus[st1.ID.String()].Total)
+	assert.Empty(t, resp.GroupsByStatus[st1.ID.String()].Items)
+	assert.Equal(t, 0, resp.GroupsByStatus[st2.ID.String()].Total)
+	assert.Empty(t, resp.GroupsByStatus[st2.ID.String()].Items)
+}
+
+func TestIntegration_ListTasksGrouped_ItemDTOShape(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "DTO", actor)
+	st := seedStatus(t, ctx, svc, actor)
+
+	desc := "description should not leak into grouped dto"
+	_, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:  tpl.ID,
+		Title:       "Shape test",
+		Description: &desc,
+		StatusID:    st.ID,
+		ActorID:     actor,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.ListTasksGrouped(ctx, tasks.ListTasksParams{}, 1)
+	require.NoError(t, err)
+	item := resp.GroupsByStatus[st.ID.String()].Items[0]
+
+	raw, err := json.Marshal(item)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	assert.Contains(t, decoded, "public_id")
+	assert.Contains(t, decoded, "title")
+	assert.Contains(t, decoded, "status_id")
+	assert.Contains(t, decoded, "created_at")
+	assert.Contains(t, decoded, "created_by")
+	assert.NotContains(t, decoded, "description")
+	assert.NotContains(t, decoded, "field_values")
+}
+
+func TestIntegration_ListTasksStatusPortion_PaginatesByStatus(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "PRT", actor)
+	st := seedStatus(t, ctx, svc, actor)
+
+	for i := 0; i < 5; i++ {
+		seedTask(t, ctx, svc, tpl.ID, st.ID, actor, fmt.Sprintf("Task %d", i))
+	}
+
+	p1, err := svc.ListTasksStatusPortion(ctx, tasks.ListTasksParams{}, st.ID, 0, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 5, p1.Total)
+	assert.Len(t, p1.Items, 2)
+	assert.Equal(t, 2, p1.NextOffset)
+	assert.True(t, p1.HasMore)
+
+	p2, err := svc.ListTasksStatusPortion(ctx, tasks.ListTasksParams{}, st.ID, p1.NextOffset, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 5, p2.Total)
+	assert.Len(t, p2.Items, 2)
+	assert.Equal(t, 4, p2.NextOffset)
+	assert.True(t, p2.HasMore)
+
+	p3, err := svc.ListTasksStatusPortion(ctx, tasks.ListTasksParams{}, st.ID, p2.NextOffset, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 5, p3.Total)
+	assert.Len(t, p3.Items, 1)
+	assert.Equal(t, 5, p3.NextOffset)
+	assert.False(t, p3.HasMore)
+}
+
+func TestIntegration_ListTasksGrouped_FilterParity(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tplA := seedTemplate(t, ctx, svc, "GFA", actor)
+	tplB := seedTemplate(t, ctx, svc, "GFB", actor)
+	st := seedStatus(t, ctx, svc, actor)
+
+	seedTask(t, ctx, svc, tplA.ID, st.ID, actor, "needle on A")
+	seedTask(t, ctx, svc, tplA.ID, st.ID, actor, "other on A")
+	seedTask(t, ctx, svc, tplB.ID, st.ID, actor, "needle on B")
+
+	resp, err := svc.ListTasksGrouped(ctx, tasks.ListTasksParams{
+		Search:   "needle",
+		Prefixes: []string{"GFA"},
+	}, 50)
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.GrandTotal)
+	assert.Equal(t, 1, resp.GroupsByStatus[st.ID.String()].Total)
+
+	portion, err := svc.ListTasksStatusPortion(ctx, tasks.ListTasksParams{
+		Search:   "needle",
+		Prefixes: []string{"GFA"},
+	}, st.ID, 0, 50)
+	require.NoError(t, err)
+	assert.Equal(t, 1, portion.Total)
+	assert.Len(t, portion.Items, 1)
 }
 
 // ---- test helpers ----

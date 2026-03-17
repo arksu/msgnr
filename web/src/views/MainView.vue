@@ -374,6 +374,12 @@ async function openTask(id: string) {
   await router.push({ name: 'tasks-card', params: { taskId: id } })
 }
 
+function routeTaskIdMatchesSelected(routeID: string): boolean {
+  const task = tasksStore.selectedTask
+  if (!task) return false
+  return task.id === routeID || task.public_id === routeID
+}
+
 async function backToList() {
   tasksStore.clearSelectedTask()
   // Refresh the list so any edits made in the card are reflected
@@ -397,14 +403,18 @@ watch(
         await router.replace({ name: 'tasks-list' })
         return
       }
-      if (tasksStore.selectedTask?.id === taskId) {
-        saveLastOpenedTaskId(taskId)
+      if (routeTaskIdMatchesSelected(taskId)) {
+        if (tasksStore.selectedTask) {
+          saveLastOpenedTaskId(tasksStore.selectedTask.id)
+        }
         return
       }
       tasksStore.clearSelectedTask()
       await tasksStore.selectTask(taskId, true)
-      if (tasksStore.selectedTask?.id === taskId) {
-        saveLastOpenedTaskId(taskId)
+      if (routeTaskIdMatchesSelected(taskId)) {
+        if (tasksStore.selectedTask) {
+          saveLastOpenedTaskId(tasksStore.selectedTask.id)
+        }
       } else {
         clearLastOpenedTaskId()
         await router.replace({ name: 'tasks-list' })

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, readonly } from 'vue'
 import {
   tasksListTemplates,
   tasksListStatuses,
@@ -16,6 +16,8 @@ import {
   tasksUpdateTaskFieldValue,
   tasksCreateSubtask,
   tasksListTasks,
+  tasksListGrouped,
+  tasksListStatusPortion,
   type TaskTemplate,
   type TaskStatus,
   type TaskFieldDefinition,
@@ -26,13 +28,14 @@ import {
   type TaskListItem,
   type TaskListGroup,
   type TaskListParams,
+  type TaskGroupedStatusBucket,
   type SortOrder,
   type CreateTaskPayload,
   type UpdateTaskPayload,
   type UpdateTaskTitlePayload,
 } from '@/services/http/tasksApi'
 
-const DEBUG_TASKS_DESC = true
+const DEBUG_TASKS_DESC = import.meta.env.DEV
 
 function descriptionSignature(value: string | null | undefined): string {
   if (value == null) return 'null'
@@ -48,6 +51,15 @@ function descriptionSignature(value: string | null | undefined): string {
 function tasksDescLog(event: string, payload: Record<string, unknown>) {
   if (!DEBUG_TASKS_DESC) return
   console.debug('[tasks-store-desc]', event, payload)
+}
+
+type TaskListLoadMode = 'list' | 'grouped'
+
+type GroupedTaskGroupState = TaskGroupedStatusBucket & {
+  next_offset: number
+  has_more: boolean
+  loading_more: boolean
+  load_more_error: string | null
 }
 
 export const useTasksStore = defineStore('tasks', () => {
@@ -89,6 +101,11 @@ export const useTasksStore = defineStore('tasks', () => {
     sort_by: 'created_at',
     sort_order: 'desc' as SortOrder,
   })
+
+  // Grouped mode (GET /api/tasks/grouped + /api/tasks/status/:id/portion)
+  const groupedTaskStatusOrder = ref<string[]>([])
+  const groupedTaskGroupsByStatus = ref<Record<string, GroupedTaskGroupState>>({})
+  const groupedTaskPortionLimit = ref(50)
 
   // Flat list derived from all group pages currently loaded
   const taskList = computed<TaskListItem[]>(() =>
@@ -133,6 +150,22 @@ export const useTasksStore = defineStore('tasks', () => {
 
   function enumItemsFor(dictionaryId: string): EnumDictionaryVersionItem[] {
     return enumItemsByDict.value[dictionaryId] ?? []
+  }
+
+  function listFilterParams(): TaskListParams {
+    return {
+      search: listParams.value.search,
+      status_ids: listParams.value.status_ids,
+      prefixes: listParams.value.prefixes,
+      field_filters: listParams.value.field_filters,
+    }
+  }
+
+  function replaceGroupedStatusState(statusId: string, next: GroupedTaskGroupState) {
+    groupedTaskGroupsByStatus.value = {
+      ...groupedTaskGroupsByStatus.value,
+      [statusId]: next,
+    }
   }
 
   // ---- Actions ----
@@ -334,13 +367,107 @@ export const useTasksStore = defineStore('tasks', () => {
     }
   }
 
-  function setListParams(partial: Partial<TaskListParams>) {
+  async function loadGroupedTaskList(overrides?: Partial<TaskListParams>, limitOverride?: number) {
+    if (overrides) {
+      listParams.value = { ...listParams.value, ...overrides }
+    }
+    taskListLoading.value = true
+    taskListError.value = null
+    try {
+      const res = await tasksListGrouped(listFilterParams(), limitOverride)
+      const groupedMap = res.groups_by_status ?? {}
+      const order = res.status_order ?? []
+      const nextByStatus: Record<string, GroupedTaskGroupState> = {}
+
+      for (const statusId of order) {
+        const bucket = groupedMap[statusId]
+        if (!bucket) continue
+        const items = bucket.items ?? []
+        nextByStatus[statusId] = {
+          ...bucket,
+          items,
+          next_offset: items.length,
+          has_more: items.length < bucket.total,
+          loading_more: false,
+          load_more_error: null,
+        }
+      }
+
+      // Keep response robust when map has keys that are not present in status_order.
+      for (const [statusId, bucket] of Object.entries(groupedMap)) {
+        if (nextByStatus[statusId]) continue
+        const items = bucket.items ?? []
+        nextByStatus[statusId] = {
+          ...bucket,
+          items,
+          next_offset: items.length,
+          has_more: items.length < bucket.total,
+          loading_more: false,
+          load_more_error: null,
+        }
+      }
+
+      groupedTaskStatusOrder.value = order
+      groupedTaskGroupsByStatus.value = nextByStatus
+      groupedTaskPortionLimit.value = res.limit ?? (limitOverride ?? groupedTaskPortionLimit.value)
+      taskListTotal.value = res.grand_total ?? 0
+    } catch (e) {
+      taskListError.value = e instanceof Error ? e.message : 'Failed to load grouped tasks'
+    } finally {
+      taskListLoading.value = false
+    }
+  }
+
+  async function loadMoreGroupedStatus(statusId: string) {
+    const current = groupedTaskGroupsByStatus.value[statusId]
+    if (!current || current.loading_more || !current.has_more) return
+
+    replaceGroupedStatusState(statusId, { ...current, loading_more: true, load_more_error: null })
+    try {
+      const res = await tasksListStatusPortion(
+        statusId,
+        listFilterParams(),
+        current.next_offset,
+        groupedTaskPortionLimit.value,
+      )
+      const latest = groupedTaskGroupsByStatus.value[statusId]
+      if (!latest) return
+      replaceGroupedStatusState(statusId, {
+        ...latest,
+        items: [...latest.items, ...(res.items ?? [])],
+        total: res.total ?? latest.total,
+        next_offset: res.next_offset ?? (latest.next_offset + (res.items?.length ?? 0)),
+        has_more: res.has_more ?? false,
+        loading_more: false,
+        load_more_error: null,
+      })
+    } catch (e) {
+      const latest = groupedTaskGroupsByStatus.value[statusId]
+      if (latest) {
+        replaceGroupedStatusState(statusId, {
+          ...latest,
+          loading_more: false,
+          load_more_error: e instanceof Error ? e.message : 'Failed to load more tasks',
+        })
+      }
+    }
+  }
+
+  function setListParams(partial: Partial<TaskListParams>, mode: TaskListLoadMode = 'list') {
     listParams.value = { ...listParams.value, ...partial, page: 1 }
+    if (mode === 'grouped') {
+      loadGroupedTaskList()
+      return
+    }
     loadTaskList()
   }
 
-  function resetListParams() {
+  function resetListParams(mode: TaskListLoadMode = 'list') {
     listParams.value = { page: 1, page_size: 50, sort_by: 'created_at', sort_order: 'desc' }
+    if (mode === 'grouped') {
+      loadGroupedTaskList()
+      return
+    }
     loadTaskList()
   }
 
@@ -363,6 +490,9 @@ export const useTasksStore = defineStore('tasks', () => {
     createDialogOpen.value = false
 
     taskListGroups.value = []
+    groupedTaskStatusOrder.value = []
+    groupedTaskGroupsByStatus.value = {}
+    groupedTaskPortionLimit.value = 50
     taskListTotal.value = 0
     taskListLoading.value = false
     taskListError.value = null
@@ -373,6 +503,12 @@ export const useTasksStore = defineStore('tasks', () => {
       sort_order: 'desc',
     }
   }
+
+  const taskListGroupsReadonly = readonly(taskListGroups)
+  const groupedTaskStatusOrderReadonly = readonly(groupedTaskStatusOrder)
+  const groupedTaskGroupsByStatusReadonly = readonly(groupedTaskGroupsByStatus)
+  const groupedTaskPortionLimitReadonly = readonly(groupedTaskPortionLimit)
+  const listParamsReadonly = readonly(listParams)
 
   return {
     // state
@@ -389,11 +525,14 @@ export const useTasksStore = defineStore('tasks', () => {
     taskError,
     createDialogOpen,
     taskList,
-    taskListGroups,
+    taskListGroups: taskListGroupsReadonly,
+    groupedTaskStatusOrder: groupedTaskStatusOrderReadonly,
+    groupedTaskGroupsByStatus: groupedTaskGroupsByStatusReadonly,
+    groupedTaskPortionLimit: groupedTaskPortionLimitReadonly,
     taskListTotal,
     taskListLoading,
     taskListError,
-    listParams,
+    listParams: listParamsReadonly,
     // derived
     activeTemplates,
     activeStatuses,
@@ -422,6 +561,8 @@ export const useTasksStore = defineStore('tasks', () => {
     createSubtask,
     clearSelectedTask,
     loadTaskList,
+    loadGroupedTaskList,
+    loadMoreGroupedStatus,
     setListParams,
     resetListParams,
     resetRuntimeState,

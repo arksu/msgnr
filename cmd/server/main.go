@@ -171,7 +171,14 @@ func main() {
 	chatSvc.ConfigureAttachments(storageClient, cfg.AttachmentMaxSizeMB)
 
 	tasksSvc := tasks.NewService(db.Pool, storageClient)
-	tasksHandler := tasks.NewHandler(tasksSvc, authSvc, log, cfg.AttachmentMaxSizeMB)
+	tasksHandler := tasks.NewHandler(
+		tasksSvc,
+		authSvc,
+		log,
+		cfg.AttachmentMaxSizeMB,
+		cfg.TaskGroupPortionDefaultLimit,
+		cfg.TaskGroupPortionMaxLimit,
+	)
 	wsServer.SetTasksService(tasksSvc)
 
 	// --- main HTTP mux ---

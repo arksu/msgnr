@@ -20,6 +20,8 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 500, cfg.MaxSyncBatch)
 	assert.Equal(t, 100, cfg.BootstrapDefaultPageSize)
 	assert.Equal(t, 50, cfg.ChatHistoryPageSize)
+	assert.Equal(t, 50, cfg.TaskGroupPortionDefaultLimit)
+	assert.Equal(t, 200, cfg.TaskGroupPortionMaxLimit)
 	assert.Equal(t, "9090", cfg.MetricsPort)
 	assert.Equal(t, "*", cfg.CORSAllowedOrigins)
 }
@@ -30,12 +32,16 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	os.Setenv("JWT_SECRET", "test-secret")
 	os.Setenv("SYNC_EVENT_LIMIT", "500")
 	os.Setenv("CHAT_HISTORY_PAGE_SIZE", "80")
+	os.Setenv("TASK_GROUP_PORTION_DEFAULT_LIMIT", "77")
+	os.Setenv("TASK_GROUP_PORTION_MAX_LIMIT", "155")
 	defer func() {
 		os.Unsetenv("PORT")
 		os.Unsetenv("DATABASE_URL")
 		os.Unsetenv("JWT_SECRET")
 		os.Unsetenv("SYNC_EVENT_LIMIT")
 		os.Unsetenv("CHAT_HISTORY_PAGE_SIZE")
+		os.Unsetenv("TASK_GROUP_PORTION_DEFAULT_LIMIT")
+		os.Unsetenv("TASK_GROUP_PORTION_MAX_LIMIT")
 	}()
 
 	cfg, err := Load()
@@ -45,6 +51,8 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	assert.Equal(t, "test-secret", cfg.JWTSecret)
 	assert.Equal(t, 500, cfg.SyncEventLimit)
 	assert.Equal(t, 80, cfg.ChatHistoryPageSize)
+	assert.Equal(t, 77, cfg.TaskGroupPortionDefaultLimit)
+	assert.Equal(t, 155, cfg.TaskGroupPortionMaxLimit)
 }
 
 func TestIsDev(t *testing.T) {

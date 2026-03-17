@@ -2,7 +2,7 @@ import { AxiosError } from 'axios'
 import { createAuthenticatedClient } from './client'
 
 const http = createAuthenticatedClient()
-const DEBUG_TASKS_API_DESC = true
+const DEBUG_TASKS_API_DESC = import.meta.env.DEV
 
 function descriptionSignature(value: string | null | undefined): string {
   if (value == null) return 'null'
@@ -559,29 +559,95 @@ export interface TaskListResponse {
   grand_total: number
 }
 
+export interface TaskGroupedItemCreator {
+  id: string
+  display_name: string
+  avatar_url: string
+}
+
+export interface TaskGroupedItem {
+  public_id: string
+  title: string
+  status_id: string
+  created_at: string
+  created_by: TaskGroupedItemCreator
+}
+
+export interface TaskGroupedStatusBucket {
+  status: TaskListStatus
+  items: TaskGroupedItem[]
+  total: number
+}
+
+export interface TaskListGroupedResponse {
+  status_order: string[]
+  groups_by_status: Record<string, TaskGroupedStatusBucket>
+  grand_total: number
+  limit: number
+}
+
+export interface TaskStatusPortionResponse {
+  status_id: string
+  items: TaskGroupedItem[]
+  total: number
+  offset: number
+  limit: number
+  next_offset: number
+  has_more: boolean
+}
+
+function buildTaskFilterQuery(params: TaskListParams): URLSearchParams {
+  const q = new URLSearchParams()
+  if (params.search) q.set('search', params.search)
+
+  params.status_ids?.forEach(id => q.append('status_id', id))
+  params.prefixes?.forEach(p => q.append('prefix', p))
+
+  params.field_filters?.forEach(ff => {
+    ff.user_ids?.forEach(uid => q.append(`field_${ff.field_definition_id}_user`, uid))
+    ff.enum_codes?.forEach(code => q.append(`field_${ff.field_definition_id}_enum`, code))
+    if (ff.date_from) q.set(`field_${ff.field_definition_id}_date_from`, ff.date_from)
+    if (ff.date_to) q.set(`field_${ff.field_definition_id}_date_to`, ff.date_to)
+  })
+  return q
+}
+
 export async function tasksListTasks(params: TaskListParams = {}): Promise<TaskListResponse> {
   try {
-    // Build URLSearchParams to support repeatable keys (status_id, prefix)
-    const q = new URLSearchParams()
-    if (params.search)      q.set('search', params.search)
-    if (params.sort_by)     q.set('sort_by', params.sort_by)
-    if (params.sort_order)  q.set('sort_order', params.sort_order)
-    if (params.page)        q.set('page', String(params.page))
-    if (params.page_size)   q.set('page_size', String(params.page_size))
-
-    // Repeatable params
-    params.status_ids?.forEach(id => q.append('status_id', id))
-    params.prefixes?.forEach(p => q.append('prefix', p))
-
-    // Per-field filters: field_<uuid>_user, field_<uuid>_enum, etc.
-    params.field_filters?.forEach(ff => {
-      ff.user_ids?.forEach(uid => q.append(`field_${ff.field_definition_id}_user`, uid))
-      ff.enum_codes?.forEach(code => q.append(`field_${ff.field_definition_id}_enum`, code))
-      if (ff.date_from) q.set(`field_${ff.field_definition_id}_date_from`, ff.date_from)
-      if (ff.date_to)   q.set(`field_${ff.field_definition_id}_date_to`, ff.date_to)
-    })
+    const q = buildTaskFilterQuery(params)
+    if (params.sort_by) q.set('sort_by', params.sort_by)
+    if (params.sort_order) q.set('sort_order', params.sort_order)
+    if (params.page) q.set('page', String(params.page))
+    if (params.page_size) q.set('page_size', String(params.page_size))
 
     const { data } = await http.get<TaskListResponse>('/api/tasks', { params: q })
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksListGrouped(params: TaskListParams = {}, limit?: number): Promise<TaskListGroupedResponse> {
+  try {
+    const q = buildTaskFilterQuery(params)
+    if (limit) q.set('limit', String(limit))
+    const { data } = await http.get<TaskListGroupedResponse>('/api/tasks/grouped', { params: q })
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksListStatusPortion(
+  statusId: string,
+  params: TaskListParams = {},
+  offset = 0,
+  limit?: number,
+): Promise<TaskStatusPortionResponse> {
+  try {
+    const q = buildTaskFilterQuery(params)
+    q.set('offset', String(offset))
+    if (limit) q.set('limit', String(limit))
+    const { data } = await http.get<TaskStatusPortionResponse>(
+      `/api/tasks/status/${encodeURIComponent(statusId)}/portion`,
+      { params: q },
+    )
     return data
   } catch (e) { handleError(e) }
 }

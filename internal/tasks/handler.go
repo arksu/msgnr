@@ -20,17 +20,42 @@ import (
 // Handler exposes task-tracker admin REST endpoints.
 // All routes require admin or owner role.
 type Handler struct {
-	svc             *Service
-	authSvc         *auth.Service
-	log             *zap.Logger
-	maxAttachSizeMB int // maximum allowed attachment file size in megabytes
+	svc                      *Service
+	authSvc                  *auth.Service
+	log                      *zap.Logger
+	maxAttachSizeMB          int // maximum allowed attachment file size in megabytes
+	groupPortionDefaultLimit int
+	groupPortionMaxLimit     int
 }
 
-func NewHandler(svc *Service, authSvc *auth.Service, log *zap.Logger, maxAttachSizeMB int) *Handler {
+func NewHandler(
+	svc *Service,
+	authSvc *auth.Service,
+	log *zap.Logger,
+	maxAttachSizeMB int,
+	groupPortionDefaultLimit int,
+	groupPortionMaxLimit int,
+) *Handler {
 	if maxAttachSizeMB <= 0 {
 		maxAttachSizeMB = 50
 	}
-	return &Handler{svc: svc, authSvc: authSvc, log: log, maxAttachSizeMB: maxAttachSizeMB}
+	if groupPortionDefaultLimit <= 0 {
+		groupPortionDefaultLimit = 50
+	}
+	if groupPortionMaxLimit <= 0 {
+		groupPortionMaxLimit = 200
+	}
+	if groupPortionDefaultLimit > groupPortionMaxLimit {
+		groupPortionDefaultLimit = groupPortionMaxLimit
+	}
+	return &Handler{
+		svc:                      svc,
+		authSvc:                  authSvc,
+		log:                      log,
+		maxAttachSizeMB:          maxAttachSizeMB,
+		groupPortionDefaultLimit: groupPortionDefaultLimit,
+		groupPortionMaxLimit:     groupPortionMaxLimit,
+	}
 }
 
 // RegisterRoutes mounts all task-tracker routes on mux.
@@ -64,6 +89,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Tasks (any authenticated user)
 	mux.HandleFunc("/api/tasks", h.requireAuth(h.tasksCollection))
+	mux.HandleFunc("/api/tasks/grouped", h.requireAuth(h.tasksGroupedCollection))
+	mux.HandleFunc("/api/tasks/status/", h.requireAuth(h.tasksStatusRouter))
 	mux.HandleFunc("/api/tasks/", h.requireAuth(h.tasksItem))
 }
 
@@ -676,6 +703,72 @@ func (h *Handler) tasksCollection(w http.ResponseWriter, r *http.Request, p auth
 	}
 }
 
+// GET /api/tasks/grouped — grouped-by-status initial payload
+func (h *Handler) tasksGroupedCollection(w http.ResponseWriter, r *http.Request, _ auth.Principal) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	params, err := parseTaskFilterParams(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
+		return
+	}
+	limit := clampInt(
+		queryInt(r.URL.Query().Get("limit"), h.groupPortionDefaultLimit),
+		1,
+		h.groupPortionMaxLimit,
+	)
+	resp, err := h.svc.ListTasksGrouped(r.Context(), params, limit)
+	if err != nil {
+		h.internalError(w, "list grouped tasks", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GET /api/tasks/status/:id/portion — grouped-by-status incremental page
+func (h *Handler) tasksStatusRouter(w http.ResponseWriter, r *http.Request, _ auth.Principal) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/status/")
+	statusRaw, after, ok := strings.Cut(rest, "/")
+	if !ok || statusRaw == "" {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid status id"))
+		return
+	}
+	if after != "portion" {
+		writeJSON(w, http.StatusNotFound, errBody("not found"))
+		return
+	}
+	statusID, err := uuid.Parse(statusRaw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid status id"))
+		return
+	}
+
+	params, err := parseTaskFilterParams(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
+		return
+	}
+	offset := queryIntNonNegative(r.URL.Query().Get("offset"), 0)
+	limit := clampInt(
+		queryInt(r.URL.Query().Get("limit"), h.groupPortionDefaultLimit),
+		1,
+		h.groupPortionMaxLimit,
+	)
+	resp, err := h.svc.ListTasksStatusPortion(r.Context(), params, statusID, offset, limit)
+	if err != nil {
+		h.internalError(w, "list grouped status portion", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // GET /api/tasks/:id
 // PATCH /api/tasks/:id
 // PATCH /api/tasks/:id/title
@@ -786,16 +879,22 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 		}
 	}
 
-	// All other /api/tasks/:id routes
-	id, err := uuid.Parse(rest)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
-		return
-	}
-
 	switch r.Method {
 	case http.MethodGet:
-		resp, err := h.svc.GetTask(r.Context(), id)
+		if id, err := uuid.Parse(rest); err == nil {
+			resp, err := h.svc.GetTask(r.Context(), id)
+			if err != nil {
+				h.serviceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		if strings.Contains(rest, "/") || strings.TrimSpace(rest) == "" {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
+			return
+		}
+		resp, err := h.svc.GetTaskByPublicID(r.Context(), rest)
 		if err != nil {
 			h.serviceError(w, err)
 			return
@@ -803,6 +902,11 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 		writeJSON(w, http.StatusOK, resp)
 
 	case http.MethodPatch:
+		id, err := uuid.Parse(rest)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
+			return
+		}
 		var req struct {
 			Title       string            `json:"title"`
 			Description *string           `json:"description"`
@@ -1624,27 +1728,39 @@ func parseListTasksParams(r *http.Request) (ListTasksParams, error) {
 	}
 	sortDesc := strings.ToLower(q.Get("sort_order")) == "desc"
 
-	// --- system field filters ---
+	params, err := parseTaskFilterParams(r)
+	if err != nil {
+		return ListTasksParams{}, err
+	}
+	params.Page = page
+	params.PageSize = pageSize
+	params.SortBy = sortBy
+	params.SortDesc = sortDesc
+	return params, nil
+}
+
+// parseTaskFilterParams parses task list filters shared by:
+//   - GET /api/tasks
+//   - GET /api/tasks/grouped
+//   - GET /api/tasks/status/:id/portion
+func parseTaskFilterParams(r *http.Request) (ListTasksParams, error) {
+	q := r.URL.Query()
+
 	statusIDs, err := parseUUIDs(q["status_id"])
 	if err != nil {
 		return ListTasksParams{}, errors.New("invalid status_id: " + err.Error())
 	}
 
-	// --- custom field filters ---
 	fieldFilters, err := parseFieldFilters(q)
 	if err != nil {
 		return ListTasksParams{}, err
 	}
 
 	return ListTasksParams{
-		Page:         page,
-		PageSize:     pageSize,
 		Search:       strings.TrimSpace(q.Get("search")),
 		StatusIDs:    statusIDs,
 		Prefixes:     q["prefix"],
 		FieldFilters: fieldFilters,
-		SortBy:       sortBy,
-		SortDesc:     sortDesc,
 	}, nil
 }
 
@@ -1746,6 +1862,28 @@ func queryInt(s string, fallback int) int {
 	v, err := strconv.Atoi(s)
 	if err != nil || v < 1 {
 		return fallback
+	}
+	return v
+}
+
+// queryIntNonNegative parses a non-negative query-param int, returning fallback on failure.
+func queryIntNonNegative(s string, fallback int) int {
+	if s == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 0 {
+		return fallback
+	}
+	return v
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
 	}
 	return v
 }

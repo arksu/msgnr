@@ -1,8 +1,6 @@
 <template>
   <div class="flex flex-col h-full overflow-hidden">
-    <!-- Toolbar -->
     <div class="shrink-0 px-6 py-3 border-b border-chat-border space-y-2">
-      <!-- Row 1: search + controls -->
       <div class="flex items-center gap-3">
         <div class="relative flex-1 max-w-sm">
           <svg
@@ -34,17 +32,32 @@
           </span>
         </button>
 
-        <button
-          class="toolbar-btn"
-          :class="isGrouped ? 'border-accent/60 text-accent' : ''"
-          @click="toggleGroupBy"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
-            <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
-          </svg>
-          Group by status
-        </button>
+        <div class="view-mode-switch">
+          <label class="view-mode-option" :class="viewMode === 'list' ? 'active' : ''">
+            <input
+              type="radio"
+              class="sr-only"
+              name="tasks-view-mode"
+              :checked="viewMode === 'list'"
+              @change="setViewMode('list')"
+            />
+            list
+          </label>
+          <label class="view-mode-option" :class="viewMode === 'grouped' ? 'active' : ''">
+            <input
+              type="radio"
+              class="sr-only"
+              name="tasks-view-mode"
+              :checked="viewMode === 'grouped'"
+              @change="setViewMode('grouped')"
+            />
+            group by status
+          </label>
+          <label class="view-mode-option disabled" title="TODO">
+            <input type="radio" class="sr-only" name="tasks-view-mode" disabled />
+            kanban
+          </label>
+        </div>
 
         <div class="flex-1" />
 
@@ -53,9 +66,7 @@
         </span>
       </div>
 
-      <!-- Row 2: filters (collapsible) -->
       <div v-if="filtersVisible" class="flex items-center gap-3 flex-wrap">
-        <!-- Status filter -->
         <div class="relative" ref="statusDropdownEl">
           <button
             class="filter-chip"
@@ -75,7 +86,6 @@
           </div>
         </div>
 
-        <!-- Template filter -->
         <div class="relative" ref="templateDropdownEl">
           <button
             class="filter-chip"
@@ -101,7 +111,6 @@
           </div>
         </div>
 
-        <!-- Assignee filter (only shown when at least one template has an assignee field) -->
         <div v-if="hasAssigneeFields" class="relative" ref="assigneeDropdownEl">
           <button
             class="filter-chip"
@@ -113,7 +122,6 @@
             <svg class="w-3 h-3 ml-1" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           <div v-if="assigneeDropdownOpen" class="dropdown-menu w-56">
-            <!-- Cross-template ambiguity warning -->
             <div
               v-if="selectedAssigneeIds.length && !resolveAssigneeFieldId()"
               class="px-3 py-2 text-xs text-amber-400 border-b border-chat-border"
@@ -154,19 +162,16 @@
       </div>
     </div>
 
-    <!-- Loading / error states -->
-    <div v-if="tasksStore.taskListLoading && tasksStore.taskList.length === 0" class="flex-1 flex items-center justify-center text-gray-500 text-sm">
+    <div v-if="tasksStore.taskListLoading && isEmptyForMode" class="flex-1 flex items-center justify-center text-gray-500 text-sm">
       Loading…
     </div>
     <div v-else-if="tasksStore.taskListError" class="flex-1 flex items-center justify-center text-red-400 text-sm">
       {{ tasksStore.taskListError }}
     </div>
 
-    <!-- Table area -->
     <div v-else class="flex-1 overflow-y-auto">
-      <!-- Empty state -->
       <div
-        v-if="tasksStore.taskList.length === 0"
+        v-if="isEmptyForMode"
         class="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-2"
       >
         <svg class="w-10 h-10 text-gray-600" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
@@ -176,7 +181,6 @@
         <button class="text-accent hover:underline text-xs mt-1" @click="tasksStore.openCreateDialog">Create a task</button>
       </div>
 
-      <!-- Flat list -->
       <table v-else-if="!isGrouped" class="w-full text-sm">
         <thead class="sticky top-0 bg-chat-bg z-10">
           <tr class="border-b border-chat-border text-left">
@@ -198,34 +202,87 @@
         </tbody>
       </table>
 
-      <!-- Grouped list -->
       <template v-else>
-        <template v-for="group in tasksStore.taskListGroups" :key="group.status.id">
-          <div class="px-6 py-2 border-b border-chat-border bg-chat-input/30 text-xs font-semibold text-gray-400 uppercase tracking-wider sticky top-0 z-10">
-            {{ group.status.name }}
-            <span class="ml-2 text-gray-600 font-normal normal-case">{{ group.total }}</span>
+        <template v-for="group in groupedVisibleGroups" :key="group.status.id">
+          <div class="px-6 py-2 border-b border-chat-border bg-chat-input/30 sticky top-0 z-10">
+            <button
+              class="w-full flex items-center justify-between text-left text-xs font-semibold text-gray-300 uppercase tracking-wider"
+              @click="toggleStatusCollapsed(group.status.id)"
+            >
+              <span class="flex items-center gap-2">
+                <svg
+                  class="w-3 h-3 transition-transform"
+                  :class="isStatusCollapsed(group.status.id) ? '-rotate-90' : ''"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="m6 9 6 6 6-6"/>
+                </svg>
+                {{ group.status.name }}
+                <span class="text-gray-500 font-normal normal-case">{{ group.total }}</span>
+              </span>
+            </button>
           </div>
-          <table class="w-full text-sm">
-            <thead class="sr-only">
-              <tr><th>ID</th><th>Title</th><th>Status</th><th>Created</th><th>Updated</th></tr>
-            </thead>
+
+          <table v-if="!isStatusCollapsed(group.status.id)" class="w-full text-sm">
             <tbody>
-              <TaskRow
-                v-for="item in group.tasks"
-                :key="item.id"
-                :item="item"
-                :status-name="group.status.name"
-                @click="emit('openTask', item.id)"
-              />
+              <tr
+                v-for="item in group.items"
+                :key="item.public_id"
+                class="border-b border-chat-border hover:bg-white/5 cursor-pointer transition-colors"
+                @click="emit('openTask', item.public_id)"
+              >
+                <td class="px-4 py-2.5 shrink-0">
+                  <span class="font-mono text-xs text-accent bg-accent/10 border border-accent/20 px-1.5 py-0.5 rounded whitespace-nowrap">
+                    {{ item.public_id }}
+                  </span>
+                </td>
+                <td class="px-4 py-2.5 text-gray-100 max-w-0 w-full">
+                  <span class="block truncate">{{ item.title }}</span>
+                </td>
+                <td class="px-4 py-2.5 text-gray-300">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <UserAvatar
+                      :user-id="item.created_by.id"
+                      :display-name="creatorDisplayName(item)"
+                      :avatar-url="item.created_by.avatar_url"
+                      size="xs"
+                    />
+                    <span class="truncate">{{ creatorDisplayName(item) }}</span>
+                  </div>
+                </td>
+                <td class="px-4 py-2.5 text-gray-500 whitespace-nowrap text-xs">{{ formatDate(item.created_at) }}</td>
+              </tr>
             </tbody>
           </table>
+
+          <div
+            v-if="!isStatusCollapsed(group.status.id) && group.has_more"
+            class="px-6 py-2 border-b border-chat-border"
+          >
+            <button
+              class="text-xs text-accent hover:underline disabled:opacity-60 disabled:no-underline"
+              :disabled="group.loading_more"
+              @click="loadMoreForStatus(group.status.id)"
+            >
+              {{ group.loading_more ? 'Loading…' : 'show more…' }}
+            </button>
+          </div>
+
+          <div
+            v-if="!isStatusCollapsed(group.status.id) && group.load_more_error"
+            class="px-6 pb-2 border-b border-chat-border text-xs text-red-400"
+          >
+            {{ group.load_more_error }}
+          </div>
         </template>
       </template>
     </div>
 
-    <!-- Pagination -->
     <div
-      v-if="totalPages > 1"
+      v-if="!isGrouped && totalPages > 1"
       class="shrink-0 flex items-center justify-center gap-1 px-6 py-3 border-t border-chat-border text-sm"
     >
       <button class="page-btn" :disabled="currentPage <= 1" @click="goToPage(currentPage - 1)">‹</button>
@@ -246,17 +303,25 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useTasksStore } from '@/stores/tasks'
-import type { SortBy, SortOrder } from '@/services/http/tasksApi'
+import type { SortBy, SortOrder, TaskGroupedItem } from '@/services/http/tasksApi'
 import TaskRow from './TaskRow.vue'
 import SortIcon from './SortIcon.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+import {
+  loadTaskListViewMode,
+  saveTaskListViewMode,
+  type TaskListViewMode,
+} from '@/services/storage/taskListViewModeStorage'
+import {
+  loadCollapsedTaskStatusIds,
+  saveCollapsedTaskStatusIds,
+} from '@/services/storage/taskGroupCollapseStorage'
 
 const props = defineProps<{ templateFilter: string | null }>()
 const emit = defineEmits<{ openTask: [id: string] }>()
 
 const tasksStore = useTasksStore()
 
-// ---- Local UI state ----
 const searchInput = ref('')
 const filtersVisible = ref(false)
 const statusDropdownOpen = ref(false)
@@ -272,19 +337,17 @@ const selectedAssigneeIds = ref<string[]>([])
 const assigneeDropdownOpen = ref(false)
 const assigneeSearch = ref('')
 
-// ---- Sort ----
 const sortBy = ref<SortBy>('created_at')
 const sortOrder = ref<SortOrder>('desc')
 
-// ---- Grouping ----
-const isGrouped = ref(false)
+const viewMode = ref<TaskListViewMode>(loadTaskListViewMode())
+const isGrouped = computed(() => viewMode.value === 'grouped')
+const collapsedStatusIds = ref<string[]>(loadCollapsedTaskStatusIds())
 
-// ---- Pagination ----
 const currentPage = computed(() => tasksStore.listParams.page ?? 1)
 const pageSize = computed(() => tasksStore.listParams.page_size ?? 50)
 const totalPages = computed(() => Math.max(1, Math.ceil(tasksStore.taskListTotal / pageSize.value)))
 
-// ---- Derived ----
 const selectedTemplatePrefix = computed(() =>
   tasksStore.activeTemplates.find(t => t.id === selectedTemplateId.value)?.prefix ?? '',
 )
@@ -306,32 +369,64 @@ const activeFilterCount = computed(() =>
   (selectedAssigneeIds.value.length > 0 ? 1 : 0),
 )
 
+const groupedVisibleGroups = computed(() => {
+  const out: Array<NonNullable<(typeof tasksStore.groupedTaskGroupsByStatus)[string]>> = []
+  for (const statusId of tasksStore.groupedTaskStatusOrder) {
+    const group = tasksStore.groupedTaskGroupsByStatus[statusId]
+    if (group && group.total > 0) out.push(group)
+  }
+  return out
+})
+
+const isEmptyForMode = computed(() => (
+  isGrouped.value
+    ? groupedVisibleGroups.value.length === 0
+    : tasksStore.taskList.length === 0
+))
+
 function statusName(id: string): string {
   return tasksStore.statusById(id)?.name ?? id
 }
 
-// ---- Search debounce ----
+function creatorDisplayName(item: TaskGroupedItem): string {
+  const displayName = item.created_by.display_name?.trim()
+  return displayName !== '' ? displayName : 'Unknown user'
+}
+
+function isStatusCollapsed(statusId: string): boolean {
+  return collapsedStatusIds.value.includes(statusId)
+}
+
+function toggleStatusCollapsed(statusId: string) {
+  if (isStatusCollapsed(statusId)) {
+    collapsedStatusIds.value = collapsedStatusIds.value.filter(id => id !== statusId)
+  } else {
+    collapsedStatusIds.value = [...collapsedStatusIds.value, statusId]
+  }
+  saveCollapsedTaskStatusIds(collapsedStatusIds.value)
+}
+
+function setViewMode(mode: TaskListViewMode) {
+  if (mode === viewMode.value) return
+  viewMode.value = mode
+  saveTaskListViewMode(mode)
+  applyParams()
+}
+
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 function onSearchInput() {
   if (searchTimer) clearTimeout(searchTimer)
   searchTimer = setTimeout(applyParams, 300)
 }
 
-// ---- Actions ----
-
-// Returns the single assignee field definition ID that is safe to filter on,
-// or null when the filter cannot be expressed as a single EXISTS subquery.
 function resolveAssigneeFieldId(): string | null {
   const ids = tasksStore.assigneeFieldIds
 
-  // Template pinned → use that template's assignee field exclusively.
   if (selectedTemplateId.value) {
     const templateFields = tasksStore.activeFieldsFor(selectedTemplateId.value)
     return templateFields.find(f => f.field_role === 'assignee')?.id ?? null
   }
 
-  // No template selected: only safe when there is exactly one assignee field
-  // across the whole system (single-template setup or all templates share one).
   return ids.length === 1 ? ids[0] : null
 }
 
@@ -340,35 +435,30 @@ function applyParams() {
     ? tasksStore.activeTemplates.find(t => t.id === selectedTemplateId.value)?.prefix
     : undefined
 
-  // Resolve the single assignee field ID to use for filtering.
-  //
-  // The backend ANDs every FieldFilter entry. Sending one entry per template's
-  // assignee field would require a task to satisfy ALL of them simultaneously —
-  // impossible, since a task only carries field values for its own template.
-  //
-  // Safe cases:
-  //   - A specific template is selected → use that template's assignee field.
-  //   - Exactly one assignee field exists system-wide → use it regardless of
-  //     template selection (single-template setups, or all templates share one).
-  //
-  // Unsafe case (multiple templates, no template selected, each with its own
-  // assignee field): no field filter is sent — the assignee chips remain visible
-  // and selected, but the backend ignores them until the user pins a template.
   const resolvedAssigneeFieldId = resolveAssigneeFieldId()
   const fieldFilters =
     selectedAssigneeIds.value.length && resolvedAssigneeFieldId
       ? [{ field_definition_id: resolvedAssigneeFieldId, user_ids: selectedAssigneeIds.value }]
       : undefined
 
-  tasksStore.setListParams({
+  const commonParams = {
     search: searchInput.value.trim() || undefined,
     status_ids: selectedStatusIds.value.length ? selectedStatusIds.value : undefined,
     prefixes: prefix ? [prefix] : undefined,
     field_filters: fieldFilters,
+    page: 1,
+  }
+
+  if (isGrouped.value) {
+    tasksStore.setListParams(commonParams, 'grouped')
+    return
+  }
+
+  tasksStore.setListParams({
+    ...commonParams,
     sort_by: sortBy.value,
     sort_order: sortOrder.value,
-    page: 1,
-  })
+  }, 'list')
 }
 
 function toggleSort(field: SortBy) {
@@ -379,12 +469,6 @@ function toggleSort(field: SortBy) {
     sortOrder.value = 'asc'
   }
   applyParams()
-}
-
-function toggleGroupBy() {
-  isGrouped.value = !isGrouped.value
-  // No query param needed — backend always returns groups; we just change the render mode
-  tasksStore.loadTaskList()
 }
 
 function selectTemplate(id: string | null) {
@@ -404,7 +488,10 @@ function goToPage(page: number) {
   tasksStore.loadTaskList({ page })
 }
 
-// ---- Pagination range ----
+function loadMoreForStatus(statusId: string) {
+  tasksStore.loadMoreGroupedStatus(statusId)
+}
+
 const pageRange = computed<(number | '...')[]>(() => {
   const total = totalPages.value
   const current = currentPage.value
@@ -417,7 +504,6 @@ const pageRange = computed<(number | '...')[]>(() => {
   return pages
 })
 
-// ---- Close dropdowns on outside click ----
 function onDocClick(e: MouseEvent) {
   if (statusDropdownEl.value && !statusDropdownEl.value.contains(e.target as Node)) {
     statusDropdownOpen.value = false
@@ -430,11 +516,9 @@ function onDocClick(e: MouseEvent) {
   }
 }
 
-// Apply filters immediately when selection changes
 watch(selectedStatusIds, () => applyParams(), { deep: true })
 watch(selectedAssigneeIds, () => applyParams(), { deep: true })
 
-// Sync templateFilter prop from sidebar
 watch(() => props.templateFilter, (val) => {
   selectedTemplateId.value = val
   applyParams()
@@ -446,8 +530,6 @@ onMounted(() => {
     if (props.templateFilter !== null) {
       selectedTemplateId.value = props.templateFilter
     }
-    // Load all template fields (to discover assignee field IDs) and users
-    // in parallel with the initial task list fetch.
     await Promise.all([
       tasksStore.loadAllTemplateFields(),
       tasksStore.loadUsers(),
@@ -460,6 +542,11 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick, true)
   if (searchTimer) clearTimeout(searchTimer)
 })
+
+function formatDate(v: string): string {
+  if (!v) return ''
+  return new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
 </script>
 
 <style scoped>
@@ -491,5 +578,18 @@ onBeforeUnmount(() => {
   @apply w-8 h-8 flex items-center justify-center rounded border border-chat-border text-sm
          text-gray-300 hover:text-white hover:border-accent/40 transition-colors
          disabled:opacity-30 disabled:cursor-not-allowed;
+}
+.view-mode-switch {
+  @apply inline-flex items-center rounded border border-chat-border overflow-hidden;
+}
+.view-mode-option {
+  @apply px-2.5 py-1.5 text-xs text-gray-300 border-r border-chat-border last:border-r-0 cursor-pointer
+         select-none transition-colors hover:text-white hover:bg-white/5;
+}
+.view-mode-option.active {
+  @apply text-accent bg-accent/10;
+}
+.view-mode-option.disabled {
+  @apply text-gray-500 bg-transparent cursor-not-allowed hover:text-gray-500 hover:bg-transparent;
 }
 </style>

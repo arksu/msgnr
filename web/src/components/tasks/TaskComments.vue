@@ -730,6 +730,12 @@ function closeImagePreview() {
   imagePreview.fileName = ''
 }
 
+function handleEscape(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  if (!imagePreview.open) return
+  closeImagePreview()
+}
+
 watch(comments, () => {
   preloadAttachmentUrls()
 }, { deep: true })
@@ -750,6 +756,14 @@ watch(() => props.taskId, (next, prev) => {
   }
 })
 
+watch(() => imagePreview.open, (open) => {
+  if (open) {
+    document.addEventListener('keydown', handleEscape)
+    return
+  }
+  document.removeEventListener('keydown', handleEscape)
+})
+
 onMounted(() => {
   void load()
   void tasksStore.loadUsers()
@@ -757,6 +771,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleEscape)
   closeEmojiPicker()
   if (stagedAttachments.value.length > 0) {
     void cleanupStagedAttachments()

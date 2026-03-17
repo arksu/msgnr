@@ -13,9 +13,11 @@ This directory contains cross-cutting runtime services: HTTP clients, persistenc
 1. Storage key migrations must be backward-safe and explicit.
 2. Sound playback is best-effort: failures from autoplay policy or output routing must not break app flow.
 3. Notification sound engine remains swappable behind an interface (`SoundEngine`).
+4. IndexedDB writes must remain structured-clone-safe (no Vue proxies / non-cloneable values); normalize arrays/records to plain data before persistence.
 
 ## Change Guidance
 
 1. If API routes or payloads change, update both service modules and their consumers in one PR.
 2. Keep browser-specific APIs guarded (`setSinkId`, Notification/SW capabilities).
 3. Avoid mixing app-domain policy into low-level services.
+4. For Dexie/cache writes, prefer explicit serialization helpers over direct assignment from reactive store objects.

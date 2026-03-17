@@ -15,12 +15,14 @@ This directory owns client-side authoritative runtime state (WS lifecycle, chat 
 2. Unread counters and `notification_level` semantics remain server-authoritative.
 3. Inactive-window behavior must not fake disconnects: WS can stay connected while window is inactive.
 4. Incoming-message sound hooks fire only for non-self messages when tab is inactive and notification level allows.
+5. Task selection is authoritative: stale async task-update responses must not overwrite `selectedTask` after navigation to another task.
 
 ## Change Guidance
 
 1. If WS payload handling changes, update store handlers and `web/src/stores/__tests__` in the same change.
 2. Keep protocol adaptation in stores; components should consume derived state and actions.
 3. Avoid introducing hidden timers/global singletons inside stores unless lifecycle is explicit and test-covered.
+4. For task-scoped update APIs, gate selected-task assignment by matching task ID to avoid cross-task races.
 
 ## Tests
 

@@ -324,6 +324,14 @@ describe('TaskComments', () => {
     expect(lightboxImage?.classList.contains('max-w-[86vw]')).toBe(true)
     expect(lightboxImage?.classList.contains('sm:max-w-[74vw]')).toBe(true)
 
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-comment-image-lightbox"]')).toBeNull()
+
+    await thumbButton.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-comment-image-lightbox"]')).toBeTruthy()
+
     const closeButton = document.body.querySelector('[data-testid="task-comment-image-lightbox-close"]') as HTMLButtonElement
     expect(closeButton).toBeTruthy()
     closeButton.click()

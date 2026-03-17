@@ -324,6 +324,14 @@ describe('TaskComments', () => {
     expect(lightboxImage?.classList.contains('max-w-[86vw]')).toBe(true)
     expect(lightboxImage?.classList.contains('sm:max-w-[74vw]')).toBe(true)
 
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-comment-image-lightbox"]')).toBeNull()
+
+    await thumbButton.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-comment-image-lightbox"]')).toBeTruthy()
+
     const closeButton = document.body.querySelector('[data-testid="task-comment-image-lightbox-close"]') as HTMLButtonElement
     expect(closeButton).toBeTruthy()
     closeButton.click()
@@ -373,5 +381,27 @@ describe('TaskComments', () => {
     expect(Number.parseInt(textarea.style.maxHeight, 10)).toBeGreaterThan(0)
     expect(textarea.style.height).toBe(textarea.style.maxHeight)
     expect(textarea.style.overflowY).toBe('auto')
+  })
+
+  it('renders comment bodies as markdown html (marked path)', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-markdown',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: '**bold** and [link](https://example.com)',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.markdown-body strong').exists()).toBe(true)
+    const link = wrapper.find('.markdown-body a')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('https://example.com')
   })
 })

@@ -344,6 +344,12 @@ type UpdateTaskTitleParams struct {
 	ActorID           uuid.UUID
 }
 
+// UpdateTaskDescriptionParams carries inputs for a description-only task update.
+type UpdateTaskDescriptionParams struct {
+	Description *string
+	ActorID     uuid.UUID
+}
+
 // ---- Service ----
 
 type Service struct {
@@ -1152,6 +1158,19 @@ func (s *Service) GetTask(ctx context.Context, id uuid.UUID) (TaskResponse, erro
 	return resp, nil
 }
 
+// GetTaskDescription fetches only a task description field.
+func (s *Service) GetTaskDescription(ctx context.Context, id uuid.UUID) (*string, error) {
+	row, err := s.q.TaskGet(ctx, id)
+	if err != nil {
+		return nil, mapNotFound(err, "task")
+	}
+	if !row.Description.Valid {
+		return nil, nil
+	}
+	value := row.Description.String
+	return &value, nil
+}
+
 // GetSubtasks returns all direct children of parentID ordered by creation time.
 func (s *Service) GetSubtasks(ctx context.Context, parentID uuid.UUID) ([]TaskRow, error) {
 	qrows, err := s.q.TaskSubtaskList(ctx, uuid.NullUUID{UUID: parentID, Valid: true})
@@ -1260,6 +1279,26 @@ func (s *Service) UpdateTaskTitle(ctx context.Context, id uuid.UUID, p UpdateTas
 		}
 		return TaskResponse{}, mapTaskWriteError(err)
 	}
+	return s.GetTask(ctx, taskRow.ID)
+}
+
+// UpdateTaskDescription updates only task description and touch columns.
+func (s *Service) UpdateTaskDescription(ctx context.Context, id uuid.UUID, p UpdateTaskDescriptionParams) (TaskResponse, error) {
+	if _, err := s.q.TaskGet(ctx, id); err != nil {
+		return TaskResponse{}, mapNotFound(err, "task")
+	}
+
+	taskRow, err := scanTask(s.pool.QueryRow(ctx,
+		`UPDATE task
+		 SET description = $2, updated_by = $3, updated_at = now()
+		 WHERE id = $1
+		 RETURNING `+taskColumns,
+		id, nullableString(p.Description), p.ActorID,
+	))
+	if err != nil {
+		return TaskResponse{}, mapTaskWriteError(err)
+	}
+
 	return s.GetTask(ctx, taskRow.ID)
 }
 

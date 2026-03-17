@@ -113,6 +113,12 @@ enum FeatureCapability {
   FEATURE_CAPABILITY_INVITE_ACTIONS = 8;
 }
 
+enum TaskDescriptionCollabMessageKind {
+  TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_UNSPECIFIED = 0;
+  TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC = 1;
+  TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS = 2;
+}
+
 enum EventType {
   EVENT_TYPE_UNSPECIFIED = 0;
   EVENT_TYPE_CONVERSATION_UPSERTED = 1;
@@ -182,6 +188,10 @@ message Envelope {
     SetNotificationLevelRequest set_notification_level_request = 58;
     SetNotificationLevelResponse set_notification_level_response = 59;
     ClientWindowActivityRequest set_client_window_activity_request = 60;
+    TaskDescriptionCollabSubscribeRequest task_description_collab_subscribe_request = 61;
+    TaskDescriptionCollabSubscribeResponse task_description_collab_subscribe_response = 62;
+    TaskDescriptionCollabUnsubscribeRequest task_description_collab_unsubscribe_request = 63;
+    TaskDescriptionCollabMessage task_description_collab_message = 64;
   }
 }
 
@@ -634,6 +644,25 @@ message SetNotificationLevelRequest {
 
 message SetNotificationLevelResponse {
   NotificationLevel level = 1;
+}
+
+message TaskDescriptionCollabSubscribeRequest {
+  string task_id = 1;
+}
+
+message TaskDescriptionCollabSubscribeResponse {
+  string task_id = 1;
+  string persisted_markdown = 2;
+}
+
+message TaskDescriptionCollabUnsubscribeRequest {
+  string task_id = 1;
+}
+
+message TaskDescriptionCollabMessage {
+  string task_id = 1;
+  TaskDescriptionCollabMessageKind kind = 2;
+  bytes payload = 3;
 }
 
 message NotificationLevelChangedEvent {

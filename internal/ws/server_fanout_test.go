@@ -31,6 +31,8 @@ func newTestServer(bus *events.Bus) *Server {
 		authorizeEvent: func(_ context.Context, _ auth.Principal, _ *packetspb.ServerEvent) bool {
 			return true
 		},
+		taskCollabSubscribers:    make(map[string]map[chan outboundMsg]struct{}),
+		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
 	}
 }
 
@@ -216,4 +218,38 @@ func TestFanout_CallStateChangedDeliveredOnlyToAuthorizedMembers(t *testing.T) {
 		t.Fatal("non-member unexpectedly received call_state_changed event")
 	case <-time.After(200 * time.Millisecond):
 	}
+}
+
+func TestTaskCollabRecipientsScopedByTask(t *testing.T) {
+	srv := newTestServer(nil)
+	chA := make(chan outboundMsg, 1)
+	chB := make(chan outboundMsg, 1)
+	chC := make(chan outboundMsg, 1)
+
+	srv.joinTaskCollabRoom("task-1", chA)
+	srv.joinTaskCollabRoom("task-1", chB)
+	srv.joinTaskCollabRoom("task-2", chC)
+
+	recipients := srv.taskCollabRecipients("task-1", chA)
+	require.Len(t, recipients, 1)
+	assert.Equal(t, chB, recipients[0])
+	assert.True(t, srv.isTaskCollabSubscribed("task-1", chB))
+	assert.False(t, srv.isTaskCollabSubscribed("task-1", chC))
+}
+
+func TestTaskCollabCleanupRemovesSessionFromAllRooms(t *testing.T) {
+	srv := newTestServer(nil)
+	ch := make(chan outboundMsg, 1)
+
+	srv.joinTaskCollabRoom("task-1", ch)
+	srv.joinTaskCollabRoom("task-2", ch)
+	assert.True(t, srv.isTaskCollabSubscribed("task-1", ch))
+	assert.True(t, srv.isTaskCollabSubscribed("task-2", ch))
+
+	srv.removeTaskCollabSession(ch)
+
+	assert.False(t, srv.isTaskCollabSubscribed("task-1", ch))
+	assert.False(t, srv.isTaskCollabSubscribed("task-2", ch))
+	assert.Empty(t, srv.taskCollabSubscribers["task-1"])
+	assert.Empty(t, srv.taskCollabSubscribers["task-2"])
 }

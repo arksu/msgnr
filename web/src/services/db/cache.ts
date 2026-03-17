@@ -35,6 +35,20 @@ function strToBigint(value: string | undefined): bigint {
 /** Maximum messages cached per conversation. */
 const MAX_MESSAGES_PER_CONVERSATION = 50
 
+function toPlainStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map(item => String(item))
+}
+
+function logDataCloneError(op: string, error: unknown, context?: Record<string, unknown>) {
+  const name = (error as { name?: string } | null | undefined)?.name
+  if (name !== 'DataCloneError') return
+  console.error('[db-cache]', op, {
+    error: error instanceof Error ? error.message : String(error),
+    ...context,
+  })
+}
+
 // ── Conversation cache ────────────────────────────────────────────────────────
 
 function channelToCached(ch: Channel): CachedConversation {
@@ -151,12 +165,12 @@ function messageToCache(msg: Message): CachedMessage {
     channelSeq: bigintToStr(msg.channelSeq),
     threadSeq: bigintToStr(msg.threadSeq),
     threadRootMessageId: msg.threadRootMessageId,
-    mentionedUserIds: msg.mentionedUserIds,
+    mentionedUserIds: toPlainStringArray(msg.mentionedUserIds),
     mentionEveryone: msg.mentionEveryone,
     createdAt: msg.createdAt,
     editedAt: msg.editedAt,
     reactions: msg.reactions.map(r => ({ emoji: r.emoji, count: r.count })),
-    myReactions: [...msg.myReactions],
+    myReactions: toPlainStringArray(msg.myReactions),
     attachments: msg.attachments?.map(a => ({ ...a })),
   }
 }
@@ -205,7 +219,11 @@ export async function cacheMessages(
         await db.messages.bulkPut(toStore)
       }
     })
-  } catch {
+  } catch (error) {
+    logDataCloneError('cacheMessages', error, {
+      conversationId,
+      count: msgs.length,
+    })
     // Non-fatal
   }
 }
@@ -234,7 +252,11 @@ export async function cacheSingleMessage(msg: Message): Promise<void> {
         await db.messages.bulkDelete(toDelete)
       }
     })
-  } catch {
+  } catch (error) {
+    logDataCloneError('cacheSingleMessage', error, {
+      conversationId: msg.channelId,
+      messageId: msg.id,
+    })
     // Non-fatal
   }
 }
@@ -322,9 +344,16 @@ export async function enqueueOutbound(
   try {
     await db.outboundQueue.add({
       ...action,
+      attachmentIds: action.attachmentIds ? toPlainStringArray(action.attachmentIds) : undefined,
       createdAt: new Date().toISOString(),
     })
-  } catch {
+  } catch (error) {
+    logDataCloneError('enqueueOutbound', error, {
+      conversationId: action.conversationId,
+      clientMsgId: action.clientMsgId,
+      hasAttachmentIds: Array.isArray(action.attachmentIds),
+      attachmentCount: action.attachmentIds?.length ?? 0,
+    })
     // Non-fatal
   }
 }
@@ -444,4 +473,3 @@ export async function deleteDatabase(): Promise<void> {
     // Non-fatal
   }
 }
-

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"strconv"
@@ -71,6 +72,21 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 // every handler accesses the principal the same way — via the p parameter —
 // regardless of which middleware protected the route.
 type authHandler func(w http.ResponseWriter, r *http.Request, p auth.Principal)
+
+func markdownSignatureForLog(value *string) string {
+	if value == nil {
+		return "null"
+	}
+	raw := *value
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(raw))
+	preview := raw
+	if len(preview) > 80 {
+		preview = preview[:80]
+	}
+	preview = strings.ReplaceAll(preview, "\n", "\\n")
+	return fmt.Sprintf("len=%d,hash=%d,preview=%q", len(raw), hasher.Sum32(), preview)
+}
 
 // =========================================================
 // Templates
@@ -663,6 +679,7 @@ func (h *Handler) tasksCollection(w http.ResponseWriter, r *http.Request, p auth
 // GET /api/tasks/:id
 // PATCH /api/tasks/:id
 // PATCH /api/tasks/:id/title
+// PATCH /api/tasks/:id/description
 // PATCH /api/tasks/:id/status
 // PATCH /api/tasks/:id/fields/:field_id
 // POST /api/tasks/:id/subtasks
@@ -707,6 +724,17 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 			return
 		}
 		h.taskTitleItem(w, r, p, id)
+		return
+	}
+
+	// Route /api/tasks/:id/description
+	if rawID, ok := strings.CutSuffix(rest, "/description"); ok {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
+			return
+		}
+		h.taskDescriptionItem(w, r, p, id)
 		return
 	}
 
@@ -842,6 +870,43 @@ func (h *Handler) taskTitleItem(w http.ResponseWriter, r *http.Request, p auth.P
 		h.serviceError(w, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// PATCH /api/tasks/:id/description
+func (h *Handler) taskDescriptionItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {
+	if r.Method != http.MethodPatch {
+		methodNotAllowed(w)
+		return
+	}
+
+	var req struct {
+		Description *string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+		return
+	}
+	h.log.Info("tasks: description patch request",
+		zap.String("task_id", id.String()),
+		zap.String("user_id", p.UserID.String()),
+		zap.String("description_sig", markdownSignatureForLog(req.Description)),
+	)
+
+	resp, err := h.svc.UpdateTaskDescription(r.Context(), id, UpdateTaskDescriptionParams{
+		Description: req.Description,
+		ActorID:     p.UserID,
+	})
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	h.log.Info("tasks: description patch response",
+		zap.String("task_id", id.String()),
+		zap.String("user_id", p.UserID.String()),
+		zap.String("description_sig", markdownSignatureForLog(resp.TaskRow.Description)),
+		zap.String("updated_at", resp.TaskRow.UpdatedAt.UTC().Format(time.RFC3339Nano)),
+	)
 	writeJSON(w, http.StatusOK, resp)
 }
 

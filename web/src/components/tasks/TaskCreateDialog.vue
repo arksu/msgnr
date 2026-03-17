@@ -68,9 +68,8 @@
 
             <div>
               <label class="form-label">Description</label>
-              <textarea
+              <TaskDescriptionEditor
                 v-model="form.description"
-                class="form-input min-h-[80px] resize-y"
                 placeholder="Optional description"
               />
             </div>
@@ -143,6 +142,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useTasksStore } from '@/stores/tasks'
 import type { TaskFieldDefinition } from '@/services/http/tasksApi'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
+import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 
 const tasksStore = useTasksStore()

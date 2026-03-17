@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf'
-import { EnvelopeSchema, ErrorCode, PresenceStatus, ConversationType } from '@/shared/proto/packets_pb'
+import { EnvelopeSchema, ErrorCode, PresenceStatus, ConversationType, TaskDescriptionCollabMessageKind } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
 
 // Minimal WebSocket mock
@@ -106,6 +106,37 @@ function makeInviteCallMembersResponseEnvelope(): ArrayBuffer {
         conversationId: 'channel-1',
         invitedUserIds: ['user-2'],
         skippedUserIds: ['user-3'],
+      },
+    },
+  })
+  return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
+}
+
+function makeTaskDescriptionCollabSubscribeResponseEnvelope(): ArrayBuffer {
+  const env = create(EnvelopeSchema, {
+    requestId: '6',
+    protocolVersion: 1,
+    payload: {
+      case: 'taskDescriptionCollabSubscribeResponse',
+      value: {
+        taskId: 'task-1',
+        persistedMarkdown: '## persisted',
+      },
+    },
+  })
+  return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
+}
+
+function makeTaskDescriptionCollabMessageEnvelope(): ArrayBuffer {
+  const env = create(EnvelopeSchema, {
+    requestId: '7',
+    protocolVersion: 1,
+    payload: {
+      case: 'taskDescriptionCollabMessage',
+      value: {
+        taskId: 'task-1',
+        kind: TaskDescriptionCollabMessageKind.SYNC,
+        payload: new Uint8Array([1, 2, 3]),
       },
     },
   })
@@ -393,6 +424,47 @@ describe('wsStore state machine', () => {
       requestId: '3',
       code: ErrorCode.CALL_NOT_ACTIVE,
       message: 'call is not active',
+    }))
+  })
+
+  it('sends task collab subscribe and collab message envelopes', () => {
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+
+    store.sendTaskDescriptionCollabSubscribe('task-1')
+    store.sendTaskDescriptionCollabMessage('task-1', TaskDescriptionCollabMessageKind.SYNC, new Uint8Array([9, 9]))
+
+    const secondLast = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 2])
+    const last = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
+    expect(secondLast.payload.case).toBe('taskDescriptionCollabSubscribeRequest')
+    expect(secondLast.payload.value).toEqual(expect.objectContaining({ taskId: 'task-1' }))
+    expect(last.payload.case).toBe('taskDescriptionCollabMessage')
+    expect(last.payload.value).toEqual(expect.objectContaining({
+      taskId: 'task-1',
+      kind: TaskDescriptionCollabMessageKind.SYNC,
+    }))
+  })
+
+  it('routes task collab subscribe response and relay message callbacks', () => {
+    const store = useWsStore()
+    const onSubscribe = vi.fn()
+    const onCollab = vi.fn()
+    store.onTaskDescriptionCollabSubscribeResponse(onSubscribe)
+    store.onTaskDescriptionCollabMessage(onCollab)
+
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeTaskDescriptionCollabSubscribeResponseEnvelope())
+    mockSocket.simulateMessage(makeTaskDescriptionCollabMessageEnvelope())
+
+    expect(onSubscribe).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-1',
+      persistedMarkdown: '## persisted',
+    }))
+    expect(onCollab).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-1',
+      kind: TaskDescriptionCollabMessageKind.SYNC,
     }))
   })
 })

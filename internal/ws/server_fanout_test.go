@@ -253,3 +253,17 @@ func TestTaskCollabCleanupRemovesSessionFromAllRooms(t *testing.T) {
 	assert.Empty(t, srv.taskCollabSubscribers["task-1"])
 	assert.Empty(t, srv.taskCollabSubscribers["task-2"])
 }
+
+func TestTaskCollabSubscribeResponseIncludesSubscriberCount(t *testing.T) {
+	srv := newTestServer(nil)
+	chA := make(chan outboundMsg, 1)
+	chB := make(chan outboundMsg, 1)
+
+	first := srv.taskCollabSubscribeResponse("task-1", chA, "aabb")
+	second := srv.taskCollabSubscribeResponse("task-1", chB, "aabb")
+
+	assert.Equal(t, int32(1), first.GetSubscriberCount())
+	assert.Equal(t, int32(2), second.GetSubscriberCount())
+	assert.Equal(t, "aabb", first.GetPersistedMarkdown())
+	assert.Equal(t, "aabb", second.GetPersistedMarkdown())
+}

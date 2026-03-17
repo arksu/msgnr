@@ -653,6 +653,7 @@ message TaskDescriptionCollabSubscribeRequest {
 message TaskDescriptionCollabSubscribeResponse {
   string task_id = 1;
   string persisted_markdown = 2;
+  int32 subscriber_count = 3;
 }
 
 message TaskDescriptionCollabUnsubscribeRequest {

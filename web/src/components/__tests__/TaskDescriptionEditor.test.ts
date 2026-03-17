@@ -5,16 +5,17 @@ import { Awareness } from 'y-protocols/awareness'
 import * as Y from 'yjs'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 
-function mountHost(initialValue = '', options?: { collab?: boolean }) {
+function mountHost(initialValue = '', options?: { collab?: boolean; allowLocalDraftSeed?: boolean }) {
   const collabDoc = options?.collab ? new Y.Doc() : null
   const collabProvider = collabDoc ? { awareness: new Awareness(collabDoc) } : null
+  const allowLocalDraftSeed = options?.allowLocalDraftSeed ?? true
   const Host = defineComponent({
     components: { TaskDescriptionEditor },
     setup() {
       const value = ref(initialValue)
-      return { value, collabDoc, collabProvider }
+      return { value, collabDoc, collabProvider, allowLocalDraftSeed }
     },
-    template: '<TaskDescriptionEditor v-model="value" :collab-doc="collabDoc" :collab-provider="collabProvider" />',
+    template: '<TaskDescriptionEditor v-model="value" :collab-doc="collabDoc" :collab-provider="collabProvider" :allow-local-draft-seed="allowLocalDraftSeed" />',
   })
 
   return mount(Host, {
@@ -113,5 +114,47 @@ describe('TaskDescriptionEditor', () => {
     expect(editor.getHTML()).toContain('seed-on-load')
     const vm = wrapper.vm as { value: string }
     expect(vm.value).toContain('seed-on-load')
+  })
+
+  it('skips initial collab seed when local draft seeding is disabled', async () => {
+    const wrapper = mountHost('seed-on-load', { collab: true, allowLocalDraftSeed: false })
+    await nextTick()
+
+    const editor = getEditorInstance(wrapper)
+    expect(editor.getHTML()).not.toContain('seed-on-load')
+    const vm = wrapper.vm as { value: string }
+    expect(vm.value).toContain('seed-on-load')
+  })
+
+  it('seeds collab doc when local draft seeding is enabled after mount', async () => {
+    const collabDoc = new Y.Doc()
+    const collabProvider = { awareness: new Awareness(collabDoc) }
+    const Host = defineComponent({
+      components: { TaskDescriptionEditor },
+      setup() {
+        const value = ref('seed-on-toggle')
+        const allowLocalDraftSeed = ref(false)
+        return { value, allowLocalDraftSeed, collabDoc, collabProvider }
+      },
+      template: '<TaskDescriptionEditor v-model="value" :collab-doc="collabDoc" :collab-provider="collabProvider" :allow-local-draft-seed="allowLocalDraftSeed" />',
+    })
+    const wrapper = mount(Host, {
+      global: {
+        stubs: {
+          BubbleMenu: { template: '<div><slot /></div>' },
+          FloatingMenu: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await nextTick()
+
+    const editor = getEditorInstance(wrapper)
+    expect(editor.getHTML()).not.toContain('seed-on-toggle')
+
+    ;(wrapper.vm as { allowLocalDraftSeed: boolean }).allowLocalDraftSeed = true
+    await nextTick()
+    await nextTick()
+
+    expect(editor.getHTML()).toContain('seed-on-toggle')
   })
 })

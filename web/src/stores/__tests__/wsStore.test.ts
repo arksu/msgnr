@@ -121,6 +121,7 @@ function makeTaskDescriptionCollabSubscribeResponseEnvelope(): ArrayBuffer {
       value: {
         taskId: 'task-1',
         persistedMarkdown: '## persisted',
+        subscriberCount: 1,
       },
     },
   })
@@ -478,6 +479,7 @@ describe('wsStore state machine', () => {
     expect(onSubscribe).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 'task-1',
       persistedMarkdown: '## persisted',
+      subscriberCount: 1,
     }))
     expect(onCollab).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 'task-1',

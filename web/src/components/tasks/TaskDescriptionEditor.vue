@@ -248,7 +248,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { Doc as YDoc } from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
 import type { AnyExtension } from '@tiptap/core'
@@ -260,7 +260,7 @@ import TableRow from '@tiptap/extension-table-row'
 import TableHeader from '@tiptap/extension-table-header'
 import TableCell from '@tiptap/extension-table-cell'
 import { DOMParser as ProseMirrorDOMParser } from '@tiptap/pm/model'
-import { Selection } from '@tiptap/pm/state'
+import { prosemirrorJSONToYXmlFragment } from '@tiptap/y-tiptap'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
@@ -276,6 +276,7 @@ const props = withDefaults(defineProps<{
   collabDoc?: YDoc | null
   collabProvider?: { awareness: Awareness } | null
   collabField?: string
+  allowLocalDraftSeed?: boolean
   collabUser?: {
     id: string
     name: string
@@ -288,6 +289,7 @@ const props = withDefaults(defineProps<{
   collabDoc: null,
   collabProvider: null,
   collabField: 'task_description',
+  allowLocalDraftSeed: true,
   collabUser: null,
 })
 
@@ -301,6 +303,7 @@ const markdownDraft = ref(props.modelValue ?? '')
 const suppressEditorSync = ref(false)
 const syncingFromEditor = ref(false)
 const syncingFromModel = ref(0)
+let seedInProgress = false
 const DEBUG_TASK_DESC = true
 
 const collabEnabled = computed(() => !!props.collabDoc)
@@ -401,11 +404,12 @@ const editor = useEditor({
       snapshot: editorStateSnapshot(),
     })
     if (collabEnabled.value && nextMarkdown.trim() === '' && markdownDraft.value.trim() !== '') {
-      descLog('onUpdate:unexpected-empty', {
+      descLog('onUpdate:unexpected-empty:suppressed', {
         tab: tab.value,
         previousDraft: markdownSignature(markdownDraft.value),
         snapshot: editorStateSnapshot(),
       })
+      return
     }
     if (nextMarkdown === markdownDraft.value) return
     syncingFromEditor.value = true
@@ -420,14 +424,16 @@ function isActive(name: string, attrs?: Record<string, unknown>) {
 }
 
 function setContentWithSafeSelection(html: string): boolean {
-  if (!editor.value?.view) return false
-  const view = editor.value.view
+  if (!editor.value || !props.collabDoc) return false
+  const schema = editor.value.schema
   const wrapper = document.createElement('div')
   wrapper.innerHTML = html
-  const parsedDoc = ProseMirrorDOMParser.fromSchema(view.state.schema).parse(wrapper)
-  let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, parsedDoc.content)
-  tr = tr.setSelection(Selection.atStart(tr.doc))
-  view.dispatch(tr)
+  const parsedDoc = ProseMirrorDOMParser.fromSchema(schema).parse(wrapper)
+  const fragment = props.collabDoc.getXmlFragment(props.collabField)
+  props.collabDoc.transact(() => {
+    fragment.delete(0, fragment.length)
+    prosemirrorJSONToYXmlFragment(schema, parsedDoc.toJSON(), fragment)
+  })
   return true
 }
 
@@ -488,19 +494,30 @@ function isEditorEffectivelyEmpty(): boolean {
 
 function maybeSeedCollabEditorFromDraft(reason: string) {
   if (!collabEnabled.value || !editor.value) return
+  if (seedInProgress) {
+    descLog('maybeSeedCollabEditorFromDraft:skip-in-progress', { reason })
+    return
+  }
   const draft = markdownDraft.value
   const empty = isEditorEffectivelyEmpty()
   descLog('maybeSeedCollabEditorFromDraft', {
     reason,
     tab: tab.value,
+    allowLocalDraftSeed: props.allowLocalDraftSeed,
     draft: markdownSignature(draft),
     empty,
     snapshot: editorStateSnapshot(),
   })
+  if (!props.allowLocalDraftSeed) return
   if (tab.value !== 'rendered') return
   if (draft.trim() === '') return
   if (!empty) return
-  setEditorContentFromMarkdown(draft, false, reason)
+  seedInProgress = true
+  try {
+    setEditorContentFromMarkdown(draft, false, reason)
+  } finally {
+    seedInProgress = false
+  }
 }
 
 function switchTab(nextTab: DescriptionTab) {
@@ -557,7 +574,7 @@ watch(
       syncingFromModel.value = Math.max(0, syncingFromModel.value - 1)
     })
     if (collabEnabled.value) {
-      queueMicrotask(() => {
+      nextTick(() => {
         maybeSeedCollabEditorFromDraft('watch-modelValue-collab-seed')
       })
       return
@@ -578,7 +595,7 @@ watch(markdownDraft, (next) => {
     modelValue: markdownSignature(props.modelValue ?? ''),
   })
   if (syncingFromModel.value > 0) {
-    queueMicrotask(() => {
+    nextTick(() => {
       maybeSeedCollabEditorFromDraft('watch-markdownDraft-syncingFromModel-collab-seed')
     })
     return
@@ -599,6 +616,16 @@ watch(
   () => props.editable,
   (next) => {
     editor.value?.setEditable(!!next)
+  },
+)
+
+watch(
+  () => props.allowLocalDraftSeed,
+  (next, prev) => {
+    if (!collabEnabled.value || !next || prev === next) return
+    nextTick(() => {
+      maybeSeedCollabEditorFromDraft('watch-allowLocalDraftSeed-enabled-collab-seed')
+    })
   },
 )
 

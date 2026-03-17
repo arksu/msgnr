@@ -650,6 +650,15 @@ func (s *Server) taskCollabSubscriberCount(taskID string) int {
 	return len(s.taskCollabSubscribers[taskID])
 }
 
+func (s *Server) taskCollabSubscribeResponse(taskID string, session chan outboundMsg, persistedMarkdown string) *packetspb.TaskDescriptionCollabSubscribeResponse {
+	s.joinTaskCollabRoom(taskID, session)
+	return &packetspb.TaskDescriptionCollabSubscribeResponse{
+		TaskId:            taskID,
+		PersistedMarkdown: persistedMarkdown,
+		SubscriberCount:   int32(s.taskCollabSubscriberCount(taskID)),
+	}
+}
+
 func (s *Server) sendDirectServerEvents(deliveries []chat.DirectDelivery) {
 	var offlineDeliveries []chat.DirectDelivery
 	for _, delivery := range deliveries {
@@ -1701,27 +1710,25 @@ func (s *Server) handleDomainPayload(
 			badReq("task_description_collab_subscribe_request: internal error")
 			return
 		}
-		s.joinTaskCollabRoom(taskID.String(), outboundCh)
+		subscribeResp := s.taskCollabSubscribeResponse(taskID.String(), outboundCh, "")
 		persistedMarkdown := ""
 		if description != nil {
 			persistedMarkdown = *description
 		}
+		subscribeResp.PersistedMarkdown = persistedMarkdown
 		s.log.Info("ws task collab subscribe",
 			zap.String("task_id", taskID.String()),
 			zap.String("user_id", principal.UserID.String()),
 			zap.String("session_id", principal.SessionID.String()),
 			zap.String("persisted_sig", markdownSignatureForLog(persistedMarkdown)),
-			zap.Int("subscribers", s.taskCollabSubscriberCount(taskID.String())),
+			zap.Int32("subscribers", subscribeResp.GetSubscriberCount()),
 		)
 		enqueue(&packetspb.Envelope{
 			RequestId:       reqID,
 			TraceId:         traceID,
 			ProtocolVersion: protocolVersion,
 			Payload: &packetspb.Envelope_TaskDescriptionCollabSubscribeResponse{
-				TaskDescriptionCollabSubscribeResponse: &packetspb.TaskDescriptionCollabSubscribeResponse{
-					TaskId:            taskID.String(),
-					PersistedMarkdown: persistedMarkdown,
-				},
+				TaskDescriptionCollabSubscribeResponse: subscribeResp,
 			},
 		})
 

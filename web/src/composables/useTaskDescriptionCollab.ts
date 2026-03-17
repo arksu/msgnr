@@ -62,6 +62,11 @@ function collabLog(event: string, payload: Record<string, unknown>) {
   console.debug('[task-desc-collab]', event, payload)
 }
 
+function isDocEmpty(doc: Y.Doc | null): boolean {
+  if (!doc) return true
+  return Y.encodeStateVector(doc).length <= 2
+}
+
 function docMarkdownSignature(doc: Y.Doc | null): string {
   if (!doc) return 'doc=null'
   // IMPORTANT: collaboration field uses XmlFragment via tiptap-collaboration.
@@ -119,6 +124,7 @@ export function useTaskDescriptionCollab(params: {
   const subscribeError = ref<string | null>(null)
   const subscribedTaskId = ref<string | null>(null)
   const serverMarkdown = ref<string | null>(null)
+  const allowLocalDraftSeed = ref(false)
 
   const pending: CollabPayload[] = []
   let awarenessListener: ((payload: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => void) | null = null
@@ -277,6 +283,7 @@ export function useTaskDescriptionCollab(params: {
     pendingPersistedMarkdown = null
     clearSeedFallbackTimer()
     serverMarkdown.value = null
+    allowLocalDraftSeed.value = false
     pending.length = 0
     collabLog('cleanupDoc:done', { taskId: params.taskId.value })
   }
@@ -372,19 +379,27 @@ export function useTaskDescriptionCollab(params: {
     const taskId = params.taskId.value
     if (!taskId || resp.taskId !== taskId) return
     subscribeResponseCount += 1
+    const shouldSeedPersisted = resp.subscriberCount <= 1
+    allowLocalDraftSeed.value = shouldSeedPersisted
     collabLog('onSubscribeResponse', {
       taskId,
       subscribeAttempt,
       subscribeResponseCount,
+      subscriberCount: resp.subscriberCount,
+      shouldSeedPersisted,
       hasLocalEdits,
       persisted: markdownSignature(resp.persistedMarkdown),
       doc: docMarkdownSignature(doc.value),
     })
     subscribeError.value = null
-    pendingPersistedMarkdown = resp.persistedMarkdown
+    pendingPersistedMarkdown = shouldSeedPersisted ? resp.persistedMarkdown : null
     receivedMeaningfulRemoteSync = false
     requestPeerState(taskId, 'subscribe-response')
-    schedulePersistedSeed(taskId)
+    if (shouldSeedPersisted) {
+      schedulePersistedSeed(taskId)
+    } else {
+      clearSeedFallbackTimer()
+    }
     flushPending(taskId)
   })
 
@@ -438,6 +453,13 @@ export function useTaskDescriptionCollab(params: {
         taskId,
         bytes: msg.payload.length,
       })
+      if (!hasRemotePeers && !hasLocalEdits && isDocEmpty(doc.value)) {
+        collabLog('awareness:peer-leave:resubscribe', {
+          taskId,
+          reason: 'all-peers-gone-doc-empty',
+        })
+        subscribe(taskId)
+      }
     }
   })
 
@@ -498,5 +520,6 @@ export function useTaskDescriptionCollab(params: {
     provider,
     subscribeError,
     serverMarkdown,
+    allowLocalDraftSeed,
   }
 }

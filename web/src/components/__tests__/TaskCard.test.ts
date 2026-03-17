@@ -106,6 +106,7 @@ vi.mock('@/composables/useTaskDescriptionCollab', () => ({
     provider: ref({ awareness: { states: new Map() } }),
     subscribeError: ref(''),
     serverMarkdown: ref<string | null>(null),
+    allowLocalDraftSeed: ref(true),
   }),
 }))
 

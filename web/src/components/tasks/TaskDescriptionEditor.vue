@@ -277,6 +277,7 @@ const props = withDefaults(defineProps<{
   collabProvider?: { awareness: Awareness } | null
   collabField?: string
   allowLocalDraftSeed?: boolean
+  forceLocalSyncToken?: number
   collabUser?: {
     id: string
     name: string
@@ -290,6 +291,7 @@ const props = withDefaults(defineProps<{
   collabProvider: null,
   collabField: 'task_description',
   allowLocalDraftSeed: true,
+  forceLocalSyncToken: 0,
   collabUser: null,
 })
 
@@ -304,7 +306,7 @@ const suppressEditorSync = ref(false)
 const syncingFromEditor = ref(false)
 const syncingFromModel = ref(0)
 let seedInProgress = false
-const DEBUG_TASK_DESC = true
+const DEBUG_TASK_DESC = import.meta.env.DEV
 
 const collabEnabled = computed(() => !!props.collabDoc)
 const editable = computed(() => !!props.editable)
@@ -626,6 +628,14 @@ watch(
     nextTick(() => {
       maybeSeedCollabEditorFromDraft('watch-allowLocalDraftSeed-enabled-collab-seed')
     })
+  },
+)
+
+watch(
+  () => props.forceLocalSyncToken,
+  (next, prev) => {
+    if (!collabEnabled.value || next === prev) return
+    setEditorContentFromMarkdown(markdownDraft.value, false, 'watch-forceLocalSyncToken')
   },
 )
 

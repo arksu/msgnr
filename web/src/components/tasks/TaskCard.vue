@@ -272,16 +272,29 @@
       <!-- Description -->
       <div class="border-t border-chat-border pt-4">
         <div class="field-label flex items-center justify-between gap-2">
-          <span>Description</span>
+          <div class="flex items-center gap-2">
+            <span>Description</span>
+            <button
+              type="button"
+              data-testid="task-description-history-toggle"
+              class="rounded border border-chat-border px-2 py-0.5 text-[11px] normal-case tracking-normal text-gray-300 hover:text-white hover:border-accent/50 transition-colors"
+              title="Description history"
+              @click="openDescriptionHistoryModal"
+            >
+              History
+            </button>
+          </div>
           <span v-if="descriptionSaving" class="text-[11px] text-gray-500 normal-case tracking-normal">Saving...</span>
         </div>
         <TaskDescriptionEditor
           v-if="taskDescriptionDoc"
+          :key="descriptionEditorRenderKey"
           v-model="descriptionDraft"
           :collab-doc="taskDescriptionDoc"
           :collab-provider="taskDescriptionProvider"
           :allow-local-draft-seed="taskDescriptionAllowLocalDraftSeed"
           :collab-user="collabUser"
+          :force-local-sync-token="descriptionForceLocalSyncToken"
           placeholder="Description"
           @blur="flushDescriptionNow"
         />
@@ -322,11 +335,128 @@
       </div>
     </div>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="descriptionHistoryModalOpen"
+      data-testid="task-description-restore-modal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      @click.self="closeDescriptionHistoryModal"
+    >
+      <div class="w-full max-w-5xl rounded-xl border border-chat-border bg-chat-header p-4 shadow-2xl">
+        <h3 class="mb-3 text-base font-semibold text-white">Description History</h3>
+        <div class="grid gap-4 md:grid-cols-[280px_minmax(0,1fr)]">
+          <aside class="rounded border border-chat-border bg-chat-input/40 p-2">
+            <div class="mb-2 text-xs uppercase tracking-wide text-gray-400">Versions</div>
+            <p v-if="descriptionHistoryLoading" class="px-2 py-2 text-xs text-gray-500">Loading versions...</p>
+            <p v-else-if="descriptionHistoryError" class="px-2 py-2 text-xs text-red-400">{{ descriptionHistoryError }}</p>
+            <p v-else-if="descriptionHistoryItems.length === 0" class="px-2 py-2 text-xs text-gray-500">No versions yet</p>
+            <ul
+              v-else
+              data-testid="task-description-history-list"
+              class="max-h-[420px] space-y-1 overflow-y-auto pr-1"
+            >
+              <li v-for="item in descriptionHistoryItems" :key="`${item.created_at}:${item.edited_by}`">
+                <button
+                  type="button"
+                  data-testid="task-description-history-item"
+                  class="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left transition-colors"
+                  :class="descriptionRestoreCandidate === item
+                    ? 'bg-accent/20 border border-accent/50'
+                    : 'border border-transparent hover:bg-white/5'"
+                  @click="selectDescriptionHistoryItem(item)"
+                >
+                  <UserAvatar
+                    :user-id="item.editor.id"
+                    :display-name="descriptionHistoryEditorName(item)"
+                    :avatar-url="item.editor.avatar_url"
+                    size="xs"
+                  />
+                  <span class="min-w-0">
+                    <span class="block truncate text-xs text-gray-200">{{ descriptionHistoryEditorName(item) }}</span>
+                    <span class="block text-[11px] text-gray-500">{{ formatDatetime(item.created_at) }}</span>
+                  </span>
+                </button>
+              </li>
+            </ul>
+          </aside>
+
+          <div class="space-y-3">
+            <template v-if="descriptionRestoreCandidate">
+              <div>
+                <div class="form-label">Public ID</div>
+                <input
+                  data-testid="task-description-history-preview-public-id"
+                  :value="descriptionRestoreCandidate.public_id"
+                  type="text"
+                  readonly
+                  class="w-full rounded border border-chat-border bg-chat-input px-2 py-1 text-sm text-gray-200"
+                >
+              </div>
+              <div>
+                <div class="form-label">Title</div>
+                <input
+                  data-testid="task-description-history-preview-title"
+                  :value="descriptionRestoreCandidate.title"
+                  type="text"
+                  readonly
+                  class="w-full rounded border border-chat-border bg-chat-input px-2 py-1 text-sm text-gray-200"
+                >
+              </div>
+              <div>
+                <div class="form-label">Description</div>
+                <div
+                  data-testid="task-description-history-preview-description-scroll"
+                  class="max-h-[420px] overflow-y-auto pr-1"
+                >
+                  <TaskDescriptionEditor
+                    v-model="descriptionRestoreDraft"
+                    :editable="false"
+                  />
+                </div>
+              </div>
+            </template>
+            <p v-else class="rounded border border-chat-border bg-chat-input px-3 py-4 text-sm text-gray-500 italic">
+              Select a history item to preview
+            </p>
+          </div>
+        </div>
+        <p v-if="descriptionRestoreError" class="mt-3 text-xs text-red-400">
+          {{ descriptionRestoreError }}
+        </p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            class="btn-secondary text-xs"
+            :disabled="descriptionRestoreApplying"
+            @click="closeDescriptionHistoryModal"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="task-description-restore-apply"
+            class="btn-primary text-xs"
+            :disabled="descriptionRestoreApplying || !descriptionRestoreCandidate"
+            @click="applyDescriptionRestore"
+          >
+            {{ descriptionRestoreApplying ? 'Applying...' : 'Apply' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { TasksApiConflictError, type TaskFieldDefinition, type TaskFieldValue, type TaskTitleConflictResponse } from '@/services/http/tasksApi'
+import {
+  TasksApiConflictError,
+  type TaskDescriptionHistoryItem,
+  type TaskFieldDefinition,
+  type TaskFieldValue,
+  type TaskTitleConflictResponse,
+} from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
@@ -337,6 +467,7 @@ import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
 import TaskComments from './TaskComments.vue'
+import UserAvatar from '../UserAvatar.vue'
 
 defineProps<{ templateFilter: string | null }>()
 const emit = defineEmits<{ back: [] }>()
@@ -362,6 +493,16 @@ const descriptionSaving = ref(false)
 const descriptionSaveError = ref('')
 const lastSavedDescription = ref<string | null>(null)
 const hydratingDescription = ref(false)
+const descriptionHistoryModalOpen = ref(false)
+const descriptionHistoryLoading = ref(false)
+const descriptionHistoryError = ref('')
+const descriptionHistoryItems = ref<TaskDescriptionHistoryItem[]>([])
+const descriptionRestoreCandidate = ref<TaskDescriptionHistoryItem | null>(null)
+const descriptionRestoreDraft = ref('')
+const descriptionRestoreApplying = ref(false)
+const descriptionRestoreError = ref('')
+const descriptionEditorRenderKey = ref(0)
+const descriptionForceLocalSyncToken = ref(0)
 let descriptionDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionMaxFlushTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionRetryTimer: ReturnType<typeof setTimeout> | null = null
@@ -851,6 +992,84 @@ async function submitSubtask() {
   }
 }
 
+function descriptionHistoryEditorName(item: TaskDescriptionHistoryItem): string {
+  return item.editor.display_name?.trim() || 'Unknown user'
+}
+
+async function loadDescriptionHistory(taskID: string) {
+  descriptionHistoryLoading.value = true
+  descriptionHistoryError.value = ''
+  try {
+    descriptionHistoryItems.value = await tasksStore.listTaskDescriptionHistory(taskID)
+    if (descriptionHistoryItems.value.length > 0) {
+      selectDescriptionHistoryItem(descriptionHistoryItems.value[0])
+    } else {
+      descriptionRestoreCandidate.value = null
+      descriptionRestoreDraft.value = ''
+    }
+  } catch (e) {
+    descriptionHistoryItems.value = []
+    descriptionHistoryError.value = e instanceof Error ? e.message : 'Failed to load description history'
+    descriptionRestoreCandidate.value = null
+    descriptionRestoreDraft.value = ''
+  } finally {
+    descriptionHistoryLoading.value = false
+  }
+}
+
+async function openDescriptionHistoryModal() {
+  if (!task.value) return
+  descriptionHistoryModalOpen.value = true
+  descriptionRestoreError.value = ''
+  await loadDescriptionHistory(task.value.id)
+}
+
+function selectDescriptionHistoryItem(item: TaskDescriptionHistoryItem) {
+  descriptionRestoreCandidate.value = item
+  descriptionRestoreDraft.value = item.description ?? ''
+}
+
+function resetDescriptionHistoryModalState() {
+  descriptionHistoryModalOpen.value = false
+  descriptionRestoreCandidate.value = null
+  descriptionRestoreDraft.value = ''
+  descriptionRestoreError.value = ''
+}
+
+function closeDescriptionHistoryModal() {
+  if (descriptionRestoreApplying.value) return
+  resetDescriptionHistoryModalState()
+}
+
+function forceCloseDescriptionHistoryModal() {
+  resetDescriptionHistoryModalState()
+}
+
+async function applyDescriptionRestore() {
+  if (!task.value || !descriptionRestoreCandidate.value || descriptionRestoreApplying.value) return
+  const currentTaskID = task.value.id
+  descriptionRestoreApplying.value = true
+  descriptionRestoreError.value = ''
+  const restoreValue = descriptionRestoreCandidate.value.description ?? null
+  try {
+    await tasksStore.updateTaskDescription(currentTaskID, restoreValue, { forceSnapshot: true })
+    await tasksStore.selectTask(currentTaskID, true)
+    descriptionCollab.restart?.()
+    const refreshedDescription = tasksStore.selectedTask?.description ?? restoreValue
+    hydratingDescription.value = true
+    descriptionDraft.value = refreshedDescription ?? ''
+    lastSavedDescription.value = normalizeDescription(descriptionDraft.value)
+    hydratingDescription.value = false
+    descriptionForceLocalSyncToken.value += 1
+    descriptionEditorRenderKey.value += 1
+    forceCloseDescriptionHistoryModal()
+  } catch (e) {
+    descriptionRestoreError.value = e instanceof Error ? e.message : 'Failed to restore description'
+  } finally {
+    descriptionRestoreApplying.value = false
+  }
+}
+
 function formatDatetime(v: string): string {
   return v ? new Date(v).toLocaleString() : ''
 }
@@ -894,6 +1113,16 @@ watch(() => task.value?.id, (_nextTaskID, prevTaskID) => {
   saveError.value = ''
   descriptionSaveError.value = ''
   descriptionRetryDelayMs = 1000
+  descriptionHistoryModalOpen.value = false
+  descriptionHistoryLoading.value = false
+  descriptionHistoryError.value = ''
+  descriptionHistoryItems.value = []
+  descriptionRestoreCandidate.value = null
+  descriptionRestoreDraft.value = ''
+  descriptionRestoreApplying.value = false
+  descriptionRestoreError.value = ''
+  descriptionEditorRenderKey.value += 1
+  descriptionForceLocalSyncToken.value = 0
   showSubtaskForm.value = false
   subtaskError.value = ''
   showSubtaskValidation.value = false

@@ -410,6 +410,22 @@ export interface UpdateTaskStatusPayload {
 
 export interface UpdateTaskDescriptionPayload {
   description?: string | null
+  force_snapshot?: boolean
+}
+
+export interface TaskDescriptionHistoryEditor {
+  id: string
+  display_name: string
+  avatar_url: string
+}
+
+export interface TaskDescriptionHistoryItem {
+  public_id: string
+  title: string
+  description: string | null
+  edited_by: string
+  created_at: string
+  editor: TaskDescriptionHistoryEditor
 }
 
 export interface UpdateTaskFieldValuePayload {
@@ -474,6 +490,13 @@ export async function tasksUpdateTaskDescription(id: string, payload: UpdateTask
       response: descriptionSignature(data.description),
       updatedAt: data.updated_at,
     })
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksListTaskDescriptionHistory(id: string): Promise<TaskDescriptionHistoryItem[]> {
+  try {
+    const { data } = await http.get<TaskDescriptionHistoryItem[]>(`/api/tasks/${id}/description/history`)
     return data
   } catch (e) { handleError(e) }
 }

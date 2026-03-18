@@ -515,11 +515,19 @@ export function useTaskDescriptionCollab(params: {
     cleanupDoc()
   })
 
+  function restart() {
+    const taskId = params.taskId.value
+    if (!taskId) return
+    unsubscribe(taskId)
+    setupDoc(taskId)
+  }
+
   return {
     doc,
     provider,
     subscribeError,
     serverMarkdown,
     allowLocalDraftSeed,
+    restart,
   }
 }

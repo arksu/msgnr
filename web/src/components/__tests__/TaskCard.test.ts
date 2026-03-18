@@ -2,6 +2,7 @@ import { reactive, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskCard from '@/components/tasks/TaskCard.vue'
+import type { TaskDescriptionHistoryItem } from '@/services/http/tasksApi'
 
 const selectedTask = {
   id: 'task-1',
@@ -73,6 +74,7 @@ const tasksStoreMock = reactive({
   updateTaskTitle: vi.fn(async () => selectedTask),
   updateTaskStatus: vi.fn(async () => selectedTask),
   updateTaskDescription: vi.fn(async () => selectedTask),
+  listTaskDescriptionHistory: vi.fn(async (): Promise<TaskDescriptionHistoryItem[]> => []),
   updateTaskFieldValue: vi.fn(async () => ({})),
   createSubtask: vi.fn(async () => ({})),
   selectTask: vi.fn(async () => {}),
@@ -113,6 +115,7 @@ vi.mock('@/composables/useTaskDescriptionCollab', () => ({
 describe('TaskCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    tasksStoreMock.listTaskDescriptionHistory = vi.fn(async (): Promise<TaskDescriptionHistoryItem[]> => [])
     tasksStoreMock.selectedTask = {
       ...selectedTask,
       description: '**old** description',
@@ -126,6 +129,7 @@ describe('TaskCard', () => {
       global: {
         stubs: {
           TaskFieldInput: true,
+          UserAvatar: true,
           TaskAttachments: true,
           TaskComments: true,
           TaskDescriptionEditor: {
@@ -148,6 +152,7 @@ describe('TaskCard', () => {
       global: {
         stubs: {
           TaskFieldInput: true,
+          UserAvatar: true,
           TaskAttachments: true,
           TaskComments: true,
           TaskDescriptionEditor: {
@@ -175,6 +180,7 @@ describe('TaskCard', () => {
       global: {
         stubs: {
           TaskFieldInput: true,
+          UserAvatar: true,
           TaskAttachments: true,
           TaskComments: true,
           TaskDescriptionEditor: {
@@ -201,6 +207,7 @@ describe('TaskCard', () => {
       global: {
         stubs: {
           TaskFieldInput: true,
+          UserAvatar: true,
           TaskAttachments: true,
           TaskComments: true,
           TaskDescriptionEditor: {
@@ -230,5 +237,72 @@ describe('TaskCard', () => {
       status_id: 'st-1',
       description: '- one\\n- two',
     }))
+  })
+
+  it('opens history modal, updates preview on item click, and applies with force snapshot', async () => {
+    tasksStoreMock.listTaskDescriptionHistory = vi.fn(async () => [
+      {
+        public_id: 'TASK-1',
+        title: 'Newest title',
+        description: '## Newest',
+        edited_by: 'u-2',
+        created_at: '2026-03-11T10:00:00Z',
+        editor: {
+          id: 'u-2',
+          display_name: 'Editor User',
+          avatar_url: '',
+        },
+      },
+      {
+        public_id: 'TASK-1',
+        title: 'Older title',
+        description: '## Older',
+        edited_by: 'u-3',
+        created_at: '2026-03-10T10:00:00Z',
+        editor: {
+          id: 'u-3',
+          display_name: 'Another User',
+          avatar_url: '',
+        },
+      },
+    ])
+
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      attachTo: document.body,
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          UserAvatar: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: {
+            props: ['modelValue'],
+            emits: ['update:modelValue'],
+            template: '<textarea data-testid="description-stub" :value="modelValue" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-description-history-toggle"]').trigger('click')
+    await flushPromises()
+    expect(tasksStoreMock.listTaskDescriptionHistory).toHaveBeenCalledWith('task-1')
+    expect((document.body.querySelector('[data-testid="task-description-history-preview-title"]') as HTMLInputElement | null)?.value).toBe('Newest title')
+
+    const historyItems = document.body.querySelectorAll('[data-testid="task-description-history-item"]')
+    expect(historyItems.length).toBe(2)
+    ;(historyItems[1] as HTMLButtonElement).click()
+    await flushPromises()
+    expect((document.body.querySelector('[data-testid="task-description-history-preview-title"]') as HTMLInputElement | null)?.value).toBe('Older title')
+
+    const applyButton = document.body.querySelector('[data-testid="task-description-restore-apply"]') as HTMLButtonElement | null
+    expect(applyButton).not.toBeNull()
+    applyButton?.click()
+    await flushPromises()
+
+    expect(tasksStoreMock.updateTaskDescription).toHaveBeenCalledWith('task-1', '## Older', { forceSnapshot: true })
+    wrapper.unmount()
   })
 })

@@ -16,6 +16,7 @@ vi.mock('@/services/http/tasksApi', () => ({
   tasksUpdateTaskTitle: vi.fn(),
   tasksUpdateTaskStatus: vi.fn(),
   tasksUpdateTaskDescription: vi.fn(),
+  tasksListTaskDescriptionHistory: vi.fn(async () => []),
   tasksUpdateTaskFieldValue: vi.fn(),
   tasksCreateSubtask: vi.fn(),
   tasksListTasks: vi.fn(async () => ({ groups: [], grand_total: 0 })),
@@ -83,5 +84,19 @@ describe('tasksStore.updateTaskDescription', () => {
 
     expect(store.selectedTask?.id).toBe('task-2')
     expect(store.selectedTask?.description).toBe('second task')
+  })
+
+  it('passes force snapshot flag when requested', async () => {
+    const store = useTasksStore()
+    store.selectedTask = makeTask('task-1', 'old')
+
+    vi.mocked(tasksUpdateTaskDescription).mockResolvedValueOnce(makeTask('task-1', 'restored'))
+
+    await store.updateTaskDescription('task-1', 'restored', { forceSnapshot: true })
+
+    expect(tasksUpdateTaskDescription).toHaveBeenCalledWith('task-1', {
+      description: 'restored',
+      force_snapshot: true,
+    })
   })
 })

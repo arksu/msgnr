@@ -934,6 +934,173 @@ func TestIntegration_Task_UpdateDescriptionOnly(t *testing.T) {
 	assert.Nil(t, cleared.Description)
 }
 
+func TestIntegration_Task_UpdateDescriptionHistoryThrottleAndForce(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actorA := seedUser(t, ctx, pool)
+	actorB := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "HIS", actorA)
+	status := seedStatus(t, ctx, svc, actorA)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "history throttle",
+		StatusID:   status.ID,
+		ActorID:    actorA,
+	})
+	require.NoError(t, err)
+
+	v1 := "version-1"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &v1,
+		ActorID:     actorA,
+	})
+	require.NoError(t, err)
+
+	v2 := "version-2"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &v2,
+		ActorID:     actorA,
+	})
+	require.NoError(t, err)
+
+	rows, err := svc.ListTaskDescriptionHistory(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].Description)
+	assert.Equal(t, "version-1", *rows[0].Description)
+	assert.Equal(t, actorA, rows[0].EditedBy)
+
+	v3 := "version-3"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description:   &v3,
+		ActorID:       actorB,
+		ForceSnapshot: true,
+	})
+	require.NoError(t, err)
+
+	rows, err = svc.ListTaskDescriptionHistory(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.NotNil(t, rows[0].Description)
+	assert.Equal(t, "version-3", *rows[0].Description)
+	assert.Equal(t, actorB, rows[0].EditedBy)
+	require.NotNil(t, rows[1].Description)
+	assert.Equal(t, "version-1", *rows[1].Description)
+}
+
+func TestIntegration_Task_DescriptionHistoryRetention(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	svc.SetDescriptionHistoryLimit(2)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "HRT", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "history retention",
+		StatusID:   status.ID,
+		ActorID:    actor,
+	})
+	require.NoError(t, err)
+
+	versions := []string{"ret-v1", "ret-v2", "ret-v3"}
+	for _, version := range versions {
+		value := version
+		_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+			Description:   &value,
+			ActorID:       actor,
+			ForceSnapshot: true,
+		})
+		require.NoError(t, err)
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	rows, err := svc.ListTaskDescriptionHistory(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.NotNil(t, rows[0].Description)
+	assert.Equal(t, "ret-v3", *rows[0].Description)
+	require.NotNil(t, rows[1].Description)
+	assert.Equal(t, "ret-v2", *rows[1].Description)
+}
+
+func TestIntegration_Task_DescriptionHistoryForceDuplicateNoop(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "HDP", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "history duplicate force",
+		StatusID:   status.ID,
+		ActorID:    actor,
+	})
+	require.NoError(t, err)
+
+	version := "same-version"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description:   &version,
+		ActorID:       actor,
+		ForceSnapshot: true,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description:   &version,
+		ActorID:       actor,
+		ForceSnapshot: true,
+	})
+	require.NoError(t, err)
+
+	rows, err := svc.ListTaskDescriptionHistory(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].Description)
+	assert.Equal(t, version, *rows[0].Description)
+}
+
+func TestIntegration_Task_DescriptionHistoryIncludesEditor(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "HED", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "history editor",
+		StatusID:   status.ID,
+		ActorID:    actor,
+	})
+	require.NoError(t, err)
+
+	next := "editor version"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &next,
+		ActorID:     actor,
+	})
+	require.NoError(t, err)
+
+	rows, err := svc.ListTaskDescriptionHistory(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, created.PublicID, rows[0].PublicID)
+	assert.Equal(t, created.Title, rows[0].Title)
+	require.NotNil(t, rows[0].Description)
+	assert.Equal(t, next, *rows[0].Description)
+	assert.Equal(t, actor, rows[0].EditedBy)
+	assert.Equal(t, actor, rows[0].Editor.ID)
+	assert.Equal(t, "Test User", rows[0].Editor.DisplayName)
+}
+
 func TestIntegration_Task_UpdateTitle_OptimisticConflict(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

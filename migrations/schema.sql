@@ -695,6 +695,20 @@ CREATE INDEX IF NOT EXISTS idx_task_title_trgm               ON task USING gin (
 CREATE INDEX IF NOT EXISTS idx_task_description_trgm         ON task USING gin (description gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_task_public_id_trgm           ON task USING gin (public_id gin_trgm_ops);
 
+CREATE TABLE IF NOT EXISTS task_description_history (
+    id          uuid         NOT NULL DEFAULT gen_random_uuid(),
+    public_id   varchar(64)  NOT NULL REFERENCES task(public_id) ON DELETE CASCADE,
+    title       text         NOT NULL,
+    description text         NULL,
+    edited_by   uuid         NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    created_at  timestamptz  NOT NULL DEFAULT now(),
+
+    CONSTRAINT chk_task_description_history_title_nonempty CHECK (btrim(title) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_description_history_public_created
+    ON task_description_history (public_id, created_at DESC);
+
 -- Atomically allocate the next sequence number for a template and set public_id.
 -- Also blocks inserts against a soft-deleted template.
 CREATE OR REPLACE FUNCTION assign_task_public_id()

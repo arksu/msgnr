@@ -50,6 +50,7 @@ func (e *TaskTitleConflictError) Unwrap() error {
 
 const prefixMaxLen = 32
 const maxCommentAttachments = 5
+const defaultTaskDescriptionHistoryLimit = 20
 
 var (
 	rePrefixValid    = regexp.MustCompile(`^[A-Z]+$`)
@@ -228,6 +229,23 @@ type TaskResponse struct {
 	ParentPublicID *string         `json:"parent_public_id,omitempty"`
 }
 
+// TaskDescriptionHistoryEditor is a public editor snapshot in task history.
+type TaskDescriptionHistoryEditor struct {
+	ID          uuid.UUID `json:"id"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   string    `json:"avatar_url"`
+}
+
+// TaskDescriptionHistoryItem is one saved description snapshot.
+type TaskDescriptionHistoryItem struct {
+	PublicID    string                       `json:"public_id"`
+	Title       string                       `json:"title"`
+	Description *string                      `json:"description"`
+	EditedBy    uuid.UUID                    `json:"edited_by"`
+	CreatedAt   time.Time                    `json:"created_at"`
+	Editor      TaskDescriptionHistoryEditor `json:"editor"`
+}
+
 // =========================================================
 // Attachment + Comment domain types (Phase 6)
 // =========================================================
@@ -346,16 +364,18 @@ type UpdateTaskTitleParams struct {
 
 // UpdateTaskDescriptionParams carries inputs for a description-only task update.
 type UpdateTaskDescriptionParams struct {
-	Description *string
-	ActorID     uuid.UUID
+	Description   *string
+	ActorID       uuid.UUID
+	ForceSnapshot bool
 }
 
 // ---- Service ----
 
 type Service struct {
-	pool  *pgxpool.Pool
-	q     *queries.Queries
-	store Storage
+	pool                    *pgxpool.Pool
+	q                       *queries.Queries
+	store                   Storage
+	descriptionHistoryLimit int
 }
 
 // Storage is the interface the service uses for file object storage.
@@ -368,10 +388,20 @@ type Storage interface {
 
 func NewService(pool *pgxpool.Pool, store Storage) *Service {
 	return &Service{
-		pool:  pool,
-		q:     queries.New(stdlib.OpenDBFromPool(pool)),
-		store: store,
+		pool:                    pool,
+		q:                       queries.New(stdlib.OpenDBFromPool(pool)),
+		store:                   store,
+		descriptionHistoryLimit: defaultTaskDescriptionHistoryLimit,
 	}
+}
+
+// SetDescriptionHistoryLimit overrides per-task retention cap.
+func (s *Service) SetDescriptionHistoryLimit(limit int) {
+	if limit <= 0 {
+		s.descriptionHistoryLimit = defaultTaskDescriptionHistoryLimit
+		return
+	}
+	s.descriptionHistoryLimit = limit
 }
 
 // =========================================================
@@ -1118,7 +1148,7 @@ func (s *Service) CreateTask(ctx context.Context, p CreateTaskParams) (TaskRespo
 		`INSERT INTO task (template_id, parent_task_id, title, description, status_id, created_by, updated_by)
 		 VALUES ($1, $2, $3, $4, $5, $6, $6)
 		 RETURNING `+taskColumns,
-		p.TemplateID, nullUUID(p.ParentTaskID), p.Title, nullableString(p.Description), p.StatusID, p.ActorID,
+		p.TemplateID, nullUUID(p.ParentTaskID), p.Title, nullString(p.Description), p.StatusID, p.ActorID,
 	))
 	if err != nil {
 		return TaskResponse{}, mapTaskWriteError(err)
@@ -1246,7 +1276,7 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 		 SET title = $2, description = $3, status_id = $4, updated_by = $5, updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+taskColumns,
-		id, p.Title, nullableString(p.Description), p.StatusID, p.ActorID,
+		id, p.Title, nullString(p.Description), p.StatusID, p.ActorID,
 	))
 	if err != nil {
 		return TaskResponse{}, mapTaskWriteError(err)
@@ -1311,22 +1341,167 @@ func (s *Service) UpdateTaskTitle(ctx context.Context, id uuid.UUID, p UpdateTas
 
 // UpdateTaskDescription updates only task description and touch columns.
 func (s *Service) UpdateTaskDescription(ctx context.Context, id uuid.UUID, p UpdateTaskDescriptionParams) (TaskResponse, error) {
-	if _, err := s.q.TaskGet(ctx, id); err != nil {
-		return TaskResponse{}, mapNotFound(err, "task")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TaskResponse{}, fmt.Errorf("tasks: begin update task description tx: %w", err)
 	}
+	defer tx.Rollback(ctx) //nolint:errcheck
 
-	taskRow, err := scanTask(s.pool.QueryRow(ctx,
+	taskRow, err := scanTask(tx.QueryRow(ctx,
 		`UPDATE task
 		 SET description = $2, updated_by = $3, updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+taskColumns,
-		id, nullableString(p.Description), p.ActorID,
+		id, nullString(p.Description), p.ActorID,
 	))
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TaskResponse{}, fmt.Errorf("%w: task", ErrNotFound)
+		}
 		return TaskResponse{}, mapTaskWriteError(err)
+	}
+	if err := s.maybeCreateTaskDescriptionSnapshotInTx(ctx, tx, taskRow, p.ActorID, p.ForceSnapshot); err != nil {
+		return TaskResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return TaskResponse{}, fmt.Errorf("tasks: commit update task description tx: %w", err)
 	}
 
 	return s.GetTask(ctx, taskRow.ID)
+}
+
+// ListTaskDescriptionHistory returns latest description snapshots for a task.
+func (s *Service) ListTaskDescriptionHistory(ctx context.Context, id uuid.UUID) ([]TaskDescriptionHistoryItem, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT h.public_id, h.title, h.description, h.edited_by, h.created_at,
+		        u.id, u.display_name, u.avatar_url
+		   FROM task t
+		   LEFT JOIN task_description_history h ON h.public_id = t.public_id
+		   LEFT JOIN users u ON u.id = h.edited_by
+		  WHERE t.id = $1
+		  ORDER BY h.created_at DESC NULLS LAST, h.id DESC NULLS LAST
+		  LIMIT $2`,
+		id, s.descriptionHistoryLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: list description history: %w", err)
+	}
+	defer rows.Close()
+
+	var out []TaskDescriptionHistoryItem
+	hasTask := false
+	for rows.Next() {
+		var (
+			publicID     sql.NullString
+			title        sql.NullString
+			desc         sql.NullString
+			editedBy     uuid.NullUUID
+			createdAt    sql.NullTime
+			editorID     uuid.NullUUID
+			editorName   sql.NullString
+			editorAvatar sql.NullString
+		)
+		if err := rows.Scan(
+			&publicID,
+			&title,
+			&desc,
+			&editedBy,
+			&createdAt,
+			&editorID,
+			&editorName,
+			&editorAvatar,
+		); err != nil {
+			return nil, fmt.Errorf("tasks: scan description history row: %w", err)
+		}
+		hasTask = true
+		// LEFT JOIN keeps one row when task exists but has no snapshots yet.
+		if !publicID.Valid {
+			continue
+		}
+		item := TaskDescriptionHistoryItem{
+			PublicID:  publicID.String,
+			Title:     title.String,
+			EditedBy:  editedBy.UUID,
+			CreatedAt: createdAt.Time,
+			Editor: TaskDescriptionHistoryEditor{
+				ID:          editorID.UUID,
+				DisplayName: editorName.String,
+				AvatarURL:   editorAvatar.String,
+			},
+		}
+		if desc.Valid {
+			description := desc.String
+			item.Description = &description
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate description history rows: %w", err)
+	}
+	if !hasTask {
+		return nil, fmt.Errorf("%w: task", ErrNotFound)
+	}
+	return out, nil
+}
+
+func (s *Service) maybeCreateTaskDescriptionSnapshotInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	task TaskRow,
+	actorID uuid.UUID,
+	force bool,
+) error {
+	var (
+		latestDescription sql.NullString
+		latestRecent      bool
+	)
+	err := tx.QueryRow(ctx,
+		`SELECT description,
+		        created_at > (now() - interval '30 seconds') AS is_recent
+		   FROM task_description_history
+		  WHERE public_id = $1
+		  ORDER BY created_at DESC, id DESC
+		  LIMIT 1`,
+		task.PublicID,
+	).Scan(&latestDescription, &latestRecent)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("tasks: load latest description snapshot: %w", err)
+	}
+	hasLatest := err == nil
+	nextDescription := nullString(task.Description)
+
+	// Skip exact duplicates even in force mode: restoring to the already-latest
+	// snapshot content should not create another adjacent copy.
+	if hasLatest && nullStringsEqual(nextDescription, latestDescription) {
+		return nil
+	}
+	if hasLatest && latestRecent && !force {
+		return nil
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO task_description_history (public_id, title, description, edited_by)
+		 VALUES ($1, $2, $3, $4)`,
+		task.PublicID, task.Title, nextDescription, actorID,
+	); err != nil {
+		return fmt.Errorf("tasks: insert description snapshot: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`WITH ranked AS (
+		     SELECT id,
+		            row_number() OVER (ORDER BY created_at DESC, id DESC) AS rn
+		       FROM task_description_history
+		      WHERE public_id = $1
+		  )
+		  DELETE FROM task_description_history h
+		   USING ranked r
+		  WHERE h.id = r.id
+		    AND r.rn > $2`,
+		task.PublicID, s.descriptionHistoryLimit,
+	); err != nil {
+		return fmt.Errorf("tasks: prune description snapshots: %w", err)
+	}
+	return nil
 }
 
 // UpdateTaskStatusParams carries inputs for a status-only task update.
@@ -1595,10 +1770,10 @@ func upsertOneFieldValue(ctx context.Context, tx pgx.Tx, taskID uuid.UUID, fv Fi
 		          created_at, updated_at`,
 		taskID,
 		fv.FieldDefinitionID,
-		nullableString(fv.ValueText),
-		nullableString(fv.ValueNumber),
+		nullString(fv.ValueText),
+		nullString(fv.ValueNumber),
 		nullUUID(fv.ValueUserID),
-		nullableString(fv.ValueDate),
+		nullString(fv.ValueDate),
 		fv.ValueDatetime,
 		rawJSON,
 		nullUUID(fv.EnumDictionaryID),
@@ -3053,14 +3228,14 @@ func sanitiseFileName(name string) string {
 	return result
 }
 
-// ---- Additional null helpers ----
-
-// nullableString converts *string to sql.NullString.
-func nullableString(s *string) sql.NullString {
-	if s == nil {
-		return sql.NullString{}
+func nullStringsEqual(a, b sql.NullString) bool {
+	if a.Valid != b.Valid {
+		return false
 	}
-	return sql.NullString{String: *s, Valid: true}
+	if !a.Valid {
+		return true
+	}
+	return a.String == b.String
 }
 
 func nullInt32Ptr(v *int32) sql.NullInt32 {

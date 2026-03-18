@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getMock = vi.fn()
+const patchMock = vi.fn()
 
 vi.mock('@/services/http/client', () => ({
   createAuthenticatedClient: () => ({
     get: getMock,
     post: vi.fn(),
-    patch: vi.fn(),
+    patch: patchMock,
     delete: vi.fn(),
   }),
 }))
@@ -14,6 +15,7 @@ vi.mock('@/services/http/client', () => ({
 describe('tasksApi task list queries', () => {
   beforeEach(() => {
     getMock.mockReset()
+    patchMock.mockReset()
   })
 
   it('serializes list mode params for GET /api/tasks', async () => {
@@ -99,5 +101,28 @@ describe('tasksApi task list queries', () => {
     expect(query).toContain('field_fd-2_user=u-1')
     expect(query).toContain('offset=30')
     expect(query).toContain('limit=20')
+  })
+
+  it('hits description history endpoint', async () => {
+    getMock.mockResolvedValueOnce({ data: [] })
+    const { tasksListTaskDescriptionHistory } = await import('@/services/http/tasksApi')
+
+    await tasksListTaskDescriptionHistory('task-1')
+
+    expect(getMock).toHaveBeenCalledTimes(1)
+    expect(getMock).toHaveBeenCalledWith('/api/tasks/task-1/description/history')
+  })
+
+  it('forwards force_snapshot for PATCH /api/tasks/:id/description', async () => {
+    patchMock.mockResolvedValueOnce({ data: { id: 'task-1', description: 'x', updated_at: '2026-01-01T00:00:00Z' } })
+    const { tasksUpdateTaskDescription } = await import('@/services/http/tasksApi')
+
+    await tasksUpdateTaskDescription('task-1', { description: 'x', force_snapshot: true })
+
+    expect(patchMock).toHaveBeenCalledTimes(1)
+    expect(patchMock).toHaveBeenCalledWith('/api/tasks/task-1/description', {
+      description: 'x',
+      force_snapshot: true,
+    })
   })
 })

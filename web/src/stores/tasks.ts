@@ -13,6 +13,7 @@ import {
   tasksUpdateTaskTitle,
   tasksUpdateTaskStatus,
   tasksUpdateTaskDescription,
+  tasksListTaskDescriptionHistory,
   tasksUpdateTaskFieldValue,
   tasksCreateSubtask,
   tasksListTasks,
@@ -29,6 +30,7 @@ import {
   type TaskListGroup,
   type TaskListParams,
   type TaskGroupedStatusBucket,
+  type TaskDescriptionHistoryItem,
   type SortOrder,
   type CreateTaskPayload,
   type UpdateTaskPayload,
@@ -285,15 +287,24 @@ export const useTasksStore = defineStore('tasks', () => {
     return updated
   }
 
-  async function updateTaskDescription(id: string, description: string | null): Promise<Task> {
+  async function updateTaskDescription(
+    id: string,
+    description: string | null,
+    options?: { forceSnapshot?: boolean },
+  ): Promise<Task> {
     tasksDescLog('updateTaskDescription:start', {
       id,
       request: descriptionSignature(description),
+      forceSnapshot: options?.forceSnapshot ?? false,
       beforeSelected: selectedTask.value?.id === id
         ? descriptionSignature(selectedTask.value.description)
         : 'not-selected',
     })
-    const updated = await tasksUpdateTaskDescription(id, { description })
+    const payload: { description: string | null; force_snapshot?: boolean } = { description }
+    if (options?.forceSnapshot) {
+      payload.force_snapshot = true
+    }
+    const updated = await tasksUpdateTaskDescription(id, payload)
     tasksDescLog('updateTaskDescription:response', {
       id,
       response: descriptionSignature(updated.description),
@@ -309,6 +320,10 @@ export const useTasksStore = defineStore('tasks', () => {
       })
     }
     return updated
+  }
+
+  async function listTaskDescriptionHistory(id: string): Promise<TaskDescriptionHistoryItem[]> {
+    return tasksListTaskDescriptionHistory(id)
   }
 
   async function updateTaskFieldValue(
@@ -557,6 +572,7 @@ export const useTasksStore = defineStore('tasks', () => {
     updateTaskTitle,
     updateTaskStatus,
     updateTaskDescription,
+    listTaskDescriptionHistory,
     updateTaskFieldValue,
     createSubtask,
     clearSelectedTask,

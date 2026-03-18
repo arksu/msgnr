@@ -243,6 +243,14 @@ type TaskCommentAttachment struct {
 	CreatedAt  time.Time     `json:"created_at"`
 }
 
+type TaskDescriptionHistory struct {
+	PublicID    string         `json:"public_id"`
+	Title       string         `json:"title"`
+	Description sql.NullString `json:"description"`
+	EditedBy    uuid.UUID      `json:"edited_by"`
+	CreatedAt   time.Time      `json:"created_at"`
+}
+
 type TaskFieldDefinition struct {
 	ID               uuid.UUID      `json:"id"`
 	TemplateID       uuid.UUID      `json:"template_id"`

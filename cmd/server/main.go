@@ -171,6 +171,7 @@ func main() {
 	chatSvc.ConfigureAttachments(storageClient, cfg.AttachmentMaxSizeMB)
 
 	tasksSvc := tasks.NewService(db.Pool, storageClient)
+	tasksSvc.SetDescriptionHistoryLimit(cfg.TaskDescriptionHistoryLimit)
 	tasksHandler := tasks.NewHandler(
 		tasksSvc,
 		authSvc,

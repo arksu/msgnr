@@ -59,6 +59,7 @@ type Config struct {
 	// Task tracker grouped-mode pagination
 	TaskGroupPortionDefaultLimit int `mapstructure:"TASK_GROUP_PORTION_DEFAULT_LIMIT"`
 	TaskGroupPortionMaxLimit     int `mapstructure:"TASK_GROUP_PORTION_MAX_LIMIT"`
+	TaskDescriptionHistoryLimit  int `mapstructure:"TASK_DESCRIPTION_HISTORY_LIMIT"`
 
 	// Minio / Object Storage
 	MinioEndpoint       string `mapstructure:"MINIO_ENDPOINT"`
@@ -132,6 +133,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("CHAT_HISTORY_PAGE_SIZE", 50)
 	viper.SetDefault("TASK_GROUP_PORTION_DEFAULT_LIMIT", 50)
 	viper.SetDefault("TASK_GROUP_PORTION_MAX_LIMIT", 200)
+	viper.SetDefault("TASK_DESCRIPTION_HISTORY_LIMIT", 20)
 
 	viper.SetDefault("MINIO_ENDPOINT", "localhost:9000")
 	viper.SetDefault("MINIO_ACCESS_KEY", "minioadmin")

@@ -772,6 +772,7 @@ func (h *Handler) tasksStatusRouter(w http.ResponseWriter, r *http.Request, _ au
 // GET /api/tasks/:id
 // PATCH /api/tasks/:id
 // PATCH /api/tasks/:id/title
+// GET /api/tasks/:id/description/history
 // PATCH /api/tasks/:id/description
 // PATCH /api/tasks/:id/status
 // PATCH /api/tasks/:id/fields/:field_id
@@ -817,6 +818,17 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 			return
 		}
 		h.taskTitleItem(w, r, p, id)
+		return
+	}
+
+	// Route /api/tasks/:id/description/history
+	if rawID, ok := strings.CutSuffix(rest, "/description/history"); ok {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
+			return
+		}
+		h.taskDescriptionHistoryItem(w, r, p, id)
 		return
 	}
 
@@ -977,6 +989,20 @@ func (h *Handler) taskTitleItem(w http.ResponseWriter, r *http.Request, p auth.P
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// GET /api/tasks/:id/description/history
+func (h *Handler) taskDescriptionHistoryItem(w http.ResponseWriter, r *http.Request, _ auth.Principal, id uuid.UUID) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	resp, err := h.svc.ListTaskDescriptionHistory(r.Context(), id)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // PATCH /api/tasks/:id/description
 func (h *Handler) taskDescriptionItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {
 	if r.Method != http.MethodPatch {
@@ -985,7 +1011,8 @@ func (h *Handler) taskDescriptionItem(w http.ResponseWriter, r *http.Request, p 
 	}
 
 	var req struct {
-		Description *string `json:"description"`
+		Description   *string `json:"description"`
+		ForceSnapshot bool    `json:"force_snapshot"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
@@ -995,11 +1022,13 @@ func (h *Handler) taskDescriptionItem(w http.ResponseWriter, r *http.Request, p 
 		zap.String("task_id", id.String()),
 		zap.String("user_id", p.UserID.String()),
 		zap.String("description_sig", markdownSignatureForLog(req.Description)),
+		zap.Bool("force_snapshot", req.ForceSnapshot),
 	)
 
 	resp, err := h.svc.UpdateTaskDescription(r.Context(), id, UpdateTaskDescriptionParams{
-		Description: req.Description,
-		ActorID:     p.UserID,
+		Description:   req.Description,
+		ActorID:       p.UserID,
+		ForceSnapshot: req.ForceSnapshot,
 	})
 	if err != nil {
 		h.serviceError(w, err)

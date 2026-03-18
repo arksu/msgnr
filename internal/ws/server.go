@@ -730,6 +730,43 @@ func (s *Server) SendForcePasswordChange(userID string) {
 	})
 }
 
+// SendTaskStatusChanged pushes a task status transition directly to all active
+// websocket sessions. The event is intentionally non-sequenced and not
+// persisted in workspace_events.
+func (s *Server) SendTaskStatusChanged(
+	taskID, publicID, fromStatusID, toStatusID, updatedBy string,
+	updatedAt time.Time,
+) {
+	evt := &packetspb.ServerEvent{
+		EventType: packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED,
+		Payload: &packetspb.ServerEvent_TaskStatusChanged{
+			TaskStatusChanged: &packetspb.TaskStatusChangedEvent{
+				TaskId:       taskID,
+				PublicId:     publicID,
+				FromStatusId: fromStatusID,
+				ToStatusId:   toStatusID,
+				UpdatedBy:    updatedBy,
+				UpdatedAt:    timestamppb.New(updatedAt.UTC()),
+			},
+		},
+	}
+
+	s.sessionMu.RLock()
+	userIDs := make([]string, 0, len(s.sessionsByUser))
+	for userID := range s.sessionsByUser {
+		userIDs = append(userIDs, userID)
+	}
+	s.sessionMu.RUnlock()
+
+	if len(userIDs) == 0 {
+		return
+	}
+	s.sendDirectEnvelope(userIDs, &packetspb.Envelope{
+		ProtocolVersion: protocolVersion,
+		Payload:         &packetspb.Envelope_ServerEvent{ServerEvent: evt},
+	})
+}
+
 func (s *Server) sharedUserIDs(ctx context.Context, userID uuid.UUID) ([]string, error) {
 	rows, err := s.db.Pool.Query(ctx, `
 		SELECT DISTINCT cm_other.user_id

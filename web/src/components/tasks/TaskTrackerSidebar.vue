@@ -18,6 +18,34 @@
         New task
       </button>
 
+      <div class="px-3 py-1 text-xs font-semibold text-sidebar-heading uppercase tracking-wide">
+        Views
+      </div>
+      <button
+        class="sidebar-item"
+        :class="currentView === 'tasks-list' ? 'bg-sidebar-active text-white' : ''"
+        @click="emit('openList')"
+      >
+        <svg class="w-4 h-4 shrink-0 text-sidebar-heading" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <rect x="4" y="4" width="16" height="16" rx="2" />
+          <path d="M9 4v16M4 10h16M4 16h16" />
+        </svg>
+        Task list
+      </button>
+      <button
+        class="sidebar-item mb-3"
+        :class="currentView === 'tasks-kanban' ? 'bg-sidebar-active text-white' : ''"
+        @click="emit('openKanban')"
+      >
+        <svg class="w-4 h-4 shrink-0 text-sidebar-heading" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="6" height="8" rx="1.5" />
+          <rect x="10.5" y="3" width="10.5" height="5" rx="1.5" />
+          <rect x="10.5" y="9" width="10.5" height="12" rx="1.5" />
+          <rect x="3" y="12" width="6" height="9" rx="1.5" />
+        </svg>
+        Kanban
+      </button>
+
       <div v-if="tasksStore.configLoading" class="px-3 py-2 text-xs text-gray-500">
         Loading...
       </div>
@@ -71,10 +99,13 @@ import { useTasksStore } from '@/stores/tasks'
 
 defineProps<{
   modelValue: string | null
+  currentView: 'tasks-list' | 'tasks-kanban'
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: string | null]
+  openList: []
+  openKanban: []
 }>()
 
 const tasksStore = useTasksStore()

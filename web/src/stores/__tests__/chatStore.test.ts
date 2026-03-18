@@ -22,6 +22,7 @@ import {
   MessageUpdatedEventSchema,
   MessageDeletedEventSchema,
   ThreadSummaryUpdatedEventSchema,
+  TaskStatusChangedEventSchema,
   ServerEventSchema,
   PresenceEventSchema,
   PresenceStatus,
@@ -1036,6 +1037,63 @@ describe('chatStore phase 6 flows', () => {
     off()
   })
 
+  it('routes direct task status changed events to subscribers', () => {
+    const chat = useChatStore()
+    const onTaskStatusChanged = vi.fn()
+    const off = chat.onTaskStatusChanged(onTaskStatusChanged)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 0n,
+      eventType: EventType.TASK_STATUS_CHANGED,
+      payload: {
+        case: 'taskStatusChanged',
+        value: create(TaskStatusChangedEventSchema, {
+          taskId: 'task-1',
+          publicId: 'BUG-1',
+          fromStatusId: 'st-1',
+          toStatusId: 'st-2',
+          updatedBy: 'user-2',
+          updatedAt: { seconds: 1700000000n, nanos: 0 },
+        }),
+      },
+    }))
+
+    expect(onTaskStatusChanged).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      publicId: 'BUG-1',
+      fromStatusId: 'st-1',
+      toStatusId: 'st-2',
+      updatedBy: 'user-2',
+      updatedAt: new Date(1700000000 * 1000).toISOString(),
+    })
+    off()
+  })
+
+  it('stops task status changed notifications after unsubscribe', () => {
+    const chat = useChatStore()
+    const onTaskStatusChanged = vi.fn()
+    const off = chat.onTaskStatusChanged(onTaskStatusChanged)
+    off()
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 0n,
+      eventType: EventType.TASK_STATUS_CHANGED,
+      payload: {
+        case: 'taskStatusChanged',
+        value: create(TaskStatusChangedEventSchema, {
+          taskId: 'task-1',
+          publicId: 'BUG-1',
+          fromStatusId: 'st-1',
+          toStatusId: 'st-2',
+          updatedBy: 'user-2',
+          updatedAt: { seconds: 1700000000n, nanos: 0 },
+        }),
+      },
+    }))
+
+    expect(onTaskStatusChanged).not.toHaveBeenCalled()
+  })
+
   it('marks active direct message as read for self-authored messages', () => {
     const chat = useChatStore()
     const ws = useWsStore()
@@ -1754,5 +1812,92 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.messages['channel-1'].map(item => item.id)).toEqual(['message-1', 'message-2', 'message-3'])
     expect(chat.messages['channel-1'][1].body).toBe('newer duplicate')
     expect(chat.conversationHasMoreHistory('channel-1')).toBe(false)
+  })
+})
+
+describe('chatStore.onTaskStatusChanged', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('dispatches task_status_changed payload to registered handler via handleServerEvent', () => {
+    const chat = useChatStore()
+    const received: any[] = []
+    chat.onTaskStatusChanged((evt) => received.push(evt))
+
+    const updatedAt = { seconds: 1742299200n, nanos: 0 }
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 0n,
+      eventType: EventType.TASK_STATUS_CHANGED,
+      payload: {
+        case: 'taskStatusChanged',
+        value: create(TaskStatusChangedEventSchema, {
+          taskId: 'task-abc',
+          publicId: 'BUG-42',
+          fromStatusId: 'st-1',
+          toStatusId: 'st-2',
+          updatedBy: 'user-1',
+          updatedAt,
+        }),
+      },
+    }))
+
+    expect(received).toHaveLength(1)
+    expect(received[0].taskId).toBe('task-abc')
+    expect(received[0].publicId).toBe('BUG-42')
+    expect(received[0].fromStatusId).toBe('st-1')
+    expect(received[0].toStatusId).toBe('st-2')
+    expect(received[0].updatedBy).toBe('user-1')
+    expect(received[0].updatedAt).toBe(new Date(1742299200 * 1000).toISOString())
+  })
+
+  it('stops dispatching after unsubscribe', () => {
+    const chat = useChatStore()
+    const received: any[] = []
+    const unsub = chat.onTaskStatusChanged((evt) => received.push(evt))
+
+    unsub()
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 0n,
+      eventType: EventType.TASK_STATUS_CHANGED,
+      payload: {
+        case: 'taskStatusChanged',
+        value: create(TaskStatusChangedEventSchema, {
+          taskId: 'task-xyz',
+          publicId: 'BUG-99',
+          fromStatusId: 'st-1',
+          toStatusId: 'st-3',
+          updatedBy: 'user-2',
+        }),
+      },
+    }))
+
+    expect(received).toHaveLength(0)
+  })
+
+  it('isolates handler failures so other handlers still receive the event', () => {
+    const chat = useChatStore()
+    const received: any[] = []
+    chat.onTaskStatusChanged(() => { throw new Error('boom') })
+    chat.onTaskStatusChanged((evt) => received.push(evt))
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 0n,
+      eventType: EventType.TASK_STATUS_CHANGED,
+      payload: {
+        case: 'taskStatusChanged',
+        value: create(TaskStatusChangedEventSchema, {
+          taskId: 'task-1',
+          publicId: 'BUG-1',
+          fromStatusId: 'st-1',
+          toStatusId: 'st-2',
+          updatedBy: 'user-1',
+        }),
+      },
+    }))
+
+    expect(received).toHaveLength(1)
+    expect(received[0].taskId).toBe('task-1')
   })
 })

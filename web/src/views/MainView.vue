@@ -72,18 +72,26 @@
         <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="task-tracker">
           <TaskTrackerSidebar
             :model-value="selectedTemplateFilter"
+            :current-view="taskTrackerBaseRouteName"
             @update:modelValue="onTaskTrackerFilterChange"
+            @open-list="openTaskListRoute"
+            @open-kanban="openTaskKanbanRoute"
           />
           <main class="flex-1 min-w-0 overflow-hidden">
-            <TaskListView
-              v-if="!isTaskCardRoute"
+            <TaskCard
+              v-if="isTaskCardRoute"
+              :template-filter="selectedTemplateFilter"
+              @back="backToList"
+            />
+            <TaskKanbanView
+              v-else-if="isTaskKanbanRoute"
               :template-filter="selectedTemplateFilter"
               @open-task="openTask"
             />
-            <TaskCard
+            <TaskListView
               v-else
               :template-filter="selectedTemplateFilter"
-              @back="backToList"
+              @open-task="openTask"
             />
           </main>
         </div>
@@ -304,6 +312,7 @@ import CallDock from '@/components/CallDock.vue'
 import TaskTrackerSidebar from '@/components/tasks/TaskTrackerSidebar.vue'
 import TaskCard from '@/components/tasks/TaskCard.vue'
 import TaskListView from '@/components/tasks/TaskListView.vue'
+import TaskKanbanView from '@/components/tasks/TaskKanbanView.vue'
 import TaskCreateDialog from '@/components/tasks/TaskCreateDialog.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useTasksStore } from '@/stores/tasks'
@@ -344,10 +353,21 @@ const handlingIncomingInvite = ref(false)
 const incomingInviteError = ref('')
 const dismissedInviteIds = ref<string[]>([])
 const selectedTemplateFilter = ref<string | null>(null)
+const lastTaskTrackerNonCardRoute = ref<'tasks-list' | 'tasks-kanban'>('tasks-list')
 let unsubscribeIncomingMessageSound: (() => void) | null = null
 const tasksStore = useTasksStore()
-const isTaskTrackerRoute = computed(() => route.name === 'tasks-list' || route.name === 'tasks-card')
+const isTaskTrackerRoute = computed(() => (
+  route.name === 'tasks-list'
+  || route.name === 'tasks-kanban'
+  || route.name === 'tasks-card'
+))
 const isTaskCardRoute = computed(() => route.name === 'tasks-card')
+const isTaskKanbanRoute = computed(() => route.name === 'tasks-kanban')
+const taskTrackerBaseRouteName = computed<'tasks-list' | 'tasks-kanban'>(() => {
+  if (route.name === 'tasks-list') return 'tasks-list'
+  if (route.name === 'tasks-kanban') return 'tasks-kanban'
+  return lastTaskTrackerNonCardRoute.value
+})
 const appMode = computed<'chat' | 'task-tracker'>(() => (isTaskTrackerRoute.value ? 'task-tracker' : 'chat'))
 const showChatModeUnreadBadge = computed(() => appMode.value !== 'chat' && chatStore.totalUnreadCount > 0)
 const chatModeUnreadBadgeLabel = computed(() => (chatStore.totalUnreadCount > 99 ? '99+' : String(chatStore.totalUnreadCount)))
@@ -369,6 +389,18 @@ async function goToTaskTrackerMode() {
   await router.push({ name: 'tasks-list' })
 }
 
+async function openTaskListRoute() {
+  lastTaskTrackerNonCardRoute.value = 'tasks-list'
+  if (route.name === 'tasks-list') return
+  await router.push({ name: 'tasks-list' })
+}
+
+async function openTaskKanbanRoute() {
+  lastTaskTrackerNonCardRoute.value = 'tasks-kanban'
+  if (route.name === 'tasks-kanban') return
+  await router.push({ name: 'tasks-kanban' })
+}
+
 async function openTask(id: string) {
   saveLastOpenedTaskId(id)
   await router.push({ name: 'tasks-card', params: { taskId: id } })
@@ -384,14 +416,14 @@ async function backToList() {
   tasksStore.clearSelectedTask()
   // Refresh the list so any edits made in the card are reflected
   await tasksStore.loadTaskList()
-  await router.push({ name: 'tasks-list' })
+  await router.push({ name: lastTaskTrackerNonCardRoute.value })
 }
 
 function onTaskTrackerFilterChange(value: string | null) {
   selectedTemplateFilter.value = value
   if (route.name === 'tasks-card') {
     tasksStore.clearSelectedTask()
-    void router.push({ name: 'tasks-list' })
+    void router.push({ name: lastTaskTrackerNonCardRoute.value })
   }
 }
 
@@ -400,7 +432,7 @@ watch(
   async ({ name, taskId }) => {
     if (name === 'tasks-card') {
       if (!taskId) {
-        await router.replace({ name: 'tasks-list' })
+        await router.replace({ name: lastTaskTrackerNonCardRoute.value })
         return
       }
       if (routeTaskIdMatchesSelected(taskId)) {
@@ -417,12 +449,13 @@ watch(
         }
       } else {
         clearLastOpenedTaskId()
-        await router.replace({ name: 'tasks-list' })
+        await router.replace({ name: lastTaskTrackerNonCardRoute.value })
       }
       return
     }
 
-    if (name === 'tasks-list') {
+    if (name === 'tasks-list' || name === 'tasks-kanban') {
+      lastTaskTrackerNonCardRoute.value = name
       tasksStore.clearSelectedTask()
       return
     }
@@ -439,7 +472,10 @@ watch(() => tasksStore.selectedTask?.id, (taskId) => {
   if (!taskId || !isTaskTrackerRoute.value) return
   // While browsing the list, avoid re-opening a card due stale task selections.
   // The list should auto-open a card only for freshly created tasks.
-  if (route.name !== 'tasks-card' && !(route.name === 'tasks-list' && tasksStore.createDialogOpen)) {
+  if (
+    route.name !== 'tasks-card'
+    && !(tasksStore.createDialogOpen && (route.name === 'tasks-list' || route.name === 'tasks-kanban'))
+  ) {
     return
   }
   saveLastOpenedTaskId(taskId)
@@ -450,7 +486,7 @@ watch(() => tasksStore.selectedTask?.id, (taskId) => {
 watch(
   () => route.name,
   (name) => {
-    if (name === 'tasks-list' || name === 'tasks-card') return
+    if (name === 'tasks-list' || name === 'tasks-kanban' || name === 'tasks-card') return
     selectedTemplateFilter.value = null
   }
 )

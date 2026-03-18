@@ -67,3 +67,29 @@ func TestBuildServerEventFromStored_DecodesUserIdentityUpdated(t *testing.T) {
 	assert.Equal(t, "u1", evt.GetUserIdentityUpdated().GetUserId())
 	assert.Equal(t, "Ada", evt.GetUserIdentityUpdated().GetDisplayName())
 }
+
+func TestBuildServerEventFromStored_DecodesTaskStatusChanged(t *testing.T) {
+	occurredAt := time.Unix(1700002000, 0).UTC()
+	payload := []byte(`{
+		"taskId":"task-1",
+		"publicId":"BUG-1",
+		"fromStatusId":"st-1",
+		"toStatusId":"st-2",
+		"updatedBy":"user-1",
+		"updatedAt":"2026-03-18T12:00:00Z"
+	}`)
+
+	evt, err := buildServerEventFromStored(
+		"task_status_changed",
+		"44444444-4444-4444-4444-444444444444",
+		"",
+		occurredAt,
+		payload,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	assert.Equal(t, packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED, evt.GetEventType())
+	require.NotNil(t, evt.GetTaskStatusChanged())
+	assert.Equal(t, "task-1", evt.GetTaskStatusChanged().GetTaskId())
+	assert.Equal(t, "BUG-1", evt.GetTaskStatusChanged().GetPublicId())
+}

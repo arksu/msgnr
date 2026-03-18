@@ -72,6 +72,15 @@ func TestValidateEventTypePayload_Valid(t *testing.T) {
 				},
 			},
 		},
+		{
+			"task_status_changed",
+			&packetspb.ServerEvent{
+				EventType: packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED,
+				Payload: &packetspb.ServerEvent_TaskStatusChanged{
+					TaskStatusChanged: &packetspb.TaskStatusChangedEvent{},
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {

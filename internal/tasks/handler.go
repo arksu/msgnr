@@ -22,10 +22,16 @@ import (
 type Handler struct {
 	svc                      *Service
 	authSvc                  *auth.Service
+	statusChangeNotifier     TaskStatusChangeNotifier
 	log                      *zap.Logger
 	maxAttachSizeMB          int // maximum allowed attachment file size in megabytes
 	groupPortionDefaultLimit int
 	groupPortionMaxLimit     int
+}
+
+// TaskStatusChangeNotifier broadcasts task status transitions to live clients.
+type TaskStatusChangeNotifier interface {
+	SendTaskStatusChanged(taskID, publicID, fromStatusID, toStatusID, updatedBy string, updatedAt time.Time)
 }
 
 func NewHandler(
@@ -56,6 +62,10 @@ func NewHandler(
 		groupPortionDefaultLimit: groupPortionDefaultLimit,
 		groupPortionMaxLimit:     groupPortionMaxLimit,
 	}
+}
+
+func (h *Handler) SetStatusChangeNotifier(notifier TaskStatusChangeNotifier) {
+	h.statusChangeNotifier = notifier
 }
 
 // RegisterRoutes mounts all task-tracker routes on mux.
@@ -1058,13 +1068,24 @@ func (h *Handler) taskStatusItem(w http.ResponseWriter, r *http.Request, p auth.
 		return
 	}
 
-	resp, err := h.svc.UpdateTaskStatus(r.Context(), id, UpdateTaskStatusParams{
+	resp, previousStatusID, err := h.svc.UpdateTaskStatus(r.Context(), id, UpdateTaskStatusParams{
 		StatusID: req.StatusID,
 		ActorID:  p.UserID,
 	})
 	if err != nil {
 		h.serviceError(w, err)
 		return
+	}
+
+	if h.statusChangeNotifier != nil && previousStatusID != resp.StatusID {
+		h.statusChangeNotifier.SendTaskStatusChanged(
+			resp.ID.String(),
+			resp.PublicID,
+			previousStatusID.String(),
+			resp.StatusID.String(),
+			p.UserID.String(),
+			resp.UpdatedAt,
+		)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

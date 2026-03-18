@@ -180,6 +180,7 @@ func main() {
 		cfg.TaskGroupPortionDefaultLimit,
 		cfg.TaskGroupPortionMaxLimit,
 	)
+	tasksHandler.SetStatusChangeNotifier(wsServer)
 	wsServer.SetTasksService(tasksSvc)
 
 	// --- main HTTP mux ---

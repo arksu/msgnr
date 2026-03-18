@@ -31,6 +31,7 @@ func newTestServer(bus *events.Bus) *Server {
 		authorizeEvent: func(_ context.Context, _ auth.Principal, _ *packetspb.ServerEvent) bool {
 			return true
 		},
+		sessionsByUser:           make(map[string]map[chan outboundMsg]*sessionState),
 		taskCollabSubscribers:    make(map[string]map[chan outboundMsg]struct{}),
 		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
 	}
@@ -266,4 +267,40 @@ func TestTaskCollabSubscribeResponseIncludesSubscriberCount(t *testing.T) {
 	assert.Equal(t, int32(2), second.GetSubscriberCount())
 	assert.Equal(t, "aabb", first.GetPersistedMarkdown())
 	assert.Equal(t, "aabb", second.GetPersistedMarkdown())
+}
+
+func TestSendTaskStatusChangedBroadcastsToActiveSessions(t *testing.T) {
+	srv := newTestServer(nil)
+	sessionA := make(chan outboundMsg, 1)
+	sessionB := make(chan outboundMsg, 1)
+	unregisterA := srv.registerUserSession("user-a", sessionA)
+	unregisterB := srv.registerUserSession("user-b", sessionB)
+	defer unregisterA()
+	defer unregisterB()
+
+	updatedAt := time.Unix(1700002000, 0).UTC()
+	srv.SendTaskStatusChanged("task-1", "BUG-1", "st-1", "st-2", "user-updater", updatedAt)
+
+	assertEvent := func(ch chan outboundMsg) {
+		select {
+		case msg := <-ch:
+			require.NotNil(t, msg.env)
+			evt := msg.env.GetServerEvent()
+			require.NotNil(t, evt)
+			assert.Equal(t, int64(0), evt.GetEventSeq())
+			assert.Equal(t, packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED, evt.GetEventType())
+			payload := evt.GetTaskStatusChanged()
+			require.NotNil(t, payload)
+			assert.Equal(t, "task-1", payload.GetTaskId())
+			assert.Equal(t, "BUG-1", payload.GetPublicId())
+			assert.Equal(t, "st-1", payload.GetFromStatusId())
+			assert.Equal(t, "st-2", payload.GetToStatusId())
+			assert.Equal(t, "user-updater", payload.GetUpdatedBy())
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for task_status_changed event")
+		}
+	}
+
+	assertEvent(sessionA)
+	assertEvent(sessionB)
 }

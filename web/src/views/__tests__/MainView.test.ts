@@ -55,8 +55,8 @@ vi.mock('@/components/ChatArea.vue', () => ({
 
 vi.mock('@/components/tasks/TaskTrackerSidebar.vue', () => ({
   default: {
-    props: ['modelValue'],
-    emits: ['update:modelValue'],
+    props: ['modelValue', 'currentView'],
+    emits: ['update:modelValue', 'openList', 'openKanban'],
     template: '<aside data-testid="task-tracker-sidebar" />',
   },
 }))
@@ -65,6 +65,13 @@ vi.mock('@/components/tasks/TaskListView.vue', () => ({
   default: {
     emits: ['openTask'],
     template: '<section data-testid="task-list-view"><button data-testid="task-list-open" @click="$emit(\'openTask\', \'task-1\')">open</button></section>',
+  },
+}))
+
+vi.mock('@/components/tasks/TaskKanbanView.vue', () => ({
+  default: {
+    emits: ['openTask'],
+    template: '<section data-testid="task-kanban-view"><button data-testid="task-kanban-open" @click="$emit(\'openTask\', \'task-k\')">open</button></section>',
   },
 }))
 
@@ -87,6 +94,7 @@ function createMainRouter() {
     routes: [
       { path: '/', name: 'main', component: MainView },
       { path: '/tasks', name: 'tasks-list', component: MainView },
+      { path: '/tasks/kanban', name: 'tasks-kanban', component: MainView },
       { path: '/tasks/:taskId', name: 'tasks-card', component: MainView },
       { path: '/login', name: 'login', component: { template: '<div>login</div>' } },
     ],
@@ -363,5 +371,25 @@ describe('MainView server unavailable state', () => {
     await flushUi()
 
     expect(router.currentRoute.value.name).toBe('tasks-list')
+  })
+
+  it('returns to kanban after opening card from kanban route', async () => {
+    const router = createMainRouter()
+    router.push('/tasks/kanban')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="task-kanban-view"]').exists()).toBe(true)
+
+    await (wrapper.findComponent(MainView).vm as any).openTask('task-k')
+    await flushUi()
+    expect(router.currentRoute.value.name).toBe('tasks-card')
+
+    await (wrapper.findComponent(MainView).vm as any).backToList()
+    await flushUi()
+
+    expect(router.currentRoute.value.name).toBe('tasks-kanban')
   })
 })

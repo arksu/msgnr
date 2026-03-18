@@ -37,13 +37,22 @@ describe('router auth guard', () => {
     expect(router.currentRoute.value.name).toBe('login')
   })
 
-  it('allows authenticated user to open /tasks and /tasks/:taskId', async () => {
+  it('redirects unauthenticated user from /tasks/kanban to login', async () => {
+    const { default: router } = await import('@/router')
+    await router.push('/tasks/kanban')
+    expect(router.currentRoute.value.name).toBe('login')
+  })
+
+  it('allows authenticated user to open /tasks, /tasks/kanban and /tasks/:taskId', async () => {
     const { default: router } = await import('@/router')
     const auth = useAuthStore()
     auth.authState = 'AUTHENTICATED'
 
     await router.push('/tasks')
     expect(router.currentRoute.value.name).toBe('tasks-list')
+
+    await router.push('/tasks/kanban')
+    expect(router.currentRoute.value.name).toBe('tasks-kanban')
 
     await router.push('/tasks/task-1')
     expect(router.currentRoute.value.name).toBe('tasks-card')

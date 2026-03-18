@@ -28,6 +28,7 @@ import type {
   CallStateChangedEvent,
   CallInviteCreatedEvent,
   CallInviteCancelledEvent,
+  TaskStatusChangedEvent,
   NotificationResolvedEvent,
   NotificationSummary,
   ActiveCallSummary,
@@ -199,6 +200,17 @@ export interface IncomingMessageNotification {
 }
 
 export type IncomingMessageNotificationHandler = (evt: IncomingMessageNotification) => void
+
+export interface TaskStatusChangedNotification {
+  taskId: string
+  publicId: string
+  fromStatusId: string
+  toStatusId: string
+  updatedBy: string
+  updatedAt: string
+}
+
+export type TaskStatusChangedNotificationHandler = (evt: TaskStatusChangedNotification) => void
 
 export interface TypingState {
   userId: string
@@ -392,6 +404,7 @@ export const useChatStore = defineStore('chat', () => {
   let userDirectoryPromise: Promise<void> | null = null
   let toastTimer: ReturnType<typeof setTimeout> | null = null
   const incomingMessageNotificationHandlers = new Set<IncomingMessageNotificationHandler>()
+  const taskStatusChangedNotificationHandlers = new Set<TaskStatusChangedNotificationHandler>()
   const DEBUG_CONVERSATION_OPEN_PERF = import.meta.env.DEV
 
   function persistThreadSummaries() {
@@ -718,6 +731,7 @@ export const useChatStore = defineStore('chat', () => {
     historyLoadTokenByConversation.clear()
     pendingReadByConversation.clear()
     incomingMessageNotificationHandlers.clear()
+    taskStatusChangedNotificationHandlers.clear()
 
     bootstrapStage = null
     bufferedServerEvents = []
@@ -1760,6 +1774,9 @@ export const useChatStore = defineStore('chat', () => {
       case 'notificationLevelChanged':
         applyNotificationLevelChanged(evt.payload.value)
         break
+      case 'taskStatusChanged':
+        emitTaskStatusChangedNotification(evt.payload.value)
+        break
       default:
         break
     }
@@ -1776,6 +1793,7 @@ export const useChatStore = defineStore('chat', () => {
       || evt.payload.case === 'callInviteCancelled'
       || evt.payload.case === 'forcePasswordChange'
       || evt.payload.case === 'notificationLevelChanged'
+      || evt.payload.case === 'taskStatusChanged'
   }
 
   function applyConversationSummary(summary?: ConversationSummary) {
@@ -1951,6 +1969,34 @@ export const useChatStore = defineStore('chat', () => {
     for (const handler of incomingMessageNotificationHandlers) {
       try {
         handler(evt)
+      } catch {
+        // Best effort callback fanout: one listener failure must not break chat flow.
+      }
+    }
+  }
+
+  function onTaskStatusChanged(handler: TaskStatusChangedNotificationHandler): () => void {
+    taskStatusChangedNotificationHandlers.add(handler)
+    return () => {
+      taskStatusChangedNotificationHandlers.delete(handler)
+    }
+  }
+
+  function emitTaskStatusChangedNotification(evt: TaskStatusChangedEvent) {
+    const updatedAt = evt.updatedAt
+      ? new Date(Number(evt.updatedAt.seconds) * 1000).toISOString()
+      : new Date().toISOString()
+    const payload: TaskStatusChangedNotification = {
+      taskId: evt.taskId,
+      publicId: evt.publicId,
+      fromStatusId: evt.fromStatusId,
+      toStatusId: evt.toStatusId,
+      updatedBy: evt.updatedBy,
+      updatedAt,
+    }
+    for (const handler of taskStatusChangedNotificationHandlers) {
+      try {
+        handler(payload)
       } catch {
         // Best effort callback fanout: one listener failure must not break chat flow.
       }
@@ -2571,6 +2617,7 @@ export const useChatStore = defineStore('chat', () => {
     onClientFocus,
     setClientActive,
     onIncomingMessageNotification,
+    onTaskStatusChanged,
     resetRuntimeState,
     setNotificationLevel,
     updateSendStatus,

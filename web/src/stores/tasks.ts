@@ -29,6 +29,7 @@ import {
   type TaskListItem,
   type TaskListGroup,
   type TaskListParams,
+  type TaskGroupedItem,
   type TaskGroupedStatusBucket,
   type TaskDescriptionHistoryItem,
   type SortOrder,
@@ -283,7 +284,9 @@ export const useTasksStore = defineStore('tasks', () => {
 
   async function updateTaskStatus(id: string, statusId: string): Promise<Task> {
     const updated = await tasksUpdateTaskStatus(id, { status_id: statusId })
-    selectedTask.value = updated
+    if (selectedTask.value?.id === id) {
+      selectedTask.value = updated
+    }
     return updated
   }
 
@@ -468,6 +471,91 @@ export const useTasksStore = defineStore('tasks', () => {
     }
   }
 
+  function findGroupedTask(taskID: string): { statusId: string; index: number; item: TaskGroupedItem } | null {
+    for (const statusId of groupedTaskStatusOrder.value) {
+      const group = groupedTaskGroupsByStatus.value[statusId]
+      if (!group) continue
+      const index = group.items.findIndex(item => item.id === taskID)
+      if (index >= 0) {
+        return { statusId, index, item: group.items[index] }
+      }
+    }
+    return null
+  }
+
+  function cloneGroupedStatusState(state: GroupedTaskGroupState): GroupedTaskGroupState {
+    return {
+      ...state,
+      status: { ...state.status },
+      items: state.items.map(item => ({ ...item, created_by: { ...item.created_by } })),
+    }
+  }
+
+  function moveGroupedTaskCard(taskID: string, toStatusID: string): boolean {
+    const found = findGroupedTask(taskID)
+    if (!found || found.statusId === toStatusID) return false
+
+    const fromState = groupedTaskGroupsByStatus.value[found.statusId]
+    const toState = groupedTaskGroupsByStatus.value[toStatusID]
+    if (!fromState || !toState) return false
+
+    const movedItem: TaskGroupedItem = { ...found.item, status_id: toStatusID }
+    const nextFromItems = fromState.items.filter((_, idx) => idx !== found.index)
+    const nextFromTotal = Math.max(0, fromState.total - 1)
+    const nextToItems = [movedItem, ...toState.items.filter(item => item.id !== movedItem.id)]
+    const nextToTotal = toState.total + 1
+
+    groupedTaskGroupsByStatus.value = {
+      ...groupedTaskGroupsByStatus.value,
+      [found.statusId]: {
+        ...fromState,
+        items: nextFromItems,
+        total: nextFromTotal,
+        next_offset: nextFromItems.length,
+        has_more: nextFromItems.length < nextFromTotal,
+      },
+      [toStatusID]: {
+        ...toState,
+        items: nextToItems,
+        total: nextToTotal,
+        next_offset: nextToItems.length,
+        has_more: nextToItems.length < nextToTotal,
+      },
+    }
+    return true
+  }
+
+  function optimisticMoveGroupedTaskCard(taskID: string, toStatusID: string): null | (() => void) {
+    const found = findGroupedTask(taskID)
+    if (!found || found.statusId === toStatusID) return null
+    const fromState = groupedTaskGroupsByStatus.value[found.statusId]
+    const toState = groupedTaskGroupsByStatus.value[toStatusID]
+    if (!fromState || !toState) return null
+
+    const fromSnapshot = cloneGroupedStatusState(fromState)
+    const toSnapshot = cloneGroupedStatusState(toState)
+    if (!moveGroupedTaskCard(taskID, toStatusID)) return null
+
+    return () => {
+      groupedTaskGroupsByStatus.value = {
+        ...groupedTaskGroupsByStatus.value,
+        [found.statusId]: fromSnapshot,
+        [toStatusID]: toSnapshot,
+      }
+    }
+  }
+
+  function applyTaskStatusChangedToGrouped(taskID: string, toStatusID: string): boolean {
+    const moved = moveGroupedTaskCard(taskID, toStatusID)
+    if (selectedTask.value?.id === taskID) {
+      selectedTask.value = {
+        ...selectedTask.value,
+        status_id: toStatusID,
+      }
+    }
+    return moved
+  }
+
   function setListParams(partial: Partial<TaskListParams>, mode: TaskListLoadMode = 'list') {
     listParams.value = { ...listParams.value, ...partial, page: 1 }
     if (mode === 'grouped') {
@@ -579,6 +667,8 @@ export const useTasksStore = defineStore('tasks', () => {
     loadTaskList,
     loadGroupedTaskList,
     loadMoreGroupedStatus,
+    optimisticMoveGroupedTaskCard,
+    applyTaskStatusChangedToGrouped,
     setListParams,
     resetListParams,
     resetRuntimeState,

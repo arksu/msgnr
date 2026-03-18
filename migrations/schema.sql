@@ -483,7 +483,8 @@ CREATE TABLE IF NOT EXISTS workspace_events (
                 'call_state_changed',
                 'thread_summary_updated',
                 'reaction_updated',
-                'user_identity_updated'
+                'user_identity_updated',
+                'task_status_changed'
               )),
   channel_id  UUID        REFERENCES channels(id) ON DELETE SET NULL,
   payload     JSONB       NOT NULL,

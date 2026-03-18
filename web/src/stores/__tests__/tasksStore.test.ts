@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useTasksStore } from '@/stores/tasks'
-import { tasksUpdateTaskDescription } from '@/services/http/tasksApi'
+import { tasksUpdateTaskDescription, tasksUpdateTaskStatus } from '@/services/http/tasksApi'
 
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListTemplates: vi.fn(async () => []),
@@ -20,6 +20,8 @@ vi.mock('@/services/http/tasksApi', () => ({
   tasksUpdateTaskFieldValue: vi.fn(),
   tasksCreateSubtask: vi.fn(),
   tasksListTasks: vi.fn(async () => ({ groups: [], grand_total: 0 })),
+  tasksListGrouped: vi.fn(async () => ({ status_order: [], groups_by_status: {}, grand_total: 0, limit: 50 })),
+  tasksListStatusPortion: vi.fn(async () => ({ total: 0, items: [], next_offset: 0, has_more: false })),
 }))
 
 type Deferred<T> = {
@@ -98,5 +100,42 @@ describe('tasksStore.updateTaskDescription', () => {
       description: 'restored',
       force_snapshot: true,
     })
+  })
+})
+
+describe('tasksStore.updateTaskStatus', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('updates selectedTask when patched task is currently selected', async () => {
+    const store = useTasksStore()
+    store.selectedTask = makeTask('task-1', 'old')
+
+    vi.mocked(tasksUpdateTaskStatus).mockResolvedValueOnce({
+      ...makeTask('task-1', 'old'),
+      status_id: 'status-2',
+    } as any)
+
+    await store.updateTaskStatus('task-1', 'status-2')
+
+    expect(store.selectedTask?.id).toBe('task-1')
+    expect(store.selectedTask?.status_id).toBe('status-2')
+  })
+
+  it('does not overwrite selectedTask when another task status is updated', async () => {
+    const store = useTasksStore()
+    store.selectedTask = makeTask('task-selected', 'selected')
+
+    vi.mocked(tasksUpdateTaskStatus).mockResolvedValueOnce({
+      ...makeTask('task-other', 'other'),
+      status_id: 'status-2',
+    } as any)
+
+    await store.updateTaskStatus('task-other', 'status-2')
+
+    expect(store.selectedTask?.id).toBe('task-selected')
+    expect(store.selectedTask?.description).toBe('selected')
   })
 })

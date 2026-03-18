@@ -589,8 +589,10 @@ export interface TaskGroupedItemCreator {
 }
 
 export interface TaskGroupedItem {
+  id: string
   public_id: string
   title: string
+  description_preview: string
   status_id: string
   created_at: string
   created_by: TaskGroupedItemCreator

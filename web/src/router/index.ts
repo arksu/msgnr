@@ -25,6 +25,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/tasks/kanban',
+      name: 'tasks-kanban',
+      component: () => import('@/views/MainView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/tasks/:taskId',
       name: 'tasks-card',
       component: () => import('@/views/MainView.vue'),

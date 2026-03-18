@@ -25,6 +25,10 @@ import (
 // pgErrCheckViolation is the Postgres SQLSTATE for check constraint violations.
 const pgErrCheckViolation = "23514"
 
+// descriptionPreviewLength is the maximum number of characters returned in
+// the description_preview field for grouped/portion task list queries.
+const descriptionPreviewLength = 280
+
 // Sentinel errors returned by the service.
 var (
 	ErrNotFound   = errors.New("not found")
@@ -1379,7 +1383,7 @@ func (s *Service) ListTaskDescriptionHistory(ctx context.Context, id uuid.UUID) 
 		   LEFT JOIN task_description_history h ON h.public_id = t.public_id
 		   LEFT JOIN users u ON u.id = h.edited_by
 		  WHERE t.id = $1
-		  ORDER BY h.created_at DESC NULLS LAST, h.id DESC NULLS LAST
+		  ORDER BY h.created_at DESC NULLS LAST
 		  LIMIT $2`,
 		id, s.descriptionHistoryLimit,
 	)
@@ -1388,7 +1392,7 @@ func (s *Service) ListTaskDescriptionHistory(ctx context.Context, id uuid.UUID) 
 	}
 	defer rows.Close()
 
-	var out []TaskDescriptionHistoryItem
+	out := make([]TaskDescriptionHistoryItem, 0)
 	hasTask := false
 	for rows.Next() {
 		var (
@@ -1511,10 +1515,13 @@ type UpdateTaskStatusParams struct {
 }
 
 // UpdateTaskStatus updates only a task status (plus audit/system fields).
-func (s *Service) UpdateTaskStatus(ctx context.Context, id uuid.UUID, p UpdateTaskStatusParams) (TaskResponse, error) {
-	if _, err := s.q.TaskGet(ctx, id); err != nil {
-		return TaskResponse{}, mapNotFound(err, "task")
+// It returns the updated TaskResponse and the status ID that was in effect before the change.
+func (s *Service) UpdateTaskStatus(ctx context.Context, id uuid.UUID, p UpdateTaskStatusParams) (TaskResponse, uuid.UUID, error) {
+	before, err := s.q.TaskGet(ctx, id)
+	if err != nil {
+		return TaskResponse{}, uuid.UUID{}, mapNotFound(err, "task")
 	}
+	previousStatusID := before.StatusID
 
 	taskRow, err := scanTask(s.pool.QueryRow(ctx,
 		`UPDATE task
@@ -1524,10 +1531,11 @@ func (s *Service) UpdateTaskStatus(ctx context.Context, id uuid.UUID, p UpdateTa
 		id, p.StatusID, p.ActorID,
 	))
 	if err != nil {
-		return TaskResponse{}, mapTaskWriteError(err)
+		return TaskResponse{}, uuid.UUID{}, mapTaskWriteError(err)
 	}
 
-	return s.GetTask(ctx, taskRow.ID)
+	resp, err := s.GetTask(ctx, taskRow.ID)
+	return resp, previousStatusID, err
 }
 
 // UpdateTaskFieldValueParams carries inputs for a single custom field update.
@@ -2059,11 +2067,13 @@ type TaskListItemCreator struct {
 
 // TaskGroupedItem is the lightweight item payload returned by grouped endpoints.
 type TaskGroupedItem struct {
-	PublicID  string              `json:"public_id"`
-	Title     string              `json:"title"`
-	StatusID  uuid.UUID           `json:"status_id"`
-	CreatedAt time.Time           `json:"created_at"`
-	CreatedBy TaskListItemCreator `json:"created_by"`
+	ID                 uuid.UUID           `json:"id"`
+	PublicID           string              `json:"public_id"`
+	Title              string              `json:"title"`
+	DescriptionPreview string              `json:"description_preview"`
+	StatusID           uuid.UUID           `json:"status_id"`
+	CreatedAt          time.Time           `json:"created_at"`
+	CreatedBy          TaskListItemCreator `json:"created_by"`
 }
 
 // TaskGroupedStatusBucket contains one status section in grouped response payloads.
@@ -2235,8 +2245,10 @@ func (s *Service) ListTasksGrouped(ctx context.Context, p ListTasksParams, limit
 			statusTotal int
 		)
 		if err := rows.Scan(
+			&item.ID,
 			&item.PublicID,
 			&item.Title,
+			&item.DescriptionPreview,
 			&item.StatusID,
 			&item.CreatedAt,
 			&creatorID,
@@ -2303,7 +2315,7 @@ func (s *Service) ListTasksStatusPortion(
 
 	query := fmt.Sprintf(
 		`WITH filtered AS (`+
-			` SELECT t.id AS task_id, t.public_id, t.title, t.status_id, t.created_at,`+
+			` SELECT t.id AS task_id, t.public_id, t.title, LEFT(COALESCE(t.description, ''), %d) AS description_preview, t.status_id, t.created_at,`+
 			` u.id AS created_by_id, u.display_name, u.avatar_url`+
 			` FROM task t`+
 			` JOIN task_status ts ON ts.id = t.status_id`+
@@ -2318,10 +2330,10 @@ func (s *Service) ListTasksStatusPortion(
 			` totals AS (`+
 			` SELECT COUNT(*)::int AS total FROM filtered`+
 			`)`+
-			` SELECT totals.total, paged.public_id, paged.title, paged.status_id, paged.created_at,`+
+			` SELECT totals.total, paged.task_id, paged.public_id, paged.title, paged.description_preview, paged.status_id, paged.created_at,`+
 			` paged.created_by_id, paged.display_name, paged.avatar_url`+
 			` FROM totals LEFT JOIN paged ON TRUE`,
-		whereWithStatus, offsetPH, limitPH,
+		descriptionPreviewLength, whereWithStatus, offsetPH, limitPH,
 	)
 	rows, err := s.pool.Query(ctx, query, args.values...)
 	if err != nil {
@@ -2335,8 +2347,10 @@ func (s *Service) ListTasksStatusPortion(
 		var (
 			item       TaskGroupedItem
 			totalRow   int
+			taskID     uuid.NullUUID
 			publicID   sql.NullString
 			title      sql.NullString
+			desc       sql.NullString
 			statusIDDB uuid.NullUUID
 			createdAt  sql.NullTime
 			creatorID  uuid.NullUUID
@@ -2345,8 +2359,10 @@ func (s *Service) ListTasksStatusPortion(
 		)
 		if err := rows.Scan(
 			&totalRow,
+			&taskID,
 			&publicID,
 			&title,
+			&desc,
 			&statusIDDB,
 			&createdAt,
 			&creatorID,
@@ -2359,8 +2375,12 @@ func (s *Service) ListTasksStatusPortion(
 		if !publicID.Valid {
 			continue
 		}
+		if taskID.Valid {
+			item.ID = taskID.UUID
+		}
 		item.PublicID = publicID.String
 		item.Title = title.String
+		item.DescriptionPreview = desc.String
 		if statusIDDB.Valid {
 			item.StatusID = statusIDDB.UUID
 		}
@@ -2445,7 +2465,7 @@ func buildGroupedInitialQuery(p ListTasksParams, limit int) (string, []any) {
 
 	sql := fmt.Sprintf(
 		`WITH ranked AS (`+
-			` SELECT t.public_id, t.title, t.status_id, t.created_at,`+
+			` SELECT t.id, t.public_id, t.title, LEFT(COALESCE(t.description, ''), %d) AS description_preview, t.status_id, t.created_at,`+
 			` u.id AS created_by_id, u.display_name, u.avatar_url,`+
 			` ROW_NUMBER() OVER (PARTITION BY t.status_id ORDER BY t.created_at DESC, t.id DESC) AS rn,`+
 			` COUNT(*) OVER (PARTITION BY t.status_id) AS status_total`+
@@ -2454,11 +2474,11 @@ func buildGroupedInitialQuery(p ListTasksParams, limit int) (string, []any) {
 			` JOIN users u ON u.id = t.created_by`+
 			` %s`+
 			` )`+
-			` SELECT public_id, title, status_id, created_at, created_by_id, display_name, avatar_url, rn, status_total`+
+			` SELECT id, public_id, title, description_preview, status_id, created_at, created_by_id, display_name, avatar_url, rn, status_total`+
 			` FROM ranked`+
 			` WHERE rn <= %s`+
 			` ORDER BY status_id ASC, rn ASC`,
-		where, limitPH,
+		descriptionPreviewLength, where, limitPH,
 	)
 	return sql, args.values
 }

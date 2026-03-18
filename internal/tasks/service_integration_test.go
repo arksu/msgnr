@@ -1891,8 +1891,10 @@ func TestIntegration_ListTasksGrouped_ItemDTOShape(t *testing.T) {
 	require.NoError(t, err)
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
+	assert.Contains(t, decoded, "id")
 	assert.Contains(t, decoded, "public_id")
 	assert.Contains(t, decoded, "title")
+	assert.Contains(t, decoded, "description_preview")
 	assert.Contains(t, decoded, "status_id")
 	assert.Contains(t, decoded, "created_at")
 	assert.Contains(t, decoded, "created_by")
@@ -1916,6 +1918,8 @@ func TestIntegration_ListTasksStatusPortion_PaginatesByStatus(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 5, p1.Total)
 	assert.Len(t, p1.Items, 2)
+	assert.NotEqual(t, uuid.Nil, p1.Items[0].ID)
+	assert.NotEmpty(t, p1.Items[0].DescriptionPreview)
 	assert.Equal(t, 2, p1.NextOffset)
 	assert.True(t, p1.HasMore)
 

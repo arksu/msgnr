@@ -45,6 +45,7 @@ var eventTypeToProto = map[string]packetspb.EventType{
 	"thread_summary_updated": packetspb.EventType_EVENT_TYPE_THREAD_SUMMARY_UPDATED,
 	"reaction_updated":       packetspb.EventType_EVENT_TYPE_REACTION_UPDATED,
 	"user_identity_updated":  packetspb.EventType_EVENT_TYPE_USER_IDENTITY_UPDATED,
+	"task_status_changed":    packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED,
 }
 
 // protoToEventType is the reverse of eventTypeToProto.
@@ -147,6 +148,10 @@ func ValidateEventTypePayload(dbText string, evt *packetspb.ServerEvent) error {
 	case packetspb.EventType_EVENT_TYPE_USER_IDENTITY_UPDATED:
 		if evt.GetUserIdentityUpdated() == nil {
 			return fmt.Errorf("event_type %q requires user_identity_updated payload", dbText)
+		}
+	case packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED:
+		if evt.GetTaskStatusChanged() == nil {
+			return fmt.Errorf("event_type %q requires task_status_changed payload", dbText)
 		}
 	}
 	return nil

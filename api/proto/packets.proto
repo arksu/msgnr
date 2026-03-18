@@ -138,6 +138,7 @@ enum EventType {
   EVENT_TYPE_NOTIFICATION_LEVEL_CHANGED = 15;
   EVENT_TYPE_MESSAGE_UPDATED = 16;
   EVENT_TYPE_MESSAGE_DELETED = 17;
+  EVENT_TYPE_TASK_STATUS_CHANGED = 18;
 }
 
 message Envelope {
@@ -671,6 +672,15 @@ message NotificationLevelChangedEvent {
   NotificationLevel level = 2;
 }
 
+message TaskStatusChangedEvent {
+  string task_id = 1;
+  string public_id = 2;
+  string from_status_id = 3;
+  string to_status_id = 4;
+  string updated_by = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
 message ServerEvent {
   // Global strictly monotonic event sequence for the whole workspace stream.
   int64 event_seq = 1;
@@ -699,5 +709,6 @@ message ServerEvent {
     NotificationLevelChangedEvent notification_level_changed = 24;
     MessageUpdatedEvent message_updated = 25;
     MessageDeletedEvent message_deleted = 26;
+    TaskStatusChangedEvent task_status_changed = 27;
   }
 }

@@ -123,6 +123,12 @@ func buildServerEventFromStored(
 			return nil, fmt.Errorf("decode user_identity_updated payload: %w", err)
 		}
 		evt.Payload = &packetspb.ServerEvent_UserIdentityUpdated{UserIdentityUpdated: msg}
+	case packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED:
+		msg := &packetspb.TaskStatusChangedEvent{}
+		if err := payloadUnmarshalOptions.Unmarshal(payloadJSON, msg); err != nil {
+			return nil, fmt.Errorf("decode task_status_changed payload: %w", err)
+		}
+		evt.Payload = &packetspb.ServerEvent_TaskStatusChanged{TaskStatusChanged: msg}
 	default:
 		return nil, fmt.Errorf("unsupported event_type %v", evtType)
 	}

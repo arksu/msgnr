@@ -244,6 +244,7 @@ type TaskCommentAttachment struct {
 }
 
 type TaskDescriptionHistory struct {
+	ID          uuid.UUID      `json:"id"`
 	PublicID    string         `json:"public_id"`
 	Title       string         `json:"title"`
 	Description sql.NullString `json:"description"`

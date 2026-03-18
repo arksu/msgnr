@@ -19,8 +19,10 @@ const tasksStoreMock = reactive({
       status: { id: 'st-1', code: 'todo', name: 'Todo', sort_order: 1 },
       items: [
         {
+          id: 'task-grouped-1',
           public_id: 'BUG-1',
           title: 'Grouped Task',
+          description_preview: 'Grouped task description',
           status_id: 'st-1',
           created_at: '2026-01-01T00:00:00Z',
           created_by: { id: 'u-1', display_name: 'User One', avatar_url: '' },
@@ -61,11 +63,12 @@ describe('TaskListView', () => {
     vi.clearAllMocks()
   })
 
-  it('renders switcher with disabled kanban option', async () => {
+  it('renders list/grouped switcher without kanban option', async () => {
     const wrapper = mount(TaskListView, {
       props: { templateFilter: null },
       global: {
         stubs: {
+          TaskTrackerFilters: { template: '<div><slot name="after-controls" /></div>' },
           UserAvatar: { template: '<div class="user-avatar-stub" />' },
           TaskRow: { template: '<tr />' },
           SortIcon: { template: '<span />' },
@@ -76,11 +79,7 @@ describe('TaskListView', () => {
 
     expect(wrapper.text()).toContain('list')
     expect(wrapper.text()).toContain('group by status')
-    expect(wrapper.text()).toContain('kanban')
-
-    const kanbanLabel = wrapper.findAll('label').find(label => label.text().includes('kanban'))
-    expect(kanbanLabel).toBeTruthy()
-    expect(kanbanLabel!.find('input').attributes('disabled')).toBeDefined()
+    expect(wrapper.text().toLowerCase()).not.toContain('kanban')
   })
 
   it('shows only non-zero groups and triggers show-more loading', async () => {
@@ -89,6 +88,7 @@ describe('TaskListView', () => {
       props: { templateFilter: null },
       global: {
         stubs: {
+          TaskTrackerFilters: { template: '<div><slot name="after-controls" /></div>' },
           UserAvatar: { template: '<div class="user-avatar-stub" />' },
           TaskRow: { template: '<tr />' },
           SortIcon: { template: '<span />' },
@@ -105,5 +105,33 @@ describe('TaskListView', () => {
     expect(showMoreButton).toBeTruthy()
     await showMoreButton!.trigger('click')
     expect(tasksStoreMock.loadMoreGroupedStatus).toHaveBeenCalledWith('st-1')
+  })
+
+  it('applies shared filter payload in grouped mode', async () => {
+    localStorage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
+    const wrapper = mount(TaskListView, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskTrackerFilters: {
+            emits: ['filtersChange'],
+            template: '<div><slot name="after-controls" /><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', status_ids: [\'st-1\'], prefixes: [\'BUG\'], field_filters: [{ field_definition_id: \'fld-1\', user_ids: [\'u-1\'] }] })">emit</button></div>',
+          },
+          UserAvatar: { template: '<div class="user-avatar-stub" />' },
+          TaskRow: { template: '<tr />' },
+          SortIcon: { template: '<span />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="filters-emit"]').trigger('click')
+    expect(tasksStoreMock.setListParams).toHaveBeenCalledWith({
+      search: 'bug',
+      status_ids: ['st-1'],
+      prefixes: ['BUG'],
+      field_filters: [{ field_definition_id: 'fld-1', user_ids: ['u-1'] }],
+      page: 1,
+    }, 'grouped')
   })
 })

@@ -24,4 +24,9 @@ describe('taskListViewModeStorage', () => {
     clearTaskListViewMode()
     expect(loadTaskListViewMode()).toBe('list')
   })
+
+  it('falls back to list for removed legacy mode values', () => {
+    localStorage.setItem('msgnr:tasks:view-mode:v1', 'kanban')
+    expect(loadTaskListViewMode()).toBe('list')
+  })
 })

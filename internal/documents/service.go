@@ -1,0 +1,985 @@
+package documents
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	defaultDocumentHistoryLimit = 25
+	pgErrUniqueViolation        = "23505"
+	pgErrForeignKeyViolation    = "23503"
+	pgErrCheckViolation         = "23514"
+)
+
+var (
+	ErrNotFound   = errors.New("not found")
+	ErrConflict   = errors.New("conflict")
+	ErrBadRequest = errors.New("bad request")
+	ErrForbidden  = errors.New("forbidden")
+)
+
+type queryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+type Service struct {
+	pool         *pgxpool.Pool
+	historyLimit int
+}
+
+func NewService(pool *pgxpool.Pool) *Service {
+	return &Service{
+		pool:         pool,
+		historyLimit: defaultDocumentHistoryLimit,
+	}
+}
+
+func (s *Service) SetHistoryLimit(limit int) {
+	if limit <= 0 {
+		limit = defaultDocumentHistoryLimit
+	}
+	s.historyLimit = limit
+}
+
+type TeamspaceMemberPreview struct {
+	ID          uuid.UUID `json:"id"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   string    `json:"avatar_url"`
+}
+
+type TeamspaceRow struct {
+	ID          uuid.UUID                `json:"id"`
+	Name        string                   `json:"name"`
+	OwnerUserID uuid.UUID                `json:"owner_user_id"`
+	IsPrivate   bool                     `json:"is_private"`
+	IsMember    bool                     `json:"is_member"`
+	IsOwner     bool                     `json:"is_owner"`
+	CanManage   bool                     `json:"can_manage"`
+	MemberCount int                      `json:"member_count"`
+	Members     []TeamspaceMemberPreview `json:"members"`
+	CreatedAt   time.Time                `json:"created_at"`
+	UpdatedAt   time.Time                `json:"updated_at"`
+}
+
+type SidebarDocumentNode struct {
+	ID               uuid.UUID             `json:"id"`
+	TeamspaceID      uuid.UUID             `json:"teamspace_id"`
+	ParentDocumentID *uuid.UUID            `json:"parent_document_id,omitempty"`
+	Title            string                `json:"title"`
+	Children         []SidebarDocumentNode `json:"children"`
+}
+
+type SidebarTeamspace struct {
+	ID        uuid.UUID             `json:"id"`
+	Name      string                `json:"name"`
+	Documents []SidebarDocumentNode `json:"documents"`
+}
+
+type sidebarTempNode struct {
+	node     SidebarDocumentNode
+	children []*sidebarTempNode
+}
+
+type DocumentResponse struct {
+	ID               uuid.UUID  `json:"id"`
+	TeamspaceID      uuid.UUID  `json:"teamspace_id"`
+	TeamspaceName    string     `json:"teamspace_name"`
+	ParentDocumentID *uuid.UUID `json:"parent_document_id,omitempty"`
+	ParentTitle      *string    `json:"parent_title,omitempty"`
+	Title            string     `json:"title"`
+	ContentMarkdown  *string    `json:"content_markdown"`
+	CreatedBy        uuid.UUID  `json:"created_by"`
+	UpdatedBy        uuid.UUID  `json:"updated_by"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+type DocumentHistoryEditor struct {
+	ID          uuid.UUID `json:"id"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   string    `json:"avatar_url"`
+}
+
+type DocumentHistoryItem struct {
+	Title           string                `json:"title"`
+	ContentMarkdown *string               `json:"content_markdown"`
+	EditedBy        uuid.UUID             `json:"edited_by"`
+	CreatedAt       time.Time             `json:"created_at"`
+	Editor          DocumentHistoryEditor `json:"editor"`
+}
+
+type CreateTeamspaceParams struct {
+	Name      string
+	IsPrivate bool
+	MemberIDs []uuid.UUID
+	ActorID   uuid.UUID
+}
+
+type UpdateTeamspaceParams struct {
+	Name      string
+	IsPrivate bool
+	MemberIDs []uuid.UUID
+	ActorID   uuid.UUID
+	ActorRole string
+}
+
+type CreateDocumentParams struct {
+	TeamspaceID      uuid.UUID
+	ParentDocumentID *uuid.UUID
+	Title            string
+	ContentMarkdown  *string
+	ActorID          uuid.UUID
+}
+
+type UpdateDocumentParams struct {
+	Title           *string
+	ContentMarkdown *string
+	ActorID         uuid.UUID
+}
+
+func (s *Service) ListTeamspaces(ctx context.Context, userID uuid.UUID, actorRole string) ([]TeamspaceRow, error) {
+	return s.listVisibleTeamspaces(ctx, s.pool, userID, actorRole, nil)
+}
+
+func (s *Service) CreateTeamspace(ctx context.Context, params CreateTeamspaceParams, actorRole string) (TeamspaceRow, error) {
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		return TeamspaceRow{}, fmt.Errorf("%w: teamspace name is required", ErrBadRequest)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TeamspaceRow{}, fmt.Errorf("documents: begin create teamspace tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var teamspaceID uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO teamspace (name, owner_user_id, is_private)
+		 VALUES ($1, $2, $3)
+		 RETURNING id`,
+		name, params.ActorID, params.IsPrivate,
+	).Scan(&teamspaceID); err != nil {
+		return TeamspaceRow{}, classifyMutationError("create teamspace", err)
+	}
+
+	memberIDs := uniqueUserIDs(append(params.MemberIDs, params.ActorID))
+	for _, memberID := range memberIDs {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO teamspace_member (teamspace_id, user_id)
+			 VALUES ($1, $2)
+			 ON CONFLICT DO NOTHING`,
+			teamspaceID, memberID,
+		); err != nil {
+			return TeamspaceRow{}, classifyMutationError("insert teamspace member", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return TeamspaceRow{}, fmt.Errorf("documents: commit create teamspace tx: %w", err)
+	}
+
+	return s.getVisibleTeamspace(ctx, teamspaceID, params.ActorID, actorRole)
+}
+
+func (s *Service) UpdateTeamspace(ctx context.Context, teamspaceID uuid.UUID, params UpdateTeamspaceParams) (TeamspaceRow, error) {
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		return TeamspaceRow{}, fmt.Errorf("%w: teamspace name is required", ErrBadRequest)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TeamspaceRow{}, fmt.Errorf("documents: begin update teamspace tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var ownerUserID uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT owner_user_id
+		   FROM teamspace
+		  WHERE id = $1`,
+		teamspaceID,
+	).Scan(&ownerUserID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TeamspaceRow{}, fmt.Errorf("%w: teamspace", ErrNotFound)
+		}
+		return TeamspaceRow{}, fmt.Errorf("documents: load teamspace owner: %w", err)
+	}
+
+	if !canManageTeamspace(ownerUserID, params.ActorID, params.ActorRole) {
+		return TeamspaceRow{}, fmt.Errorf("%w: teamspace", ErrForbidden)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE teamspace
+		    SET name = $2,
+		        is_private = $3
+		  WHERE id = $1`,
+		teamspaceID, name, params.IsPrivate,
+	); err != nil {
+		return TeamspaceRow{}, classifyMutationError("update teamspace", err)
+	}
+
+	targetMembers := uniqueUserIDs(append(params.MemberIDs, ownerUserID))
+	currentMembers, err := listTeamspaceMemberIDs(ctx, tx, teamspaceID)
+	if err != nil {
+		return TeamspaceRow{}, err
+	}
+	for _, currentMemberID := range currentMembers {
+		if currentMemberID == ownerUserID || slices.Contains(targetMembers, currentMemberID) {
+			continue
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM teamspace_member
+			  WHERE teamspace_id = $1
+			    AND user_id = $2`,
+			teamspaceID, currentMemberID,
+		); err != nil {
+			return TeamspaceRow{}, fmt.Errorf("documents: delete teamspace member: %w", err)
+		}
+	}
+	for _, memberID := range targetMembers {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO teamspace_member (teamspace_id, user_id)
+			 VALUES ($1, $2)
+			 ON CONFLICT DO NOTHING`,
+			teamspaceID, memberID,
+		); err != nil {
+			return TeamspaceRow{}, classifyMutationError("upsert teamspace member", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return TeamspaceRow{}, fmt.Errorf("documents: commit update teamspace tx: %w", err)
+	}
+
+	return s.getVisibleTeamspace(ctx, teamspaceID, params.ActorID, params.ActorRole)
+}
+
+func (s *Service) JoinTeamspace(ctx context.Context, teamspaceID, userID uuid.UUID, actorRole string) (TeamspaceRow, error) {
+	var isPrivate bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT is_private
+		   FROM teamspace
+		  WHERE id = $1`,
+		teamspaceID,
+	).Scan(&isPrivate); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TeamspaceRow{}, fmt.Errorf("%w: teamspace", ErrNotFound)
+		}
+		return TeamspaceRow{}, fmt.Errorf("documents: load teamspace privacy: %w", err)
+	}
+	if isPrivate {
+		return TeamspaceRow{}, fmt.Errorf("%w: teamspace", ErrForbidden)
+	}
+
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO teamspace_member (teamspace_id, user_id)
+		 VALUES ($1, $2)
+		 ON CONFLICT DO NOTHING`,
+		teamspaceID, userID,
+	); err != nil {
+		return TeamspaceRow{}, classifyMutationError("join teamspace", err)
+	}
+
+	return s.getVisibleTeamspace(ctx, teamspaceID, userID, actorRole)
+}
+
+func (s *Service) ListSidebar(ctx context.Context, userID uuid.UUID) ([]SidebarTeamspace, error) {
+	teamspaceRows, err := s.pool.Query(ctx,
+		`SELECT t.id, t.name
+		   FROM teamspace t
+		   JOIN teamspace_member tm
+		     ON tm.teamspace_id = t.id
+		    AND tm.user_id = $1
+		  ORDER BY lower(t.name), t.created_at ASC`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("documents: list sidebar teamspaces: %w", err)
+	}
+	defer teamspaceRows.Close()
+
+	teamspaces := make([]SidebarTeamspace, 0)
+	teamspaceIndexByID := make(map[uuid.UUID]int)
+	for teamspaceRows.Next() {
+		var item SidebarTeamspace
+		if err := teamspaceRows.Scan(&item.ID, &item.Name); err != nil {
+			return nil, fmt.Errorf("documents: scan sidebar teamspace: %w", err)
+		}
+		teamspaces = append(teamspaces, item)
+		teamspaceIndexByID[item.ID] = len(teamspaces) - 1
+	}
+	if err := teamspaceRows.Err(); err != nil {
+		return nil, fmt.Errorf("documents: iterate sidebar teamspaces: %w", err)
+	}
+	if len(teamspaces) == 0 {
+		return teamspaces, nil
+	}
+
+	docRows, err := s.pool.Query(ctx,
+		`SELECT d.id, d.teamspace_id, d.parent_document_id, d.title
+		   FROM document d
+		   JOIN teamspace_member tm
+		     ON tm.teamspace_id = d.teamspace_id
+		    AND tm.user_id = $1
+		  WHERE d.archived_at IS NULL
+		  ORDER BY d.teamspace_id ASC,
+		           COALESCE(d.parent_document_id::text, '') ASC,
+		           d.created_at ASC,
+		           lower(d.title) ASC`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("documents: list sidebar documents: %w", err)
+	}
+	defer docRows.Close()
+
+	nodeByID := make(map[uuid.UUID]*sidebarTempNode)
+	orderedNodes := make([]*sidebarTempNode, 0)
+	rootNodesByTeamspace := make(map[uuid.UUID][]*sidebarTempNode)
+	for docRows.Next() {
+		var (
+			id               uuid.UUID
+			teamspaceID      uuid.UUID
+			parentDocumentID uuid.NullUUID
+			title            string
+		)
+		if err := docRows.Scan(&id, &teamspaceID, &parentDocumentID, &title); err != nil {
+			return nil, fmt.Errorf("documents: scan sidebar document: %w", err)
+		}
+		item := &sidebarTempNode{
+			node: SidebarDocumentNode{
+				ID:          id,
+				TeamspaceID: teamspaceID,
+				Title:       title,
+			},
+		}
+		if parentDocumentID.Valid {
+			parentID := parentDocumentID.UUID
+			item.node.ParentDocumentID = &parentID
+		}
+		nodeByID[id] = item
+		orderedNodes = append(orderedNodes, item)
+	}
+	if err := docRows.Err(); err != nil {
+		return nil, fmt.Errorf("documents: iterate sidebar documents: %w", err)
+	}
+
+	for _, node := range orderedNodes {
+		if node.node.ParentDocumentID != nil {
+			parent := nodeByID[*node.node.ParentDocumentID]
+			if parent != nil {
+				parent.children = append(parent.children, node)
+				continue
+			}
+		}
+		rootNodesByTeamspace[node.node.TeamspaceID] = append(rootNodesByTeamspace[node.node.TeamspaceID], node)
+	}
+
+	for teamspaceID, roots := range rootNodesByTeamspace {
+		index, ok := teamspaceIndexByID[teamspaceID]
+		if !ok {
+			continue
+		}
+		teamspaces[index].Documents = make([]SidebarDocumentNode, 0, len(roots))
+		for _, root := range roots {
+			teamspaces[index].Documents = append(teamspaces[index].Documents, cloneSidebarNode(root))
+		}
+	}
+
+	return teamspaces, nil
+}
+
+func (s *Service) CreateDocument(ctx context.Context, params CreateDocumentParams) (DocumentResponse, error) {
+	title := strings.TrimSpace(params.Title)
+	if title == "" {
+		return DocumentResponse{}, fmt.Errorf("%w: document title is required", ErrBadRequest)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DocumentResponse{}, fmt.Errorf("documents: begin create document tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := ensureTeamspaceMember(ctx, tx, params.TeamspaceID, params.ActorID); err != nil {
+		return DocumentResponse{}, err
+	}
+
+	if params.ParentDocumentID != nil {
+		var parentTeamspaceID uuid.UUID
+		if err := tx.QueryRow(ctx,
+			`SELECT teamspace_id
+			   FROM document
+			  WHERE id = $1
+			    AND archived_at IS NULL`,
+			*params.ParentDocumentID,
+		).Scan(&parentTeamspaceID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return DocumentResponse{}, fmt.Errorf("%w: parent document", ErrNotFound)
+			}
+			return DocumentResponse{}, fmt.Errorf("documents: load parent document: %w", err)
+		}
+		if parentTeamspaceID != params.TeamspaceID {
+			return DocumentResponse{}, fmt.Errorf("%w: parent document belongs to another teamspace", ErrBadRequest)
+		}
+	}
+
+	var documentID uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO document (teamspace_id, parent_document_id, title, content_markdown, created_by, updated_by)
+		 VALUES ($1, $2, $3, $4, $5, $5)
+		 RETURNING id`,
+		params.TeamspaceID, params.ParentDocumentID, title, nullString(params.ContentMarkdown), params.ActorID,
+	).Scan(&documentID); err != nil {
+		return DocumentResponse{}, classifyMutationError("create document", err)
+	}
+
+	if err := s.maybeCreateDocumentSnapshotInTx(ctx, tx, documentID, title, params.ContentMarkdown, params.ActorID); err != nil {
+		return DocumentResponse{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return DocumentResponse{}, fmt.Errorf("documents: commit create document tx: %w", err)
+	}
+
+	return s.GetDocument(ctx, documentID, params.ActorID)
+}
+
+func (s *Service) GetDocument(ctx context.Context, documentID, userID uuid.UUID) (DocumentResponse, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT d.id,
+		        d.teamspace_id,
+		        t.name,
+		        d.parent_document_id,
+		        parent.title,
+		        d.title,
+		        d.content_markdown,
+		        d.created_by,
+		        d.updated_by,
+		        d.created_at,
+		        d.updated_at
+		   FROM document d
+		   JOIN teamspace t
+		     ON t.id = d.teamspace_id
+		   JOIN teamspace_member tm
+		     ON tm.teamspace_id = d.teamspace_id
+		    AND tm.user_id = $2
+		   LEFT JOIN document parent
+		     ON parent.id = d.parent_document_id
+		  WHERE d.id = $1
+		    AND d.archived_at IS NULL`,
+		documentID, userID,
+	)
+
+	var (
+		resp             DocumentResponse
+		parentDocumentID uuid.NullUUID
+		parentTitle      sql.NullString
+		content          sql.NullString
+	)
+	if err := row.Scan(
+		&resp.ID,
+		&resp.TeamspaceID,
+		&resp.TeamspaceName,
+		&parentDocumentID,
+		&parentTitle,
+		&resp.Title,
+		&content,
+		&resp.CreatedBy,
+		&resp.UpdatedBy,
+		&resp.CreatedAt,
+		&resp.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DocumentResponse{}, s.documentAccessError(ctx, documentID, userID)
+		}
+		return DocumentResponse{}, fmt.Errorf("documents: get document: %w", err)
+	}
+	if parentDocumentID.Valid {
+		parentID := parentDocumentID.UUID
+		resp.ParentDocumentID = &parentID
+	}
+	if parentTitle.Valid {
+		value := parentTitle.String
+		resp.ParentTitle = &value
+	}
+	if content.Valid {
+		value := content.String
+		resp.ContentMarkdown = &value
+	}
+	return resp, nil
+}
+
+func (s *Service) UpdateDocument(ctx context.Context, documentID uuid.UUID, params UpdateDocumentParams) (DocumentResponse, error) {
+	if params.Title == nil && params.ContentMarkdown == nil {
+		return DocumentResponse{}, fmt.Errorf("%w: no document fields provided", ErrBadRequest)
+	}
+
+	var (
+		currentTitle   string
+		currentContent sql.NullString
+	)
+	if err := s.pool.QueryRow(ctx,
+		`SELECT d.title, d.content_markdown
+		   FROM document d
+		   JOIN teamspace_member tm
+		     ON tm.teamspace_id = d.teamspace_id
+		    AND tm.user_id = $2
+		  WHERE d.id = $1
+		    AND d.archived_at IS NULL`,
+		documentID, params.ActorID,
+	).Scan(&currentTitle, &currentContent); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DocumentResponse{}, s.documentAccessError(ctx, documentID, params.ActorID)
+		}
+		return DocumentResponse{}, fmt.Errorf("documents: load document for update: %w", err)
+	}
+
+	nextTitle := currentTitle
+	if params.Title != nil {
+		nextTitle = strings.TrimSpace(*params.Title)
+		if nextTitle == "" {
+			return DocumentResponse{}, fmt.Errorf("%w: document title is required", ErrBadRequest)
+		}
+	}
+
+	var nextContent *string
+	if currentContent.Valid {
+		current := currentContent.String
+		nextContent = &current
+	}
+	if params.ContentMarkdown != nil {
+		nextContent = params.ContentMarkdown
+	}
+
+	if nextTitle == currentTitle && nullStringEqual(nextContent, currentContent) {
+		return s.GetDocument(ctx, documentID, params.ActorID)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DocumentResponse{}, fmt.Errorf("documents: begin update document tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE document
+		    SET title = $2,
+		        content_markdown = $3,
+		        updated_by = $4
+		  WHERE id = $1`,
+		documentID, nextTitle, nullString(nextContent), params.ActorID,
+	); err != nil {
+		return DocumentResponse{}, classifyMutationError("update document", err)
+	}
+
+	if err := s.maybeCreateDocumentSnapshotInTx(ctx, tx, documentID, nextTitle, nextContent, params.ActorID); err != nil {
+		return DocumentResponse{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return DocumentResponse{}, fmt.Errorf("documents: commit update document tx: %w", err)
+	}
+
+	return s.GetDocument(ctx, documentID, params.ActorID)
+}
+
+func (s *Service) ListDocumentHistory(ctx context.Context, documentID, userID uuid.UUID) ([]DocumentHistoryItem, error) {
+	if err := s.ensureDocumentReadable(ctx, documentID, userID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT h.title,
+		        h.content_markdown,
+		        h.edited_by,
+		        h.created_at,
+		        u.id,
+		        COALESCE(NULLIF(u.display_name, ''), u.email),
+		        u.avatar_url
+		   FROM document_history h
+		   JOIN users u
+		     ON u.id = h.edited_by
+		  WHERE h.document_id = $1
+		  ORDER BY h.created_at DESC, h.id DESC
+		  LIMIT $2`,
+		documentID, s.historyLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("documents: list document history: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]DocumentHistoryItem, 0)
+	for rows.Next() {
+		var (
+			item    DocumentHistoryItem
+			content sql.NullString
+		)
+		if err := rows.Scan(
+			&item.Title,
+			&content,
+			&item.EditedBy,
+			&item.CreatedAt,
+			&item.Editor.ID,
+			&item.Editor.DisplayName,
+			&item.Editor.AvatarURL,
+		); err != nil {
+			return nil, fmt.Errorf("documents: scan document history: %w", err)
+		}
+		if content.Valid {
+			value := content.String
+			item.ContentMarkdown = &value
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("documents: iterate document history: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Service) getVisibleTeamspace(ctx context.Context, teamspaceID, userID uuid.UUID, actorRole string) (TeamspaceRow, error) {
+	rows, err := s.listVisibleTeamspaces(ctx, s.pool, userID, actorRole, &teamspaceID)
+	if err != nil {
+		return TeamspaceRow{}, err
+	}
+	if len(rows) == 0 {
+		return TeamspaceRow{}, fmt.Errorf("%w: teamspace", ErrNotFound)
+	}
+	return rows[0], nil
+}
+
+func (s *Service) listVisibleTeamspaces(ctx context.Context, q queryer, userID uuid.UUID, actorRole string, teamspaceID *uuid.UUID) ([]TeamspaceRow, error) {
+	args := []any{userID}
+	filter := ""
+	if teamspaceID != nil {
+		args = append(args, *teamspaceID)
+		filter = " AND t.id = $2"
+	}
+
+	rows, err := q.Query(ctx,
+		`SELECT t.id,
+		        t.name,
+		        t.owner_user_id,
+		        t.is_private,
+		        t.created_at,
+		        t.updated_at,
+		        membership.is_member,
+		        t.owner_user_id = $1 AS is_owner,
+		        counts.member_count::int AS member_count
+		   FROM teamspace t
+		   CROSS JOIN LATERAL (
+		        SELECT EXISTS (
+		            SELECT 1
+		              FROM teamspace_member tm
+		             WHERE tm.teamspace_id = t.id
+		               AND tm.user_id = $1
+		        ) AS is_member
+		   ) membership
+		   CROSS JOIN LATERAL (
+		        SELECT COUNT(*) AS member_count
+		          FROM teamspace_member tm2
+		         WHERE tm2.teamspace_id = t.id
+		   ) counts
+		  WHERE (
+		            t.is_private = false
+		         OR membership.is_member
+		        )`+filter+`
+		  ORDER BY CASE
+		               WHEN t.owner_user_id = $1 THEN 0
+		               WHEN membership.is_member THEN 1
+		               ELSE 2
+		           END,
+		           lower(t.name),
+		           t.created_at ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("documents: list teamspaces: %w", err)
+	}
+	defer rows.Close()
+
+	teamspaces := make([]TeamspaceRow, 0)
+	teamspaceIDs := make([]uuid.UUID, 0)
+	byID := make(map[uuid.UUID]int)
+	for rows.Next() {
+		var item TeamspaceRow
+		if err := rows.Scan(
+			&item.ID,
+			&item.Name,
+			&item.OwnerUserID,
+			&item.IsPrivate,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&item.IsMember,
+			&item.IsOwner,
+			&item.MemberCount,
+		); err != nil {
+			return nil, fmt.Errorf("documents: scan teamspace: %w", err)
+		}
+		item.CanManage = canManageTeamspace(item.OwnerUserID, userID, actorRole)
+		teamspaces = append(teamspaces, item)
+		teamspaceIDs = append(teamspaceIDs, item.ID)
+		byID[item.ID] = len(teamspaces) - 1
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("documents: iterate teamspaces: %w", err)
+	}
+	if len(teamspaces) == 0 {
+		return teamspaces, nil
+	}
+
+	memberRows, err := q.Query(ctx,
+		`SELECT tm.teamspace_id,
+		        u.id,
+		        COALESCE(NULLIF(u.display_name, ''), u.email),
+		        u.avatar_url
+		   FROM teamspace_member tm
+		   JOIN users u
+		     ON u.id = tm.user_id
+		  WHERE tm.teamspace_id = ANY($1::uuid[])
+		  ORDER BY tm.teamspace_id ASC,
+		           lower(COALESCE(NULLIF(u.display_name, ''), u.email)) ASC`,
+		teamspaceIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("documents: list teamspace members: %w", err)
+	}
+	defer memberRows.Close()
+
+	for memberRows.Next() {
+		var (
+			teamspaceID uuid.UUID
+			member      TeamspaceMemberPreview
+		)
+		if err := memberRows.Scan(&teamspaceID, &member.ID, &member.DisplayName, &member.AvatarURL); err != nil {
+			return nil, fmt.Errorf("documents: scan teamspace member: %w", err)
+		}
+		if index, ok := byID[teamspaceID]; ok {
+			teamspaces[index].Members = append(teamspaces[index].Members, member)
+		}
+	}
+	if err := memberRows.Err(); err != nil {
+		return nil, fmt.Errorf("documents: iterate teamspace members: %w", err)
+	}
+
+	return teamspaces, nil
+}
+
+func (s *Service) maybeCreateDocumentSnapshotInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	documentID uuid.UUID,
+	title string,
+	contentMarkdown *string,
+	actorID uuid.UUID,
+) error {
+	var (
+		latestTitle   string
+		latestContent sql.NullString
+	)
+	err := tx.QueryRow(ctx,
+		`SELECT title, content_markdown
+		   FROM document_history
+		  WHERE document_id = $1
+		  ORDER BY created_at DESC, id DESC
+		  LIMIT 1`,
+		documentID,
+	).Scan(&latestTitle, &latestContent)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("documents: load latest document snapshot: %w", err)
+	}
+	if err == nil && latestTitle == title && nullStringEqual(contentMarkdown, latestContent) {
+		return nil
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO document_history (document_id, title, content_markdown, edited_by)
+		 VALUES ($1, $2, $3, $4)`,
+		documentID, title, nullString(contentMarkdown), actorID,
+	); err != nil {
+		return fmt.Errorf("documents: insert document snapshot: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`WITH ranked AS (
+		     SELECT id,
+		            row_number() OVER (ORDER BY created_at DESC, id DESC) AS rn
+		       FROM document_history
+		      WHERE document_id = $1
+		  )
+		  DELETE FROM document_history h
+		   USING ranked r
+		  WHERE h.id = r.id
+		    AND r.rn > $2`,
+		documentID, s.historyLimit,
+	); err != nil {
+		return fmt.Errorf("documents: prune document snapshots: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) ensureDocumentReadable(ctx context.Context, documentID, userID uuid.UUID) error {
+	var allowed bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (
+		     SELECT 1
+		       FROM document d
+		       JOIN teamspace_member tm
+		         ON tm.teamspace_id = d.teamspace_id
+		        AND tm.user_id = $2
+		      WHERE d.id = $1
+		        AND d.archived_at IS NULL
+		 )`,
+		documentID, userID,
+	).Scan(&allowed); err != nil {
+		return fmt.Errorf("documents: check document access: %w", err)
+	}
+	if !allowed {
+		return s.documentAccessError(ctx, documentID, userID)
+	}
+	return nil
+}
+
+func (s *Service) documentAccessError(ctx context.Context, documentID, userID uuid.UUID) error {
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (
+		     SELECT 1
+		       FROM document
+		      WHERE id = $1
+		        AND archived_at IS NULL
+		 )`,
+		documentID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("documents: check document existence: %w", err)
+	}
+	if exists {
+		return fmt.Errorf("%w: document", ErrForbidden)
+	}
+	return fmt.Errorf("%w: document", ErrNotFound)
+}
+
+func ensureTeamspaceMember(ctx context.Context, q queryer, teamspaceID, userID uuid.UUID) error {
+	var (
+		exists   bool
+		isMember bool
+	)
+	if err := q.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM teamspace WHERE id = $1),
+		        EXISTS (
+		            SELECT 1
+		              FROM teamspace_member
+		             WHERE teamspace_id = $1
+		               AND user_id = $2
+		        )`,
+		teamspaceID, userID,
+	).Scan(&exists, &isMember); err != nil {
+		return fmt.Errorf("documents: check teamspace access: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("%w: teamspace", ErrNotFound)
+	}
+	if !isMember {
+		return fmt.Errorf("%w: teamspace", ErrForbidden)
+	}
+	return nil
+}
+
+func listTeamspaceMemberIDs(ctx context.Context, q queryer, teamspaceID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx,
+		`SELECT user_id
+		   FROM teamspace_member
+		  WHERE teamspace_id = $1`,
+		teamspaceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("documents: list teamspace member ids: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var userID uuid.UUID
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("documents: scan teamspace member id: %w", err)
+		}
+		out = append(out, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("documents: iterate teamspace member ids: %w", err)
+	}
+	return out, nil
+}
+
+func classifyMutationError(action string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case pgErrUniqueViolation:
+			return fmt.Errorf("%w: %s", ErrConflict, action)
+		case pgErrForeignKeyViolation, pgErrCheckViolation:
+			return fmt.Errorf("%w: %s", ErrBadRequest, action)
+		}
+	}
+	return fmt.Errorf("documents: %s: %w", action, err)
+}
+
+func canManageTeamspace(ownerUserID, actorID uuid.UUID, actorRole string) bool {
+	return ownerUserID == actorID || actorRole == "admin" || actorRole == "owner"
+}
+
+func uniqueUserIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func nullString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func nullStringEqual(value *string, candidate sql.NullString) bool {
+	if value == nil {
+		return !candidate.Valid
+	}
+	return candidate.Valid && candidate.String == *value
+}
+
+func cloneSidebarNode(node *sidebarTempNode) SidebarDocumentNode {
+	out := node.node
+	out.Children = make([]SidebarDocumentNode, 0, len(node.children))
+	for _, child := range node.children {
+		out.Children = append(out.Children, cloneSidebarNode(child))
+	}
+	return out
+}

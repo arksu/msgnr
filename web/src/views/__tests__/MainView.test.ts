@@ -6,6 +6,7 @@ import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { NotificationLevel, PresenceStatus } from '@/shared/proto/packets_pb'
 import { useAuthStore } from '@/stores/auth'
 import { useTasksStore } from '@/stores/tasks'
+import { useDocumentsStore } from '@/stores/documents'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
@@ -88,6 +89,29 @@ vi.mock('@/components/tasks/TaskCreateDialog.vue', () => ({
   },
 }))
 
+vi.mock('@/components/documents/DocumentsSidebar.vue', () => ({
+  default: {
+    props: ['selectedTeamspaceId', 'selectedDocumentId'],
+    emits: ['openTeamspaces', 'openTeamspace', 'openDocument'],
+    template: '<aside data-testid="documents-sidebar" />',
+  },
+}))
+
+vi.mock('@/components/documents/TeamspacesView.vue', () => ({
+  default: {
+    props: ['selectedTeamspaceId'],
+    emits: ['openTeamspace'],
+    template: '<section data-testid="teamspaces-view" />',
+  },
+}))
+
+vi.mock('@/components/documents/DocumentCard.vue', () => ({
+  default: {
+    emits: ['back', 'openParent'],
+    template: '<section data-testid="document-card"><button data-testid="document-card-back" @click="$emit(\'back\')">back</button></section>',
+  },
+}))
+
 function createMainRouter() {
   return createRouter({
     history: createMemoryHistory(),
@@ -96,6 +120,9 @@ function createMainRouter() {
       { path: '/tasks', name: 'tasks-list', component: MainView },
       { path: '/tasks/kanban', name: 'tasks-kanban', component: MainView },
       { path: '/tasks/:taskId', name: 'tasks-card', component: MainView },
+      { path: '/documents', name: 'documents-teamspaces', component: MainView },
+      { path: '/documents/teamspaces/:teamspaceId', name: 'documents-teamspace', component: MainView },
+      { path: '/documents/:documentId', name: 'documents-card', component: MainView },
       { path: '/login', name: 'login', component: { template: '<div>login</div>' } },
     ],
   })
@@ -132,6 +159,13 @@ describe('MainView server unavailable state', () => {
       tasksStore.selectedTask = { id } as any
     })
     vi.spyOn(tasksStore, 'loadTaskList').mockResolvedValue()
+
+    const documentsStore = useDocumentsStore(pinia)
+    vi.spyOn(documentsStore, 'selectDocument').mockImplementation(async (id: string) => {
+      documentsStore.selectedDocument = { id, teamspace_id: 'teamspace-1' } as any
+    })
+    vi.spyOn(documentsStore, 'loadTeamspaces').mockResolvedValue()
+    vi.spyOn(documentsStore, 'loadSidebar').mockResolvedValue()
   })
 
   it('shows server unavailable alert with spinner and logout button', async () => {
@@ -305,6 +339,37 @@ describe('MainView server unavailable state', () => {
     expect(router.currentRoute.value.name).toBe('tasks-card')
     expect(router.currentRoute.value.params.taskId).toBe('task-remembered')
     expect(wrapper.find('[data-testid=\"task-card\"]').exists()).toBe(true)
+  })
+
+  it('opens documents route when documents button is clicked', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+
+    await (wrapper.findComponent(MainView).vm as any).goToDocumentsMode()
+    await flushUi()
+
+    expect(router.currentRoute.value.name).toBe('documents-teamspaces')
+    expect(wrapper.find('[data-testid="documents-mode"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="documents-sidebar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="teamspaces-view"]').exists()).toBe(true)
+  })
+
+  it('keeps documents card mode and loads document on direct /documents/:documentId entry', async () => {
+    const router = createMainRouter()
+    const documentsStore = useDocumentsStore(pinia)
+    const selectDocumentSpy = vi.spyOn(documentsStore, 'selectDocument')
+    router.push('/documents/document-123')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    expect(router.currentRoute.value.name).toBe('documents-card')
+    expect(wrapper.find('[data-testid="document-card"]').exists()).toBe(true)
+    expect(selectDocumentSpy).toHaveBeenCalledWith('document-123', true)
   })
 
   it('keeps task card mode and loads task on direct /tasks/:taskId entry', async () => {

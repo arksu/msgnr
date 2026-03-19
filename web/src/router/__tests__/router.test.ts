@@ -43,7 +43,19 @@ describe('router auth guard', () => {
     expect(router.currentRoute.value.name).toBe('login')
   })
 
-  it('allows authenticated user to open /tasks, /tasks/kanban and /tasks/:taskId', async () => {
+  it('redirects unauthenticated user from /documents routes to login', async () => {
+    const { default: router } = await import('@/router')
+    await router.push('/documents')
+    expect(router.currentRoute.value.name).toBe('login')
+
+    await router.push('/documents/teamspaces/teamspace-1')
+    expect(router.currentRoute.value.name).toBe('login')
+
+    await router.push('/documents/document-1')
+    expect(router.currentRoute.value.name).toBe('login')
+  })
+
+  it('allows authenticated user to open task and document routes', async () => {
     const { default: router } = await import('@/router')
     const auth = useAuthStore()
     auth.authState = 'AUTHENTICATED'
@@ -57,6 +69,17 @@ describe('router auth guard', () => {
     await router.push('/tasks/task-1')
     expect(router.currentRoute.value.name).toBe('tasks-card')
     expect(router.currentRoute.value.params.taskId).toBe('task-1')
+
+    await router.push('/documents')
+    expect(router.currentRoute.value.name).toBe('documents-teamspaces')
+
+    await router.push('/documents/teamspaces/teamspace-1')
+    expect(router.currentRoute.value.name).toBe('documents-teamspace')
+    expect(router.currentRoute.value.params.teamspaceId).toBe('teamspace-1')
+
+    await router.push('/documents/document-1')
+    expect(router.currentRoute.value.name).toBe('documents-card')
+    expect(router.currentRoute.value.params.documentId).toBe('document-1')
   })
 
   it('keeps main route when restore fails but auth store stays authenticated (server unavailable)', async () => {

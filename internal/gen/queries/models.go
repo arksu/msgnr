@@ -83,6 +83,28 @@ type ChannelMember struct {
 	CreatedAt         time.Time `json:"created_at"`
 }
 
+type Document struct {
+	ID               uuid.UUID      `json:"id"`
+	TeamspaceID      uuid.UUID      `json:"teamspace_id"`
+	ParentDocumentID uuid.NullUUID  `json:"parent_document_id"`
+	Title            string         `json:"title"`
+	ContentMarkdown  sql.NullString `json:"content_markdown"`
+	CreatedBy        uuid.UUID      `json:"created_by"`
+	UpdatedBy        uuid.UUID      `json:"updated_by"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	ArchivedAt       sql.NullTime   `json:"archived_at"`
+}
+
+type DocumentHistory struct {
+	ID              uuid.UUID      `json:"id"`
+	DocumentID      uuid.UUID      `json:"document_id"`
+	Title           string         `json:"title"`
+	ContentMarkdown sql.NullString `json:"content_markdown"`
+	EditedBy        uuid.UUID      `json:"edited_by"`
+	CreatedAt       time.Time      `json:"created_at"`
+}
+
 type EnumDictionary struct {
 	ID             uuid.UUID `json:"id"`
 	Code           string    `json:"code"`
@@ -309,6 +331,21 @@ type TaskTemplateSequence struct {
 	TemplateID uuid.UUID `json:"template_id"`
 	LastValue  int64     `json:"last_value"`
 	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type Teamspace struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	OwnerUserID uuid.UUID `json:"owner_user_id"`
+	IsPrivate   bool      `json:"is_private"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type TeamspaceMember struct {
+	TeamspaceID uuid.UUID `json:"teamspace_id"`
+	UserID      uuid.UUID `json:"user_id"`
+	JoinedAt    time.Time `json:"joined_at"`
 }
 
 type ThreadRead struct {

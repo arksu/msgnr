@@ -45,6 +45,25 @@
           Task tracker
         </span>
       </div>
+      <div class="group relative">
+        <button
+          type="button"
+          class="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+          :class="appMode === 'documents' ? 'bg-sidebar-active text-white' : 'text-sidebar-textMuted hover:bg-sidebar-hover hover:text-sidebar-text'"
+          title="Documents"
+          aria-label="Documents"
+          data-testid="mode-documents"
+          @click="goToDocumentsMode"
+        >
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+            <path d="M14 3v6h6" />
+          </svg>
+        </button>
+        <span class="pointer-events-none absolute left-12 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-chat-border bg-chat-header px-2 py-1 text-xs text-gray-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+          Documents
+        </span>
+      </div>
     </aside>
     <AppSidebar v-if="appMode === 'chat'" @profile="openSettings" @settings="openAudioSettings" />
     <main class="flex-1 min-w-0 min-h-0">
@@ -68,7 +87,7 @@
         </button>
       </div>
       <ChatArea v-if="appMode === 'chat'" />
-      <template v-else>
+      <template v-else-if="appMode === 'task-tracker'">
         <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="task-tracker">
           <TaskTrackerSidebar
             :model-value="selectedTemplateFilter"
@@ -96,6 +115,28 @@
           </main>
         </div>
         <TaskCreateDialog />
+      </template>
+      <template v-else>
+        <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="documents-mode">
+          <DocumentsSidebar
+            :selected-teamspace-id="documentsSelectedTeamspaceId"
+            :selected-document-id="routeDocumentId || documentsStore.selectedDocument?.id || null"
+            @open-teamspaces="openDocumentsTeamspacesRoute"
+            @open-document="openDocument"
+          />
+          <main class="flex-1 min-w-0 overflow-hidden">
+            <DocumentCard
+              v-if="isDocumentsCardRoute"
+              @back="backToDocuments"
+              @open-parent="openDocument"
+            />
+            <TeamspacesView
+              v-else
+              :selected-teamspace-id="routeDocumentsTeamspaceId || null"
+              @open-teamspace="openDocumentsTeamspaceRoute"
+            />
+          </main>
+        </div>
       </template>
     </main>
     <div
@@ -314,8 +355,12 @@ import TaskCard from '@/components/tasks/TaskCard.vue'
 import TaskListView from '@/components/tasks/TaskListView.vue'
 import TaskKanbanView from '@/components/tasks/TaskKanbanView.vue'
 import TaskCreateDialog from '@/components/tasks/TaskCreateDialog.vue'
+import DocumentsSidebar from '@/components/documents/DocumentsSidebar.vue'
+import TeamspacesView from '@/components/documents/TeamspacesView.vue'
+import DocumentCard from '@/components/documents/DocumentCard.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useTasksStore } from '@/stores/tasks'
+import { useDocumentsStore } from '@/stores/documents'
 const SettingsDialog = defineAsyncComponent(() => import('@/components/SettingsDialog.vue'))
 import { useCallStore } from '@/stores/call'
 
@@ -354,25 +399,48 @@ const incomingInviteError = ref('')
 const dismissedInviteIds = ref<string[]>([])
 const selectedTemplateFilter = ref<string | null>(null)
 const lastTaskTrackerNonCardRoute = ref<'tasks-list' | 'tasks-kanban'>('tasks-list')
+const lastDocumentsNonCardRoute = ref<{ name: 'documents-teamspaces' | 'documents-teamspace'; teamspaceId?: string }>({
+  name: 'documents-teamspaces',
+})
 let unsubscribeIncomingMessageSound: (() => void) | null = null
 const tasksStore = useTasksStore()
+const documentsStore = useDocumentsStore()
 const isTaskTrackerRoute = computed(() => (
   route.name === 'tasks-list'
   || route.name === 'tasks-kanban'
   || route.name === 'tasks-card'
 ))
+const isDocumentsRoute = computed(() => (
+  route.name === 'documents-teamspaces'
+  || route.name === 'documents-teamspace'
+  || route.name === 'documents-card'
+))
 const isTaskCardRoute = computed(() => route.name === 'tasks-card')
 const isTaskKanbanRoute = computed(() => route.name === 'tasks-kanban')
+const isDocumentsCardRoute = computed(() => route.name === 'documents-card')
 const taskTrackerBaseRouteName = computed<'tasks-list' | 'tasks-kanban'>(() => {
   if (route.name === 'tasks-list') return 'tasks-list'
   if (route.name === 'tasks-kanban') return 'tasks-kanban'
   return lastTaskTrackerNonCardRoute.value
 })
-const appMode = computed<'chat' | 'task-tracker'>(() => (isTaskTrackerRoute.value ? 'task-tracker' : 'chat'))
+const appMode = computed<'chat' | 'task-tracker' | 'documents'>(() => {
+  if (isTaskTrackerRoute.value) return 'task-tracker'
+  if (isDocumentsRoute.value) return 'documents'
+  return 'chat'
+})
 const showChatModeUnreadBadge = computed(() => appMode.value !== 'chat' && chatStore.totalUnreadCount > 0)
 const chatModeUnreadBadgeLabel = computed(() => (chatStore.totalUnreadCount > 99 ? '99+' : String(chatStore.totalUnreadCount)))
 const routeTaskId = computed(() =>
   typeof route.params.taskId === 'string' ? route.params.taskId : '',
+)
+const routeDocumentId = computed(() =>
+  typeof route.params.documentId === 'string' ? route.params.documentId : '',
+)
+const routeDocumentsTeamspaceId = computed(() =>
+  typeof route.params.teamspaceId === 'string' ? route.params.teamspaceId : '',
+)
+const documentsSelectedTeamspaceId = computed(() =>
+  routeDocumentsTeamspaceId.value || documentsStore.selectedDocument?.teamspace_id || null,
 )
 
 async function goToChatMode() {
@@ -387,6 +455,15 @@ async function goToTaskTrackerMode() {
     return
   }
   await router.push({ name: 'tasks-list' })
+}
+
+async function goToDocumentsMode() {
+  if (route.name === 'documents-card' || route.name === 'documents-teamspace' || route.name === 'documents-teamspaces') return
+  if (lastDocumentsNonCardRoute.value.name === 'documents-teamspace' && lastDocumentsNonCardRoute.value.teamspaceId) {
+    await router.push({ name: 'documents-teamspace', params: { teamspaceId: lastDocumentsNonCardRoute.value.teamspaceId } })
+    return
+  }
+  await router.push({ name: 'documents-teamspaces' })
 }
 
 async function openTaskListRoute() {
@@ -406,10 +483,32 @@ async function openTask(id: string) {
   await router.push({ name: 'tasks-card', params: { taskId: id } })
 }
 
+async function openDocumentsTeamspacesRoute() {
+  lastDocumentsNonCardRoute.value = { name: 'documents-teamspaces' }
+  if (route.name === 'documents-teamspaces') return
+  await router.push({ name: 'documents-teamspaces' })
+}
+
+async function openDocumentsTeamspaceRoute(teamspaceId: string) {
+  lastDocumentsNonCardRoute.value = { name: 'documents-teamspace', teamspaceId }
+  if (route.name === 'documents-teamspace' && routeDocumentsTeamspaceId.value === teamspaceId) return
+  await router.push({ name: 'documents-teamspace', params: { teamspaceId } })
+}
+
+async function openDocument(id: string) {
+  await router.push({ name: 'documents-card', params: { documentId: id } })
+}
+
 function routeTaskIdMatchesSelected(routeID: string): boolean {
   const task = tasksStore.selectedTask
   if (!task) return false
   return task.id === routeID || task.public_id === routeID
+}
+
+function routeDocumentIdMatchesSelected(routeID: string): boolean {
+  const documentItem = documentsStore.selectedDocument
+  if (!documentItem) return false
+  return documentItem.id === routeID
 }
 
 async function backToList() {
@@ -417,6 +516,16 @@ async function backToList() {
   // Refresh the list so any edits made in the card are reflected
   await tasksStore.loadTaskList()
   await router.push({ name: lastTaskTrackerNonCardRoute.value })
+}
+
+async function backToDocuments() {
+  documentsStore.clearSelectedDocument()
+  await documentsStore.loadSidebar(true)
+  if (lastDocumentsNonCardRoute.value.name === 'documents-teamspace' && lastDocumentsNonCardRoute.value.teamspaceId) {
+    await router.push({ name: 'documents-teamspace', params: { teamspaceId: lastDocumentsNonCardRoute.value.teamspaceId } })
+    return
+  }
+  await router.push({ name: 'documents-teamspaces' })
 }
 
 function onTaskTrackerFilterChange(value: string | null) {
@@ -428,8 +537,8 @@ function onTaskTrackerFilterChange(value: string | null) {
 }
 
 watch(
-  () => ({ name: route.name, taskId: routeTaskId.value }),
-  async ({ name, taskId }) => {
+  () => ({ name: route.name, taskId: routeTaskId.value, documentId: routeDocumentId.value, teamspaceId: routeDocumentsTeamspaceId.value }),
+  async ({ name, taskId, documentId, teamspaceId }) => {
     if (name === 'tasks-card') {
       if (!taskId) {
         await router.replace({ name: lastTaskTrackerNonCardRoute.value })
@@ -460,8 +569,46 @@ watch(
       return
     }
 
+    if (name === 'documents-card') {
+      if (!documentId) {
+        await backToDocuments()
+        return
+      }
+      void documentsStore.loadSidebar()
+      if (routeDocumentIdMatchesSelected(documentId)) {
+        return
+      }
+      documentsStore.clearSelectedDocument()
+      await documentsStore.selectDocument(documentId, true)
+      if (!routeDocumentIdMatchesSelected(documentId)) {
+        await backToDocuments()
+      }
+      return
+    }
+
+    if (name === 'documents-teamspace') {
+      if (!teamspaceId) {
+        await router.replace({ name: 'documents-teamspaces' })
+        return
+      }
+      lastDocumentsNonCardRoute.value = { name: 'documents-teamspace', teamspaceId }
+      documentsStore.clearSelectedDocument()
+      void documentsStore.loadTeamspaces()
+      void documentsStore.loadSidebar()
+      return
+    }
+
+    if (name === 'documents-teamspaces') {
+      lastDocumentsNonCardRoute.value = { name: 'documents-teamspaces' }
+      documentsStore.clearSelectedDocument()
+      void documentsStore.loadTeamspaces()
+      void documentsStore.loadSidebar()
+      return
+    }
+
     if (name === 'main') {
       tasksStore.clearSelectedTask()
+      documentsStore.clearSelectedDocument()
     }
   },
   { immediate: true },
@@ -483,10 +630,24 @@ watch(() => tasksStore.selectedTask?.id, (taskId) => {
   void router.push({ name: 'tasks-card', params: { taskId } })
 })
 
+watch(() => documentsStore.selectedDocument?.id, (documentId) => {
+  if (!documentId || !isDocumentsRoute.value) return
+  if (route.name !== 'documents-card' && route.name !== 'documents-teamspace' && route.name !== 'documents-teamspaces') return
+  if (route.name === 'documents-card' && routeDocumentId.value === documentId) return
+  void router.push({ name: 'documents-card', params: { documentId } })
+})
+
 watch(
   () => route.name,
   (name) => {
-    if (name === 'tasks-list' || name === 'tasks-kanban' || name === 'tasks-card') return
+    if (
+      name === 'tasks-list'
+      || name === 'tasks-kanban'
+      || name === 'tasks-card'
+      || name === 'documents-teamspaces'
+      || name === 'documents-teamspace'
+      || name === 'documents-card'
+    ) return
     selectedTemplateFilter.value = null
   }
 )

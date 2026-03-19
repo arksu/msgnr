@@ -23,6 +23,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 50, cfg.TaskGroupPortionDefaultLimit)
 	assert.Equal(t, 200, cfg.TaskGroupPortionMaxLimit)
 	assert.Equal(t, 20, cfg.TaskDescriptionHistoryLimit)
+	assert.Equal(t, 25, cfg.DocumentHistoryLimit)
 	assert.Equal(t, "9090", cfg.MetricsPort)
 	assert.Equal(t, "*", cfg.CORSAllowedOrigins)
 }
@@ -36,6 +37,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	os.Setenv("TASK_GROUP_PORTION_DEFAULT_LIMIT", "77")
 	os.Setenv("TASK_GROUP_PORTION_MAX_LIMIT", "155")
 	os.Setenv("TASK_DESCRIPTION_HISTORY_LIMIT", "33")
+	os.Setenv("DOCUMENT_HISTORY_LIMIT", "44")
 	defer func() {
 		os.Unsetenv("PORT")
 		os.Unsetenv("DATABASE_URL")
@@ -45,6 +47,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 		os.Unsetenv("TASK_GROUP_PORTION_DEFAULT_LIMIT")
 		os.Unsetenv("TASK_GROUP_PORTION_MAX_LIMIT")
 		os.Unsetenv("TASK_DESCRIPTION_HISTORY_LIMIT")
+		os.Unsetenv("DOCUMENT_HISTORY_LIMIT")
 	}()
 
 	cfg, err := Load()
@@ -57,6 +60,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	assert.Equal(t, 77, cfg.TaskGroupPortionDefaultLimit)
 	assert.Equal(t, 155, cfg.TaskGroupPortionMaxLimit)
 	assert.Equal(t, 33, cfg.TaskDescriptionHistoryLimit)
+	assert.Equal(t, 44, cfg.DocumentHistoryLimit)
 }
 
 func TestIsDev(t *testing.T) {

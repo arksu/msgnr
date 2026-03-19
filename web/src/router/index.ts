@@ -37,6 +37,25 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/documents',
+      name: 'documents-teamspaces',
+      component: () => import('@/views/MainView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/documents/teamspaces/:teamspaceId',
+      name: 'documents-teamspace',
+      component: () => import('@/views/MainView.vue'),
+      meta: { requiresAuth: true },
+    },
+    // Keep static `/documents/teamspaces/...` before the dynamic document route.
+    {
+      path: '/documents/:documentId',
+      name: 'documents-card',
+      component: () => import('@/views/MainView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/admin',
       name: 'admin',
       component: () => import('@/views/AdminView.vue'),

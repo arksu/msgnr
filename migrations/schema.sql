@@ -977,3 +977,116 @@ CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
 
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_last_used
   ON push_subscriptions(last_used);
+
+-- ---------------------------------------------------------------------------
+-- Documents / Teamspaces
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS teamspace (
+    id            uuid         NOT NULL DEFAULT gen_random_uuid(),
+    name          text         NOT NULL,
+    owner_user_id uuid         NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    is_private    boolean      NOT NULL DEFAULT false,
+    created_at    timestamptz  NOT NULL DEFAULT now(),
+    updated_at    timestamptz  NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_teamspace PRIMARY KEY (id),
+    CONSTRAINT chk_teamspace_name_nonempty CHECK (btrim(name) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamspace_owner_user_id ON teamspace (owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_teamspace_public_name ON teamspace (is_private, lower(name));
+
+DO $$ BEGIN
+    CREATE TRIGGER trg_teamspace_set_updated_at
+    BEFORE UPDATE ON teamspace
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS teamspace_member (
+    teamspace_id uuid        NOT NULL REFERENCES teamspace(id) ON DELETE CASCADE,
+    user_id      uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    joined_at    timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_teamspace_member PRIMARY KEY (teamspace_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamspace_member_user_id ON teamspace_member (user_id, joined_at DESC);
+
+CREATE TABLE IF NOT EXISTS document (
+    id                 uuid         NOT NULL DEFAULT gen_random_uuid(),
+    teamspace_id       uuid         NOT NULL REFERENCES teamspace(id) ON DELETE CASCADE,
+    parent_document_id uuid         NULL REFERENCES document(id) ON DELETE CASCADE,
+    title              text         NOT NULL,
+    content_markdown   text         NULL,
+    created_by         uuid         NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    updated_by         uuid         NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    created_at         timestamptz  NOT NULL DEFAULT now(),
+    updated_at         timestamptz  NOT NULL DEFAULT now(),
+    archived_at        timestamptz  NULL,
+
+    CONSTRAINT pk_document PRIMARY KEY (id),
+    CONSTRAINT chk_document_title_nonempty CHECK (btrim(title) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_teamspace_id ON document (teamspace_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_document_parent_document_id ON document (parent_document_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_document_active_title ON document (teamspace_id, archived_at, lower(title));
+
+DO $$ BEGIN
+    CREATE TRIGGER trg_document_set_updated_at
+    BEFORE UPDATE ON document
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE OR REPLACE FUNCTION check_document_parent_teamspace_match()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    v_parent_teamspace_id uuid;
+BEGIN
+    IF NEW.parent_document_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT teamspace_id INTO v_parent_teamspace_id
+    FROM document
+    WHERE id = NEW.parent_document_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'parent document not found: %', NEW.parent_document_id USING ERRCODE = '23503';
+    END IF;
+
+    IF v_parent_teamspace_id <> NEW.teamspace_id THEN
+        RAISE EXCEPTION 'parent document % belongs to different teamspace', NEW.parent_document_id
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF NEW.parent_document_id = NEW.id THEN
+        RAISE EXCEPTION 'document cannot be its own parent' USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_document_parent_teamspace_match ON document;
+CREATE TRIGGER trg_document_parent_teamspace_match
+    BEFORE INSERT OR UPDATE OF teamspace_id, parent_document_id ON document
+    FOR EACH ROW EXECUTE FUNCTION check_document_parent_teamspace_match();
+
+CREATE TABLE IF NOT EXISTS document_history (
+    id               uuid         NOT NULL DEFAULT gen_random_uuid(),
+    document_id      uuid         NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+    title            text         NOT NULL,
+    content_markdown text         NULL,
+    edited_by        uuid         NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    created_at       timestamptz  NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_document_history PRIMARY KEY (id),
+    CONSTRAINT chk_document_history_title_nonempty CHECK (btrim(title) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_history_document_id
+    ON document_history (document_id, created_at DESC);

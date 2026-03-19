@@ -20,6 +20,7 @@ import (
 	"msgnr/internal/chat"
 	"msgnr/internal/config"
 	"msgnr/internal/database"
+	"msgnr/internal/documents"
 	"msgnr/internal/events"
 	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/logger"
@@ -183,6 +184,10 @@ func main() {
 	tasksHandler.SetStatusChangeNotifier(wsServer)
 	wsServer.SetTasksService(tasksSvc)
 
+	documentsSvc := documents.NewService(db.Pool)
+	documentsSvc.SetHistoryLimit(cfg.DocumentHistoryLimit)
+	documentsHandler := documents.NewHandler(documentsSvc, authSvc, log)
+
 	// --- main HTTP mux ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", wsServer.Handler())
@@ -193,6 +198,7 @@ func main() {
 	callHandler.RegisterRoutes(mux)
 	adminHandler.RegisterRoutes(mux)
 	tasksHandler.RegisterRoutes(mux)
+	documentsHandler.RegisterRoutes(mux)
 	pushHandler.RegisterRoutes(mux)
 
 	httpServer := &http.Server{

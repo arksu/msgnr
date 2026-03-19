@@ -60,6 +60,7 @@ type Config struct {
 	TaskGroupPortionDefaultLimit int `mapstructure:"TASK_GROUP_PORTION_DEFAULT_LIMIT"`
 	TaskGroupPortionMaxLimit     int `mapstructure:"TASK_GROUP_PORTION_MAX_LIMIT"`
 	TaskDescriptionHistoryLimit  int `mapstructure:"TASK_DESCRIPTION_HISTORY_LIMIT"`
+	DocumentHistoryLimit         int `mapstructure:"DOCUMENT_HISTORY_LIMIT"`
 
 	// Minio / Object Storage
 	MinioEndpoint       string `mapstructure:"MINIO_ENDPOINT"`
@@ -134,6 +135,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("TASK_GROUP_PORTION_DEFAULT_LIMIT", 50)
 	viper.SetDefault("TASK_GROUP_PORTION_MAX_LIMIT", 200)
 	viper.SetDefault("TASK_DESCRIPTION_HISTORY_LIMIT", 20)
+	viper.SetDefault("DOCUMENT_HISTORY_LIMIT", 25)
 
 	viper.SetDefault("MINIO_ENDPOINT", "localhost:9000")
 	viper.SetDefault("MINIO_ACCESS_KEY", "minioadmin")

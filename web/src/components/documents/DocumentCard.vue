@@ -183,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { DocumentHistoryItem } from '@/services/http/documentsApi'
 import { useDocumentsStore } from '@/stores/documents'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
@@ -200,6 +200,8 @@ const titleDraft = ref('')
 const contentDraft = ref('')
 const saveError = ref('')
 const titleInputRef = ref<HTMLInputElement | null>(null)
+const autosaveDelayMs = 20_000
+let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
 const historyModalOpen = ref(false)
 const historyLoading = ref(false)
@@ -214,14 +216,25 @@ const documentItem = computed(() => documentsStore.selectedDocument)
 
 watch(
   () => documentsStore.selectedDocument,
-  (value) => {
+  (value, previous) => {
+    clearAutosaveTimer()
     titleDraft.value = value?.title ?? ''
     contentDraft.value = value?.content_markdown ?? ''
-    titleEditing.value = false
+    if (value?.id !== previous?.id) {
+      titleEditing.value = false
+    }
     saveError.value = ''
   },
   { immediate: true },
 )
+
+watch([titleDraft, contentDraft], () => {
+  scheduleAutosave()
+})
+
+onBeforeUnmount(() => {
+  clearAutosaveTimer()
+})
 
 function formatDatetime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -242,38 +255,101 @@ function cancelTitleEdit() {
   titleDraft.value = documentsStore.selectedDocument?.title ?? ''
 }
 
-async function saveTitle() {
-  const current = documentsStore.selectedDocument
-  if (!current) return
-  const nextTitle = titleDraft.value.trim()
-  if (!nextTitle) {
-    saveError.value = 'Document title is required'
-    return
-  }
-  if (nextTitle === current.title) {
-    titleEditing.value = false
-    return
-  }
-  try {
-    saveError.value = ''
-    await documentsStore.updateDocument(current.id, { title: nextTitle })
-    titleEditing.value = false
-  } catch (e) {
-    saveError.value = e instanceof Error ? e.message : 'Failed to save title'
+function clearAutosaveTimer() {
+  if (autosaveTimer) {
+    clearTimeout(autosaveTimer)
+    autosaveTimer = null
   }
 }
 
-async function saveContent() {
+function collectDraftChanges(documentItem: NonNullable<typeof documentsStore.selectedDocument>): {
+  payload: { title?: string; content_markdown?: string }
+  titleInvalid: boolean
+} {
+  const payload: { title?: string; content_markdown?: string } = {}
+  const nextTitle = titleDraft.value.trim()
+  const currentContent = documentItem.content_markdown ?? ''
+  let titleInvalid = false
+
+  if (!nextTitle) {
+    if (titleDraft.value !== documentItem.title) {
+      titleInvalid = true
+    }
+  } else if (nextTitle !== documentItem.title) {
+    payload.title = nextTitle
+  }
+
+  if (contentDraft.value !== currentContent) {
+    payload.content_markdown = contentDraft.value
+  }
+
+  return { payload, titleInvalid }
+}
+
+async function persistDraft(options: { closeTitleEditor?: boolean } = {}) {
   const current = documentsStore.selectedDocument
   if (!current) return
-  const nextContent = contentDraft.value
-  if ((current.content_markdown ?? '') === nextContent) return
-  try {
+  const documentId = current.id
+  const submittedTitleDraft = titleDraft.value
+  const submittedContentDraft = contentDraft.value
+  const { payload, titleInvalid } = collectDraftChanges(current)
+
+  if (titleInvalid) {
+    saveError.value = 'Document title is required'
+  } else {
     saveError.value = ''
-    await documentsStore.updateDocument(current.id, { content_markdown: nextContent })
+  }
+
+  if (Object.keys(payload).length === 0) {
+    if (options.closeTitleEditor && !titleInvalid) {
+      titleEditing.value = false
+    }
+    return
+  }
+
+  try {
+    const row = await documentsStore.updateDocument(documentId, payload)
+    if (documentsStore.selectedDocument?.id !== documentId) return
+    if (payload.title !== undefined && titleDraft.value === submittedTitleDraft) {
+      titleDraft.value = row.title
+    }
+    if (payload.content_markdown !== undefined && contentDraft.value === submittedContentDraft) {
+      contentDraft.value = row.content_markdown ?? ''
+    }
+    if (options.closeTitleEditor && !titleInvalid) {
+      titleEditing.value = false
+    }
+    saveError.value = titleInvalid ? 'Document title is required' : ''
   } catch (e) {
     saveError.value = e instanceof Error ? e.message : 'Failed to save document'
   }
+}
+
+function scheduleAutosave() {
+  const current = documentsStore.selectedDocument
+  if (!current) return
+  const { payload, titleInvalid } = collectDraftChanges(current)
+  if (Object.keys(payload).length === 0 && !titleInvalid) {
+    clearAutosaveTimer()
+    return
+  }
+  clearAutosaveTimer()
+  const documentId = current.id
+  autosaveTimer = setTimeout(() => {
+    autosaveTimer = null
+    if (documentsStore.selectedDocument?.id !== documentId) return
+    void persistDraft()
+  }, autosaveDelayMs)
+}
+
+async function saveTitle() {
+  clearAutosaveTimer()
+  await persistDraft({ closeTitleEditor: true })
+}
+
+async function saveContent() {
+  clearAutosaveTimer()
+  await persistDraft()
 }
 
 async function openHistoryModal() {
@@ -308,13 +384,16 @@ async function applyHistory() {
   const current = documentsStore.selectedDocument
   const candidate = historyCandidate.value
   if (!current || !candidate) return
+  clearAutosaveTimer()
   historyApplying.value = true
   historyApplyError.value = ''
   try {
-    await documentsStore.updateDocument(current.id, {
+    const row = await documentsStore.updateDocument(current.id, {
       title: candidate.title,
       content_markdown: candidate.content_markdown ?? null,
     })
+    titleDraft.value = row.title
+    contentDraft.value = row.content_markdown ?? ''
     closeHistoryModal()
   } catch (e) {
     historyApplyError.value = e instanceof Error ? e.message : 'Failed to restore version'

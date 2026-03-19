@@ -77,8 +77,10 @@
                 :node="node"
                 :level="0"
                 :selected-document-id="selectedDocumentId"
+                :collapsed-document-ids="collapsedDocumentIds"
                 @open-document="$emit('openDocument', $event)"
                 @add-child="openCreateDocument(teamspace.id, $event)"
+                @toggle-collapse="toggleDocument"
               />
             </div>
           </div>
@@ -155,11 +157,16 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import type { SidebarDocumentNode } from '@/services/http/documentsApi'
 import { useDocumentsStore } from '@/stores/documents'
 import {
   loadCollapsedDocumentsTeamspaceIds,
   saveCollapsedDocumentsTeamspaceIds,
 } from '@/services/storage/documentsTeamspaceCollapseStorage'
+import {
+  loadCollapsedDocumentsNodeIds,
+  saveCollapsedDocumentsNodeIds,
+} from '@/services/storage/documentsNodeCollapseStorage'
 import DocumentsTreeNode from './DocumentsTreeNode.vue'
 
 const props = defineProps<{
@@ -174,6 +181,7 @@ const emit = defineEmits<{
 
 const documentsStore = useDocumentsStore()
 const collapsedTeamspaceIds = ref<string[]>(loadCollapsedDocumentsTeamspaceIds())
+const collapsedDocumentIds = ref<string[]>(loadCollapsedDocumentsNodeIds())
 const createModalOpen = ref(false)
 const createTeamspaceId = ref<string | null>(null)
 const createParentDocumentId = ref<string | null>(null)
@@ -190,6 +198,10 @@ watch(collapsedTeamspaceIds, (value) => {
   saveCollapsedDocumentsTeamspaceIds(value)
 })
 
+watch(collapsedDocumentIds, (value) => {
+  saveCollapsedDocumentsNodeIds(value)
+})
+
 watch(
   () => documentsStore.sidebarTeamspaces.map(teamspace => teamspace.id).join(','),
   () => {
@@ -198,6 +210,19 @@ watch(
     const next = collapsedTeamspaceIds.value.filter(id => validIds.has(id))
     if (next.length !== collapsedTeamspaceIds.value.length || next.some((id, index) => id !== collapsedTeamspaceIds.value[index])) {
       collapsedTeamspaceIds.value = next
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => documentsStore.sidebarTeamspaces,
+  () => {
+    if (documentsStore.sidebarTeamspaces.length === 0) return
+    const validIds = new Set(documentsStore.sidebarTeamspaces.flatMap(teamspace => collectDocumentIds(teamspace.documents)))
+    const next = collapsedDocumentIds.value.filter(id => validIds.has(id))
+    if (next.length !== collapsedDocumentIds.value.length || next.some((id, index) => id !== collapsedDocumentIds.value[index])) {
+      collapsedDocumentIds.value = next
     }
   },
   { immediate: true },
@@ -213,6 +238,22 @@ function toggleTeamspace(teamspaceId: string) {
     return
   }
   collapsedTeamspaceIds.value = [...collapsedTeamspaceIds.value, teamspaceId]
+}
+
+function isDocumentCollapsed(documentId: string): boolean {
+  return collapsedDocumentIds.value.includes(documentId)
+}
+
+function toggleDocument(documentId: string) {
+  if (isDocumentCollapsed(documentId)) {
+    collapsedDocumentIds.value = collapsedDocumentIds.value.filter(id => id !== documentId)
+    return
+  }
+  collapsedDocumentIds.value = [...collapsedDocumentIds.value, documentId]
+}
+
+function collectDocumentIds(nodes: SidebarDocumentNode[]): string[] {
+  return nodes.flatMap(node => [node.id, ...collectDocumentIds(node.children)])
 }
 
 function openCreateDocument(teamspaceId: string, parentDocumentId: string | null) {

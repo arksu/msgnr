@@ -17,6 +17,7 @@ describe('TaskDescriptionEditor', () => {
       location: {
         replace: vi.fn(),
       },
+      focus: vi.fn(),
       close: vi.fn(),
     } as unknown as Window))
     vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
@@ -157,7 +158,7 @@ describe('TaskDescriptionEditor', () => {
     expect(fetchOwnedAttachmentBlob).toHaveBeenCalledWith('task', 'task-1', 'att-image')
   })
 
-  it('opens attachment links from the rendered editor on cmd-click', async () => {
+  it('opens attachment links from the rendered editor on click', async () => {
     vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }))
 
     const wrapper = mount(TaskDescriptionEditor, {
@@ -174,7 +175,6 @@ describe('TaskDescriptionEditor', () => {
     link.element.dispatchEvent(new MouseEvent('click', {
       bubbles: true,
       cancelable: true,
-      metaKey: true,
     }))
     await flushPromises()
 
@@ -182,6 +182,28 @@ describe('TaskDescriptionEditor', () => {
     expect(window.open).toHaveBeenCalledWith('about:blank', '_blank')
     const opened = vi.mocked(window.open).mock.results[0]?.value as { location: { replace: ReturnType<typeof vi.fn> } }
     expect(opened.location.replace).toHaveBeenCalledWith('blob:editor')
+  })
+
+  it('opens normal markdown links from the rendered editor on click', async () => {
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '[OpenAI](https://openai.com)',
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const link = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror a')
+    link.element.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }))
+    await flushPromises()
+
+    expect(fetchOwnedAttachmentBlob).not.toHaveBeenCalled()
+    expect(window.open).toHaveBeenCalledWith('https://openai.com', '_blank')
+    const opened = vi.mocked(window.open).mock.results[0]?.value as { focus: ReturnType<typeof vi.fn> }
+    expect(opened.focus).toHaveBeenCalled()
   })
 
   it('shows a non-error hint and skips uploads when the owner is not saved yet', async () => {

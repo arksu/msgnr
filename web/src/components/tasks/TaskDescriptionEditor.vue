@@ -289,7 +289,7 @@ import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
 import { fetchOwnedAttachmentBlob, uploadOwnedAttachment, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
-import { openBlobInBrowser } from '@/utils/attachmentBrowser'
+import { openBlobInBrowser, openHrefInBrowser } from '@/utils/attachmentBrowser'
 import {
   buildAttachmentUrl,
   buildAttachmentMarkdown,
@@ -435,6 +435,19 @@ async function openAttachmentLinkFromEditor(href: string) {
     clearAttachmentNotice()
   } catch (error) {
     setAttachmentNotice(error instanceof Error ? error.message : 'Attachment open failed', true)
+  }
+
+  return true
+}
+
+function openStandardLinkFromEditor(href: string): boolean {
+  if (!href.trim()) return false
+
+  try {
+    openHrefInBrowser(href)
+    clearAttachmentNotice()
+  } catch (error) {
+    setAttachmentNotice(error instanceof Error ? error.message : 'Link open failed', true)
   }
 
   return true
@@ -657,17 +670,18 @@ const editor = useEditor({
       click(_view, event) {
         const target = event.target
         if (!(target instanceof HTMLElement)) return false
-        if (!event.metaKey && !event.ctrlKey) return false
 
         const link = target.closest('a[href]')
         if (!(link instanceof HTMLAnchorElement)) return false
 
         const href = link.getAttribute('href') ?? ''
-        if (!parseAttachmentUrl(href)) return false
-
         event.preventDefault()
-        void openAttachmentLinkFromEditor(href)
-        return true
+        if (parseAttachmentUrl(href)) {
+          void openAttachmentLinkFromEditor(href)
+          return true
+        }
+
+        return openStandardLinkFromEditor(href)
       },
     },
     handlePaste(_view, event) {

@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import {
   documentsCreateDocument,
   documentsCreateTeamspace,
+  documentsDeleteDocument,
   documentsGetDocument,
   documentsJoinTeamspace,
   documentsListDocumentHistory,
@@ -142,6 +143,14 @@ export const useDocumentsStore = defineStore('documents', () => {
     return row
   }
 
+  async function deleteDocument(id: string) {
+    await documentsDeleteDocument(id)
+    if (selectedDocument.value?.id === id) {
+      clearSelectedDocument()
+    }
+    await loadSidebar(true)
+  }
+
   async function loadDocumentHistory(id: string): Promise<DocumentHistoryItem[]> {
     return documentsListDocumentHistory(id)
   }
@@ -169,6 +178,7 @@ export const useDocumentsStore = defineStore('documents', () => {
     joinTeamspace,
     createDocument,
     updateDocument,
+    deleteDocument,
     loadDocumentHistory,
   }
 })

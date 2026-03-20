@@ -600,6 +600,41 @@ func (s *Service) UpdateDocument(ctx context.Context, documentID uuid.UUID, para
 	return s.GetDocument(ctx, documentID, params.ActorID)
 }
 
+func (s *Service) DeleteDocument(ctx context.Context, documentID, actorID uuid.UUID) error {
+	if err := s.ensureDocumentReadable(ctx, documentID, actorID); err != nil {
+		return err
+	}
+
+	commandTag, err := s.pool.Exec(ctx,
+		`WITH RECURSIVE subtree AS (
+		     SELECT d.id
+		       FROM document d
+		      WHERE d.id = $1
+		        AND d.archived_at IS NULL
+		     UNION ALL
+		     SELECT child.id
+		       FROM document child
+		       JOIN subtree parent
+		         ON child.parent_document_id = parent.id
+		      WHERE child.archived_at IS NULL
+		 )
+		 UPDATE document d
+		    SET archived_at = now(),
+		        updated_by = $2,
+		        updated_at = now()
+		   FROM subtree
+		  WHERE d.id = subtree.id`,
+		documentID, actorID,
+	)
+	if err != nil {
+		return classifyMutationError("delete document", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return s.documentAccessError(ctx, documentID, actorID)
+	}
+	return nil
+}
+
 func (s *Service) ListDocumentHistory(ctx context.Context, documentID, userID uuid.UUID) ([]DocumentHistoryItem, error) {
 	if err := s.ensureDocumentReadable(ctx, documentID, userID); err != nil {
 		return nil, err

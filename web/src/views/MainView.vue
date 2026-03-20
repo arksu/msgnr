@@ -123,6 +123,7 @@
             :selected-document-id="routeDocumentId || documentsStore.selectedDocument?.id || null"
             @open-teamspaces="openDocumentsTeamspacesRoute"
             @open-document="openDocument"
+            @documents-deleted="handleDocumentsDeleted"
           />
           <main class="flex-1 min-w-0 overflow-hidden">
             <DocumentCard
@@ -497,6 +498,16 @@ async function openDocumentsTeamspaceRoute(teamspaceId: string) {
 
 async function openDocument(id: string) {
   await router.push({ name: 'documents-card', params: { documentId: id } })
+}
+
+async function handleDocumentsDeleted(deletedDocumentIds: string[]) {
+  if (deletedDocumentIds.length === 0) return
+  const currentDocumentId = routeDocumentId.value || documentsStore.selectedDocument?.id || ''
+  if (!currentDocumentId || !deletedDocumentIds.includes(currentDocumentId)) {
+    return
+  }
+  documentsStore.clearSelectedDocument()
+  await backToDocuments()
 }
 
 function routeTaskIdMatchesSelected(routeID: string): boolean {

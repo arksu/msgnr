@@ -30,7 +30,7 @@
         type="button"
         class="min-w-0 flex-1 truncate text-left"
         :data-testid="`documents-node-${node.id}`"
-        @click="$emit('openDocument', node.id)"
+        @click="openDocumentRow"
       >
         {{ node.title }}
       </button>
@@ -42,6 +42,20 @@
         @click.stop="$emit('addChild', node.id)"
       >
         +
+      </button>
+      <button
+        ref="menuButtonRef"
+        type="button"
+        class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-sidebar-textMuted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-sidebar-hover hover:text-sidebar-text"
+        :data-testid="`documents-node-menu-${node.id}`"
+        title="Document actions"
+        @click.stop="toggleMenu"
+      >
+        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="5" r="1.8" />
+          <circle cx="12" cy="12" r="1.8" />
+          <circle cx="12" cy="19" r="1.8" />
+        </svg>
       </button>
     </div>
 
@@ -56,14 +70,68 @@
         @open-document="$emit('openDocument', $event)"
         @add-child="$emit('addChild', $event)"
         @toggle-collapse="$emit('toggleCollapse', $event)"
+        @documents-deleted="$emit('documentsDeleted', $event)"
       />
     </div>
   </div>
+
+  <Teleport to="body">
+    <div v-if="menuOpen" class="fixed inset-0 z-50" @click="closeMenu">
+      <div
+        class="fixed min-w-[140px] rounded-lg border border-chat-border bg-chat-header p-1 shadow-2xl"
+        :style="{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }"
+        @click.stop
+      >
+        <button
+          type="button"
+          class="flex w-full items-center rounded px-3 py-2 text-left text-sm text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
+          @click="openDeleteConfirm"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div
+      v-if="deleteConfirmOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      @click.self="closeDeleteConfirm"
+    >
+      <div class="w-full max-w-sm rounded-xl border border-chat-border bg-chat-header p-5 shadow-2xl">
+        <h3 class="text-base font-semibold text-white">Delete document?</h3>
+        <p class="mt-2 text-sm text-gray-300">
+          This will delete "{{ node.title }}" and all nested child documents.
+        </p>
+        <p v-if="deleteError" class="mt-3 text-xs text-red-400">{{ deleteError }}</p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            class="rounded border border-chat-border px-3 py-1.5 text-sm text-gray-300 transition-colors hover:text-white"
+            :disabled="deleteLoading"
+            @click="closeDeleteConfirm"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-50"
+            :disabled="deleteLoading"
+            @click="confirmDelete"
+          >
+            {{ deleteLoading ? 'Deleting...' : 'Delete' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { SidebarDocumentNode } from '@/services/http/documentsApi'
+import { useDocumentsStore } from '@/stores/documents'
 
 const props = defineProps<{
   node: SidebarDocumentNode
@@ -72,12 +140,74 @@ const props = defineProps<{
   collapsedDocumentIds: string[]
 }>()
 
+const documentsStore = useDocumentsStore()
 const hasChildren = computed(() => props.node.children.length > 0)
 const isCollapsed = computed(() => props.collapsedDocumentIds.includes(props.node.id))
+const menuOpen = ref(false)
+const deleteConfirmOpen = ref(false)
+const deleteLoading = ref(false)
+const deleteError = ref('')
+const menuButtonRef = ref<HTMLButtonElement | null>(null)
+const menuPosition = ref({ top: 0, left: 0 })
 
-defineEmits<{
+const emit = defineEmits<{
   openDocument: [id: string]
   addChild: [id: string]
   toggleCollapse: [id: string]
+  documentsDeleted: [ids: string[]]
 }>()
+
+function openDocumentRow() {
+  closeMenu()
+  emit('openDocument', props.node.id)
+}
+
+function toggleMenu() {
+  if (menuOpen.value) {
+    closeMenu()
+    return
+  }
+  const rect = menuButtonRef.value?.getBoundingClientRect()
+  if (rect) {
+    menuPosition.value = {
+      top: rect.bottom + 6,
+      left: Math.max(8, rect.right - 140),
+    }
+  }
+  menuOpen.value = true
+}
+
+function closeMenu() {
+  menuOpen.value = false
+}
+
+function openDeleteConfirm() {
+  closeMenu()
+  deleteError.value = ''
+  deleteConfirmOpen.value = true
+}
+
+function closeDeleteConfirm() {
+  if (deleteLoading.value) return
+  deleteConfirmOpen.value = false
+  deleteError.value = ''
+}
+
+function collectSubtreeIds(node: SidebarDocumentNode): string[] {
+  return [node.id, ...node.children.flatMap(child => collectSubtreeIds(child))]
+}
+
+async function confirmDelete() {
+  deleteLoading.value = true
+  deleteError.value = ''
+  try {
+    await documentsStore.deleteDocument(props.node.id)
+    deleteConfirmOpen.value = false
+    emit('documentsDeleted', collectSubtreeIds(props.node))
+  } catch (e) {
+    deleteError.value = e instanceof Error ? e.message : 'Failed to delete document'
+  } finally {
+    deleteLoading.value = false
+  }
+}
 </script>

@@ -25,6 +25,12 @@ async function apiCall<T>(request: Promise<{ data: T }>): Promise<T> {
   } catch (e) { handleError(e) }
 }
 
+async function apiCallNoContent(request: Promise<unknown>): Promise<void> {
+  try {
+    await request
+  } catch (e) { handleError(e) }
+}
+
 export interface TeamspaceMemberPreview {
   id: string
   display_name: string
@@ -135,6 +141,10 @@ export async function documentsGetDocument(id: string): Promise<DocumentItem> {
 
 export async function documentsUpdateDocument(id: string, payload: UpdateDocumentPayload): Promise<DocumentItem> {
   return apiCall(http.patch<DocumentItem>(`/api/documents/${id}`, payload))
+}
+
+export async function documentsDeleteDocument(id: string): Promise<void> {
+  return apiCallNoContent(http.delete(`/api/documents/${id}`))
 }
 
 export async function documentsListDocumentHistory(id: string): Promise<DocumentHistoryItem[]> {

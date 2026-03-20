@@ -81,6 +81,7 @@
                 @open-document="$emit('openDocument', $event)"
                 @add-child="openCreateDocument(teamspace.id, $event)"
                 @toggle-collapse="toggleDocument"
+                @documents-deleted="$emit('documentsDeleted', $event)"
               />
             </div>
           </div>
@@ -177,6 +178,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   openTeamspaces: []
   openDocument: [id: string]
+  documentsDeleted: [ids: string[]]
 }>()
 
 const documentsStore = useDocumentsStore()

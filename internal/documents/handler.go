@@ -234,6 +234,12 @@ func (h *Handler) documentItem(w http.ResponseWriter, r *http.Request, p auth.Pr
 			return
 		}
 		writeJSON(w, http.StatusOK, row)
+	case http.MethodDelete:
+		if err := h.svc.DeleteDocument(r.Context(), id, p.UserID); err != nil {
+			h.serviceError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(w)
 	}

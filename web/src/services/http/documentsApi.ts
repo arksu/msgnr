@@ -22,13 +22,13 @@ async function apiCall<T>(request: Promise<{ data: T }>): Promise<T> {
   try {
     const { data } = await request
     return data
-  } catch (e) { handleError(e) }
+  } catch (e) { return handleError(e) }
 }
 
 async function apiCallNoContent(request: Promise<unknown>): Promise<void> {
   try {
     await request
-  } catch (e) { handleError(e) }
+  } catch (e) { return handleError(e) }
 }
 
 export interface TeamspaceMemberPreview {
@@ -93,6 +93,16 @@ export interface DocumentHistoryItem {
   editor: DocumentHistoryEditor
 }
 
+export interface DocumentAttachment {
+  id: string
+  document_id: string
+  file_name: string
+  file_size: number
+  mime_type: string
+  uploaded_by: string
+  created_at: string
+}
+
 export interface UpsertTeamspacePayload {
   name: string
   is_private: boolean
@@ -149,4 +159,29 @@ export async function documentsDeleteDocument(id: string): Promise<void> {
 
 export async function documentsListDocumentHistory(id: string): Promise<DocumentHistoryItem[]> {
   return apiCall(http.get<DocumentHistoryItem[]>(`/api/documents/${id}/history`))
+}
+
+export async function documentsListAttachments(id: string): Promise<DocumentAttachment[]> {
+  return apiCall(http.get<DocumentAttachment[]>(`/api/documents/${id}/attachments`))
+}
+
+export async function documentsUploadAttachment(id: string, file: File): Promise<DocumentAttachment> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  return apiCall(http.post<DocumentAttachment>(
+    `/api/documents/${id}/attachments`,
+    form,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  ))
+}
+
+export async function documentsDeleteAttachment(id: string, attachmentId: string): Promise<void> {
+  return apiCallNoContent(http.delete(`/api/documents/${id}/attachments/${attachmentId}`))
+}
+
+export async function documentsFetchAttachmentBlob(id: string, attachmentId: string): Promise<Blob> {
+  return apiCall(http.get<Blob>(
+    `/api/documents/${id}/attachments/${attachmentId}/download`,
+    { responseType: 'blob' },
+  ))
 }

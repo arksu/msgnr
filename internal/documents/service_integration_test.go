@@ -3,7 +3,9 @@
 package documents_test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"testing"
 
 	"github.com/google/uuid"
@@ -36,7 +38,7 @@ func seedDocumentUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, dis
 func TestIntegration_ListTeamspacesVisibilityAndJoin(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
-	svc := documents.NewService(pool)
+	svc := documents.NewService(pool, nil)
 
 	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
 	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
@@ -77,7 +79,7 @@ func TestIntegration_ListTeamspacesVisibilityAndJoin(t *testing.T) {
 func TestIntegration_SidebarHierarchyMemberOnly(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
-	svc := documents.NewService(pool)
+	svc := documents.NewService(pool, nil)
 
 	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
 	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
@@ -121,7 +123,7 @@ func TestIntegration_SidebarHierarchyMemberOnly(t *testing.T) {
 func TestIntegration_DocumentMemberEditAndNonMemberForbidden(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
-	svc := documents.NewService(pool)
+	svc := documents.NewService(pool, nil)
 
 	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
 	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
@@ -164,7 +166,7 @@ func TestIntegration_DocumentMemberEditAndNonMemberForbidden(t *testing.T) {
 func TestIntegration_DocumentHistoryDeduplicatesAndPrunes(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
-	svc := documents.NewService(pool)
+	svc := documents.NewService(pool, nil)
 	svc.SetHistoryLimit(3)
 
 	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
@@ -223,7 +225,7 @@ func TestIntegration_DocumentHistoryDeduplicatesAndPrunes(t *testing.T) {
 func TestIntegration_DeleteDocumentArchivesSubtree(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
-	svc := documents.NewService(pool)
+	svc := documents.NewService(pool, nil)
 
 	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
 	outsiderID := seedDocumentUser(t, ctx, pool, "Outsider", "member")
@@ -273,6 +275,115 @@ func TestIntegration_DeleteDocumentArchivesSubtree(t *testing.T) {
 	require.ErrorIs(t, err, documents.ErrNotFound)
 
 	err = svc.DeleteDocument(ctx, rootDoc.ID, outsiderID)
+	require.ErrorIs(t, err, documents.ErrNotFound)
+}
+
+func TestIntegration_DocumentAttachment_UploadListDownloadDelete(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := documents.NewService(pool, minioClient)
+
+	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
+	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
+
+	teamspace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:      "Attachment docs",
+		MemberIDs: []uuid.UUID{memberID},
+		ActorID:   ownerID,
+	}, "member")
+	require.NoError(t, err)
+
+	doc, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID: teamspace.ID,
+		Title:       "Doc with file",
+		ActorID:     ownerID,
+	})
+	require.NoError(t, err)
+
+	content := []byte("image-bytes")
+	uploaded, err := svc.UploadAttachment(ctx, documents.UploadAttachmentParams{
+		DocumentID: doc.ID,
+		ActorID:    memberID,
+		FileName:   "diagram.png",
+		MimeType:   "image/png",
+		Size:       int64(len(content)),
+		Body:       bytes.NewReader(content),
+	}, 50, nil)
+	require.NoError(t, err)
+	assert.Equal(t, doc.ID, uploaded.DocumentID)
+	assert.Equal(t, "diagram.png", uploaded.FileName)
+
+	list, err := svc.ListAttachments(ctx, doc.ID, ownerID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, uploaded.ID, list[0].ID)
+
+	body, _, mimeType, fileName, err := svc.DownloadAttachment(ctx, doc.ID, ownerID, uploaded.ID)
+	require.NoError(t, err)
+	defer body.Close()
+	raw, err := io.ReadAll(body)
+	require.NoError(t, err)
+	assert.Equal(t, content, raw)
+	assert.Equal(t, "image/png", mimeType)
+	assert.Equal(t, "diagram.png", fileName)
+
+	err = svc.DeleteAttachment(ctx, doc.ID, ownerID, uploaded.ID)
+	require.NoError(t, err)
+
+	list, err = svc.ListAttachments(ctx, doc.ID, ownerID)
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
+func TestIntegration_DocumentAttachment_RejectsForbiddenAndMismatchedDocument(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := documents.NewService(pool, minioClient)
+
+	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
+	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
+	outsiderID := seedDocumentUser(t, ctx, pool, "Outsider", "member")
+
+	teamspace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:      "Shared attachments",
+		MemberIDs: []uuid.UUID{memberID},
+		ActorID:   ownerID,
+	}, "member")
+	require.NoError(t, err)
+
+	doc1, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID: teamspace.ID,
+		Title:       "Doc one",
+		ActorID:     ownerID,
+	})
+	require.NoError(t, err)
+
+	doc2, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID: teamspace.ID,
+		Title:       "Doc two",
+		ActorID:     ownerID,
+	})
+	require.NoError(t, err)
+
+	uploaded, err := svc.UploadAttachment(ctx, documents.UploadAttachmentParams{
+		DocumentID: doc1.ID,
+		ActorID:    ownerID,
+		FileName:   "note.txt",
+		MimeType:   "text/plain",
+		Size:       int64(len("hello")),
+		Body:       bytes.NewReader([]byte("hello")),
+	}, 50, nil)
+	require.NoError(t, err)
+
+	_, err = svc.ListAttachments(ctx, doc1.ID, outsiderID)
+	require.ErrorIs(t, err, documents.ErrForbidden)
+
+	_, _, _, _, err = svc.DownloadAttachment(ctx, doc2.ID, memberID, uploaded.ID)
+	require.ErrorIs(t, err, documents.ErrNotFound)
+
+	err = svc.DeleteAttachment(ctx, doc2.ID, ownerID, uploaded.ID)
 	require.ErrorIs(t, err, documents.ErrNotFound)
 }
 

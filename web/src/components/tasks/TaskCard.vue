@@ -209,6 +209,7 @@
             <label class="form-label">Description</label>
             <TaskDescriptionEditor
               v-model="subtaskForm.description"
+              owner-kind="task"
               placeholder="Optional"
             />
           </div>
@@ -290,6 +291,8 @@
           v-if="taskDescriptionDoc"
           :key="descriptionEditorRenderKey"
           v-model="descriptionDraft"
+          owner-kind="task"
+          :owner-id="task.id"
           :collab-doc="taskDescriptionDoc"
           :collab-provider="taskDescriptionProvider"
           :allow-local-draft-seed="taskDescriptionAllowLocalDraftSeed"
@@ -298,10 +301,10 @@
           placeholder="Description"
           @blur="flushDescriptionNow"
         />
-        <div
+        <AttachmentMarkdownContent
           v-else-if="descriptionDraft"
-          class="rounded bg-chat-input p-3 text-sm text-gray-100 leading-relaxed markdown-body pointer-events-none select-none opacity-70"
-          v-html="descriptionPreviewHtml"
+          class="rounded bg-chat-input p-3 pointer-events-none select-none opacity-70"
+          :markdown="descriptionDraft"
         />
         <p v-else class="text-sm text-gray-500 italic">No description</p>
         <p v-if="descriptionSaveError" class="text-xs text-amber-300 mt-2">
@@ -462,7 +465,7 @@ import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
 import { useTaskDescriptionCollab, type TaskDescriptionCollabUser } from '@/composables/useTaskDescriptionCollab'
-import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
+import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
 import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
@@ -540,7 +543,6 @@ const taskDescriptionDoc = computed(() => descriptionCollab.doc.value)
 const taskDescriptionProvider = computed(() => descriptionCollab.provider.value)
 const taskDescriptionCollabError = computed(() => descriptionCollab.subscribeError.value)
 const taskDescriptionAllowLocalDraftSeed = computed(() => descriptionCollab.allowLocalDraftSeed.value)
-const descriptionPreviewHtml = computed(() => renderTaskMarkdownToHtml(descriptionDraft.value))
 
 function markdownSignature(input: string): string {
   let hash = 0

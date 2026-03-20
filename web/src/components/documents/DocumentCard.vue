@@ -81,6 +81,8 @@
 
       <TaskDescriptionEditor
         v-model="contentDraft"
+        owner-kind="document"
+        :owner-id="documentItem.id"
         placeholder="Document content"
         @blur="saveContent"
       />

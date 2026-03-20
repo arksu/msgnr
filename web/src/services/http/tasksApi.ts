@@ -719,13 +719,20 @@ export async function tasksDeleteAttachment(taskId: string, attachmentId: string
   } catch (e) { handleError(e) }
 }
 
-/** Download an attachment as a Blob and trigger a browser save dialog. */
-export async function tasksDownloadAttachment(taskId: string, attachmentId: string, fileName: string): Promise<void> {
+export async function tasksFetchAttachmentBlob(taskId: string, attachmentId: string): Promise<Blob> {
   try {
     const { data } = await http.get<Blob>(
       `/api/tasks/${taskId}/attachments/${attachmentId}/download`,
       { responseType: 'blob' },
     )
+    return data
+  } catch (e) { handleError(e) }
+}
+
+/** Download an attachment as a Blob and trigger a browser save dialog. */
+export async function tasksDownloadAttachment(taskId: string, attachmentId: string, fileName: string): Promise<void> {
+  try {
+    const data = await tasksFetchAttachmentBlob(taskId, attachmentId)
     const url = URL.createObjectURL(data)
     const a = document.createElement('a')
     a.href = url

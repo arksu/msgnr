@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 const (
@@ -23,10 +25,13 @@ const (
 )
 
 var (
-	ErrNotFound   = errors.New("not found")
-	ErrConflict   = errors.New("conflict")
-	ErrBadRequest = errors.New("bad request")
-	ErrForbidden  = errors.New("forbidden")
+	ErrNotFound    = errors.New("not found")
+	ErrConflict    = errors.New("conflict")
+	ErrBadRequest  = errors.New("bad request")
+	ErrForbidden   = errors.New("forbidden")
+	ErrUnavailable = errors.New("unavailable")
+
+	errAttachmentTooLarge = errors.New("attachment exceeds max size")
 )
 
 type queryer interface {
@@ -37,12 +42,26 @@ type queryer interface {
 
 type Service struct {
 	pool         *pgxpool.Pool
+	store        Storage
 	historyLimit int
 }
 
-func NewService(pool *pgxpool.Pool) *Service {
+// Storage is the interface the document service uses for file object storage.
+type Storage interface {
+	PutObject(ctx context.Context, key string, r io.Reader, size int64, mimeType string) error
+	GetObject(ctx context.Context, key string) (body io.ReadCloser, size int64, mimeType string, err error)
+	DeleteObject(ctx context.Context, key string) error
+}
+
+// ByteCounter is satisfied by reader wrappers that track bytes consumed.
+type ByteCounter interface {
+	BytesRead() int64
+}
+
+func NewService(pool *pgxpool.Pool, store Storage) *Service {
 	return &Service{
 		pool:         pool,
+		store:        store,
 		historyLimit: defaultDocumentHistoryLimit,
 	}
 }
@@ -121,6 +140,17 @@ type DocumentHistoryItem struct {
 	Editor          DocumentHistoryEditor `json:"editor"`
 }
 
+type DocumentAttachmentRow struct {
+	ID         uuid.UUID `json:"id"`
+	DocumentID uuid.UUID `json:"document_id"`
+	FileName   string    `json:"file_name"`
+	FileSize   int64     `json:"file_size"`
+	MimeType   string    `json:"mime_type"`
+	StorageKey string    `json:"-"`
+	UploadedBy uuid.UUID `json:"uploaded_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type CreateTeamspaceParams struct {
 	Name      string
 	IsPrivate bool
@@ -148,6 +178,15 @@ type UpdateDocumentParams struct {
 	Title           *string
 	ContentMarkdown *string
 	ActorID         uuid.UUID
+}
+
+type UploadAttachmentParams struct {
+	DocumentID uuid.UUID
+	ActorID    uuid.UUID
+	FileName   string
+	MimeType   string
+	Size       int64
+	Body       io.Reader
 }
 
 func (s *Service) ListTeamspaces(ctx context.Context, userID uuid.UUID, actorRole string) ([]TeamspaceRow, error) {
@@ -690,6 +729,160 @@ func (s *Service) ListDocumentHistory(ctx context.Context, documentID, userID uu
 	return out, nil
 }
 
+func (s *Service) UploadAttachment(
+	ctx context.Context,
+	params UploadAttachmentParams,
+	maxSizeMB int,
+	counter ByteCounter,
+) (*DocumentAttachmentRow, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(params.FileName) == "" {
+		return nil, fmt.Errorf("%w: file_name is required", ErrBadRequest)
+	}
+	if err := s.ensureDocumentReadable(ctx, params.DocumentID, params.ActorID); err != nil {
+		return nil, err
+	}
+
+	maxBytes := int64(maxSizeMB) * 1024 * 1024
+	if params.Size >= 0 && params.Size > maxBytes {
+		return nil, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
+	}
+
+	attachmentID := uuid.New()
+	safeFileName := sanitiseFileName(params.FileName)
+	storageKey := fmt.Sprintf("documents/%s/%s/%s", params.DocumentID, attachmentID, safeFileName)
+	if err := store.PutObject(ctx, storageKey, params.Body, params.Size, params.MimeType); err != nil {
+		if errors.Is(err, errAttachmentTooLarge) {
+			return nil, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
+		}
+		return nil, fmt.Errorf("documents: upload attachment: %w", err)
+	}
+
+	actualSize := params.Size
+	if counter != nil {
+		actualSize = counter.BytesRead()
+	}
+	if actualSize > maxBytes {
+		s.deleteObjectBestEffort(ctx, store, storageKey)
+		return nil, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
+	}
+
+	var row DocumentAttachmentRow
+	if err := s.pool.QueryRow(ctx,
+		`INSERT INTO document_attachment (id, document_id, file_name, file_size, mime_type, storage_key, uploaded_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id, document_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at`,
+		attachmentID, params.DocumentID, params.FileName, actualSize, params.MimeType, storageKey, params.ActorID,
+	).Scan(
+		&row.ID,
+		&row.DocumentID,
+		&row.FileName,
+		&row.FileSize,
+		&row.MimeType,
+		&row.StorageKey,
+		&row.UploadedBy,
+		&row.CreatedAt,
+	); err != nil {
+		s.deleteObjectBestEffort(ctx, store, storageKey)
+		return nil, fmt.Errorf("documents: create attachment record: %w", err)
+	}
+	return &row, nil
+}
+
+func (s *Service) ListAttachments(ctx context.Context, documentID, userID uuid.UUID) ([]DocumentAttachmentRow, error) {
+	if err := s.ensureDocumentReadable(ctx, documentID, userID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, document_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+		   FROM document_attachment
+		  WHERE document_id = $1
+		  ORDER BY created_at ASC, id ASC`,
+		documentID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("documents: list attachments: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]DocumentAttachmentRow, 0)
+	for rows.Next() {
+		var item DocumentAttachmentRow
+		if err := rows.Scan(
+			&item.ID,
+			&item.DocumentID,
+			&item.FileName,
+			&item.FileSize,
+			&item.MimeType,
+			&item.StorageKey,
+			&item.UploadedBy,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("documents: scan attachment: %w", err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("documents: iterate attachments: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Service) DownloadAttachment(
+	ctx context.Context,
+	documentID, userID, attachmentID uuid.UUID,
+) (io.ReadCloser, int64, string, string, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	if err := s.ensureDocumentReadable(ctx, documentID, userID); err != nil {
+		return nil, 0, "", "", err
+	}
+
+	row, err := s.getAttachmentForDocument(ctx, documentID, attachmentID)
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+
+	body, size, mimeType, err := store.GetObject(ctx, row.StorageKey)
+	if err != nil {
+		return nil, 0, "", "", fmt.Errorf("documents: download attachment: %w", err)
+	}
+	return body, size, mimeType, row.FileName, nil
+}
+
+func (s *Service) DeleteAttachment(ctx context.Context, documentID, userID, attachmentID uuid.UUID) error {
+	store, err := s.requireStore()
+	if err != nil {
+		return err
+	}
+	if err := s.ensureDocumentReadable(ctx, documentID, userID); err != nil {
+		return err
+	}
+
+	var storageKey string
+	if err := s.pool.QueryRow(ctx,
+		`DELETE FROM document_attachment
+		  WHERE id = $1
+		    AND document_id = $2
+		 RETURNING storage_key`,
+		attachmentID, documentID,
+	).Scan(&storageKey); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: attachment", ErrNotFound)
+		}
+		return fmt.Errorf("documents: delete attachment record: %w", err)
+	}
+
+	s.deleteObjectBestEffort(ctx, store, storageKey)
+	return nil
+}
+
 func (s *Service) getVisibleTeamspace(ctx context.Context, teamspaceID, userID uuid.UUID, actorRole string) (TeamspaceRow, error) {
 	rows, err := s.listVisibleTeamspaces(ctx, s.pool, userID, actorRole, &teamspaceID)
 	if err != nil {
@@ -870,6 +1063,32 @@ func (s *Service) maybeCreateDocumentSnapshotInTx(
 	return nil
 }
 
+func (s *Service) getAttachmentForDocument(ctx context.Context, documentID, attachmentID uuid.UUID) (DocumentAttachmentRow, error) {
+	var item DocumentAttachmentRow
+	if err := s.pool.QueryRow(ctx,
+		`SELECT id, document_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+		   FROM document_attachment
+		  WHERE document_id = $1
+		    AND id = $2`,
+		documentID, attachmentID,
+	).Scan(
+		&item.ID,
+		&item.DocumentID,
+		&item.FileName,
+		&item.FileSize,
+		&item.MimeType,
+		&item.StorageKey,
+		&item.UploadedBy,
+		&item.CreatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DocumentAttachmentRow{}, fmt.Errorf("%w: attachment", ErrNotFound)
+		}
+		return DocumentAttachmentRow{}, fmt.Errorf("documents: get attachment for document: %w", err)
+	}
+	return item, nil
+}
+
 func (s *Service) ensureDocumentReadable(ctx context.Context, documentID, userID uuid.UUID) error {
 	var allowed bool
 	if err := s.pool.QueryRow(ctx,
@@ -937,6 +1156,22 @@ func ensureTeamspaceMember(ctx context.Context, q queryer, teamspaceID, userID u
 	return nil
 }
 
+func (s *Service) requireStore() (Storage, error) {
+	if s.store == nil {
+		return nil, fmt.Errorf("%w: attachment storage unavailable", ErrUnavailable)
+	}
+	return s.store, nil
+}
+
+func (s *Service) deleteObjectBestEffort(ctx context.Context, store Storage, storageKey string) {
+	if store == nil {
+		return
+	}
+	if err := store.DeleteObject(ctx, storageKey); err != nil {
+		zap.L().Warn("documents: failed to delete attachment object", zap.String("storage_key", storageKey), zap.Error(err))
+	}
+}
+
 func listTeamspaceMemberIDs(ctx context.Context, q queryer, teamspaceID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.Query(ctx,
 		`SELECT user_id
@@ -994,6 +1229,22 @@ func uniqueUserIDs(ids []uuid.UUID) []uuid.UUID {
 		out = append(out, id)
 	}
 	return out
+}
+
+func sanitiseFileName(name string) string {
+	name = strings.NewReplacer("/", "_", "\\", "_").Replace(name)
+	var b strings.Builder
+	for _, r := range name {
+		if r <= 0x1f || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	result := b.String()
+	if result == "" {
+		return "file"
+	}
+	return result
 }
 
 func nullString(value *string) any {

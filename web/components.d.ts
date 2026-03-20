@@ -8,6 +8,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AppSidebar: typeof import('./src/components/AppSidebar.vue')['default']
+    AttachmentMarkdownContent: typeof import('./src/components/AttachmentMarkdownContent.vue')['default']
     CallDock: typeof import('./src/components/CallDock.vue')['default']
     ChatArea: typeof import('./src/components/ChatArea.vue')['default']
     ConnectionBanner: typeof import('./src/components/ConnectionBanner.vue')['default']

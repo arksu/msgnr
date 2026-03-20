@@ -141,6 +141,13 @@ function serializeTable(node: JSONContent): string {
 }
 
 function serializeBlock(node: JSONContent, depth = 0): string {
+  if (node.type === 'image') {
+    const src = String(node.attrs?.src ?? '').trim()
+    const alt = String(node.attrs?.alt ?? '').replace(/\\/g, '\\\\').replace(/\]/g, '\\]')
+    if (!src) return ''
+    return `![${alt}](${src})`
+  }
+
   if (node.type === 'paragraph') {
     return serializeInline(node.content ?? [])
   }

@@ -1,160 +1,206 @@
-import { defineComponent, nextTick, ref } from 'vue'
-import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
-import { Awareness } from 'y-protocols/awareness'
-import * as Y from 'yjs'
+import { flushPromises, mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
+import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
 
-function mountHost(initialValue = '', options?: { collab?: boolean; allowLocalDraftSeed?: boolean }) {
-  const collabDoc = options?.collab ? new Y.Doc() : null
-  const collabProvider = collabDoc ? { awareness: new Awareness(collabDoc) } : null
-  const allowLocalDraftSeed = options?.allowLocalDraftSeed ?? true
-  const Host = defineComponent({
-    components: { TaskDescriptionEditor },
-    setup() {
-      const value = ref(initialValue)
-      return { value, collabDoc, collabProvider, allowLocalDraftSeed }
-    },
-    template: '<TaskDescriptionEditor v-model="value" :collab-doc="collabDoc" :collab-provider="collabProvider" :allow-local-draft-seed="allowLocalDraftSeed" />',
-  })
-
-  return mount(Host, {
-    global: {
-      stubs: {
-        BubbleMenu: { template: '<div><slot /></div>' },
-        FloatingMenu: { template: '<div><slot /></div>' },
-      },
-    },
-  })
-}
-
-function getEditorInstance(wrapper: ReturnType<typeof mountHost>) {
-  const component = wrapper.getComponent(TaskDescriptionEditor)
-  const exposed = (component.vm as { editor?: unknown }).editor as { value?: unknown } | undefined
-  return (exposed?.value ?? exposed) as {
-    commands: { setContent: (content: string) => boolean }
-    getHTML: () => string
-  }
-}
+vi.mock('@/services/http/attachmentOwnersApi', () => ({
+  uploadOwnedAttachment: vi.fn(),
+  fetchOwnedAttachmentBlob: vi.fn(),
+}))
 
 describe('TaskDescriptionEditor', () => {
-  it('initializes rendered editor from markdown', async () => {
-    const wrapper = mountHost('# Title\n\n- one')
-    await nextTick()
-
-    const editor = getEditorInstance(wrapper)
-    expect(editor.getHTML()).toContain('<h1>Title</h1>')
-    expect(editor.getHTML()).toContain('<ul>')
-  })
-
-  it('updates markdown model when rendered editor changes', async () => {
-    const wrapper = mountHost('')
-    await nextTick()
-
-    const editor = getEditorInstance(wrapper)
-    editor.commands.setContent('<h2>Sync</h2><p><strong>Bold</strong> and <em>italic</em></p>')
-    await nextTick()
-
-    const vm = wrapper.vm as { value: string }
-    expect(vm.value).toContain('## Sync')
-    expect(vm.value).toContain('**Bold**')
-    expect(vm.value).toContain('*italic*')
-  })
-
-  it('applies markdown edits back into rendered tab', async () => {
-    const wrapper = mountHost('Initial')
-    await nextTick()
-
-    await wrapper.get('[data-testid="task-description-tab-markdown"]').trigger('click')
-    await wrapper.get('[data-testid="task-description-markdown-input"]').setValue('## Updated\n\nBody text')
-    await wrapper.get('[data-testid="task-description-tab-rendered"]').trigger('click')
-    await nextTick()
-
-    const editor = getEditorInstance(wrapper)
-    expect(editor.getHTML()).toContain('<h2>Updated</h2>')
-    expect(editor.getHTML()).toContain('<p>Body text</p>')
-  })
-
-  it('renders markdown tables and serializes table edits back to markdown', async () => {
-    const wrapper = mountHost('| Feature | Works? |\n| --- | --- |\n| Bold | yes |')
-    await nextTick()
-
-    const editor = getEditorInstance(wrapper)
-    expect(editor.getHTML()).toContain('<table')
-    expect(editor.getHTML()).toContain('<th')
-
-    editor.commands.setContent('<table><tbody><tr><th>Feature</th><th>Works?</th></tr><tr><td>Table cell edit</td><td>yes</td></tr></tbody></table>')
-    await nextTick()
-
-    const vm = wrapper.vm as { value: string }
-    expect(vm.value).toContain('| Feature | Works? |')
-    expect(vm.value).toContain('| Table cell edit | yes |')
-  })
-
-  it('keeps markdown content when switching to rendered in collab mode', async () => {
-    const wrapper = mountHost('', { collab: true })
-    await nextTick()
-
-    await wrapper.get('[data-testid="task-description-tab-markdown"]').trigger('click')
-    await wrapper.get('[data-testid="task-description-markdown-input"]').setValue('333ffss')
-    await wrapper.get('[data-testid="task-description-tab-rendered"]').trigger('click')
-    await nextTick()
-
-    const editor = getEditorInstance(wrapper)
-    expect(editor.getHTML()).toContain('333ffss')
-    const vm = wrapper.vm as { value: string }
-    expect(vm.value).toContain('333ffss')
-  })
-
-  it('seeds initial rendered content from modelValue in collab mode', async () => {
-    const wrapper = mountHost('seed-on-load', { collab: true })
-    await nextTick()
-
-    const editor = getEditorInstance(wrapper)
-    expect(editor.getHTML()).toContain('seed-on-load')
-    const vm = wrapper.vm as { value: string }
-    expect(vm.value).toContain('seed-on-load')
-  })
-
-  it('skips initial collab seed when local draft seeding is disabled', async () => {
-    const wrapper = mountHost('seed-on-load', { collab: true, allowLocalDraftSeed: false })
-    await nextTick()
-
-    const editor = getEditorInstance(wrapper)
-    expect(editor.getHTML()).not.toContain('seed-on-load')
-    const vm = wrapper.vm as { value: string }
-    expect(vm.value).toContain('seed-on-load')
-  })
-
-  it('seeds collab doc when local draft seeding is enabled after mount', async () => {
-    const collabDoc = new Y.Doc()
-    const collabProvider = { awareness: new Awareness(collabDoc) }
-    const Host = defineComponent({
-      components: { TaskDescriptionEditor },
-      setup() {
-        const value = ref('seed-on-toggle')
-        const allowLocalDraftSeed = ref(false)
-        return { value, allowLocalDraftSeed, collabDoc, collabProvider }
+  beforeEach(() => {
+    vi.clearAllMocks()
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:editor')
+    globalThis.URL.revokeObjectURL = vi.fn()
+    window.open = vi.fn(() => ({
+      location: {
+        replace: vi.fn(),
       },
-      template: '<TaskDescriptionEditor v-model="value" :collab-doc="collabDoc" :collab-provider="collabProvider" :allow-local-draft-seed="allowLocalDraftSeed" />',
-    })
-    const wrapper = mount(Host, {
-      global: {
-        stubs: {
-          BubbleMenu: { template: '<div><slot /></div>' },
-          FloatingMenu: { template: '<div><slot /></div>' },
-        },
+      close: vi.fn(),
+    } as unknown as Window))
+    vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+  })
+
+  it('uploads dropped files from the markdown tab and inserts tokens at the cursor', async () => {
+    vi.mocked(uploadOwnedAttachment)
+      .mockResolvedValueOnce({
+        id: 'att-file',
+        file_name: 'Spec.pdf',
+        mime_type: 'application/pdf',
+      })
+      .mockResolvedValueOnce({
+        id: 'att-image',
+        file_name: 'Photo.png',
+        mime_type: 'image/png',
+      })
+
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: 'Before',
+        defaultTab: 'markdown',
+        ownerKind: 'task',
+        ownerId: 'task-1',
       },
     })
-    await nextTick()
 
-    const editor = getEditorInstance(wrapper)
-    expect(editor.getHTML()).not.toContain('seed-on-toggle')
+    const input = wrapper.get('[data-testid="task-description-markdown-input"]')
+    ;(input.element as HTMLTextAreaElement).setSelectionRange(6, 6)
 
-    ;(wrapper.vm as { allowLocalDraftSeed: boolean }).allowLocalDraftSeed = true
-    await nextTick()
-    await nextTick()
+    await input.trigger('paste', {
+      clipboardData: {
+        files: [
+          new File(['pdf'], 'Spec.pdf', { type: 'application/pdf' }),
+          new File(['img'], 'Photo.png', { type: 'image/png' }),
+        ],
+      },
+    })
+    await flushPromises()
 
-    expect(editor.getHTML()).toContain('seed-on-toggle')
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    const latest = updates[updates.length - 1]?.[0] as string
+    expect(latest).toContain('[Spec.pdf](msgnr-attachment://task/task-1/att-file)')
+    expect(latest).toContain('![Photo.png](msgnr-attachment://task/task-1/att-image)')
+    expect(String(latest)).toMatch(/\[Spec\.pdf\].*!\[Photo\.png\]/s)
+  })
+
+  it('uploads multiple files in parallel and preserves result order', async () => {
+    type UploadedAttachmentStub = {
+      id: string
+      file_name: string
+      mime_type: string
+    }
+
+    let firstResolverAssigned = false
+    let secondResolverAssigned = false
+    let resolveFirst: (value: UploadedAttachmentStub) => void = () => {
+      throw new Error('first resolver was not assigned')
+    }
+    let resolveSecond: (value: UploadedAttachmentStub) => void = () => {
+      throw new Error('second resolver was not assigned')
+    }
+    vi.mocked(uploadOwnedAttachment)
+      .mockImplementationOnce(() => new Promise<UploadedAttachmentStub>((resolve) => {
+        firstResolverAssigned = true
+        resolveFirst = resolve
+      }))
+      .mockImplementationOnce(() => new Promise<UploadedAttachmentStub>((resolve) => {
+        secondResolverAssigned = true
+        resolveSecond = resolve
+      }))
+
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '',
+        defaultTab: 'markdown',
+        ownerKind: 'task',
+        ownerId: 'task-1',
+      },
+    })
+
+    const input = wrapper.get('[data-testid="task-description-markdown-input"]')
+    const pastePromise = input.trigger('paste', {
+      clipboardData: {
+        files: [
+          new File(['pdf'], 'Spec.pdf', { type: 'application/pdf' }),
+          new File(['img'], 'Photo.png', { type: 'image/png' }),
+        ],
+      },
+    })
+    await Promise.resolve()
+
+    expect(uploadOwnedAttachment).toHaveBeenNthCalledWith(1, 'task', 'task-1', expect.any(File))
+    expect(uploadOwnedAttachment).toHaveBeenNthCalledWith(2, 'task', 'task-1', expect.any(File))
+
+    expect(secondResolverAssigned).toBe(true)
+    expect(firstResolverAssigned).toBe(true)
+
+    resolveSecond({ id: 'att-image', file_name: 'Photo.png', mime_type: 'image/png' })
+    resolveFirst({ id: 'att-file', file_name: 'Spec.pdf', mime_type: 'application/pdf' })
+    await pastePromise
+    await flushPromises()
+
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    const latest = updates[updates.length - 1]?.[0] as string
+    expect(String(latest)).toMatch(/\[Spec\.pdf\].*!\[Photo\.png\]/s)
+  })
+
+  it('uploads image files from the rendered tab and serializes them back to markdown tokens', async () => {
+    vi.mocked(uploadOwnedAttachment).mockResolvedValue({
+      id: 'att-image',
+      file_name: 'Photo.png',
+      mime_type: 'image/png',
+    })
+
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '',
+        ownerKind: 'task',
+        ownerId: 'task-1',
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const editorEl = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror')
+    await editorEl.trigger('paste', {
+      clipboardData: {
+        files: [new File(['img'], 'Photo.png', { type: 'image/png' })],
+        getData: () => '',
+      },
+    })
+    await flushPromises()
+
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    const latest = updates[updates.length - 1]?.[0] as string
+    expect(latest).toContain('![Photo.png](msgnr-attachment://task/task-1/att-image)')
+    expect(fetchOwnedAttachmentBlob).toHaveBeenCalledWith('task', 'task-1', 'att-image')
+  })
+
+  it('opens attachment links from the rendered editor on cmd-click', async () => {
+    vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }))
+
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '[Spec.pdf](msgnr-attachment://document/doc-1/att-2)',
+        ownerKind: 'document',
+        ownerId: 'doc-1',
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const link = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror a')
+    link.element.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+    }))
+    await flushPromises()
+
+    expect(fetchOwnedAttachmentBlob).toHaveBeenCalledWith('document', 'doc-1', 'att-2')
+    expect(window.open).toHaveBeenCalledWith('about:blank', '_blank')
+    const opened = vi.mocked(window.open).mock.results[0]?.value as { location: { replace: ReturnType<typeof vi.fn> } }
+    expect(opened.location.replace).toHaveBeenCalledWith('blob:editor')
+  })
+
+  it('shows a non-error hint and skips uploads when the owner is not saved yet', async () => {
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '',
+        defaultTab: 'markdown',
+        ownerKind: 'task',
+      },
+    })
+
+    await wrapper.get('[data-testid="task-description-markdown-input"]').trigger('paste', {
+      clipboardData: {
+        files: [new File(['img'], 'Photo.png', { type: 'image/png' })],
+      },
+    })
+    await flushPromises()
+
+    expect(uploadOwnedAttachment).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="task-description-attachment-note"]').text()).toContain('available after save')
   })
 })

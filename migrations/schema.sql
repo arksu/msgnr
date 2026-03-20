@@ -1076,6 +1076,25 @@ CREATE TRIGGER trg_document_parent_teamspace_match
     BEFORE INSERT OR UPDATE OF teamspace_id, parent_document_id ON document
     FOR EACH ROW EXECUTE FUNCTION check_document_parent_teamspace_match();
 
+CREATE TABLE IF NOT EXISTS document_attachment (
+    id           uuid          NOT NULL DEFAULT gen_random_uuid(),
+    document_id  uuid          NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+    file_name    varchar(1024) NOT NULL,
+    file_size    bigint        NOT NULL,
+    mime_type    varchar(255)  NOT NULL,
+    storage_key  varchar(2048) NOT NULL,
+    uploaded_by  uuid          NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    created_at   timestamptz   NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_document_attachment PRIMARY KEY (id),
+    CONSTRAINT chk_document_attachment_file_size CHECK (file_size >= 0),
+    CONSTRAINT chk_document_attachment_file_name CHECK (btrim(file_name) <> ''),
+    CONSTRAINT chk_document_attachment_storage_key CHECK (btrim(storage_key) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_attachment_document_id
+    ON document_attachment (document_id, created_at ASC);
+
 CREATE TABLE IF NOT EXISTS document_history (
     id               uuid         NOT NULL DEFAULT gen_random_uuid(),
     document_id      uuid         NOT NULL REFERENCES document(id) ON DELETE CASCADE,

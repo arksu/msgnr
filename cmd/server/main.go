@@ -184,9 +184,9 @@ func main() {
 	tasksHandler.SetStatusChangeNotifier(wsServer)
 	wsServer.SetTasksService(tasksSvc)
 
-	documentsSvc := documents.NewService(db.Pool)
+	documentsSvc := documents.NewService(db.Pool, storageClient)
 	documentsSvc.SetHistoryLimit(cfg.DocumentHistoryLimit)
-	documentsHandler := documents.NewHandler(documentsSvc, authSvc, log)
+	documentsHandler := documents.NewHandler(documentsSvc, authSvc, log, cfg.AttachmentMaxSizeMB)
 
 	// --- main HTTP mux ---
 	mux := http.NewServeMux()

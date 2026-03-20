@@ -232,37 +232,70 @@
         </div>
       </FloatingMenu>
 
-      <EditorContent :editor="editor" class="task-description-editor-content markdown-body" data-testid="task-description-editor-content" />
+      <AttachmentMarkdownContent
+        v-if="!editable"
+        :markdown="markdownDraft"
+      />
+      <EditorContent
+        v-else
+        :editor="editor"
+        class="task-description-editor-content markdown-body"
+        data-testid="task-description-editor-content"
+      />
     </div>
 
     <textarea
       v-show="tab === 'markdown'"
+      ref="markdownInputRef"
       v-model="markdownDraft"
       class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent resize-y min-h-[100px]"
       :placeholder="placeholder"
       :disabled="!editable"
       data-testid="task-description-markdown-input"
       @blur="emit('blur')"
+      @paste="onMarkdownPaste"
+      @dragover="onMarkdownDragOver"
+      @drop="onMarkdownDrop"
     />
+
+    <p
+      v-if="attachmentNotice"
+      data-testid="task-description-attachment-note"
+      class="text-xs"
+      :class="attachmentNoticeIsError ? 'text-amber-300' : 'text-gray-500'"
+    >
+      {{ attachmentNotice }}
+    </p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Doc as YDoc } from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
-import type { AnyExtension } from '@tiptap/core'
+import { Node, type AnyExtension } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Collaboration from '@tiptap/extension-collaboration'
 import CollaborationCaret from '@tiptap/extension-collaboration-caret'
+import Link from '@tiptap/extension-link'
 import { Table } from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableHeader from '@tiptap/extension-table-header'
 import TableCell from '@tiptap/extension-table-cell'
 import { DOMParser as ProseMirrorDOMParser } from '@tiptap/pm/model'
+import { TextSelection } from '@tiptap/pm/state'
 import { prosemirrorJSONToYXmlFragment } from '@tiptap/y-tiptap'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
+import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
+import { fetchOwnedAttachmentBlob, uploadOwnedAttachment, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
+import { openBlobInBrowser } from '@/utils/attachmentBrowser'
+import {
+  buildAttachmentUrl,
+  buildAttachmentMarkdown,
+  parseAttachmentUrl,
+  type AttachmentOwnerKind,
+} from '@/utils/attachmentMarkdown'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 
@@ -278,6 +311,8 @@ const props = withDefaults(defineProps<{
   collabField?: string
   allowLocalDraftSeed?: boolean
   forceLocalSyncToken?: number
+  ownerKind?: AttachmentOwnerKind | null
+  ownerId?: string | null
   collabUser?: {
     id: string
     name: string
@@ -292,6 +327,8 @@ const props = withDefaults(defineProps<{
   collabField: 'task_description',
   allowLocalDraftSeed: true,
   forceLocalSyncToken: 0,
+  ownerKind: null,
+  ownerId: null,
   collabUser: null,
 })
 
@@ -310,6 +347,32 @@ const DEBUG_TASK_DESC = import.meta.env.DEV
 
 const collabEnabled = computed(() => !!props.collabDoc)
 const editable = computed(() => !!props.editable)
+const markdownInputRef = ref<HTMLTextAreaElement | null>(null)
+const attachmentNotice = ref('')
+const attachmentNoticeIsError = ref(false)
+const attachmentObjectUrls = new Map<string, string>()
+const attachmentLoadsInFlight = new Set<string>()
+
+const AttachmentImage = Node.create({
+  name: 'image',
+  group: 'block',
+  draggable: true,
+  selectable: true,
+  atom: true,
+  addAttributes() {
+    return {
+      src: { default: null },
+      alt: { default: '' },
+      title: { default: null },
+    }
+  },
+  parseHTML() {
+    return [{ tag: 'img[src]' }]
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['img', HTMLAttributes]
+  },
+})
 
 function markdownSignature(input: string): string {
   let hash = 0
@@ -345,14 +408,213 @@ function editorStateSnapshot() {
   }
 }
 
+function setAttachmentNotice(message: string, isError = false) {
+  attachmentNotice.value = message
+  attachmentNoticeIsError.value = isError
+}
+
+function clearAttachmentNotice() {
+  attachmentNotice.value = ''
+  attachmentNoticeIsError.value = false
+}
+
+function attachmentsEnabledForUpload(): boolean {
+  return editable.value && !!props.ownerKind && !!props.ownerId
+}
+
+function attachmentBlobFetcher(ownerKind: AttachmentOwnerKind, ownerId: string, attachmentId: string): Promise<Blob> {
+  return fetchOwnedAttachmentBlob(ownerKind, ownerId, attachmentId)
+}
+
+async function openAttachmentLinkFromEditor(href: string) {
+  const parsed = parseAttachmentUrl(href)
+  if (!parsed) return false
+
+  try {
+    await openBlobInBrowser(() => attachmentBlobFetcher(parsed.ownerKind, parsed.ownerId, parsed.attachmentId))
+    clearAttachmentNotice()
+  } catch (error) {
+    setAttachmentNotice(error instanceof Error ? error.message : 'Attachment open failed', true)
+  }
+
+  return true
+}
+
+function revokeAttachmentObjectUrls() {
+  for (const url of attachmentObjectUrls.values()) {
+    URL.revokeObjectURL(url)
+  }
+  attachmentObjectUrls.clear()
+  attachmentLoadsInFlight.clear()
+}
+
+async function resolveEditorAttachmentImages() {
+  const root = editor.value?.view.dom as HTMLElement | undefined
+  if (!root) return
+  const imageEls = Array.from(root.querySelectorAll('img[src^="msgnr-attachment://"], img[data-attachment-url^="msgnr-attachment://"]')) as HTMLImageElement[]
+  for (const imageEl of imageEls) {
+    const attachmentUrl = imageEl.dataset.attachmentUrl ?? imageEl.getAttribute('src') ?? ''
+    const parsed = parseAttachmentUrl(attachmentUrl)
+    if (!parsed) continue
+    imageEl.dataset.attachmentUrl = attachmentUrl
+    if (attachmentObjectUrls.has(attachmentUrl)) {
+      imageEl.src = attachmentObjectUrls.get(attachmentUrl) ?? ''
+      continue
+    }
+    if (attachmentLoadsInFlight.has(attachmentUrl)) continue
+    attachmentLoadsInFlight.add(attachmentUrl)
+    attachmentBlobFetcher(parsed.ownerKind, parsed.ownerId, parsed.attachmentId)
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob)
+        attachmentObjectUrls.set(attachmentUrl, objectUrl)
+        const currentRoot = editor.value?.view.dom as HTMLElement | undefined
+        const pendingEls = currentRoot
+          ? Array.from(currentRoot.querySelectorAll(`img[data-attachment-url="${attachmentUrl}"]`)) as HTMLImageElement[]
+          : []
+        for (const pendingEl of pendingEls) {
+          pendingEl.src = objectUrl
+          pendingEl.classList.add('attachment-editor-inline-image')
+        }
+      })
+      .catch(() => {
+        imageEl.alt = `${imageEl.alt || 'Attachment'} (unavailable)`
+      })
+      .finally(() => {
+        attachmentLoadsInFlight.delete(attachmentUrl)
+      })
+  }
+}
+
+function queueResolveEditorAttachmentImages() {
+  queueMicrotask(() => {
+    void resolveEditorAttachmentImages()
+  })
+}
+
+function buildInsertedAttachmentMarkdown(ownerKind: AttachmentOwnerKind, ownerId: string, rows: OwnedAttachmentUpload[]): string {
+  return rows.map(row => buildAttachmentMarkdown(
+    ownerKind,
+    ownerId,
+    row.id,
+    row.file_name,
+    row.mime_type,
+  )).join('\n\n')
+}
+
+function buildEditorAttachmentNodes(ownerKind: AttachmentOwnerKind, ownerId: string, rows: OwnedAttachmentUpload[]) {
+  return rows.map((row) => {
+    const url = buildAttachmentUrl(ownerKind, ownerId, row.id)
+    if (row.mime_type.startsWith('image/')) {
+      return {
+        type: 'image',
+        attrs: {
+          src: url,
+          alt: row.file_name,
+          title: row.file_name,
+        },
+      }
+    }
+    return {
+      type: 'paragraph',
+      content: [{
+        type: 'text',
+        text: row.file_name,
+        marks: [{
+          type: 'link',
+          attrs: {
+            href: url,
+          },
+        }],
+      }],
+    }
+  })
+}
+
+async function uploadAndInsertFiles(files: File[], target: 'editor' | 'markdown') {
+  if (!files.length) return
+  if (!attachmentsEnabledForUpload()) {
+    setAttachmentNotice('Attachments are available after save.')
+    return
+  }
+  const ownerKind = props.ownerKind
+  const ownerId = props.ownerId
+  if (!ownerKind || !ownerId) {
+    setAttachmentNotice('Attachments are available after save.')
+    return
+  }
+
+  setAttachmentNotice(`Uploading ${files.length === 1 ? 'attachment' : `${files.length} attachments`}...`)
+  try {
+    const uploaded = await Promise.all(files.map(file => uploadOwnedAttachment(ownerKind, ownerId, file)))
+
+    if (target === 'editor' && editor.value) {
+      editor.value.chain().focus().insertContent(buildEditorAttachmentNodes(ownerKind, ownerId, uploaded)).run()
+      queueResolveEditorAttachmentImages()
+    } else {
+      insertMarkdownAtCursor(buildInsertedAttachmentMarkdown(ownerKind, ownerId, uploaded))
+    }
+    clearAttachmentNotice()
+  } catch (error) {
+    setAttachmentNotice(error instanceof Error ? error.message : 'Attachment upload failed', true)
+  }
+}
+
+function insertMarkdownAtCursor(value: string) {
+  const input = markdownInputRef.value
+  if (!input) {
+    markdownDraft.value = [markdownDraft.value, value].filter(Boolean).join('\n\n')
+    emit('update:modelValue', markdownDraft.value)
+    return
+  }
+  const start = input.selectionStart ?? markdownDraft.value.length
+  const end = input.selectionEnd ?? start
+  const before = markdownDraft.value.slice(0, start)
+  const after = markdownDraft.value.slice(end)
+  const needsLeadingBreak = before.length > 0 && !before.endsWith('\n')
+  const needsTrailingBreak = after.length > 0 && !after.startsWith('\n')
+  const inserted = `${needsLeadingBreak ? '\n\n' : ''}${value}${needsTrailingBreak ? '\n\n' : ''}`
+  markdownDraft.value = `${before}${inserted}${after}`
+  emit('update:modelValue', markdownDraft.value)
+  nextTick(() => {
+    const caret = before.length + inserted.length
+    input.focus()
+    input.setSelectionRange(caret, caret)
+  })
+}
+
+async function onMarkdownPaste(event: ClipboardEvent) {
+  const files = Array.from(event.clipboardData?.files ?? [])
+  if (!files.length) return
+  event.preventDefault()
+  await uploadAndInsertFiles(files, 'markdown')
+}
+
+function onMarkdownDragOver(event: DragEvent) {
+  if ((event.dataTransfer?.files?.length ?? 0) > 0) {
+    event.preventDefault()
+    event.dataTransfer!.dropEffect = 'copy'
+  }
+}
+
+async function onMarkdownDrop(event: DragEvent) {
+  const files = Array.from(event.dataTransfer?.files ?? [])
+  if (!files.length) return
+  event.preventDefault()
+  await uploadAndInsertFiles(files, 'markdown')
+}
+
 const extensions = computed(() => {
   const list: AnyExtension[] = [
     StarterKit.configure({
       undoRedo: collabEnabled.value ? false : {},
-      link: {
-        openOnClick: false,
-      },
+      link: false,
     }),
+    Link.configure({
+      openOnClick: false,
+      autolink: false,
+      defaultProtocol: 'https',
+    }),
+    AttachmentImage,
     Table.configure({
       resizable: true,
     }),
@@ -391,9 +653,47 @@ const editor = useEditor({
     attributes: {
       class: 'min-h-[140px] text-sm text-gray-100 outline-none',
     },
+    handleDOMEvents: {
+      click(_view, event) {
+        const target = event.target
+        if (!(target instanceof HTMLElement)) return false
+        if (!event.metaKey && !event.ctrlKey) return false
+
+        const link = target.closest('a[href]')
+        if (!(link instanceof HTMLAnchorElement)) return false
+
+        const href = link.getAttribute('href') ?? ''
+        if (!parseAttachmentUrl(href)) return false
+
+        event.preventDefault()
+        void openAttachmentLinkFromEditor(href)
+        return true
+      },
+    },
+    handlePaste(_view, event) {
+      const files = Array.from(event.clipboardData?.files ?? [])
+      if (!files.length) return false
+      event.preventDefault()
+      void uploadAndInsertFiles(files, 'editor')
+      return true
+    },
+    handleDrop(view, event) {
+      const files = Array.from(event.dataTransfer?.files ?? [])
+      if (!files.length) return false
+      const coords = view.posAtCoords({ left: event.clientX, top: event.clientY })
+      if (coords) {
+        view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(coords.pos))))
+      }
+      event.preventDefault()
+      void uploadAndInsertFiles(files, 'editor')
+      return true
+    },
   },
   onBlur() {
     emit('blur')
+  },
+  onCreate() {
+    queueResolveEditorAttachmentImages()
   },
   onUpdate({ editor: nextEditor }) {
     if (suppressEditorSync.value) return
@@ -418,6 +718,7 @@ const editor = useEditor({
     markdownDraft.value = nextMarkdown
     emit('update:modelValue', nextMarkdown)
     syncingFromEditor.value = false
+    queueResolveEditorAttachmentImages()
   },
 })
 
@@ -470,6 +771,7 @@ function setEditorContentFromMarkdown(markdown: string, emitUpdate: boolean, rea
       afterSnapshot: editorStateSnapshot(),
       afterMarkdown: markdownSignature(tiptapJsonToMarkdown(editor.value.getJSON())),
     })
+    queueResolveEditorAttachmentImages()
   } catch (error) {
     descLog('setEditorContentFromMarkdown:error', {
       reason,
@@ -622,6 +924,21 @@ watch(
 )
 
 watch(
+  [() => props.ownerId, () => props.ownerKind, editable],
+  ([ownerId, ownerKind, isEditable]) => {
+    if (!isEditable) return
+    if (!ownerId || !ownerKind) {
+      setAttachmentNotice('Attachments are available after save.')
+      return
+    }
+    if (!attachmentNoticeIsError.value) {
+      clearAttachmentNotice()
+    }
+  },
+  { immediate: true },
+)
+
+watch(
   () => props.allowLocalDraftSeed,
   (next, prev) => {
     if (!collabEnabled.value || !next || prev === next) return
@@ -649,6 +966,9 @@ watch(editor, (next) => {
       selectionSet: transaction.selectionSet,
       snapshot: editorStateSnapshot(),
     })
+    if (transaction.docChanged) {
+      queueResolveEditorAttachmentImages()
+    }
   })
   if (collabEnabled.value) {
     descLog('watch:editor', { collab: true, skip: true, tab: tab.value })
@@ -659,6 +979,10 @@ watch(editor, (next) => {
     setEditorContentFromMarkdown(markdownDraft.value, false, 'watch-editor-immediate')
   }
 }, { immediate: true })
+
+onBeforeUnmount(() => {
+  revokeAttachmentObjectUrls()
+})
 
 defineExpose<{ editor: typeof editor }>({
   editor,
@@ -684,6 +1008,10 @@ defineExpose<{ editor: typeof editor }>({
 
 .task-description-editor-content :deep(.ProseMirror) {
   @apply min-h-[140px] bg-chat-bg px-3 py-2 text-sm text-gray-100 leading-relaxed;
+}
+
+.task-description-editor-content :deep(.attachment-editor-inline-image) {
+  @apply max-h-[260px] max-w-full rounded-lg border border-chat-border/70 bg-chat-input/60 shadow-sm;
 }
 
 .task-description-editor-content :deep(.collaboration-carets__caret) {

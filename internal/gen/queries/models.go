@@ -96,6 +96,17 @@ type Document struct {
 	ArchivedAt       sql.NullTime   `json:"archived_at"`
 }
 
+type DocumentAttachment struct {
+	ID         uuid.UUID `json:"id"`
+	DocumentID uuid.UUID `json:"document_id"`
+	FileName   string    `json:"file_name"`
+	FileSize   int64     `json:"file_size"`
+	MimeType   string    `json:"mime_type"`
+	StorageKey string    `json:"storage_key"`
+	UploadedBy uuid.UUID `json:"uploaded_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type DocumentHistory struct {
 	ID              uuid.UUID      `json:"id"`
 	DocumentID      uuid.UUID      `json:"document_id"`

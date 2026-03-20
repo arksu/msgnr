@@ -70,6 +70,7 @@
               <label class="form-label">Description</label>
               <TaskDescriptionEditor
                 v-model="form.description"
+                owner-kind="task"
                 placeholder="Optional description"
               />
             </div>

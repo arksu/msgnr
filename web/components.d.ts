@@ -36,6 +36,7 @@ declare module 'vue' {
     TaskComments: typeof import('./src/components/tasks/TaskComments.vue')['default']
     TaskCreateDialog: typeof import('./src/components/tasks/TaskCreateDialog.vue')['default']
     TaskDescriptionEditor: typeof import('./src/components/tasks/TaskDescriptionEditor.vue')['default']
+    TaskDescriptionRichEditor: typeof import('./src/components/tasks/TaskDescriptionRichEditor.vue')['default']
     TaskFieldInput: typeof import('./src/components/tasks/TaskFieldInput.vue')['default']
     TaskKanbanView: typeof import('./src/components/tasks/TaskKanbanView.vue')['default']
     TaskListView: typeof import('./src/components/tasks/TaskListView.vue')['default']

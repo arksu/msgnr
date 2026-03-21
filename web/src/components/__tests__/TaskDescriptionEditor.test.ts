@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
-import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
+import { uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
 
 vi.mock('@/services/http/attachmentOwnersApi', () => ({
   uploadOwnedAttachment: vi.fn(),
@@ -20,7 +20,6 @@ describe('TaskDescriptionEditor', () => {
       focus: vi.fn(),
       close: vi.fn(),
     } as unknown as Window))
-    vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
   })
 
   it('uploads dropped files from the markdown tab and inserts tokens at the cursor', async () => {
@@ -124,86 +123,6 @@ describe('TaskDescriptionEditor', () => {
     const updates = wrapper.emitted('update:modelValue') ?? []
     const latest = updates[updates.length - 1]?.[0] as string
     expect(String(latest)).toMatch(/\[Spec\.pdf\].*!\[Photo\.png\]/s)
-  })
-
-  it('uploads image files from the rendered tab and serializes them back to markdown tokens', async () => {
-    vi.mocked(uploadOwnedAttachment).mockResolvedValue({
-      id: 'att-image',
-      file_name: 'Photo.png',
-      mime_type: 'image/png',
-    })
-
-    const wrapper = mount(TaskDescriptionEditor, {
-      props: {
-        modelValue: '',
-        ownerKind: 'task',
-        ownerId: 'task-1',
-      },
-      attachTo: document.body,
-    })
-    await flushPromises()
-
-    const editorEl = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror')
-    await editorEl.trigger('paste', {
-      clipboardData: {
-        files: [new File(['img'], 'Photo.png', { type: 'image/png' })],
-        getData: () => '',
-      },
-    })
-    await flushPromises()
-
-    const updates = wrapper.emitted('update:modelValue') ?? []
-    const latest = updates[updates.length - 1]?.[0] as string
-    expect(latest).toContain('![Photo.png](msgnr-attachment://task/task-1/att-image)')
-    expect(fetchOwnedAttachmentBlob).toHaveBeenCalledWith('task', 'task-1', 'att-image')
-  })
-
-  it('opens attachment links from the rendered editor on click', async () => {
-    vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }))
-
-    const wrapper = mount(TaskDescriptionEditor, {
-      props: {
-        modelValue: '[Spec.pdf](msgnr-attachment://document/doc-1/att-2)',
-        ownerKind: 'document',
-        ownerId: 'doc-1',
-      },
-      attachTo: document.body,
-    })
-    await flushPromises()
-
-    const link = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror a')
-    link.element.dispatchEvent(new MouseEvent('click', {
-      bubbles: true,
-      cancelable: true,
-    }))
-    await flushPromises()
-
-    expect(fetchOwnedAttachmentBlob).toHaveBeenCalledWith('document', 'doc-1', 'att-2')
-    expect(window.open).toHaveBeenCalledWith('about:blank', '_blank')
-    const opened = vi.mocked(window.open).mock.results[0]?.value as { location: { replace: ReturnType<typeof vi.fn> } }
-    expect(opened.location.replace).toHaveBeenCalledWith('blob:editor')
-  })
-
-  it('opens normal markdown links from the rendered editor on click', async () => {
-    const wrapper = mount(TaskDescriptionEditor, {
-      props: {
-        modelValue: '[OpenAI](https://openai.com)',
-      },
-      attachTo: document.body,
-    })
-    await flushPromises()
-
-    const link = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror a')
-    link.element.dispatchEvent(new MouseEvent('click', {
-      bubbles: true,
-      cancelable: true,
-    }))
-    await flushPromises()
-
-    expect(fetchOwnedAttachmentBlob).not.toHaveBeenCalled()
-    expect(window.open).toHaveBeenCalledWith('https://openai.com', '_blank')
-    const opened = vi.mocked(window.open).mock.results[0]?.value as { focus: ReturnType<typeof vi.fn> }
-    expect(opened.focus).toHaveBeenCalled()
   })
 
   it('shows a non-error hint and skips uploads when the owner is not saved yet', async () => {

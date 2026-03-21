@@ -15,7 +15,7 @@
         <span
           v-for="item in selected"
           :key="item.value"
-          class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/20 text-accent text-xs"
+          class="inline-flex items-center gap-2 px-1.5 py-0.5 rounded bg-accent/10 text-public_id"
         >
           <UserAvatar
             v-if="item.avatarUrl || item.userId"

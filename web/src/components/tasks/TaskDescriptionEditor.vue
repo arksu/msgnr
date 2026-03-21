@@ -1,6 +1,6 @@
 <template>
   <div class="flex min-h-0 flex-col gap-2">
-    <div class="inline-flex overflow-hidden rounded border border-chat-border text-[11px]">
+    <div class="inline-flex overflow-hidden rounded  text-[11px]">
       <button
         type="button"
         class="px-2 py-0.5"
@@ -23,7 +23,7 @@
 
     <div
       v-show="tab === 'rendered'"
-      class="min-h-0 flex-1 overflow-y-auto rounded bg-chat-input p-2 space-y-2"
+      class="min-h-0 flex-1 overflow-y-auto rounded border border-chat-border bg-chat-input space-y-2"
       data-testid="task-description-rendered"
     >
       <AttachmentMarkdownContent
@@ -47,19 +47,24 @@
       />
     </div>
 
-    <textarea
+    <div
       v-show="tab === 'markdown'"
-      ref="markdownInputRef"
-      v-model="markdownDraft"
-      class="min-h-[100px] w-full flex-1 resize-y rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
-      :placeholder="placeholder"
-      :disabled="!editable"
-      data-testid="task-description-markdown-input"
-      @blur="emit('blur')"
-      @paste="onMarkdownPaste"
-      @dragover="onMarkdownDragOver"
-      @drop="onMarkdownDrop"
-    />
+      class="flex min-h-0 flex-1 flex-col"
+    >
+      <textarea
+        ref="markdownInputRef"
+        v-model="markdownDraft"
+        class="min-h-[140px] w-full resize-none overflow-hidden rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+        :placeholder="placeholder"
+        :disabled="!editable"
+        data-testid="task-description-markdown-input"
+        @blur="emit('blur')"
+        @input="resizeMarkdownTextarea"
+        @paste="onMarkdownPaste"
+        @dragover="onMarkdownDragOver"
+        @drop="onMarkdownDrop"
+      />
+    </div>
 
     <p
       v-if="attachmentNotice"
@@ -135,6 +140,13 @@ function setAttachmentNotice(message: string, isError = false) {
 function clearAttachmentNotice() {
   attachmentNotice.value = ''
   attachmentNoticeIsError.value = false
+}
+
+function resizeMarkdownTextarea() {
+  const el = markdownInputRef.value
+  if (!el || tab.value !== 'markdown') return
+  el.style.height = '0px'
+  el.style.height = `${el.scrollHeight}px`
 }
 
 function attachmentsEnabledForUpload(): boolean {
@@ -225,6 +237,11 @@ async function onMarkdownDrop(event: DragEvent) {
 
 function switchTab(nextTab: DescriptionTab) {
   tab.value = nextTab
+  if (nextTab === 'markdown') {
+    nextTick(() => {
+      resizeMarkdownTextarea()
+    })
+  }
 }
 
 watch(
@@ -240,7 +257,23 @@ watch(markdownDraft, (next) => {
   if (next !== props.modelValue) {
     emit('update:modelValue', next)
   }
+  if (tab.value === 'markdown') {
+    nextTick(() => {
+      resizeMarkdownTextarea()
+    })
+  }
 })
+
+watch(
+  tab,
+  (nextTab) => {
+    if (nextTab !== 'markdown') return
+    nextTick(() => {
+      resizeMarkdownTextarea()
+    })
+  },
+  { immediate: true },
+)
 
 watch(
   [() => props.ownerId, () => props.ownerKind, editable],

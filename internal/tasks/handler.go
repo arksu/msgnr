@@ -85,10 +85,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/enums", h.adminOnly(h.enums))
 	mux.HandleFunc("/api/admin/enums/", h.adminOnly(h.enumsItem))
 
-	// Read-only config endpoints — available to all authenticated users.
+	// Config endpoints — available to all authenticated users.
 	// These mirror the admin GET routes so that non-admin users can load the
 	// data they need to use the task tracker (templates, statuses, fields,
-	// enum dictionary versions/items). Write operations remain admin-only.
+	// enum dictionary versions/items). Public dictionaries also allow member
+	// item creation under /api/tasks/config/enums/:id/items.
 	mux.HandleFunc("/api/tasks/config/templates", h.requireAuth(h.configTemplates))
 	mux.HandleFunc("/api/tasks/config/templates/", h.requireAuth(h.configTemplatesRouter))
 	mux.HandleFunc("/api/tasks/config/statuses", h.requireAuth(h.configStatuses))
@@ -523,16 +524,18 @@ func (h *Handler) enums(w http.ResponseWriter, r *http.Request, _ auth.Principal
 
 	case http.MethodPost:
 		var req struct {
-			Code string `json:"code"`
-			Name string `json:"name"`
+			Code     string `json:"code"`
+			Name     string `json:"name"`
+			IsPublic bool   `json:"is_public"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
 			return
 		}
 		row, err := h.svc.CreateDictionary(r.Context(), CreateDictionaryParams{
-			Code: req.Code,
-			Name: req.Name,
+			Code:     req.Code,
+			Name:     req.Name,
+			IsPublic: req.IsPublic,
 		})
 		if err != nil {
 			h.serviceError(w, err)
@@ -559,7 +562,7 @@ func (h *Handler) enumsItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 
 	// /api/admin/enums/:id
 	if len(parts) == 1 {
-		h.enumGet(w, r, dictID)
+		h.enumItem(w, r, dictID)
 		return
 	}
 
@@ -584,17 +587,35 @@ func (h *Handler) enumsItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 }
 
 // GET /api/admin/enums/:id
-func (h *Handler) enumGet(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
-	if r.Method != http.MethodGet {
+// PATCH /api/admin/enums/:id
+func (h *Handler) enumItem(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	switch r.Method {
+	case http.MethodGet:
+		row, err := h.svc.GetDictionary(r.Context(), id)
+		if err != nil {
+			h.serviceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, row)
+
+	case http.MethodPatch:
+		var req struct {
+			IsPublic bool `json:"is_public"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+			return
+		}
+		row, err := h.svc.UpdateDictionaryVisibility(r.Context(), id, req.IsPublic)
+		if err != nil {
+			h.serviceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, row)
+
+	default:
 		methodNotAllowed(w)
-		return
 	}
-	row, err := h.svc.GetDictionary(r.Context(), id)
-	if err != nil {
-		h.serviceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, row)
 }
 
 // GET /api/admin/enums/:id/versions
@@ -635,7 +656,9 @@ func (h *Handler) enumVersionItems(w http.ResponseWriter, r *http.Request, versi
 		methodNotAllowed(w)
 		return
 	}
-	items, err := h.svc.GetDictionaryVersionItems(r.Context(), versionID)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	limit := queryIntNonNegative(r.URL.Query().Get("limit"), 0)
+	items, err := h.svc.GetDictionaryVersionItems(r.Context(), versionID, search, limit, nil)
 	if err != nil {
 		h.serviceError(w, err)
 		return
@@ -1562,13 +1585,8 @@ func (h *Handler) configStatuses(w http.ResponseWriter, r *http.Request, _ auth.
 	writeJSON(w, http.StatusOK, rows)
 }
 
-// Routes under /api/tasks/config/enums/:id[/versions[/:vid]]
-// Only GET operations are permitted.
-func (h *Handler) configEnumsItem(w http.ResponseWriter, r *http.Request, _ auth.Principal) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w)
-		return
-	}
+// Routes under /api/tasks/config/enums/:id[/versions[/:vid]|/items]
+func (h *Handler) configEnumsItem(w http.ResponseWriter, r *http.Request, p auth.Principal) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/config/enums/")
 	parts := strings.SplitN(rest, "/", 3)
 
@@ -1579,6 +1597,10 @@ func (h *Handler) configEnumsItem(w http.ResponseWriter, r *http.Request, _ auth
 	}
 
 	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
 		// GET /api/tasks/config/enums/:id — return the dictionary itself
 		row, err := h.svc.GetDictionary(r.Context(), dictID)
 		if err != nil {
@@ -1589,6 +1611,31 @@ func (h *Handler) configEnumsItem(w http.ResponseWriter, r *http.Request, _ auth
 		return
 	}
 
+	if parts[1] == "items" {
+		if len(parts) != 2 {
+			writeJSON(w, http.StatusNotFound, errBody("not found"))
+			return
+		}
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		var req struct {
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+			return
+		}
+		item, err := h.svc.CreatePublicDictionaryItem(r.Context(), dictID, req.Value, p.UserID)
+		if err != nil {
+			h.serviceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+		return
+	}
+
 	if parts[1] != "versions" {
 		writeJSON(w, http.StatusNotFound, errBody("not found"))
 		return
@@ -1596,6 +1643,10 @@ func (h *Handler) configEnumsItem(w http.ResponseWriter, r *http.Request, _ auth
 
 	// GET /api/tasks/config/enums/:id/versions
 	if len(parts) == 2 {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
 		rows, err := h.svc.ListDictionaryVersions(r.Context(), dictID)
 		if err != nil {
 			h.serviceError(w, err)
@@ -1606,12 +1657,20 @@ func (h *Handler) configEnumsItem(w http.ResponseWriter, r *http.Request, _ auth
 	}
 
 	// GET /api/tasks/config/enums/:id/versions/:vid
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
 	versionID, err := uuid.Parse(parts[2])
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errBody("invalid version id"))
 		return
 	}
-	items, err := h.svc.GetDictionaryVersionItems(r.Context(), versionID)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	limit := queryIntNonNegative(r.URL.Query().Get("limit"), 0)
+	valueCodes := append([]string{}, r.URL.Query()["value_code"]...)
+	valueCodes = append(valueCodes, r.URL.Query()["value_code[]"]...)
+	items, err := h.svc.GetDictionaryVersionItems(r.Context(), versionID, search, limit, valueCodes)
 	if err != nil {
 		h.serviceError(w, err)
 		return

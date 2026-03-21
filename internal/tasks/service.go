@@ -89,6 +89,7 @@ type DictionaryRow struct {
 	ID             uuid.UUID `json:"id"`
 	Code           string    `json:"code"`
 	Name           string    `json:"name"`
+	IsPublic       bool      `json:"is_public"`
 	CurrentVersion int       `json:"current_version"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -141,8 +142,9 @@ type UpdateStatusParams struct {
 }
 
 type CreateDictionaryParams struct {
-	Code string
-	Name string
+	Code     string
+	Name     string
+	IsPublic bool
 }
 
 type DictionaryItemInput struct {
@@ -617,11 +619,34 @@ func (s *Service) CreateDictionary(ctx context.Context, p CreateDictionaryParams
 		return DictionaryRow{}, fmt.Errorf("%w: code and name are required", ErrBadRequest)
 	}
 	row, err := s.q.EnumDictionaryCreate(ctx, queries.EnumDictionaryCreateParams{
-		Code: p.Code,
-		Name: p.Name,
+		Code:     p.Code,
+		Name:     p.Name,
+		IsPublic: p.IsPublic,
 	})
 	if err != nil {
 		return DictionaryRow{}, mapUniqueViolation(err, "code already exists")
+	}
+	return mapDictionary(row), nil
+}
+
+func (s *Service) UpdateDictionaryVisibility(ctx context.Context, id uuid.UUID, isPublic bool) (DictionaryRow, error) {
+	var row queries.EnumDictionary
+	err := s.pool.QueryRow(ctx, `
+		UPDATE enum_dictionary
+		SET is_public = $2, updated_at = now()
+		WHERE id = $1
+		RETURNING id, code, name, is_public, current_version, created_at, updated_at
+	`, id, isPublic).Scan(
+		&row.ID,
+		&row.Code,
+		&row.Name,
+		&row.IsPublic,
+		&row.CurrentVersion,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	)
+	if err != nil {
+		return DictionaryRow{}, mapNotFound(err, "dictionary")
 	}
 	return mapDictionary(row), nil
 }
@@ -702,6 +727,121 @@ func (s *Service) CreateDictionaryVersion(
 	return mapDictionaryVersion(ver), nil
 }
 
+func (s *Service) CreatePublicDictionaryItem(
+	ctx context.Context,
+	dictID uuid.UUID,
+	value string,
+	actorID uuid.UUID,
+) (DictionaryItemRow, error) {
+	trimmedValue := strings.TrimSpace(value)
+	if trimmedValue == "" {
+		return DictionaryItemRow{}, fmt.Errorf("%w: value is required", ErrBadRequest)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DictionaryItemRow{}, fmt.Errorf("tasks: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var dict queries.EnumDictionary
+	err = tx.QueryRow(ctx, `
+		SELECT id, code, name, is_public, current_version, created_at, updated_at
+		FROM enum_dictionary
+		WHERE id = $1
+		FOR UPDATE
+	`, dictID).Scan(
+		&dict.ID,
+		&dict.Code,
+		&dict.Name,
+		&dict.IsPublic,
+		&dict.CurrentVersion,
+		&dict.CreatedAt,
+		&dict.UpdatedAt,
+	)
+	if err != nil {
+		return DictionaryItemRow{}, mapNotFound(err, "dictionary")
+	}
+	if !dict.IsPublic {
+		return DictionaryItemRow{}, fmt.Errorf("%w: dictionary is private", ErrForbidden)
+	}
+
+	latestVersion, latestItems, err := loadLatestDictionaryVersionTx(ctx, tx, dictID)
+	if err != nil {
+		return DictionaryItemRow{}, err
+	}
+	for _, item := range latestItems {
+		if item.ValueCode == trimmedValue {
+			return DictionaryItemRow{}, fmt.Errorf("%w: duplicate value_code %q in this version", ErrConflict, trimmedValue)
+		}
+	}
+
+	if latestVersion != nil {
+		var item queries.EnumDictionaryVersionItem
+		err = tx.QueryRow(ctx, `
+			INSERT INTO enum_dictionary_version_item
+			    (dictionary_version_id, value_code, value_name, sort_order, is_active)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id, dictionary_version_id, value_code, value_name, sort_order, is_active
+		`, latestVersion.ID, trimmedValue, trimmedValue, len(latestItems)+1, true).Scan(
+			&item.ID,
+			&item.DictionaryVersionID,
+			&item.ValueCode,
+			&item.ValueName,
+			&item.SortOrder,
+			&item.IsActive,
+		)
+		if err != nil {
+			return DictionaryItemRow{}, mapUniqueViolation(err, fmt.Sprintf("duplicate value_code %q in this version", trimmedValue))
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return DictionaryItemRow{}, fmt.Errorf("tasks: commit public dictionary item tx: %w", err)
+		}
+		return mapDictionaryItem(item), nil
+	}
+
+	ver, err := createDictionaryVersionTx(ctx, tx, dictID, dict.CurrentVersion+1, actorID, []DictionaryItemInput{{
+		ValueCode: trimmedValue,
+		ValueName: trimmedValue,
+		SortOrder: 1,
+		IsActive:  true,
+	}})
+	if err != nil {
+		return DictionaryItemRow{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE enum_dictionary
+		SET current_version = $2, updated_at = now()
+		WHERE id = $1
+	`, dictID, ver.Version); err != nil {
+		return DictionaryItemRow{}, fmt.Errorf("tasks: update dictionary current_version: %w", err)
+	}
+
+	var item queries.EnumDictionaryVersionItem
+	err = tx.QueryRow(ctx, `
+		SELECT id, dictionary_version_id, value_code, value_name, sort_order, is_active
+		FROM enum_dictionary_version_item
+		WHERE dictionary_version_id = $1
+		ORDER BY sort_order ASC, value_name ASC
+		LIMIT 1
+	`, ver.ID).Scan(
+		&item.ID,
+		&item.DictionaryVersionID,
+		&item.ValueCode,
+		&item.ValueName,
+		&item.SortOrder,
+		&item.IsActive,
+	)
+	if err != nil {
+		return DictionaryItemRow{}, fmt.Errorf("tasks: load created dictionary item: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return DictionaryItemRow{}, fmt.Errorf("tasks: commit public dictionary bootstrap tx: %w", err)
+	}
+	return mapDictionaryItem(item), nil
+}
+
 func (s *Service) ListDictionaryVersions(ctx context.Context, dictID uuid.UUID) ([]DictionaryVersionRow, error) {
 	rows, err := s.q.EnumDictionaryVersionList(ctx, dictID)
 	if err != nil {
@@ -769,6 +909,8 @@ func classifyDictionaryItemSaveMode(
 	latestItems []queries.EnumDictionaryVersionItem,
 	submittedByCode map[string]DictionaryItemInput,
 ) dictionaryItemSaveMode {
+	// Existing items may change sort_order and is_active in place. Only removals
+	// or value_name changes force a new version row.
 	if len(latestItems) == 0 {
 		return dictionaryItemSaveModeCreateVersion
 	}
@@ -872,12 +1014,172 @@ func createDictionaryVersionTx(
 	return ver, nil
 }
 
-func (s *Service) GetDictionaryVersionItems(ctx context.Context, versionID uuid.UUID) ([]DictionaryItemRow, error) {
-	rows, err := s.q.EnumDictionaryVersionItemList(ctx, versionID)
-	if err != nil {
-		return nil, fmt.Errorf("tasks: list version items: %w", err)
+func (s *Service) GetDictionaryVersionItems(
+	ctx context.Context,
+	versionID uuid.UUID,
+	search string,
+	limit int,
+	valueCodes []string,
+) ([]DictionaryItemRow, error) {
+	itemsByCode := make(map[string]DictionaryItemRow)
+	orderedCodes := make([]string, 0)
+
+	appendUnique := func(rows []DictionaryItemRow) {
+		for _, row := range rows {
+			if _, exists := itemsByCode[row.ValueCode]; exists {
+				continue
+			}
+			itemsByCode[row.ValueCode] = row
+			orderedCodes = append(orderedCodes, row.ValueCode)
+		}
 	}
-	return mapDictionaryItems(rows), nil
+
+	if len(valueCodes) > 0 {
+		selectedRows, err := s.getDictionaryVersionItemsByCodes(ctx, versionID, valueCodes)
+		if err != nil {
+			return nil, err
+		}
+		appendUnique(selectedRows)
+	}
+
+	matchedRows, err := s.searchDictionaryVersionItems(ctx, versionID, search, limit)
+	if err != nil {
+		return nil, err
+	}
+	appendUnique(matchedRows)
+
+	out := make([]DictionaryItemRow, 0, len(orderedCodes))
+	for _, code := range orderedCodes {
+		out = append(out, itemsByCode[code])
+	}
+	return out, nil
+}
+
+func (s *Service) getDictionaryVersionItemsByCodes(
+	ctx context.Context,
+	versionID uuid.UUID,
+	valueCodes []string,
+) ([]DictionaryItemRow, error) {
+	normalized := make([]string, 0, len(valueCodes))
+	seen := make(map[string]struct{}, len(valueCodes))
+	for _, code := range valueCodes {
+		trimmed := strings.TrimSpace(code)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, dictionary_version_id, value_code, value_name, sort_order, is_active
+		FROM enum_dictionary_version_item
+		WHERE dictionary_version_id = $1
+		  AND value_code = ANY($2::text[])
+		ORDER BY sort_order ASC, value_name ASC
+	`, versionID, normalized)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: list version items by codes: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]DictionaryItemRow, 0, len(normalized))
+	for rows.Next() {
+		var row queries.EnumDictionaryVersionItem
+		if err := rows.Scan(
+			&row.ID,
+			&row.DictionaryVersionID,
+			&row.ValueCode,
+			&row.ValueName,
+			&row.SortOrder,
+			&row.IsActive,
+		); err != nil {
+			return nil, fmt.Errorf("tasks: scan version item by code: %w", err)
+		}
+		out = append(out, mapDictionaryItem(row))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate version items by code: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Service) searchDictionaryVersionItems(
+	ctx context.Context,
+	versionID uuid.UUID,
+	search string,
+	limit int,
+) ([]DictionaryItemRow, error) {
+	search = strings.TrimSpace(search)
+
+	var (
+		rows pgx.Rows
+		err  error
+	)
+
+	switch {
+	case search == "" && limit > 0:
+		rows, err = s.pool.Query(ctx, `
+			SELECT id, dictionary_version_id, value_code, value_name, sort_order, is_active
+			FROM enum_dictionary_version_item
+			WHERE dictionary_version_id = $1
+			ORDER BY sort_order ASC, value_name ASC
+			LIMIT $2
+		`, versionID, limit)
+	case search == "":
+		queryRows, queryErr := s.q.EnumDictionaryVersionItemList(ctx, versionID)
+		if queryErr != nil {
+			return nil, fmt.Errorf("tasks: list version items: %w", queryErr)
+		}
+		return mapDictionaryItems(queryRows), nil
+	case limit > 0:
+		rows, err = s.pool.Query(ctx, `
+			SELECT id, dictionary_version_id, value_code, value_name, sort_order, is_active
+			FROM enum_dictionary_version_item
+			WHERE dictionary_version_id = $1
+			  AND value_name ILIKE '%' || $2 || '%'
+			ORDER BY sort_order ASC, value_name ASC
+			LIMIT $3
+		`, versionID, search, limit)
+	default:
+		rows, err = s.pool.Query(ctx, `
+			SELECT id, dictionary_version_id, value_code, value_name, sort_order, is_active
+			FROM enum_dictionary_version_item
+			WHERE dictionary_version_id = $1
+			  AND value_name ILIKE '%' || $2 || '%'
+			ORDER BY sort_order ASC, value_name ASC
+		`, versionID, search)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("tasks: search version items: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]DictionaryItemRow, 0)
+	for rows.Next() {
+		var row queries.EnumDictionaryVersionItem
+		if err := rows.Scan(
+			&row.ID,
+			&row.DictionaryVersionID,
+			&row.ValueCode,
+			&row.ValueName,
+			&row.SortOrder,
+			&row.IsActive,
+		); err != nil {
+			return nil, fmt.Errorf("tasks: scan searched version item: %w", err)
+		}
+		out = append(out, mapDictionaryItem(row))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate searched version items: %w", err)
+	}
+	return out, nil
 }
 
 // =========================================================
@@ -1186,6 +1488,7 @@ func mapDictionary(r queries.EnumDictionary) DictionaryRow {
 		ID:             r.ID,
 		Code:           r.Code,
 		Name:           r.Name,
+		IsPublic:       r.IsPublic,
 		CurrentVersion: r.CurrentVersion,
 		CreatedAt:      r.CreatedAt,
 		UpdatedAt:      r.UpdatedAt,

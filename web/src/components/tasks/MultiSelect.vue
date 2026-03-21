@@ -1,13 +1,15 @@
 <template>
   <div ref="root" class="relative">
-    <!-- Trigger -->
     <button
       type="button"
       class="multiselect-trigger"
-      :class="open ? 'border-accent' : ''"
-      @click="toggle"
+      :class="[
+        open ? 'border-accent' : '',
+        disabled ? 'cursor-not-allowed opacity-60' : '',
+      ]"
+      :disabled="disabled"
+      @click="toggleOpen"
     >
-      <!-- Pills for selected items -->
       <span v-if="selected.length === 0" class="text-gray-500 text-sm">{{ placeholder }}</span>
       <span v-else class="flex flex-wrap gap-1">
         <span
@@ -24,16 +26,17 @@
             :presence="item.presence"
           />
           {{ item.label }}
-          <button
-            type="button"
-            class="hover:text-white leading-none"
+          <span
+            class="leading-none hover:text-white"
+            role="button"
+            tabindex="0"
             @click.stop="deselect(item.value)"
+            @keydown.enter.prevent.stop="deselect(item.value)"
           >
             ×
-          </button>
+          </span>
         </span>
       </span>
-      <!-- Chevron -->
       <svg
         class="ml-auto shrink-0 w-3.5 h-3.5 text-gray-500 transition-transform"
         :class="open ? 'rotate-180' : ''"
@@ -43,32 +46,29 @@
       </svg>
     </button>
 
-    <!-- Dropdown -->
     <div
       v-if="open"
       class="absolute z-50 mt-1 w-full rounded border border-chat-border bg-chat-header shadow-xl"
     >
-      <!-- Search -->
       <div class="p-2 border-b border-chat-border">
         <input
           ref="searchInput"
           v-model="query"
           type="text"
           class="w-full bg-chat-input border border-chat-border rounded px-2 py-1 text-white text-sm outline-none focus:border-accent"
-          placeholder="Search..."
-        />
+          :placeholder="searchPlaceholder"
+          @keydown="onSearchKeydown"
+        >
       </div>
 
-      <!-- Options -->
       <ul class="max-h-48 overflow-y-auto py-1">
-        <li v-if="filtered.length === 0" class="px-3 py-2 text-sm text-gray-500">
-          No results
-        </li>
         <li
-          v-for="item in filtered"
+          v-for="(item, index) in filtered"
           :key="item.value"
-          class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-white/5 transition-colors"
-          @click="toggle(item.value)"
+          class="flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors"
+          :class="index === activeIndex ? 'bg-white/10' : 'hover:bg-white/5'"
+          @mouseenter="activeIndex = index"
+          @click="toggleValue(item.value)"
         >
           <span
             class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors"
@@ -92,96 +92,258 @@
             size="xs"
             :presence="item.presence"
           />
-          <span class="text-sm text-gray-200 truncate">{{ item.label }}</span>
+          <span class="min-w-0 flex-1 truncate text-sm text-gray-200">{{ item.label }}</span>
+        </li>
+
+        <li
+          v-if="showCreate"
+          class="px-3 py-1.5 cursor-pointer transition-colors text-sm text-accent"
+          :class="activeIndex === filtered.length ? 'bg-white/10' : 'hover:bg-white/5'"
+          @mouseenter="activeIndex = filtered.length"
+          @click="emitCreate"
+        >
+          {{ createLabelText }}
+        </li>
+
+        <li v-if="!loading && filtered.length === 0 && !showCreate" class="px-3 py-2 text-sm text-gray-500">
+          No results
+        </li>
+        <li v-if="loading" class="px-3 py-2 text-sm text-gray-500">
+          Loading...
         </li>
       </ul>
+
+      <div
+        v-if="showSearchHint"
+        class="border-t border-chat-border px-3 py-2 text-xs text-gray-500"
+      >
+        {{ searchHintText }}
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, onMounted, onUnmounted } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 
-interface Option {
+export interface MultiSelectOption {
   value: string
   label: string
+  searchText?: string
   userId?: string
   avatarUrl?: string
   presence?: 'online' | 'away' | 'offline'
 }
 
-const props = defineProps<{
-  options: Option[]
+const props = withDefaults(defineProps<{
+  options: MultiSelectOption[]
   modelValue: string[]
   placeholder?: string
+  searchPlaceholder?: string
   single?: boolean
-}>()
+  disabled?: boolean
+  loading?: boolean
+  allowCreate?: boolean
+  createLabel?: string
+  initialDisplayLimit?: number
+  serverSearch?: boolean
+  searchDebounceMs?: number
+}>(), {
+  placeholder: 'Select values',
+  searchPlaceholder: 'Search...',
+  single: false,
+  disabled: false,
+  loading: false,
+  allowCreate: false,
+  createLabel: 'Add',
+  initialDisplayLimit: 50,
+  serverSearch: false,
+  searchDebounceMs: 200,
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: string[]]
+  create: [value: string]
+  'search-change': [value: string]
 }>()
 
 const root = ref<HTMLElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const open = ref(false)
 const query = ref('')
+const activeIndex = ref(0)
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
-const selected = computed<Option[]>(() =>
+const normalizedQuery = computed(() => query.value.trim())
+
+const selected = computed<MultiSelectOption[]>(() =>
   props.modelValue
     .map(v => props.options.find(o => o.value === v))
-    .filter((o): o is Option => o !== undefined),
+    .filter((o): o is MultiSelectOption => o !== undefined),
 )
 
-const filtered = computed(() => {
-  const q = query.value.trim().toLowerCase()
-  return q ? props.options.filter(o => o.label.toLowerCase().includes(q)) : props.options
+function matchesQuery(option: MultiSelectOption, q: string): boolean {
+  const haystack = `${option.label} ${option.value} ${option.searchText ?? ''}`.toLowerCase()
+  return haystack.includes(q)
+}
+
+const exactMatch = computed(() => {
+  const q = normalizedQuery.value.toLowerCase()
+  if (!q) return false
+  return props.options.some(option => {
+    const valueMatch = option.value.toLowerCase() === q
+    const labelMatch = option.label.toLowerCase() === q
+    return valueMatch || labelMatch
+  })
 })
+
+const filtered = computed(() => {
+  if (props.serverSearch) {
+    return props.options
+  }
+  const q = normalizedQuery.value.toLowerCase()
+  if (q) {
+    return props.options.filter(option => matchesQuery(option, q))
+  }
+  const limited = props.options.slice(0, props.initialDisplayLimit)
+  const selectedMissing = selected.value.filter(item => !limited.some(option => option.value === item.value))
+  return [...selectedMissing, ...limited]
+})
+
+const showCreate = computed(() =>
+  props.allowCreate &&
+  !props.loading &&
+  normalizedQuery.value !== '' &&
+  !exactMatch.value,
+)
+
+const createLabelText = computed(() => `${props.createLabel} "${normalizedQuery.value}"`)
+const showSearchHint = computed(() =>
+  props.serverSearch
+    ? !props.loading && normalizedQuery.value === ''
+    : !normalizedQuery.value && props.options.length > props.initialDisplayLimit,
+)
+const searchHintText = computed(() =>
+  props.serverSearch
+    ? `Showing up to ${props.options.length} results. Type to search.`
+    : `Showing first ${filtered.value.length} of ${props.options.length}. Type to search.`,
+)
 
 function isSelected(value: string): boolean {
   return props.modelValue.includes(value)
 }
 
-function toggle(valueOrEvent?: string | MouseEvent) {
-  // Called both as a click handler on the trigger (no arg / MouseEvent) and
-  // as a list item handler (string arg).
-  if (typeof valueOrEvent === 'string') {
-    let next: string[]
-    if (props.single) {
-      next = isSelected(valueOrEvent) ? [] : [valueOrEvent]
-      open.value = false
-    } else {
-      next = isSelected(valueOrEvent)
-        ? props.modelValue.filter(v => v !== valueOrEvent)
-        : [...props.modelValue, valueOrEvent]
+function resetActiveIndex() {
+  activeIndex.value = filtered.value.length > 0 || showCreate.value ? 0 : -1
+}
+
+function toggleOpen() {
+  if (props.disabled) return
+  open.value = !open.value
+  if (open.value) {
+    query.value = ''
+    resetActiveIndex()
+    if (props.serverSearch) {
+      emit('search-change', '')
     }
-    emit('update:modelValue', next)
-  } else {
-    open.value = !open.value
-    if (open.value) {
-      query.value = ''
-      nextTick(() => searchInput.value?.focus())
-    }
+    nextTick(() => searchInput.value?.focus())
   }
+}
+
+function close() {
+  open.value = false
+}
+
+function emitModelValue(next: string[]) {
+  emit('update:modelValue', next)
+}
+
+function toggleValue(value: string) {
+  let next: string[]
+  if (props.single) {
+    next = isSelected(value) ? [] : [value]
+    emitModelValue(next)
+    close()
+    return
+  }
+  next = isSelected(value)
+    ? props.modelValue.filter(v => v !== value)
+    : [...props.modelValue, value]
+  emitModelValue(next)
 }
 
 function deselect(value: string) {
-  emit('update:modelValue', props.modelValue.filter(v => v !== value))
+  if (props.disabled) return
+  emitModelValue(props.modelValue.filter(v => v !== value))
 }
 
-// Close on outside click
-function onClickOutside(e: MouseEvent) {
-  if (root.value && !root.value.contains(e.target as Node)) {
-    open.value = false
+function emitCreate() {
+  if (!showCreate.value) return
+  emit('create', normalizedQuery.value)
+}
+
+function onSearchKeydown(event: KeyboardEvent) {
+  const optionCount = filtered.value.length + (showCreate.value ? 1 : 0)
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    if (optionCount === 0) return
+    activeIndex.value = activeIndex.value < optionCount - 1 ? activeIndex.value + 1 : 0
+    return
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    if (optionCount === 0) return
+    activeIndex.value = activeIndex.value > 0 ? activeIndex.value - 1 : optionCount - 1
+    return
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    if (activeIndex.value < 0) return
+    if (activeIndex.value < filtered.value.length) {
+      const option = filtered.value[activeIndex.value]
+      if (option) toggleValue(option.value)
+      return
+    }
+    if (showCreate.value) emitCreate()
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    close()
   }
 }
 
+function onClickOutside(event: MouseEvent) {
+  if (root.value && !root.value.contains(event.target as Node)) {
+    close()
+  }
+}
+
+watch(() => normalizedQuery.value, (value) => {
+  resetActiveIndex()
+  if (!open.value || !props.serverSearch) return
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+  }
+  searchDebounceTimer = setTimeout(() => {
+    emit('search-change', value)
+  }, props.searchDebounceMs)
+})
+watch(() => props.options, () => resetActiveIndex(), { deep: true })
+
 onMounted(() => document.addEventListener('mousedown', onClickOutside))
-onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onClickOutside)
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
+})
 </script>
 
 <style scoped>
 .multiselect-trigger {
-  @apply w-full flex flex-wrap items-center gap-1 min-h-[34px] bg-chat-input border border-chat-border rounded px-3 py-1.5 text-left outline-none transition-colors cursor-pointer hover:border-accent/60;
+  @apply w-full flex flex-wrap items-center gap-1 min-h-[34px] bg-chat-input border border-chat-border rounded px-3 py-1.5 text-left outline-none transition-colors hover:border-accent/60;
 }
 </style>

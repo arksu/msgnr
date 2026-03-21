@@ -65,8 +65,8 @@ UPDATE task_status SET sort_order = $2, updated_at = now() WHERE id = $1;
 -- ---- enum_dictionary ----
 
 -- name: EnumDictionaryCreate :one
-INSERT INTO enum_dictionary (code, name)
-VALUES ($1, $2)
+INSERT INTO enum_dictionary (code, name, is_public)
+VALUES ($1, $2, $3)
 RETURNING *;
 
 -- name: EnumDictionaryList :many

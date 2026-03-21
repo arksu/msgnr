@@ -80,6 +80,7 @@ export interface EnumDictionary {
   id: string
   code: string
   name: string
+  is_public: boolean
   current_version: number
   created_at: string
   updated_at: string
@@ -190,7 +191,7 @@ export async function tasksListDictionaries(): Promise<EnumDictionary[]> {
   } catch (e) { handleError(e) }
 }
 
-export async function tasksCreateDictionary(payload: { code: string; name: string }): Promise<EnumDictionary> {
+export async function tasksCreateDictionary(payload: { code: string; name: string; is_public?: boolean }): Promise<EnumDictionary> {
   try {
     const { data } = await http.post<EnumDictionary>('/api/admin/enums', payload)
     return data
@@ -200,6 +201,23 @@ export async function tasksCreateDictionary(payload: { code: string; name: strin
 export async function tasksGetDictionary(id: string): Promise<EnumDictionary> {
   try {
     const { data } = await http.get<EnumDictionary>(`/api/admin/enums/${id}`)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksUpdateDictionary(
+  id: string,
+  payload: { is_public: boolean },
+): Promise<EnumDictionary> {
+  try {
+    const { data } = await http.patch<EnumDictionary>(`/api/admin/enums/${id}`, payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksGetConfigDictionary(id: string): Promise<EnumDictionary> {
+  try {
+    const { data } = await http.get<EnumDictionary>(`/api/tasks/config/enums/${id}`)
     return data
   } catch (e) { handleError(e) }
 }
@@ -224,11 +242,28 @@ export async function tasksCreateDictionaryVersion(
 export async function tasksGetDictionaryVersionItems(
   dictId: string,
   versionId: string,
+  params?: { search?: string; limit?: number; value_codes?: string[] },
 ): Promise<EnumDictionaryVersionItem[]> {
   try {
+    const query = new URLSearchParams()
+    if (params?.search) query.set('search', params.search)
+    if (params?.limit && params.limit > 0) query.set('limit', String(params.limit))
+    for (const code of params?.value_codes ?? []) {
+      query.append('value_code', code)
+    }
     const { data } = await http.get<EnumDictionaryVersionItem[]>(
-      `/api/tasks/config/enums/${dictId}/versions/${versionId}`,
+      `/api/tasks/config/enums/${dictId}/versions/${versionId}${query.size > 0 ? `?${query.toString()}` : ''}`,
     )
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksCreatePublicDictionaryItem(
+  dictId: string,
+  payload: { value: string },
+): Promise<EnumDictionaryVersionItem> {
+  try {
+    const { data } = await http.post<EnumDictionaryVersionItem>(`/api/tasks/config/enums/${dictId}/items`, payload)
     return data
   } catch (e) { handleError(e) }
 }

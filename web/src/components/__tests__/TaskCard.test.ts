@@ -64,10 +64,15 @@ const tasksStoreMock = reactive({
   ]),
   statusById: vi.fn(() => ({ id: 'st-1', name: 'Open' })),
   activeFieldsFor: vi.fn(() => []),
+  enumDictionaryFor: vi.fn(() => undefined),
   enumItemsFor: vi.fn(() => []),
+  enumKnownItemsFor: vi.fn(() => []),
+  enumItemCreateLoadingFor: vi.fn(() => false),
+  enumItemSearchLoadingFor: vi.fn(() => false),
   enumVersionFor: vi.fn(() => undefined),
   loadUsers: vi.fn(async () => {}),
   loadEnumItemsFor: vi.fn(async () => {}),
+  searchEnumItemsFor: vi.fn(async () => []),
   loadConfig: vi.fn(async () => {}),
   loadFieldsFor: vi.fn(async () => {}),
   updateTask: vi.fn(async () => selectedTask),
@@ -289,6 +294,8 @@ describe('TaskCard', () => {
     await wrapper.get('[data-testid="task-description-history-toggle"]').trigger('click')
     await flushPromises()
     expect(tasksStoreMock.listTaskDescriptionHistory).toHaveBeenCalledWith('task-1')
+    expect(document.body.querySelector('[data-testid="task-description-restore-modal"] > div')?.className).toContain('w-[90vw]')
+    expect(document.body.querySelector('[data-testid="task-description-restore-modal"] > div')?.className).toContain('h-[90vh]')
     expect((document.body.querySelector('[data-testid="task-description-history-preview-title"]') as HTMLInputElement | null)?.value).toBe('Newest title')
 
     const historyItems = document.body.querySelectorAll('[data-testid="task-description-history-item"]')

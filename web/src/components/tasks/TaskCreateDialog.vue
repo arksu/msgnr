@@ -101,7 +101,13 @@
                   mode="edit"
                   :users="tasksStore.users"
                   :enum-items="field.enum_dictionary_id ? tasksStore.enumItemsFor(field.enum_dictionary_id) : undefined"
+                  :enum-known-items="field.enum_dictionary_id ? tasksStore.enumKnownItemsFor(field.enum_dictionary_id) : undefined"
+                  :enum-dictionary="field.enum_dictionary_id ? tasksStore.enumDictionaryFor(field.enum_dictionary_id) : undefined"
+                  :creating-enum-item="field.enum_dictionary_id ? tasksStore.enumItemCreateLoadingFor(field.enum_dictionary_id) : false"
+                  :enum-items-loading="field.enum_dictionary_id ? tasksStore.enumItemSearchLoadingFor(field.enum_dictionary_id) : false"
                   @update:value="customValues[field.id] = $event"
+                  @create:enum-item="onCreateFieldEnumItem(field, $event)"
+                  @search:enum-items="onSearchFieldEnumItems(field, $event)"
                 />
                 <p v-if="isFieldMissing(field.id)" class="text-red-400 text-xs mt-1">
                   This field is required
@@ -197,7 +203,43 @@ function preloadSupportingData() {
   // Load enum items for each enum field
   activeFields.value
     .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
-    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
+    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!, selectedCodesForField(f)))
+}
+
+function selectedCodesForField(field: TaskFieldDefinition): string[] {
+  const current = customValues[field.id]
+  if (field.type === 'enum') {
+    return current ? [String(current)] : []
+  }
+  if (field.type === 'multi_enum' && Array.isArray(current)) {
+    return current as string[]
+  }
+  return []
+}
+
+function applyCreatedEnumValue(field: TaskFieldDefinition, createdCode: string) {
+  if (field.type === 'enum') {
+    customValues[field.id] = createdCode
+    return
+  }
+  const current = Array.isArray(customValues[field.id]) ? customValues[field.id] as string[] : []
+  customValues[field.id] = current.includes(createdCode) ? current : [...current, createdCode]
+}
+
+async function onCreateFieldEnumItem(field: TaskFieldDefinition, value: string) {
+  if (!field.enum_dictionary_id) return
+  submitError.value = ''
+  try {
+    const created = await tasksStore.createPublicDictionaryItem(field.enum_dictionary_id, value)
+    applyCreatedEnumValue(field, created.value_code)
+  } catch (e) {
+    submitError.value = e instanceof Error ? e.message : 'Failed to add dictionary value'
+  }
+}
+
+async function onSearchFieldEnumItems(field: TaskFieldDefinition, query: string) {
+  if (!field.enum_dictionary_id) return
+  await tasksStore.searchEnumItemsFor(field.enum_dictionary_id, query, selectedCodesForField(field), 20)
 }
 
 function close() {

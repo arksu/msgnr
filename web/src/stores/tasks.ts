@@ -5,8 +5,10 @@ import {
   tasksListStatuses,
   tasksListFields,
   tasksListUsers,
+  tasksGetConfigDictionary,
   tasksGetDictionaryVersionItems,
   tasksListDictionaryVersions,
+  tasksCreatePublicDictionaryItem,
   tasksCreate,
   tasksGet,
   tasksUpdate,
@@ -23,6 +25,7 @@ import {
   type TaskStatus,
   type TaskFieldDefinition,
   type TaskUser,
+  type EnumDictionary,
   type EnumDictionaryVersionItem,
   type Task,
   type TaskFieldValue,
@@ -78,10 +81,18 @@ export const useTasksStore = defineStore('tasks', () => {
   // Loaded once; injected into field inputs via props so there are no per-instance fetches.
   const users = ref<TaskUser[]>([])
   const usersLoaded = ref(false)
-  // enum items keyed by dictionary_id (always latest version)
+  const enumDictionariesById = ref<Record<string, EnumDictionary>>({})
+  // Latest search result keyed by dictionary_id.
   const enumItemsByDict = ref<Record<string, EnumDictionaryVersionItem[]>>({})
+  // Known item labels keyed by dictionary_id; merged from search results and selected-value hydration.
+  const enumKnownItemsByDict = ref<Record<string, EnumDictionaryVersionItem[]>>({})
   // version number loaded for each dictionary_id
   const enumVersionByDict = ref<Record<string, number>>({})
+  const enumLatestVersionIdByDict = ref<Record<string, string>>({})
+  const enumItemCreateLoadingByDict = ref<Record<string, boolean>>({})
+  const enumItemSearchLoadingByDict = ref<Record<string, boolean>>({})
+  const enumItemSearchTokenByDict = ref<Record<string, number>>({})
+  const enumDictionaryLoadPromises = new Map<string, Promise<void>>()
 
   // ---- Selected task ----
   const selectedTask = ref<Task | null>(null)
@@ -155,6 +166,14 @@ export const useTasksStore = defineStore('tasks', () => {
     return enumItemsByDict.value[dictionaryId] ?? []
   }
 
+  function enumKnownItemsFor(dictionaryId: string): EnumDictionaryVersionItem[] {
+    return enumKnownItemsByDict.value[dictionaryId] ?? []
+  }
+
+  function enumDictionaryFor(dictionaryId: string): EnumDictionary | undefined {
+    return enumDictionariesById.value[dictionaryId]
+  }
+
   function listFilterParams(): TaskListParams {
     return {
       search: listParams.value.search,
@@ -218,22 +237,156 @@ export const useTasksStore = defineStore('tasks', () => {
     }
   }
 
-  async function loadEnumItemsFor(dictionaryId: string) {
-    if (enumItemsByDict.value[dictionaryId]) return
-    try {
-      const versions = await tasksListDictionaryVersions(dictionaryId)
-      if (versions.length === 0) return
-      const latest = versions.reduce((a, b) => (a.version > b.version ? a : b))
-      const items = await tasksGetDictionaryVersionItems(dictionaryId, latest.id)
-      enumItemsByDict.value = { ...enumItemsByDict.value, [dictionaryId]: items }
-      enumVersionByDict.value = { ...enumVersionByDict.value, [dictionaryId]: latest.version }
-    } catch {
-      // non-fatal
+  function mergeKnownEnumItems(dictionaryId: string, items: EnumDictionaryVersionItem[]) {
+    const merged = new Map<string, EnumDictionaryVersionItem>()
+    for (const item of enumKnownItemsByDict.value[dictionaryId] ?? []) {
+      merged.set(item.value_code, item)
     }
+    for (const item of items) {
+      merged.set(item.value_code, item)
+    }
+    enumKnownItemsByDict.value = {
+      ...enumKnownItemsByDict.value,
+      [dictionaryId]: Array.from(merged.values()).sort((a, b) => {
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+        return a.value_name.localeCompare(b.value_name)
+      }),
+    }
+  }
+
+  async function ensureEnumDictionaryLoaded(dictionaryId: string) {
+    if (enumDictionariesById.value[dictionaryId] && enumLatestVersionIdByDict.value[dictionaryId]) return
+    const inFlight = enumDictionaryLoadPromises.get(dictionaryId)
+    if (inFlight) {
+      await inFlight
+      return
+    }
+
+    const loadPromise = (async () => {
+      try {
+      const [dictionary, versions] = await Promise.all([
+        tasksGetConfigDictionary(dictionaryId),
+        tasksListDictionaryVersions(dictionaryId),
+      ])
+      enumDictionariesById.value = {
+        ...enumDictionariesById.value,
+        [dictionaryId]: dictionary,
+      }
+      if (versions.length === 0) {
+        enumItemsByDict.value = { ...enumItemsByDict.value, [dictionaryId]: [] }
+        return
+      }
+      const latest = versions.reduce((a, b) => (a.version > b.version ? a : b))
+      enumLatestVersionIdByDict.value = {
+        ...enumLatestVersionIdByDict.value,
+        [dictionaryId]: latest.id,
+      }
+      enumVersionByDict.value = {
+        ...enumVersionByDict.value,
+        [dictionaryId]: latest.version,
+      }
+      } catch {
+        // non-fatal
+      } finally {
+        enumDictionaryLoadPromises.delete(dictionaryId)
+      }
+    })()
+
+    enumDictionaryLoadPromises.set(dictionaryId, loadPromise)
+    await loadPromise
+  }
+
+  async function searchEnumItemsFor(
+    dictionaryId: string,
+    search = '',
+    selectedCodes: string[] = [],
+    limit = 20,
+  ) {
+    await ensureEnumDictionaryLoaded(dictionaryId)
+    const versionId = enumLatestVersionIdByDict.value[dictionaryId]
+    if (!versionId) {
+      enumItemsByDict.value = { ...enumItemsByDict.value, [dictionaryId]: [] }
+      return []
+    }
+    const nextToken = (enumItemSearchTokenByDict.value[dictionaryId] ?? 0) + 1
+    enumItemSearchTokenByDict.value = {
+      ...enumItemSearchTokenByDict.value,
+      [dictionaryId]: nextToken,
+    }
+    enumItemSearchLoadingByDict.value = {
+      ...enumItemSearchLoadingByDict.value,
+      [dictionaryId]: true,
+    }
+    try {
+      const items = await tasksGetDictionaryVersionItems(dictionaryId, versionId, {
+        search: search.trim() || undefined,
+        limit,
+        value_codes: selectedCodes,
+      })
+      if (enumItemSearchTokenByDict.value[dictionaryId] !== nextToken) {
+        return items
+      }
+      enumItemsByDict.value = { ...enumItemsByDict.value, [dictionaryId]: items }
+      mergeKnownEnumItems(dictionaryId, items)
+      return items
+    } catch {
+      return []
+    } finally {
+      if (enumItemSearchTokenByDict.value[dictionaryId] === nextToken) {
+        enumItemSearchLoadingByDict.value = {
+          ...enumItemSearchLoadingByDict.value,
+          [dictionaryId]: false,
+        }
+      }
+    }
+  }
+
+  async function refreshEnumItemsFor(dictionaryId: string, selectedCodes: string[] = []) {
+    return searchEnumItemsFor(dictionaryId, '', selectedCodes, 20)
+  }
+
+  async function loadEnumItemsFor(dictionaryId: string, selectedCodes: string[] = []) {
+    if (
+      enumItemsByDict.value[dictionaryId] &&
+      enumDictionariesById.value[dictionaryId] &&
+      enumLatestVersionIdByDict.value[dictionaryId]
+    ) {
+      if (selectedCodes.length > 0) {
+        await searchEnumItemsFor(dictionaryId, '', selectedCodes, 20)
+      }
+      return
+    }
+    await refreshEnumItemsFor(dictionaryId, selectedCodes)
   }
 
   function enumVersionFor(dictionaryId: string): number | undefined {
     return enumVersionByDict.value[dictionaryId]
+  }
+
+  function enumItemCreateLoadingFor(dictionaryId: string): boolean {
+    return !!enumItemCreateLoadingByDict.value[dictionaryId]
+  }
+
+  function enumItemSearchLoadingFor(dictionaryId: string): boolean {
+    return !!enumItemSearchLoadingByDict.value[dictionaryId]
+  }
+
+  async function createPublicDictionaryItem(dictionaryId: string, value: string): Promise<EnumDictionaryVersionItem> {
+    enumItemCreateLoadingByDict.value = {
+      ...enumItemCreateLoadingByDict.value,
+      [dictionaryId]: true,
+    }
+    try {
+      const item = await tasksCreatePublicDictionaryItem(dictionaryId, { value })
+      mergeKnownEnumItems(dictionaryId, [item])
+      await refreshEnumItemsFor(dictionaryId, [item.value_code])
+      return item
+    } finally {
+      enumItemCreateLoadingByDict.value = {
+        ...enumItemCreateLoadingByDict.value,
+        [dictionaryId]: false,
+      }
+    }
   }
 
   function openCreateDialog() {
@@ -604,8 +757,15 @@ export const useTasksStore = defineStore('tasks', () => {
 
     users.value = []
     usersLoaded.value = false
+    enumDictionariesById.value = {}
     enumItemsByDict.value = {}
+    enumKnownItemsByDict.value = {}
     enumVersionByDict.value = {}
+    enumLatestVersionIdByDict.value = {}
+    enumItemCreateLoadingByDict.value = {}
+    enumItemSearchLoadingByDict.value = {}
+    enumItemSearchTokenByDict.value = {}
+    enumDictionaryLoadPromises.clear()
 
     selectedTask.value = null
     taskLoading.value = false
@@ -642,7 +802,9 @@ export const useTasksStore = defineStore('tasks', () => {
     configLoading,
     configError,
     users,
+    enumDictionariesById,
     enumItemsByDict,
+    enumKnownItemsByDict,
     selectedTask,
     taskLoading,
     taskError,
@@ -664,14 +826,21 @@ export const useTasksStore = defineStore('tasks', () => {
     assigneeFieldIds,
     statusById,
     templateById,
+    enumDictionaryFor,
     enumItemsFor,
+    enumKnownItemsFor,
     enumVersionFor,
+    enumItemCreateLoadingFor,
+    enumItemSearchLoadingFor,
     // actions
     loadConfig,
     loadFieldsFor,
     loadAllTemplateFields,
     loadUsers,
     loadEnumItemsFor,
+    searchEnumItemsFor,
+    refreshEnumItemsFor,
+    createPublicDictionaryItem,
     openCreateDialog,
     closeCreateDialog,
     createTask,

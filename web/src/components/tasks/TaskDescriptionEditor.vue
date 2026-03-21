@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-2">
+  <div class="flex min-h-0 flex-col gap-2">
     <div class="inline-flex rounded border border-chat-border overflow-hidden text-[11px]">
       <button
         type="button"
@@ -23,7 +23,7 @@
 
     <div
       v-show="tab === 'rendered'"
-      class="rounded bg-chat-input p-2 space-y-2"
+      class="min-h-0 flex-1 overflow-y-auto rounded bg-chat-input p-2 space-y-2"
       data-testid="task-description-rendered"
     >
       <BubbleMenu
@@ -248,7 +248,7 @@
       v-show="tab === 'markdown'"
       ref="markdownInputRef"
       v-model="markdownDraft"
-      class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent resize-y min-h-[100px]"
+      class="w-full flex-1 min-h-[100px] bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent resize-y"
       :placeholder="placeholder"
       :disabled="!editable"
       data-testid="task-description-markdown-input"

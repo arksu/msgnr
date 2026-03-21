@@ -93,33 +93,48 @@
       @update:model-value="emit('update:value', $event)"
     />
 
-    <select
+    <MultiSelect
       v-else-if="field.type === 'enum'"
-      :value="value as string"
-      class="field-input"
-      @change="emit('update:value', ($event.target as HTMLSelectElement).value || null)"
-    >
-      <option value="">— none —</option>
-      <option v-for="item in activeEnumItems" :key="item.value_code" :value="item.value_code">
-        {{ item.value_name }}
-      </option>
-    </select>
+      :model-value="(value ? [value as string] : [])"
+      :options="enumOptions"
+      placeholder="— select value —"
+      :allow-create="canCreateEnumItem"
+      :loading="creatingEnumItem || enumItemsLoading"
+      server-search
+      create-label="Add"
+      single
+      @update:model-value="emit('update:value', $event[0] || null)"
+      @create="emit('create:enum-item', $event)"
+      @search-change="emit('search:enum-items', $event)"
+    />
 
     <MultiSelect
       v-else-if="field.type === 'multi_enum'"
       :model-value="(value as string[] | null) ?? []"
-      :options="activeEnumItems.map(i => ({ value: i.value_code, label: i.value_name }))"
+      :options="enumOptions"
       placeholder="— select values —"
+      :allow-create="canCreateEnumItem"
+      :loading="creatingEnumItem || enumItemsLoading"
+      server-search
+      create-label="Add"
       @update:model-value="emit('update:value', $event)"
+      @create="emit('create:enum-item', $event)"
+      @search-change="emit('search:enum-items', $event)"
     />
   </template>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { TaskFieldDefinition, TaskUser, EnumDictionaryVersionItem } from '@/services/http/tasksApi'
+import type { TaskFieldDefinition, TaskUser, EnumDictionary, EnumDictionaryVersionItem } from '@/services/http/tasksApi'
 import MultiSelect from './MultiSelect.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+
+interface SelectOption {
+  value: string
+  label: string
+  searchText?: string
+}
 
 const props = defineProps<{
   field: TaskFieldDefinition
@@ -129,10 +144,16 @@ const props = defineProps<{
   users?: TaskUser[]
   /** Injected from the store — only required for enum/multi_enum field types */
   enumItems?: EnumDictionaryVersionItem[]
+  enumKnownItems?: EnumDictionaryVersionItem[]
+  enumDictionary?: EnumDictionary
+  creatingEnumItem?: boolean
+  enumItemsLoading?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:value': [value: unknown]
+  'create:enum-item': [value: string]
+  'search:enum-items': [query: string]
 }>()
 
 const isEmpty = computed(() => {
@@ -167,8 +188,54 @@ const activeEnumItems = computed(() =>
   (props.enumItems ?? []).filter(i => i.is_active),
 )
 
+const knownActiveEnumItems = computed(() =>
+  (props.enumKnownItems ?? props.enumItems ?? []).filter(i => i.is_active),
+)
+
+const selectedEnumCodes = computed(() => {
+  if (props.field.type === 'enum') {
+    return props.value ? [props.value as string] : []
+  }
+  if (props.field.type === 'multi_enum') {
+    return Array.isArray(props.value) ? props.value as string[] : []
+  }
+  return []
+})
+
+const enumOptions = computed<SelectOption[]>(() =>
+  {
+    const merged = new Map<string, SelectOption>()
+    for (const item of activeEnumItems.value) {
+      merged.set(item.value_code, {
+        value: item.value_code,
+        label: item.value_name,
+      })
+    }
+    for (const code of selectedEnumCodes.value) {
+      const selectedItem = knownActiveEnumItems.value.find(item => item.value_code === code)
+      if (merged.has(code)) continue
+      if (!selectedItem) {
+        merged.set(code, {
+          value: code,
+          label: code,
+        })
+        continue
+      }
+      merged.set(code, {
+        value: selectedItem.value_code,
+        label: selectedItem.value_name,
+      })
+    }
+    return Array.from(merged.values())
+  },
+)
+
+const canCreateEnumItem = computed(() =>
+  !!props.enumDictionary?.is_public,
+)
+
 function resolveEnumLabel(code: string): string {
-  const item = props.enumItems?.find(i => i.value_code === code)
+  const item = (props.enumKnownItems ?? props.enumItems)?.find(i => i.value_code === code)
   return item ? item.value_name : code
 }
 

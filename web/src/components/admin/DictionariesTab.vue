@@ -21,16 +21,17 @@
           <tr class="border-b border-chat-border text-gray-400 text-xs uppercase tracking-wide">
             <th class="text-left px-4 py-3">Code</th>
             <th class="text-left px-4 py-3">Name</th>
+            <th class="text-left px-4 py-3">Is Public</th>
             <th class="text-left px-4 py-3">Current Version</th>
             <th class="px-4 py-3"/>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="4" class="px-4 py-6 text-center text-gray-500">Loading...</td>
+            <td colspan="5" class="px-4 py-6 text-center text-gray-500">Loading...</td>
           </tr>
           <tr v-else-if="dictionaries.length === 0">
-            <td colspan="4" class="px-4 py-6 text-center text-gray-500">No dictionaries</td>
+            <td colspan="5" class="px-4 py-6 text-center text-gray-500">No dictionaries</td>
           </tr>
           <tr
             v-for="d in dictionaries"
@@ -39,6 +40,18 @@
           >
             <td class="px-4 py-3 font-mono text-gray-300">{{ d.code }}</td>
             <td class="px-4 py-3 text-white">{{ d.name }}</td>
+            <td class="px-4 py-3">
+              <button
+                class="inline-flex min-w-[86px] items-center justify-center rounded px-2 py-1 text-xs transition-colors"
+                :class="d.is_public
+                  ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
+                  : 'bg-white/10 text-gray-300 hover:bg-white/15'"
+                :disabled="toggleLoadingById[d.id]"
+                @click="toggleDictionaryVisibility(d)"
+              >
+                {{ toggleLoadingById[d.id] ? 'Saving...' : (d.is_public ? 'Public' : 'Private') }}
+              </button>
+            </td>
             <td class="px-4 py-3 text-gray-400">v{{ d.current_version }}</td>
             <td class="px-4 py-3 text-right space-x-2">
               <button
@@ -124,6 +137,10 @@
               <label class="block text-sm text-gray-400 mb-1">Name</label>
               <input v-model="createForm.name" type="text" class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent" placeholder="Priority" />
             </div>
+            <label class="flex items-center gap-2 rounded border border-chat-border px-3 py-2 text-sm text-gray-300">
+              <input v-model="createForm.is_public" type="checkbox" class="rounded border-chat-border bg-chat-input text-accent focus:ring-accent" />
+              Is Public
+            </label>
           </div>
           <div v-if="createError" class="text-red-400 text-sm mt-3">{{ createError }}</div>
           <div class="flex gap-3 mt-5">
@@ -137,12 +154,13 @@
 
       <!-- Dictionary items dialog -->
       <div v-if="versionOpen" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="versionOpen = false">
-        <div class="bg-[#222529] border border-chat-border rounded-xl shadow-2xl w-full max-w-lg p-6">
-          <h3 class="text-lg font-bold text-white mb-1">Edit Items</h3>
-          <p class="text-sm text-gray-400 mb-4">Dictionary: <span class="text-gray-200 font-mono">{{ versionDictCode }}</span></p>
+        <div class="bg-[#222529] border border-chat-border rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] p-6 flex flex-col">
+          <h3 class="text-lg font-bold text-white mb-1 shrink-0">Edit Items</h3>
+          <p class="text-sm text-gray-400 mb-4 shrink-0">Dictionary: <span class="text-gray-200 font-mono">{{ versionDictCode }}</span></p>
           <div v-if="versionLoading" class="text-center text-gray-500 py-8">Loading current items...</div>
           <template v-else>
-            <div class="space-y-2 mb-3">
+            <div class="flex-1 min-h-0 overflow-y-auto pr-1">
+              <div class="space-y-2 mb-3">
               <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px_56px] gap-3 text-xs text-gray-400 uppercase tracking-wide px-1">
                 <span>Code</span><span>Name</span><span class="text-center">Order</span><span class="text-center">Active</span>
               </div>
@@ -160,10 +178,11 @@
                   </button>
                 </div>
               </div>
+              </div>
             </div>
-            <button class="w-full py-1.5 text-sm text-gray-400 hover:text-white border border-dashed border-white/20 rounded hover:border-white/40 transition-colors mb-4" @click="addItem">+ Add Item</button>
-            <div v-if="versionError" class="text-red-400 text-sm mb-3">{{ versionError }}</div>
-            <div class="flex gap-3">
+            <button class="w-full py-1.5 text-sm text-gray-400 hover:text-white border border-dashed border-white/20 rounded hover:border-white/40 transition-colors mt-4 mb-4 shrink-0" @click="addItem">+ Add Item</button>
+            <div v-if="versionError" class="text-red-400 text-sm mb-3 shrink-0">{{ versionError }}</div>
+            <div class="flex gap-3 shrink-0">
               <button class="flex-1 py-2 rounded bg-white/10 hover:bg-white/20 text-gray-200 text-sm transition-colors" @click="versionOpen = false">Cancel</button>
               <button class="flex-1 py-2 rounded bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors" :disabled="versionLoading" @click="submitVersion">
                 {{ versionLoading ? 'Saving...' : 'Save Changes' }}
@@ -179,7 +198,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import {
-  tasksListDictionaries, tasksCreateDictionary,
+  tasksListDictionaries, tasksCreateDictionary, tasksUpdateDictionary,
   tasksListDictionaryVersions, tasksCreateDictionaryVersion, tasksGetDictionaryVersionItems,
   type EnumDictionary, type EnumDictionaryVersion, type EnumDictionaryVersionItem,
 } from '@/services/http/tasksApi'
@@ -200,7 +219,8 @@ const itemsError = ref<string | null>(null)
 const createOpen = ref(false)
 const createLoading = ref(false)
 const createError = ref<string | null>(null)
-const createForm = ref({ code: '', name: '' })
+const createForm = ref({ code: '', name: '', is_public: false })
+const toggleLoadingById = ref<Record<string, boolean>>({})
 
 // Dictionary items dialog
 const versionOpen = ref(false)
@@ -223,7 +243,7 @@ async function load() {
 }
 
 function openCreate() {
-  createForm.value = { code: '', name: '' }
+  createForm.value = { code: '', name: '', is_public: false }
   createError.value = null
   createOpen.value = true
 }
@@ -239,6 +259,19 @@ async function submitCreate() {
     createError.value = e instanceof Error ? e.message : 'Failed to create dictionary'
   } finally {
     createLoading.value = false
+  }
+}
+
+async function toggleDictionaryVisibility(dictionary: EnumDictionary) {
+  toggleLoadingById.value = { ...toggleLoadingById.value, [dictionary.id]: true }
+  listError.value = null
+  try {
+    const updated = await tasksUpdateDictionary(dictionary.id, { is_public: !dictionary.is_public })
+    dictionaries.value = dictionaries.value.map(item => item.id === updated.id ? updated : item)
+  } catch (e: unknown) {
+    listError.value = e instanceof Error ? e.message : 'Failed to update dictionary visibility'
+  } finally {
+    toggleLoadingById.value = { ...toggleLoadingById.value, [dictionary.id]: false }
   }
 }
 
@@ -271,6 +304,7 @@ async function openNewVersion(d: EnumDictionary) {
   versionDictCode.value = d.code
   versionError.value = null
   versionLoading.value = true
+  versionOpen.value = false
 
   try {
     // Fetch all versions to find the latest one
@@ -296,12 +330,13 @@ async function openNewVersion(d: EnumDictionary) {
       // No previous version, start with empty item
       versionItems.value = [{ value_code: '', value_name: '', sort_order: 1, is_active: true }]
     }
+    versionOpen.value = true
   } catch (e: unknown) {
-    // If we can't load current items, just start empty.
-    versionItems.value = [{ value_code: '', value_name: '', sort_order: 1, is_active: true }]
+    versionItems.value = []
+    versionError.value = e instanceof Error ? e.message : 'Failed to load current items'
+    listError.value = versionError.value
   } finally {
     versionLoading.value = false
-    versionOpen.value = true
   }
 }
 

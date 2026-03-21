@@ -17,24 +17,26 @@ import (
 
 const enumDictionaryCreate = `-- name: EnumDictionaryCreate :one
 
-INSERT INTO enum_dictionary (code, name)
-VALUES ($1, $2)
-RETURNING id, code, name, current_version, created_at, updated_at
+INSERT INTO enum_dictionary (code, name, is_public)
+VALUES ($1, $2, $3)
+RETURNING id, code, name, is_public, current_version, created_at, updated_at
 `
 
 type EnumDictionaryCreateParams struct {
-	Code string `json:"code"`
-	Name string `json:"name"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	IsPublic bool   `json:"is_public"`
 }
 
 // ---- enum_dictionary ----
 func (q *Queries) EnumDictionaryCreate(ctx context.Context, arg EnumDictionaryCreateParams) (EnumDictionary, error) {
-	row := q.db.QueryRowContext(ctx, enumDictionaryCreate, arg.Code, arg.Name)
+	row := q.db.QueryRowContext(ctx, enumDictionaryCreate, arg.Code, arg.Name, arg.IsPublic)
 	var i EnumDictionary
 	err := row.Scan(
 		&i.ID,
 		&i.Code,
 		&i.Name,
+		&i.IsPublic,
 		&i.CurrentVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -43,7 +45,7 @@ func (q *Queries) EnumDictionaryCreate(ctx context.Context, arg EnumDictionaryCr
 }
 
 const enumDictionaryGet = `-- name: EnumDictionaryGet :one
-SELECT id, code, name, current_version, created_at, updated_at FROM enum_dictionary WHERE id = $1
+SELECT id, code, name, is_public, current_version, created_at, updated_at FROM enum_dictionary WHERE id = $1
 `
 
 func (q *Queries) EnumDictionaryGet(ctx context.Context, id uuid.UUID) (EnumDictionary, error) {
@@ -53,6 +55,7 @@ func (q *Queries) EnumDictionaryGet(ctx context.Context, id uuid.UUID) (EnumDict
 		&i.ID,
 		&i.Code,
 		&i.Name,
+		&i.IsPublic,
 		&i.CurrentVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -64,7 +67,7 @@ const enumDictionaryIncrementVersion = `-- name: EnumDictionaryIncrementVersion 
 UPDATE enum_dictionary
 SET current_version = current_version + 1, updated_at = now()
 WHERE id = $1
-RETURNING id, code, name, current_version, created_at, updated_at
+RETURNING id, code, name, is_public, current_version, created_at, updated_at
 `
 
 func (q *Queries) EnumDictionaryIncrementVersion(ctx context.Context, id uuid.UUID) (EnumDictionary, error) {
@@ -74,6 +77,7 @@ func (q *Queries) EnumDictionaryIncrementVersion(ctx context.Context, id uuid.UU
 		&i.ID,
 		&i.Code,
 		&i.Name,
+		&i.IsPublic,
 		&i.CurrentVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -82,7 +86,7 @@ func (q *Queries) EnumDictionaryIncrementVersion(ctx context.Context, id uuid.UU
 }
 
 const enumDictionaryList = `-- name: EnumDictionaryList :many
-SELECT id, code, name, current_version, created_at, updated_at FROM enum_dictionary ORDER BY name ASC
+SELECT id, code, name, is_public, current_version, created_at, updated_at FROM enum_dictionary ORDER BY name ASC
 `
 
 func (q *Queries) EnumDictionaryList(ctx context.Context) ([]EnumDictionary, error) {
@@ -98,6 +102,7 @@ func (q *Queries) EnumDictionaryList(ctx context.Context) ([]EnumDictionary, err
 			&i.ID,
 			&i.Code,
 			&i.Name,
+			&i.IsPublic,
 			&i.CurrentVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,

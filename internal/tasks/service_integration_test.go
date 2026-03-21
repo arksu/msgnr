@@ -241,16 +241,19 @@ func TestIntegration_Dictionary_CreateAndList(t *testing.T) {
 	svc := tasks.NewService(pool, nil)
 
 	row, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{
-		Code: "priority",
-		Name: "Priority",
+		Code:     "priority",
+		Name:     "Priority",
+		IsPublic: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "priority", row.Code)
+	assert.True(t, row.IsPublic)
 	assert.Equal(t, 1, row.CurrentVersion)
 
 	list, err := svc.ListDictionaries(ctx)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
+	assert.True(t, list[0].IsPublic)
 }
 
 func TestIntegration_Dictionary_CodeMustBeUnique(t *testing.T) {
@@ -289,7 +292,7 @@ func TestIntegration_Dictionary_CreateVersion(t *testing.T) {
 	assert.Equal(t, 2, updated.CurrentVersion)
 
 	// Items are stored.
-	stored, err := svc.GetDictionaryVersionItems(ctx, ver.ID)
+	stored, err := svc.GetDictionaryVersionItems(ctx, ver.ID, "", 0, nil)
 	require.NoError(t, err)
 	require.Len(t, stored, 2)
 	assert.Equal(t, "prod", stored[0].ValueCode)
@@ -338,7 +341,7 @@ func TestIntegration_Dictionary_AdditiveSaveReusesLatestVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, updated.CurrentVersion)
 
-	stored, err := svc.GetDictionaryVersionItems(ctx, saved.ID)
+	stored, err := svc.GetDictionaryVersionItems(ctx, saved.ID, "", 0, nil)
 	require.NoError(t, err)
 	require.Len(t, stored, 3)
 	assert.Equal(t, "stage", stored[0].ValueCode)
@@ -400,7 +403,7 @@ func TestIntegration_Dictionary_RemovalCreatesNewVersion(t *testing.T) {
 	assert.NotEqual(t, initial.ID, removed.ID)
 	assert.Equal(t, initial.Version+1, removed.Version)
 
-	stored, err := svc.GetDictionaryVersionItems(ctx, removed.ID)
+	stored, err := svc.GetDictionaryVersionItems(ctx, removed.ID, "", 0, nil)
 	require.NoError(t, err)
 	require.Len(t, stored, 1)
 	assert.Equal(t, "open", stored[0].ValueCode)
@@ -420,6 +423,165 @@ func TestIntegration_Dictionary_DuplicateSubmittedCodesConflict(t *testing.T) {
 		{ValueCode: "dup", ValueName: "Two", SortOrder: 2, IsActive: true},
 	}, actor)
 	require.ErrorIs(t, err, tasks.ErrConflict)
+}
+
+func TestIntegration_Dictionary_UpdateVisibility(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{Code: "pubdict", Name: "Public Dict"})
+	require.NoError(t, err)
+	assert.False(t, dict.IsPublic)
+
+	updated, err := svc.UpdateDictionaryVisibility(ctx, dict.ID, true)
+	require.NoError(t, err)
+	assert.True(t, updated.IsPublic)
+
+	stored, err := svc.GetDictionary(ctx, dict.ID)
+	require.NoError(t, err)
+	assert.True(t, stored.IsPublic)
+}
+
+func TestIntegration_Dictionary_CreatePublicItemAppendsToLatestVersion(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{
+		Code:     "public_env",
+		Name:     "Public Env",
+		IsPublic: true,
+	})
+	require.NoError(t, err)
+
+	version, err := svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "prod", ValueName: "Production", SortOrder: 1, IsActive: true},
+	}, actor)
+	require.NoError(t, err)
+
+	item, err := svc.CreatePublicDictionaryItem(ctx, dict.ID, "stage", actor)
+	require.NoError(t, err)
+	assert.Equal(t, "stage", item.ValueCode)
+	assert.Equal(t, "stage", item.ValueName)
+
+	versions, err := svc.ListDictionaryVersions(ctx, dict.ID)
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	assert.Equal(t, version.ID, versions[0].ID)
+
+	stored, err := svc.GetDictionaryVersionItems(ctx, version.ID, "", 0, nil)
+	require.NoError(t, err)
+	require.Len(t, stored, 2)
+	assert.Equal(t, "prod", stored[0].ValueCode)
+	assert.Equal(t, "stage", stored[1].ValueCode)
+
+	updated, err := svc.GetDictionary(ctx, dict.ID)
+	require.NoError(t, err)
+	assert.Equal(t, version.Version, updated.CurrentVersion)
+}
+
+func TestIntegration_Dictionary_CreatePublicItemBootstrapsFirstVersion(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{
+		Code:     "public_bootstrap",
+		Name:     "Public Bootstrap",
+		IsPublic: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, dict.CurrentVersion)
+
+	item, err := svc.CreatePublicDictionaryItem(ctx, dict.ID, "alpha", actor)
+	require.NoError(t, err)
+	assert.Equal(t, "alpha", item.ValueCode)
+
+	versions, err := svc.ListDictionaryVersions(ctx, dict.ID)
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	assert.Equal(t, 2, versions[0].Version)
+
+	updated, err := svc.GetDictionary(ctx, dict.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.CurrentVersion)
+}
+
+func TestIntegration_Dictionary_CreatePublicItemRejectsPrivateDictionary(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{Code: "private_env", Name: "Private Env"})
+	require.NoError(t, err)
+
+	_, err = svc.CreatePublicDictionaryItem(ctx, dict.ID, "secret", actor)
+	require.ErrorIs(t, err, tasks.ErrForbidden)
+}
+
+func TestIntegration_Dictionary_CreatePublicItemRejectsDuplicate(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{
+		Code:     "public_dup",
+		Name:     "Public Dup",
+		IsPublic: true,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.CreatePublicDictionaryItem(ctx, dict.ID, "dup", actor)
+	require.NoError(t, err)
+
+	_, err = svc.CreatePublicDictionaryItem(ctx, dict.ID, "dup", actor)
+	require.ErrorIs(t, err, tasks.ErrConflict)
+}
+
+func TestIntegration_Dictionary_GetVersionItemsSupportsSearchAndLimit(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{Code: "searchdict", Name: "Search Dict"})
+	require.NoError(t, err)
+
+	items := make([]tasks.DictionaryItemInput, 0, 25)
+	for i := 1; i <= 25; i += 1 {
+		name := fmt.Sprintf("Version %02d", i)
+		items = append(items, tasks.DictionaryItemInput{
+			ValueCode: fmt.Sprintf("v%02d", i),
+			ValueName: name,
+			SortOrder: i,
+			IsActive:  true,
+		})
+	}
+
+	version, err := svc.CreateDictionaryVersion(ctx, dict.ID, items, actor)
+	require.NoError(t, err)
+
+	limited, err := svc.GetDictionaryVersionItems(ctx, version.ID, "", 20, nil)
+	require.NoError(t, err)
+	require.Len(t, limited, 20)
+	assert.Equal(t, "v01", limited[0].ValueCode)
+	assert.Equal(t, "v20", limited[19].ValueCode)
+
+	matched, err := svc.GetDictionaryVersionItems(ctx, version.ID, "Version 24", 20, nil)
+	require.NoError(t, err)
+	require.Len(t, matched, 1)
+	assert.Equal(t, "v24", matched[0].ValueCode)
+
+	hydrated, err := svc.GetDictionaryVersionItems(ctx, version.ID, "Version 24", 20, []string{"v03"})
+	require.NoError(t, err)
+	require.Len(t, hydrated, 2)
+	assert.Equal(t, "v03", hydrated[0].ValueCode)
+	assert.Equal(t, "v24", hydrated[1].ValueCode)
 }
 
 // =========================================================

@@ -125,7 +125,13 @@
             mode="edit"
             :users="tasksStore.users"
             :enum-items="field.enum_dictionary_id ? tasksStore.enumItemsFor(field.enum_dictionary_id) : undefined"
+            :enum-known-items="field.enum_dictionary_id ? tasksStore.enumKnownItemsFor(field.enum_dictionary_id) : undefined"
+            :enum-dictionary="field.enum_dictionary_id ? tasksStore.enumDictionaryFor(field.enum_dictionary_id) : undefined"
+            :creating-enum-item="field.enum_dictionary_id ? tasksStore.enumItemCreateLoadingFor(field.enum_dictionary_id) : false"
+            :enum-items-loading="field.enum_dictionary_id ? tasksStore.enumItemSearchLoadingFor(field.enum_dictionary_id) : false"
             @update:value="onFieldValueChange(field, $event)"
+            @create:enum-item="onInlineCreateEnumItem(field, $event)"
+            @search:enum-items="onSearchInlineEnumItems(field, $event)"
           />
           <p v-if="isFieldMissing(field.id)" class="text-red-400 text-xs mt-1">
             This field is required
@@ -239,7 +245,13 @@
                 mode="edit"
                 :users="tasksStore.users"
                 :enum-items="field.enum_dictionary_id ? tasksStore.enumItemsFor(field.enum_dictionary_id) : undefined"
+                :enum-known-items="field.enum_dictionary_id ? tasksStore.enumKnownItemsFor(field.enum_dictionary_id) : undefined"
+                :enum-dictionary="field.enum_dictionary_id ? tasksStore.enumDictionaryFor(field.enum_dictionary_id) : undefined"
+                :creating-enum-item="field.enum_dictionary_id ? tasksStore.enumItemCreateLoadingFor(field.enum_dictionary_id) : false"
+                :enum-items-loading="field.enum_dictionary_id ? tasksStore.enumItemSearchLoadingFor(field.enum_dictionary_id) : false"
                 @update:value="subtaskCustomValues[field.id] = $event"
+                @create:enum-item="onSubtaskCreateEnumItem(field, $event)"
+                @search:enum-items="onSearchSubtaskEnumItems(field, $event)"
               />
               <p v-if="isSubtaskFieldMissing(field.id)" class="text-red-400 text-xs mt-1">
                 This field is required
@@ -346,10 +358,10 @@
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       @click.self="closeDescriptionHistoryModal"
     >
-      <div class="w-full max-w-5xl rounded-xl border border-chat-border bg-chat-header p-4 shadow-2xl">
-        <h3 class="mb-3 text-base font-semibold text-white">Description History</h3>
-        <div class="grid gap-4 md:grid-cols-[280px_minmax(0,1fr)]">
-          <aside class="rounded border border-chat-border bg-chat-input/40 p-2">
+      <div class="flex h-[90vh] w-[90vw] max-h-none max-w-none flex-col overflow-hidden rounded-xl border border-chat-border bg-chat-header p-4 shadow-2xl">
+        <h3 class="mb-3 shrink-0 text-base font-semibold text-white">Description History</h3>
+        <div class="grid flex-1 min-h-0 gap-4 md:grid-cols-[280px_minmax(0,1fr)]">
+          <aside class="flex min-h-0 flex-col rounded border border-chat-border bg-chat-input/40 p-2">
             <div class="mb-2 text-xs uppercase tracking-wide text-gray-400">Versions</div>
             <p v-if="descriptionHistoryLoading" class="px-2 py-2 text-xs text-gray-500">Loading versions...</p>
             <p v-else-if="descriptionHistoryError" class="px-2 py-2 text-xs text-red-400">{{ descriptionHistoryError }}</p>
@@ -357,7 +369,7 @@
             <ul
               v-else
               data-testid="task-description-history-list"
-              class="max-h-[420px] space-y-1 overflow-y-auto pr-1"
+              class="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1"
             >
               <li v-for="item in descriptionHistoryItems" :key="`${item.created_at}:${item.edited_by}`">
                 <button
@@ -384,9 +396,9 @@
             </ul>
           </aside>
 
-          <div class="space-y-3">
+          <div class="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
             <template v-if="descriptionRestoreCandidate">
-              <div>
+              <div class="shrink-0">
                 <div class="form-label">Public ID</div>
                 <input
                   data-testid="task-description-history-preview-public-id"
@@ -396,7 +408,7 @@
                   class="w-full rounded border border-chat-border bg-chat-input px-2 py-1 text-sm text-gray-200"
                 >
               </div>
-              <div>
+              <div class="shrink-0">
                 <div class="form-label">Title</div>
                 <input
                   data-testid="task-description-history-preview-title"
@@ -406,14 +418,15 @@
                   class="w-full rounded border border-chat-border bg-chat-input px-2 py-1 text-sm text-gray-200"
                 >
               </div>
-              <div>
+              <div class="flex min-h-0 flex-1 flex-col">
                 <div class="form-label">Description</div>
                 <div
                   data-testid="task-description-history-preview-description-scroll"
-                  class="max-h-[420px] overflow-y-auto pr-1"
+                  class="min-h-0 flex-1 pr-1"
                 >
                   <TaskDescriptionEditor
                     v-model="descriptionRestoreDraft"
+                    class="h-full min-h-0 w-full"
                     :editable="false"
                   />
                 </div>
@@ -585,6 +598,16 @@ function fieldInputValue(field: TaskFieldDefinition): unknown {
   return inlineValues[field.id]
 }
 
+function selectedCodesForValue(field: TaskFieldDefinition, value: unknown): string[] {
+  if (field.type === 'enum') {
+    return value ? [String(value)] : []
+  }
+  if (field.type === 'multi_enum' && Array.isArray(value)) {
+    return value as string[]
+  }
+  return []
+}
+
 function normalizeInlineFieldValue(field: TaskFieldDefinition, value: unknown): unknown {
   if (field.type === 'text' || field.type === 'number' || field.type === 'date') {
     if (value === '' || value === undefined) return null
@@ -705,6 +728,66 @@ async function onFieldValueChange(field: TaskFieldDefinition, value: unknown) {
   } finally {
     fieldSaving[field.id] = false
   }
+}
+
+function applyCreatedEnumValue(
+  target: Record<string, unknown>,
+  field: TaskFieldDefinition,
+  createdCode: string,
+) {
+  if (field.type === 'enum') {
+    target[field.id] = createdCode
+    return
+  }
+  const current = Array.isArray(target[field.id]) ? target[field.id] as string[] : []
+  target[field.id] = current.includes(createdCode) ? current : [...current, createdCode]
+}
+
+async function createEnumItemForField(
+  target: Record<string, unknown>,
+  field: TaskFieldDefinition,
+  value: string,
+  setError: (message: string) => void,
+) {
+  if (!field.enum_dictionary_id) return
+  setError('')
+  try {
+    const created = await tasksStore.createPublicDictionaryItem(field.enum_dictionary_id, value)
+    applyCreatedEnumValue(target, field, created.value_code)
+    if (task.value && target === inlineValues) {
+      await onFieldValueChange(field, target[field.id])
+    }
+  } catch (e) {
+    setError(e instanceof Error ? e.message : 'Failed to add dictionary value')
+  }
+}
+
+async function onInlineCreateEnumItem(field: TaskFieldDefinition, value: string) {
+  await createEnumItemForField(inlineValues, field, value, message => { saveError.value = message })
+}
+
+async function onSubtaskCreateEnumItem(field: TaskFieldDefinition, value: string) {
+  await createEnumItemForField(subtaskCustomValues, field, value, message => { subtaskError.value = message })
+}
+
+async function onSearchInlineEnumItems(field: TaskFieldDefinition, query: string) {
+  if (!field.enum_dictionary_id) return
+  await tasksStore.searchEnumItemsFor(
+    field.enum_dictionary_id,
+    query,
+    selectedCodesForValue(field, inlineValues[field.id]),
+    20,
+  )
+}
+
+async function onSearchSubtaskEnumItems(field: TaskFieldDefinition, query: string) {
+  if (!field.enum_dictionary_id) return
+  await tasksStore.searchEnumItemsFor(
+    field.enum_dictionary_id,
+    query,
+    selectedCodesForValue(field, subtaskCustomValues[field.id]),
+    20,
+  )
 }
 
 function isTaskTitleConflictResponse(v: unknown): v is TaskTitleConflictResponse {
@@ -969,7 +1052,7 @@ function preloadSubtaskSupportingData() {
   }
   subtaskFields.value
     .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
-    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
+    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!, selectedCodesForValue(f, subtaskCustomValues[f.id])))
 }
 
 async function submitSubtask() {
@@ -1102,7 +1185,7 @@ watch(() => task.value?.id, (_nextTaskID, prevTaskID) => {
   }
   customFields.value
     .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
-    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
+    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!, selectedCodesForValue(f, inlineValues[f.id])))
   viewStatusId.value = task.value?.status_id ?? ''
   hydratingDescription.value = true
   descriptionDraft.value = task.value?.description ?? ''
@@ -1165,7 +1248,7 @@ watch(customFields, () => {
   }
   customFields.value
     .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
-    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!))
+    .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!, selectedCodesForValue(f, inlineValues[f.id])))
 })
 
 onMounted(() => {

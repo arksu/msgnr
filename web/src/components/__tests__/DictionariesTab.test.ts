@@ -5,6 +5,7 @@ import DictionariesTab from '@/components/admin/DictionariesTab.vue'
 const apiMocks = vi.hoisted(() => ({
   tasksListDictionaries: vi.fn(),
   tasksCreateDictionary: vi.fn(),
+  tasksUpdateDictionary: vi.fn(),
   tasksListDictionaryVersions: vi.fn(),
   tasksCreateDictionaryVersion: vi.fn(),
   tasksGetDictionaryVersionItems: vi.fn(),
@@ -13,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListDictionaries: apiMocks.tasksListDictionaries,
   tasksCreateDictionary: apiMocks.tasksCreateDictionary,
+  tasksUpdateDictionary: apiMocks.tasksUpdateDictionary,
   tasksListDictionaryVersions: apiMocks.tasksListDictionaryVersions,
   tasksCreateDictionaryVersion: apiMocks.tasksCreateDictionaryVersion,
   tasksGetDictionaryVersionItems: apiMocks.tasksGetDictionaryVersionItems,
@@ -26,6 +28,7 @@ describe('DictionariesTab', () => {
         id: 'dict-1',
         code: 'priority',
         name: 'Priority',
+        is_public: false,
         current_version: 2,
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-02T00:00:00Z',
@@ -63,6 +66,15 @@ describe('DictionariesTab', () => {
       version: 2,
       created_at: '2026-01-02T00:00:00Z',
       created_by: 'user-1',
+    })
+    apiMocks.tasksUpdateDictionary.mockResolvedValue({
+      id: 'dict-1',
+      code: 'priority',
+      name: 'Priority',
+      is_public: true,
+      current_version: 2,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-03T00:00:00Z',
     })
   })
 
@@ -134,5 +146,59 @@ describe('DictionariesTab', () => {
     ])
     expect(apiMocks.tasksListDictionaries).toHaveBeenCalledTimes(2)
     expect(apiMocks.tasksListDictionaryVersions).toHaveBeenCalledTimes(3)
+  })
+
+  it('submits is_public on create and allows toggling visibility', async () => {
+    apiMocks.tasksCreateDictionary.mockResolvedValue({
+      id: 'dict-2',
+      code: 'versions',
+      name: 'Versions',
+      is_public: true,
+      current_version: 1,
+      created_at: '2026-01-03T00:00:00Z',
+      updated_at: '2026-01-03T00:00:00Z',
+    })
+
+    const wrapper = mount(DictionariesTab, {
+      global: {
+        stubs: {
+          Teleport: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Private')
+
+    const createButton = wrapper.findAll('button').find(button => button.text() === 'Create Dictionary')
+    expect(createButton).toBeTruthy()
+    await createButton!.trigger('click')
+    await flushPromises()
+
+    const codeInput = wrapper.find('input[placeholder="priority"]')
+    const nameInput = wrapper.find('input[placeholder="Priority"]')
+    const publicCheckbox = wrapper.find('input[type="checkbox"]')
+    await codeInput.setValue('versions')
+    await nameInput.setValue('Versions')
+    await publicCheckbox.setValue(true)
+
+    const confirmCreateButton = wrapper.findAll('button').find(button => button.text() === 'Create')
+    expect(confirmCreateButton).toBeTruthy()
+    await confirmCreateButton!.trigger('click')
+    await flushPromises()
+
+    expect(apiMocks.tasksCreateDictionary).toHaveBeenCalledWith({
+      code: 'versions',
+      name: 'Versions',
+      is_public: true,
+    })
+
+    const toggleButton = wrapper.findAll('button').find(button => button.text() === 'Private')
+    expect(toggleButton).toBeTruthy()
+    await toggleButton!.trigger('click')
+    await flushPromises()
+
+    expect(apiMocks.tasksUpdateDictionary).toHaveBeenCalledWith('dict-1', { is_public: true })
+    expect(wrapper.text()).toContain('Public')
   })
 })

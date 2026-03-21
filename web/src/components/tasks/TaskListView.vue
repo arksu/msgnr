@@ -104,7 +104,7 @@
                 @click="emit('openTask', item.public_id)"
               >
                 <td class="px-4 py-2.5 shrink-0">
-                  <span class="font-mono text-xs text-accent bg-accent/10 border border-accent/20 px-1.5 py-0.5 rounded whitespace-nowrap">
+                  <span class="font-mono text-public_id border border-public_id/20 px-1.5 py-0.5 rounded whitespace-nowrap">
                     {{ item.public_id }}
                   </span>
                 </td>

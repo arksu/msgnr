@@ -264,27 +264,27 @@ export const useTasksStore = defineStore('tasks', () => {
 
     const loadPromise = (async () => {
       try {
-      const [dictionary, versions] = await Promise.all([
-        tasksGetConfigDictionary(dictionaryId),
-        tasksListDictionaryVersions(dictionaryId),
-      ])
-      enumDictionariesById.value = {
-        ...enumDictionariesById.value,
-        [dictionaryId]: dictionary,
-      }
-      if (versions.length === 0) {
-        enumItemsByDict.value = { ...enumItemsByDict.value, [dictionaryId]: [] }
-        return
-      }
-      const latest = versions.reduce((a, b) => (a.version > b.version ? a : b))
-      enumLatestVersionIdByDict.value = {
-        ...enumLatestVersionIdByDict.value,
-        [dictionaryId]: latest.id,
-      }
-      enumVersionByDict.value = {
-        ...enumVersionByDict.value,
-        [dictionaryId]: latest.version,
-      }
+        const [dictionary, versions] = await Promise.all([
+          tasksGetConfigDictionary(dictionaryId),
+          tasksListDictionaryVersions(dictionaryId),
+        ])
+        enumDictionariesById.value = {
+          ...enumDictionariesById.value,
+          [dictionaryId]: dictionary,
+        }
+        if (versions.length === 0) {
+          enumItemsByDict.value = { ...enumItemsByDict.value, [dictionaryId]: [] }
+          return
+        }
+        const latest = versions.reduce((a, b) => (a.version > b.version ? a : b))
+        enumLatestVersionIdByDict.value = {
+          ...enumLatestVersionIdByDict.value,
+          [dictionaryId]: latest.id,
+        }
+        enumVersionByDict.value = {
+          ...enumVersionByDict.value,
+          [dictionaryId]: latest.version,
+        }
       } catch {
         // non-fatal
       } finally {
@@ -300,7 +300,7 @@ export const useTasksStore = defineStore('tasks', () => {
     dictionaryId: string,
     search = '',
     selectedCodes: string[] = [],
-    limit = 20,
+    limit = 40,
   ) {
     await ensureEnumDictionaryLoaded(dictionaryId)
     const versionId = enumLatestVersionIdByDict.value[dictionaryId]

@@ -198,7 +198,7 @@ onBeforeUnmount(() => {
 }
 
 .kanban-column {
-  @apply flex min-w-[280px] max-w-[360px] flex-1 flex-col rounded-lg border border-chat-border bg-chat-input/30;
+  @apply flex min-w-[364px] max-w-[468px] flex-1 flex-col rounded-lg border border-chat-border bg-chat-input/30;
 }
 
 .kanban-column-drop {
@@ -222,11 +222,11 @@ onBeforeUnmount(() => {
 }
 
 .kanban-card-id {
-  @apply inline-block rounded border border-accent/20 bg-accent/10 px-1.5 py-0.5 font-mono text-[11px] text-accent;
+  @apply inline-block rounded border border-public_id/20 px-1.5 py-0.5 font-mono text-public_id;
 }
 
 .kanban-card-title {
-  @apply mt-1 truncate text-sm font-medium text-gray-100;
+  @apply mt-1 whitespace-normal break-words text-sm font-medium text-gray-100;
 }
 
 .kanban-card-description {

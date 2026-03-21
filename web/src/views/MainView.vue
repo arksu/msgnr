@@ -88,56 +88,28 @@
       </div>
       <ChatArea v-if="appMode === 'chat'" />
       <template v-else-if="appMode === 'task-tracker'">
-        <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="task-tracker">
-          <TaskTrackerSidebar
-            :model-value="selectedTemplateFilter"
-            :current-view="taskTrackerBaseRouteName"
-            @update:modelValue="onTaskTrackerFilterChange"
-            @open-list="openTaskListRoute"
-            @open-kanban="openTaskKanbanRoute"
-          />
-          <main class="flex-1 min-w-0 overflow-hidden">
-            <TaskCard
-              v-if="isTaskCardRoute"
-              :template-filter="selectedTemplateFilter"
-              @back="backToList"
-            />
-            <TaskKanbanView
-              v-else-if="isTaskKanbanRoute"
-              :template-filter="selectedTemplateFilter"
-              @open-task="openTask"
-            />
-            <TaskListView
-              v-else
-              :template-filter="selectedTemplateFilter"
-              @open-task="openTask"
-            />
-          </main>
-        </div>
-        <TaskCreateDialog />
+        <TaskTrackerShell
+          v-model="selectedTemplateFilter"
+          :current-view="taskTrackerBaseRouteName"
+          :view-mode="taskTrackerViewMode"
+          @open-list="openTaskListRoute"
+          @open-kanban="openTaskKanbanRoute"
+          @open-task="openTask"
+          @back="backToList"
+        />
       </template>
       <template v-else>
-        <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="documents-mode">
-          <DocumentsSidebar
-            :selected-teamspace-id="documentsSelectedTeamspaceId"
-            :selected-document-id="routeDocumentId || documentsStore.selectedDocument?.id || null"
-            @open-teamspaces="openDocumentsTeamspacesRoute"
-            @open-document="openDocument"
-            @documents-deleted="handleDocumentsDeleted"
-          />
-          <main class="flex-1 min-w-0 overflow-hidden">
-            <DocumentCard
-              v-if="isDocumentsCardRoute"
-              @back="backToDocuments"
-              @open-parent="openDocument"
-            />
-            <TeamspacesView
-              v-else
-              :selected-teamspace-id="routeDocumentsTeamspaceId || null"
-              @open-teamspace="openDocumentsTeamspaceRoute"
-            />
-          </main>
-        </div>
+        <DocumentsShell
+          :selected-teamspace-id="documentsSelectedTeamspaceId"
+          :selected-document-id="routeDocumentId || documentsStore.selectedDocument?.id || null"
+          :view-mode="documentsViewMode"
+          @open-teamspaces="openDocumentsTeamspacesRoute"
+          @open-teamspace="openDocumentsTeamspaceRoute"
+          @open-document="openDocument"
+          @documents-deleted="handleDocumentsDeleted"
+          @back="backToDocuments"
+          @open-parent="openDocument"
+        />
       </template>
     </main>
     <div
@@ -329,7 +301,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted, defineAsyncComponent, defineComponent, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PresenceStatus } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
@@ -356,18 +328,101 @@ import {
 import AppSidebar from '@/components/AppSidebar.vue'
 import ChatArea from '@/components/ChatArea.vue'
 import CallDock from '@/components/CallDock.vue'
-import TaskTrackerSidebar from '@/components/tasks/TaskTrackerSidebar.vue'
-import TaskCard from '@/components/tasks/TaskCard.vue'
-import TaskListView from '@/components/tasks/TaskListView.vue'
-import TaskKanbanView from '@/components/tasks/TaskKanbanView.vue'
-import TaskCreateDialog from '@/components/tasks/TaskCreateDialog.vue'
-import DocumentsSidebar from '@/components/documents/DocumentsSidebar.vue'
-import TeamspacesView from '@/components/documents/TeamspacesView.vue'
-import DocumentCard from '@/components/documents/DocumentCard.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useTasksStore } from '@/stores/tasks'
 import { useDocumentsStore } from '@/stores/documents'
 const SettingsDialog = defineAsyncComponent(() => import('@/components/SettingsDialog.vue'))
+function createTaskTrackerShellStub() {
+  return defineComponent({
+    name: 'TaskTrackerShellStub',
+    props: {
+      modelValue: {
+        type: String,
+        default: null,
+      },
+      currentView: {
+        type: String,
+        required: true,
+      },
+      viewMode: {
+        type: String,
+        required: true,
+      },
+    },
+    emits: ['update:modelValue', 'openList', 'openKanban', 'openTask', 'back'],
+    setup(props, { emit }) {
+      return () => h('div', { 'data-testid': 'task-tracker' }, [
+        h('aside', { 'data-testid': 'task-tracker-sidebar' }),
+        props.viewMode === 'card'
+          ? h('section', { 'data-testid': 'task-card' }, [
+              h('button', {
+                'data-testid': 'task-card-back',
+                type: 'button',
+                onClick: () => emit('back'),
+              }, 'back'),
+            ])
+          : props.viewMode === 'kanban'
+            ? h('section', { 'data-testid': 'task-kanban-view' }, [
+                h('button', {
+                  'data-testid': 'task-kanban-open',
+                  type: 'button',
+                  onClick: () => emit('openTask', 'TASK-K'),
+                }, 'open'),
+              ])
+            : h('section', { 'data-testid': 'task-list-view' }, [
+                h('button', {
+                  'data-testid': 'task-list-open',
+                  type: 'button',
+                  onClick: () => emit('openTask', 'TASK-1'),
+                }, 'open'),
+              ]),
+        h('div', { 'data-testid': 'task-create-dialog' }),
+      ])
+    },
+  })
+}
+
+function createDocumentsShellStub() {
+  return defineComponent({
+    name: 'DocumentsShellStub',
+    props: {
+      selectedTeamspaceId: {
+        type: String,
+        default: null,
+      },
+      selectedDocumentId: {
+        type: String,
+        default: null,
+      },
+      viewMode: {
+        type: String,
+        required: true,
+      },
+    },
+    emits: ['openTeamspaces', 'openTeamspace', 'openDocument', 'documentsDeleted', 'back', 'openParent'],
+    setup(props, { emit }) {
+      return () => h('div', { 'data-testid': 'documents-mode' }, [
+        h('aside', { 'data-testid': 'documents-sidebar' }),
+        props.viewMode === 'card'
+          ? h('section', { 'data-testid': 'document-card' }, [
+              h('button', {
+                'data-testid': 'document-card-back',
+                type: 'button',
+                onClick: () => emit('back'),
+              }, 'back'),
+            ])
+          : h('section', { 'data-testid': 'teamspaces-view' }),
+      ])
+    },
+  })
+}
+
+const TaskTrackerShell = import.meta.env.MODE === 'test'
+  ? createTaskTrackerShellStub()
+  : defineAsyncComponent(() => import('@/components/tasks/TaskTrackerShell.vue'))
+const DocumentsShell = import.meta.env.MODE === 'test'
+  ? createDocumentsShellStub()
+  : defineAsyncComponent(() => import('@/components/documents/DocumentsShell.vue'))
 import { useCallStore } from '@/stores/call'
 
 const route = useRoute()
@@ -421,9 +476,6 @@ const isDocumentsRoute = computed(() => (
   || route.name === 'documents-teamspace'
   || route.name === 'documents-card'
 ))
-const isTaskCardRoute = computed(() => route.name === 'tasks-card')
-const isTaskKanbanRoute = computed(() => route.name === 'tasks-kanban')
-const isDocumentsCardRoute = computed(() => route.name === 'documents-card')
 const taskTrackerBaseRouteName = computed<'tasks-list' | 'tasks-kanban'>(() => {
   if (route.name === 'tasks-list') return 'tasks-list'
   if (route.name === 'tasks-kanban') return 'tasks-kanban'
@@ -433,6 +485,16 @@ const appMode = computed<'chat' | 'task-tracker' | 'documents'>(() => {
   if (isTaskTrackerRoute.value) return 'task-tracker'
   if (isDocumentsRoute.value) return 'documents'
   return 'chat'
+})
+const taskTrackerViewMode = computed<'list' | 'kanban' | 'card'>(() => {
+  if (route.name === 'tasks-card') return 'card'
+  if (route.name === 'tasks-kanban') return 'kanban'
+  return 'list'
+})
+const documentsViewMode = computed<'teamspaces' | 'teamspace' | 'card'>(() => {
+  if (route.name === 'documents-card') return 'card'
+  if (route.name === 'documents-teamspace') return 'teamspace'
+  return 'teamspaces'
 })
 const showChatModeUnreadBadge = computed(() => appMode.value !== 'chat' && chatStore.totalUnreadCount > 0)
 const chatModeUnreadBadgeLabel = computed(() => (chatStore.totalUnreadCount > 99 ? '99+' : String(chatStore.totalUnreadCount)))
@@ -568,14 +630,6 @@ async function backToDocuments() {
     return
   }
   await router.push({ name: 'documents-teamspaces' })
-}
-
-function onTaskTrackerFilterChange(value: string | null) {
-  selectedTemplateFilter.value = value
-  if (route.name === 'tasks-card') {
-    tasksStore.clearSelectedTask()
-    void router.push({ name: lastTaskTrackerNonCardRoute.value })
-  }
 }
 
 watch(

@@ -40,7 +40,7 @@
           {{ task.parent_public_id ?? 'Parent task' }}
         </button>
 
-        <span class="font-mono text-xs text-accent bg-accent/10 border border-accent/20 px-2 py-0.5 rounded shrink-0">
+        <span class="font-mono text-public_id border border-public_id/20 px-2 py-0.5 rounded shrink-0">
           {{ task.public_id }}
         </span>
         <input
@@ -162,7 +162,7 @@
             class="flex items-center gap-2 px-3 py-2 rounded bg-chat-input border border-chat-border hover:border-accent/40 transition-colors cursor-pointer group"
             @click="tasksStore.selectTask(sub.id)"
           >
-            <span class="font-mono text-xs text-accent bg-accent/10 border border-accent/20 px-1.5 py-0.5 rounded shrink-0">
+            <span class="font-mono text-public_id border border-public_id/20 px-1.5 py-0.5 rounded shrink-0">
               {{ sub.public_id }}
             </span>
             <span class="flex-1 text-sm text-gray-200 truncate">{{ sub.title }}</span>
@@ -776,7 +776,7 @@ async function onSearchInlineEnumItems(field: TaskFieldDefinition, query: string
     field.enum_dictionary_id,
     query,
     selectedCodesForValue(field, inlineValues[field.id]),
-    20,
+    40,
   )
 }
 
@@ -786,7 +786,7 @@ async function onSearchSubtaskEnumItems(field: TaskFieldDefinition, query: strin
     field.enum_dictionary_id,
     query,
     selectedCodesForValue(field, subtaskCustomValues[field.id]),
-    20,
+    40,
   )
 }
 

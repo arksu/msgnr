@@ -32,6 +32,7 @@ export default {
           DEFAULT: '#1164A3',
           hover: '#0E538C',
         },
+        public_id: '#c99444',
       },
     },
   },

@@ -100,7 +100,7 @@ describe('tasksApi task list queries', () => {
     expect(query).toContain('search=n')
     expect(query).toContain('field_fd-2_user=u-1')
     expect(query).toContain('offset=30')
-    expect(query).toContain('limit=20')
+    expect(query).toContain('limit=40')
   })
 
   it('hits description history endpoint', async () => {

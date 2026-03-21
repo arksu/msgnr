@@ -55,6 +55,29 @@ vi.mock('@/components/ChatArea.vue', () => ({
   },
 }))
 
+vi.mock('@/components/tasks/TaskTrackerShell.vue', () => ({
+  __isTeleport: false,
+  default: {
+    props: ['modelValue', 'currentView', 'viewMode'],
+    emits: ['update:modelValue', 'openList', 'openKanban', 'openTask', 'back'],
+    template: `
+      <div data-testid="task-tracker">
+        <aside data-testid="task-tracker-sidebar" />
+        <section v-if="viewMode === 'card'" data-testid="task-card">
+          <button data-testid="task-card-back" @click="$emit('back')">back</button>
+        </section>
+        <section v-else-if="viewMode === 'kanban'" data-testid="task-kanban-view">
+          <button data-testid="task-kanban-open" @click="$emit('openTask', 'TASK-K')">open</button>
+        </section>
+        <section v-else data-testid="task-list-view">
+          <button data-testid="task-list-open" @click="$emit('openTask', 'TASK-1')">open</button>
+        </section>
+        <div data-testid="task-create-dialog" />
+      </div>
+    `,
+  },
+}))
+
 vi.mock('@/components/tasks/TaskTrackerSidebar.vue', () => ({
   default: {
     props: ['modelValue', 'currentView'],
@@ -95,6 +118,23 @@ vi.mock('@/components/documents/DocumentsSidebar.vue', () => ({
     props: ['selectedTeamspaceId', 'selectedDocumentId'],
     emits: ['openTeamspaces', 'openTeamspace', 'openDocument'],
     template: '<aside data-testid="documents-sidebar" />',
+  },
+}))
+
+vi.mock('@/components/documents/DocumentsShell.vue', () => ({
+  __isTeleport: false,
+  default: {
+    props: ['selectedTeamspaceId', 'selectedDocumentId', 'viewMode'],
+    emits: ['openTeamspaces', 'openTeamspace', 'openDocument', 'documentsDeleted', 'back', 'openParent'],
+    template: `
+      <div data-testid="documents-mode">
+        <aside data-testid="documents-sidebar" />
+        <section v-if="viewMode === 'card'" data-testid="document-card">
+          <button data-testid="document-card-back" @click="$emit('back')">back</button>
+        </section>
+        <section v-else data-testid="teamspaces-view" />
+      </div>
+    `,
   },
 }))
 

@@ -1,0 +1,49 @@
+<template>
+  <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="documents-mode">
+    <DocumentsSidebar
+      :selected-teamspace-id="selectedTeamspaceId"
+      :selected-document-id="selectedDocumentId"
+      @open-teamspaces="emit('openTeamspaces')"
+      @open-document="emit('openDocument', $event)"
+      @documents-deleted="emit('documentsDeleted', $event)"
+    />
+    <main class="flex-1 min-w-0 overflow-hidden">
+      <DocumentCard
+        v-if="viewMode === 'card'"
+        @back="emit('back')"
+        @open-parent="emit('openParent', $event)"
+      />
+      <TeamspacesView
+        v-else-if="viewMode === 'teamspace'"
+        :selected-teamspace-id="selectedTeamspaceId"
+        @open-teamspace="emit('openTeamspace', $event)"
+      />
+      <TeamspacesView
+        v-else
+        :selected-teamspace-id="null"
+        @open-teamspace="emit('openTeamspace', $event)"
+      />
+    </main>
+  </div>
+</template>
+
+<script setup lang="ts">
+import DocumentsSidebar from '@/components/documents/DocumentsSidebar.vue'
+import TeamspacesView from '@/components/documents/TeamspacesView.vue'
+import DocumentCard from '@/components/documents/DocumentCard.vue'
+
+defineProps<{
+  selectedTeamspaceId: string | null
+  selectedDocumentId: string | null
+  viewMode: 'teamspaces' | 'teamspace' | 'card'
+}>()
+
+const emit = defineEmits<{
+  openTeamspaces: []
+  openTeamspace: [teamspaceId: string]
+  openDocument: [documentId: string]
+  documentsDeleted: [documentIds: string[]]
+  back: []
+  openParent: [documentId: string]
+}>()
+</script>

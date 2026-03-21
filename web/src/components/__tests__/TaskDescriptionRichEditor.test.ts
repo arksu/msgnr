@@ -34,6 +34,49 @@ describe('TaskDescriptionRichEditor', () => {
     }
   }
 
+  it('renders markdown task items as checkboxes and toggles them back to markdown', async () => {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '- [ ] Text',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    const checkbox = wrapper.get('[data-testid="task-description-editor-content"] input[type="checkbox"]')
+    const checkboxEl = checkbox.element as HTMLInputElement
+    expect(checkboxEl.checked).toBe(false)
+
+    checkboxEl.checked = true
+    await checkbox.trigger('change')
+    await flushPromises()
+    await nextTick()
+
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    const latest = updates[updates.length - 1]?.[0] as string
+    expect(latest).toContain('- [x] Text')
+  })
+
+  it('adds task-item markup so checkbox text stays inline', async () => {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '- [x] text\n- [ ] two',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    const items = wrapper.findAll('[data-testid="task-description-editor-content"] li[data-type="taskItem"]')
+
+    expect(items).toHaveLength(2)
+    expect(items[0].attributes('data-type')).toBe('taskItem')
+    expect(items[0].find('label').exists()).toBe(true)
+    expect(items[0].find('div').exists()).toBe(true)
+    expect(items[0].text()).toContain('text')
+  })
+
   it('uploads image files from the rendered editor and serializes them back to markdown tokens', async () => {
     vi.mocked(uploadOwnedAttachment).mockResolvedValue({
       id: 'att-image',

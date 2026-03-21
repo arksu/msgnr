@@ -224,6 +224,7 @@ import StarterKit from '@tiptap/starter-kit'
 import Collaboration from '@tiptap/extension-collaboration'
 import CollaborationCaret from '@tiptap/extension-collaboration-caret'
 import Link from '@tiptap/extension-link'
+import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { Table } from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableHeader from '@tiptap/extension-table-header'
@@ -465,6 +466,13 @@ const extensions = computed(() => {
       openOnClick: false,
       autolink: false,
       defaultProtocol: 'https',
+    }),
+    TaskList,
+    TaskItem.configure({
+      nested: true,
+      HTMLAttributes: {
+        'data-type': 'taskItem',
+      },
     }),
     AttachmentImage,
     Table.configure({

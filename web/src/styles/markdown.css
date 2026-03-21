@@ -23,6 +23,13 @@
   .markdown-body ul { @apply list-disc pl-5; }
   .markdown-body ol { @apply list-decimal pl-5; }
   .markdown-body li { @apply mb-1; }
+  .markdown-body ul[data-type='taskList'] { @apply list-none pl-0; }
+  .markdown-body li[data-type='taskItem'] { @apply mb-1 list-none flex items-start gap-2; }
+  .markdown-body li[data-type='taskItem'] > label { @apply mt-0.5 inline-flex items-start gap-2 select-none; }
+  .markdown-body li[data-type='taskItem'] > label > input[type='checkbox'] { @apply h-4 w-4 shrink-0 accent-accent; }
+  .markdown-body li[data-type='taskItem'] > label > span { @apply hidden; }
+  .markdown-body li[data-type='taskItem'] > div { @apply min-w-0 flex-1; }
+  .markdown-body li[data-type='taskItem'] > div > p:last-child { @apply mb-0; }
 
   .markdown-body blockquote {
     @apply border-l-4 border-accent/50 bg-chat-input/40 px-3 py-2 rounded-r text-inherit;
@@ -56,4 +63,3 @@
     @apply border border-chat-border px-3 py-2 text-gray-200 align-top;
   }
 }
-

@@ -99,6 +99,18 @@ function serializeList(node: JSONContent, depth: number): string {
     .join('\n')
 }
 
+function serializeTaskList(node: JSONContent, depth: number): string {
+  const items = node.content ?? []
+
+  return items
+    .filter(item => item.type === 'taskItem')
+    .map((item) => {
+      const checked = item.attrs?.checked ? '- [x]' : '- [ ]'
+      return serializeListItem(item, depth, checked)
+    })
+    .join('\n')
+}
+
 function renderTableRow(cells: string[]): string {
   return `| ${cells.join(' | ')} |`
 }
@@ -161,6 +173,15 @@ function serializeBlock(node: JSONContent, depth = 0): string {
 
   if (node.type === 'bulletList' || node.type === 'orderedList') {
     return serializeList(node, depth)
+  }
+
+  if (node.type === 'taskList') {
+    return serializeTaskList(node, depth)
+  }
+
+  if (node.type === 'taskItem') {
+    const checked = node.attrs?.checked ? '- [x]' : '- [ ]'
+    return serializeListItem(node, depth, checked)
   }
 
   if (node.type === 'table') {

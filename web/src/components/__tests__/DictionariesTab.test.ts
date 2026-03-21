@@ -93,6 +93,56 @@ describe('DictionariesTab', () => {
     expect(wrapper.text()).not.toContain('Save Version')
   })
 
+  it('renders the item editor dialog at full width', async () => {
+    const wrapper = mount(DictionariesTab, {
+      global: {
+        stubs: {
+          Teleport: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const versionsButton = wrapper.findAll('button').find(button => button.text() === 'Versions')
+    expect(versionsButton).toBeTruthy()
+    await versionsButton!.trigger('click')
+    await flushPromises()
+
+    const editButton = wrapper.findAll('button').find(button => button.text() === 'Edit Items')
+    expect(editButton).toBeTruthy()
+    await editButton!.trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.get('div.fixed.inset-0 > div')
+    expect(dialog.classes()).toContain('w-full')
+    expect(dialog.classes()).toContain('max-w-none')
+  })
+
+  it('renders the view items panel with full-width rows', async () => {
+    const wrapper = mount(DictionariesTab, {
+      global: {
+        stubs: {
+          Teleport: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const versionsButton = wrapper.findAll('button').find(button => button.text() === 'Versions')
+    expect(versionsButton).toBeTruthy()
+    await versionsButton!.trigger('click')
+    await flushPromises()
+
+    const viewItemsButton = wrapper.findAll('button').find(button => button.text() === 'View Items')
+    expect(viewItemsButton).toBeTruthy()
+    await viewItemsButton!.trigger('click')
+    await flushPromises()
+
+    const itemsPanel = wrapper.find('div.border-t.border-chat-border.px-4.py-3 > div.w-full.overflow-x-auto')
+    expect(itemsPanel.exists()).toBe(true)
+    expect(itemsPanel.text()).toContain('High')
+  })
+
   it('submits current items and refreshes dictionaries and versions after save', async () => {
     const wrapper = mount(DictionariesTab, {
       global: {

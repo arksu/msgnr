@@ -108,16 +108,18 @@
       <div v-if="activeItems.length > 0" class="border-t border-chat-border px-4 py-3">
         <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Items</h4>
         <div v-if="itemsError" class="text-red-400 text-sm mb-2">{{ itemsError }}</div>
-        <div class="space-y-1">
+        <div class="w-full overflow-x-auto">
+          <div class="min-w-full space-y-1">
           <div
             v-for="item in activeItems"
             :key="item.id"
-            class="flex items-center gap-3 text-sm"
+            class="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-3 text-sm"
             :class="item.is_active ? 'text-gray-200' : 'text-gray-500 line-through'"
           >
-            <span class="font-mono text-xs w-24 shrink-0 text-gray-400">{{ item.value_code }}</span>
-            <span>{{ item.value_name }}</span>
-            <span v-if="!item.is_active" class="text-xs text-gray-500 ml-auto">(inactive)</span>
+            <span class="min-w-0 font-mono text-xs text-gray-400">{{ item.value_code }}</span>
+            <span class="min-w-0">{{ item.value_name }}</span>
+            <span v-if="!item.is_active" class="text-xs text-gray-500 justify-self-end">(inactive)</span>
+          </div>
           </div>
         </div>
       </div>
@@ -154,7 +156,7 @@
 
       <!-- Dictionary items dialog -->
       <div v-if="versionOpen" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="versionOpen = false">
-        <div class="bg-[#222529] border border-chat-border rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] p-6 flex flex-col">
+        <div class="bg-[#222529] border border-chat-border rounded-xl shadow-2xl w-full max-w-none max-h-[90vh] p-6 flex flex-col">
           <h3 class="text-lg font-bold text-white mb-1 shrink-0">Edit Items</h3>
           <p class="text-sm text-gray-400 mb-4 shrink-0">Dictionary: <span class="text-gray-200 font-mono">{{ versionDictCode }}</span></p>
           <div v-if="versionLoading" class="text-center text-gray-500 py-8">Loading current items...</div>

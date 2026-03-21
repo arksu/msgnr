@@ -7,7 +7,7 @@ import { saveLastAppliedEventSeq, loadLastAppliedEventSeq } from '@/services/sto
 import { getOrCreateClientInstanceId, getClientInstanceId } from '@/services/storage/clientInstanceStorage'
 import { saveManualPresencePreference, loadManualPresencePreference } from '@/services/storage/manualPresenceStorage'
 import { saveLastOpenedConversation, loadLastOpenedConversation } from '@/services/storage/lastConversationStorage'
-import { saveLastOpenedTaskId, loadLastOpenedTaskId } from '@/services/storage/lastTaskRouteStorage'
+import { saveLastOpenedTaskPublicId, loadLastOpenedTaskPublicId } from '@/services/storage/lastTaskRouteStorage'
 import { setBackendBaseUrl, getBackendBaseUrl } from '@/services/runtime/backendEndpoint'
 import { saveAudioPrefs, loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
 
@@ -274,7 +274,7 @@ describe('authStore.logout', () => {
     saveManualPresencePreference('away')
     saveLastOpenedConversation('workspace-1', 'user-1', 'conversation-1')
     localStorage.setItem('msgnr:thread-summaries:v1', JSON.stringify({ user1: {} }))
-    saveLastOpenedTaskId('task-1')
+    saveLastOpenedTaskPublicId('TASK-1')
     const logoutSpy = vi.spyOn(authApi, 'apiLogout').mockResolvedValue(undefined)
 
     const store = useAuthStore()
@@ -290,7 +290,7 @@ describe('authStore.logout', () => {
     expect(loadManualPresencePreference()).toBeNull()
     expect(loadLastOpenedConversation('workspace-1', 'user-1')).toBe('')
     expect(localStorage.getItem('msgnr:thread-summaries:v1')).toBeNull()
-    expect(loadLastOpenedTaskId()).toBe('')
+    expect(loadLastOpenedTaskPublicId()).toBe('')
     expect(clientInstanceId).toBeTruthy()
   })
 

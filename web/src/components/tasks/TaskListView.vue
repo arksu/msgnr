@@ -66,7 +66,7 @@
             :key="item.id"
             :item="item"
             :status-name="statusName(item.status_id)"
-            @click="emit('openTask', item.id)"
+            @click="emit('openTask', item.public_id)"
           />
         </tbody>
       </table>
@@ -101,7 +101,7 @@
                 v-for="item in group.items"
                 :key="item.public_id"
                 class="border-b border-chat-border hover:bg-white/5 cursor-pointer transition-colors"
-                @click="emit('openTask', item.id)"
+                @click="emit('openTask', item.public_id)"
               >
                 <td class="px-4 py-2.5 shrink-0">
                   <span class="font-mono text-xs text-accent bg-accent/10 border border-accent/20 px-1.5 py-0.5 rounded whitespace-nowrap">
@@ -188,7 +188,7 @@ import {
 } from '@/services/storage/taskGroupCollapseStorage'
 
 const props = defineProps<{ templateFilter: string | null }>()
-const emit = defineEmits<{ openTask: [id: string] }>()
+const emit = defineEmits<{ openTask: [publicId: string] }>()
 
 const tasksStore = useTasksStore()
 const baseFilters = ref<Pick<TaskListParams, 'search' | 'status_ids' | 'prefixes' | 'field_filters'>>({})

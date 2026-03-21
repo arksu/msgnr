@@ -270,6 +270,26 @@ export const useTasksStore = defineStore('tasks', () => {
     }
   }
 
+  async function selectTaskByPublicId(publicId: string, forceRefresh = false) {
+    if (!forceRefresh && selectedTask.value?.public_id === publicId) return
+    taskLoading.value = true
+    taskError.value = null
+    try {
+      selectedTask.value = await tasksGet(publicId)
+      tasksDescLog('selectTaskByPublicId:loaded', {
+        publicId,
+        forceRefresh,
+        description: descriptionSignature(selectedTask.value.description),
+        updatedAt: selectedTask.value.updated_at,
+      })
+      await loadFieldsFor(selectedTask.value.template_id)
+    } catch (e) {
+      taskError.value = e instanceof Error ? e.message : 'Failed to load task'
+    } finally {
+      taskLoading.value = false
+    }
+  }
+
   async function updateTask(id: string, payload: UpdateTaskPayload): Promise<Task> {
     const updated = await tasksUpdate(id, payload)
     selectedTask.value = updated
@@ -656,6 +676,7 @@ export const useTasksStore = defineStore('tasks', () => {
     closeCreateDialog,
     createTask,
     selectTask,
+    selectTaskByPublicId,
     updateTask,
     updateTaskTitle,
     updateTaskStatus,

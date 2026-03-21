@@ -10,6 +10,7 @@ import { useDocumentsStore } from '@/stores/documents'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
+import { isUuidTaskRouteValue, taskSlugFromPublicId } from '@/services/taskRoute'
 import MainView from '@/views/MainView.vue'
 
 const orchestratorMocks = vi.hoisted(() => ({
@@ -17,9 +18,9 @@ const orchestratorMocks = vi.hoisted(() => ({
 }))
 
 const taskRouteStorageMocks = vi.hoisted(() => ({
-  loadLastOpenedTaskId: vi.fn<() => string>(),
-  saveLastOpenedTaskId: vi.fn<(taskId: string) => void>(),
-  clearLastOpenedTaskId: vi.fn<() => void>(),
+  loadLastOpenedTaskPublicId: vi.fn<() => string>(),
+  saveLastOpenedTaskPublicId: vi.fn<(publicId: string) => void>(),
+  clearLastOpenedTaskPublicId: vi.fn<() => void>(),
 }))
 
 vi.mock('@/composables/useSessionOrchestrator', () => ({
@@ -37,9 +38,9 @@ vi.mock('@/services/sound', () => ({
 }))
 
 vi.mock('@/services/storage/lastTaskRouteStorage', () => ({
-  loadLastOpenedTaskId: taskRouteStorageMocks.loadLastOpenedTaskId,
-  saveLastOpenedTaskId: taskRouteStorageMocks.saveLastOpenedTaskId,
-  clearLastOpenedTaskId: taskRouteStorageMocks.clearLastOpenedTaskId,
+  loadLastOpenedTaskPublicId: taskRouteStorageMocks.loadLastOpenedTaskPublicId,
+  saveLastOpenedTaskPublicId: taskRouteStorageMocks.saveLastOpenedTaskPublicId,
+  clearLastOpenedTaskPublicId: taskRouteStorageMocks.clearLastOpenedTaskPublicId,
 }))
 
 vi.mock('@/components/AppSidebar.vue', () => ({
@@ -65,14 +66,14 @@ vi.mock('@/components/tasks/TaskTrackerSidebar.vue', () => ({
 vi.mock('@/components/tasks/TaskListView.vue', () => ({
   default: {
     emits: ['openTask'],
-    template: '<section data-testid="task-list-view"><button data-testid="task-list-open" @click="$emit(\'openTask\', \'task-1\')">open</button></section>',
+    template: '<section data-testid="task-list-view"><button data-testid="task-list-open" @click="$emit(\'openTask\', \'TASK-1\')">open</button></section>',
   },
 }))
 
 vi.mock('@/components/tasks/TaskKanbanView.vue', () => ({
   default: {
     emits: ['openTask'],
-    template: '<section data-testid="task-kanban-view"><button data-testid="task-kanban-open" @click="$emit(\'openTask\', \'task-k\')">open</button></section>',
+    template: '<section data-testid="task-kanban-view"><button data-testid="task-kanban-open" @click="$emit(\'openTask\', \'TASK-K\')">open</button></section>',
   },
 }))
 
@@ -119,7 +120,30 @@ function createMainRouter() {
       { path: '/', name: 'main', component: MainView },
       { path: '/tasks', name: 'tasks-list', component: MainView },
       { path: '/tasks/kanban', name: 'tasks-kanban', component: MainView },
-      { path: '/tasks/:taskId', name: 'tasks-card', component: MainView },
+      {
+        path: '/tasks/:taskSlug',
+        name: 'tasks-card',
+        component: MainView,
+        beforeEnter: (to) => {
+          const taskSlug = typeof to.params.taskSlug === 'string' ? to.params.taskSlug : ''
+          if (!taskSlug || isUuidTaskRouteValue(taskSlug)) {
+            return { name: 'tasks-list' }
+          }
+
+          const canonicalTaskSlug = taskSlugFromPublicId(taskSlug)
+          if (taskSlug !== canonicalTaskSlug) {
+            return {
+              name: 'tasks-card',
+              params: { taskSlug: canonicalTaskSlug },
+              query: to.query,
+              hash: to.hash,
+              replace: true,
+            }
+          }
+
+          return true
+        },
+      },
       { path: '/documents', name: 'documents-teamspaces', component: MainView },
       { path: '/documents/teamspaces/:teamspaceId', name: 'documents-teamspace', component: MainView },
       { path: '/documents/:documentId', name: 'documents-card', component: MainView },
@@ -149,14 +173,17 @@ describe('MainView server unavailable state', () => {
     setActivePinia(pinia)
     orchestratorMocks.logout.mockReset()
     orchestratorMocks.logout.mockResolvedValue()
-    taskRouteStorageMocks.loadLastOpenedTaskId.mockReset()
-    taskRouteStorageMocks.loadLastOpenedTaskId.mockReturnValue('')
-    taskRouteStorageMocks.saveLastOpenedTaskId.mockReset()
-    taskRouteStorageMocks.clearLastOpenedTaskId.mockReset()
+    taskRouteStorageMocks.loadLastOpenedTaskPublicId.mockReset()
+    taskRouteStorageMocks.loadLastOpenedTaskPublicId.mockReturnValue('')
+    taskRouteStorageMocks.saveLastOpenedTaskPublicId.mockReset()
+    taskRouteStorageMocks.clearLastOpenedTaskPublicId.mockReset()
 
     const tasksStore = useTasksStore(pinia)
     vi.spyOn(tasksStore, 'selectTask').mockImplementation(async (id: string) => {
-      tasksStore.selectedTask = { id } as any
+      tasksStore.selectedTask = { id, public_id: id.toUpperCase() } as any
+    })
+    vi.spyOn(tasksStore, 'selectTaskByPublicId').mockImplementation(async (publicId: string) => {
+      tasksStore.selectedTask = { id: `uuid-for-${publicId}`, public_id: publicId } as any
     })
     vi.spyOn(tasksStore, 'loadTaskList').mockResolvedValue()
 
@@ -326,7 +353,7 @@ describe('MainView server unavailable state', () => {
   })
 
   it('opens remembered task route when task tracker button is clicked', async () => {
-    taskRouteStorageMocks.loadLastOpenedTaskId.mockReturnValue('task-remembered')
+    taskRouteStorageMocks.loadLastOpenedTaskPublicId.mockReturnValue('TASK-REMEMBERED')
     const router = createMainRouter()
     router.push('/')
     await router.isReady()
@@ -337,7 +364,7 @@ describe('MainView server unavailable state', () => {
     await flushUi()
 
     expect(router.currentRoute.value.name).toBe('tasks-card')
-    expect(router.currentRoute.value.params.taskId).toBe('task-remembered')
+    expect(router.currentRoute.value.params.taskSlug).toBe('task-remembered')
     expect(wrapper.find('[data-testid=\"task-card\"]').exists()).toBe(true)
   })
 
@@ -372,11 +399,11 @@ describe('MainView server unavailable state', () => {
     expect(selectDocumentSpy).toHaveBeenCalledWith('document-123', true)
   })
 
-  it('keeps task card mode and loads task on direct /tasks/:taskId entry', async () => {
+  it('keeps task card mode and loads task on direct /tasks/:taskSlug entry', async () => {
     const router = createMainRouter()
     const tasksStore = useTasksStore(pinia)
-    const selectTaskSpy = vi.spyOn(tasksStore, 'selectTask')
-    router.push('/tasks/task-123')
+    const selectTaskByPublicIdSpy = vi.spyOn(tasksStore, 'selectTaskByPublicId')
+    router.push('/tasks/dev-123')
     await router.isReady()
 
     const wrapper = mountAtRoute(router)
@@ -384,7 +411,49 @@ describe('MainView server unavailable state', () => {
 
     expect(router.currentRoute.value.name).toBe('tasks-card')
     expect(wrapper.find('[data-testid=\"task-card\"]').exists()).toBe(true)
-    expect(selectTaskSpy).toHaveBeenCalledWith('task-123', true)
+    expect(selectTaskByPublicIdSpy).toHaveBeenCalledWith('DEV-123', true)
+  })
+
+  it('normalizes mixed-case task slugs to lowercase', async () => {
+    const router = createMainRouter()
+    router.push('/tasks/DEV-123')
+    await router.isReady()
+
+    mountAtRoute(router)
+    await flushUi()
+    await flushUi()
+
+    expect(router.currentRoute.value.name).toBe('tasks-card')
+    expect(router.currentRoute.value.params.taskSlug).toBe('dev-123')
+  })
+
+  it('falls back to the list for legacy UUID task routes', async () => {
+    const router = createMainRouter()
+    const tasksStore = useTasksStore(pinia)
+    const selectTaskByPublicIdSpy = vi.spyOn(tasksStore, 'selectTaskByPublicId')
+    router.push('/tasks/92f41023-40a9-42f7-a124-38d426e061ba')
+    await router.isReady()
+
+    mountAtRoute(router)
+    await flushUi()
+    await flushUi()
+
+    expect(router.currentRoute.value.name).toBe('tasks-list')
+    expect(selectTaskByPublicIdSpy).not.toHaveBeenCalled()
+  })
+
+  it('ignores remembered legacy UUID task routes', async () => {
+    taskRouteStorageMocks.loadLastOpenedTaskPublicId.mockReturnValue('')
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+
+    await (wrapper.findComponent(MainView).vm as any).goToTaskTrackerMode()
+    await flushUi()
+
+    expect(router.currentRoute.value.name).toBe('tasks-list')
   })
 
   it('accepts incoming invites by joining existing call without create-call step', async () => {
@@ -448,9 +517,10 @@ describe('MainView server unavailable state', () => {
 
     expect(wrapper.find('[data-testid="task-kanban-view"]').exists()).toBe(true)
 
-    await (wrapper.findComponent(MainView).vm as any).openTask('task-k')
+    await (wrapper.findComponent(MainView).vm as any).openTask('TASK-K')
     await flushUi()
     expect(router.currentRoute.value.name).toBe('tasks-card')
+    expect(router.currentRoute.value.params.taskSlug).toBe('task-k')
 
     await (wrapper.findComponent(MainView).vm as any).backToList()
     await flushUi()

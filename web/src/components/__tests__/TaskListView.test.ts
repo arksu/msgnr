@@ -165,4 +165,23 @@ describe('TaskListView', () => {
       page: 1,
     }, 'grouped')
   })
+
+  it('emits task public id when a grouped row is clicked', async () => {
+    localStorage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
+    const wrapper = mount(TaskListView, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskTrackerFilters: { template: '<div><slot name="after-controls" /></div>' },
+          UserAvatar: { template: '<div class="user-avatar-stub" />' },
+          TaskRow: { template: '<tr />' },
+          SortIcon: { template: '<span />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('tbody tr').trigger('click')
+    expect(wrapper.emitted('openTask')).toEqual([['BUG-1']])
+  })
 })

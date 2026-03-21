@@ -26,7 +26,7 @@ import { clearClientInstanceId } from '@/services/storage/clientInstanceStorage'
 import { clearManualPresencePreference } from '@/services/storage/manualPresenceStorage'
 import { clearAllLastOpenedConversations } from '@/services/storage/lastConversationStorage'
 import { clearStoredThreadSummaries } from '@/services/storage/threadSummaryStorage'
-import { clearLastOpenedTaskId } from '@/services/storage/lastTaskRouteStorage'
+import { clearLastOpenedTaskPublicId } from '@/services/storage/lastTaskRouteStorage'
 import { clearPushEndpoint } from '@/services/storage/pushStorage'
 import { clearCollapsedDocumentsTeamspaceIds } from '@/services/storage/documentsTeamspaceCollapseStorage'
 import { clearCollapsedDocumentsNodeIds } from '@/services/storage/documentsNodeCollapseStorage'
@@ -311,7 +311,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearManualPresencePreference()
     clearAllLastOpenedConversations()
     clearStoredThreadSummaries()
-    clearLastOpenedTaskId()
+    clearLastOpenedTaskPublicId()
     clearPushEndpoint()
     clearCollapsedDocumentsTeamspaceIds()
     clearCollapsedDocumentsNodeIds()

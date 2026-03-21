@@ -132,7 +132,7 @@ describe('TaskKanbanView', () => {
     await flushPromises()
 
     await wrapper.get('[data-testid="kanban-card-task-1"]').trigger('click')
-    expect(wrapper.emitted('openTask')).toEqual([['task-1']])
+    expect(wrapper.emitted('openTask')).toEqual([['BUG-1']])
   })
 
   it('optimistically moves card on drag/drop and patches status', async () => {

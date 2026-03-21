@@ -31,9 +31,9 @@ describe('router auth guard', () => {
     expect(router.currentRoute.value.name).toBe('login')
   })
 
-  it('redirects unauthenticated user from /tasks/:taskId to login', async () => {
+  it('redirects unauthenticated user from /tasks/:taskSlug to login', async () => {
     const { default: router } = await import('@/router')
-    await router.push('/tasks/task-1')
+    await router.push('/tasks/dev-123')
     expect(router.currentRoute.value.name).toBe('login')
   })
 
@@ -66,9 +66,9 @@ describe('router auth guard', () => {
     await router.push('/tasks/kanban')
     expect(router.currentRoute.value.name).toBe('tasks-kanban')
 
-    await router.push('/tasks/task-1')
+    await router.push('/tasks/dev-123')
     expect(router.currentRoute.value.name).toBe('tasks-card')
-    expect(router.currentRoute.value.params.taskId).toBe('task-1')
+    expect(router.currentRoute.value.params.taskSlug).toBe('dev-123')
 
     await router.push('/documents')
     expect(router.currentRoute.value.name).toBe('documents-teamspaces')

@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import { hasBackendBaseUrl, requiresConfiguredBackendUrl } from '@/services/runtime/backendEndpoint'
+import { isUuidTaskRouteValue, taskSlugFromPublicId } from '@/services/taskRoute'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -31,10 +32,29 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: '/tasks/:taskId',
+      path: '/tasks/:taskSlug',
       name: 'tasks-card',
       component: () => import('@/views/MainView.vue'),
       meta: { requiresAuth: true },
+      beforeEnter: (to) => {
+        const taskSlug = typeof to.params.taskSlug === 'string' ? to.params.taskSlug : ''
+        if (!taskSlug || isUuidTaskRouteValue(taskSlug)) {
+          return { name: 'tasks-list' }
+        }
+
+        const canonicalTaskSlug = taskSlugFromPublicId(taskSlug)
+        if (taskSlug !== canonicalTaskSlug) {
+          return {
+            name: 'tasks-card',
+            params: { taskSlug: canonicalTaskSlug },
+            query: to.query,
+            hash: to.hash,
+            replace: true,
+          }
+        }
+
+        return true
+      },
     },
     {
       path: '/documents',

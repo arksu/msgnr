@@ -344,10 +344,15 @@ import { useNotificationSoundEngine } from '@/services/sound'
 import { getPlatformOrNull } from '@/platform'
 import { isTauriRuntime } from '@/platform/runtime'
 import {
-  loadLastOpenedTaskId,
-  saveLastOpenedTaskId,
-  clearLastOpenedTaskId,
+  loadLastOpenedTaskPublicId,
+  saveLastOpenedTaskPublicId,
+  clearLastOpenedTaskPublicId,
 } from '@/services/storage/lastTaskRouteStorage'
+import {
+  isUuidTaskRouteValue,
+  taskPublicIdFromSlug,
+  taskSlugFromPublicId,
+} from '@/services/taskRoute'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ChatArea from '@/components/ChatArea.vue'
 import CallDock from '@/components/CallDock.vue'
@@ -431,8 +436,8 @@ const appMode = computed<'chat' | 'task-tracker' | 'documents'>(() => {
 })
 const showChatModeUnreadBadge = computed(() => appMode.value !== 'chat' && chatStore.totalUnreadCount > 0)
 const chatModeUnreadBadgeLabel = computed(() => (chatStore.totalUnreadCount > 99 ? '99+' : String(chatStore.totalUnreadCount)))
-const routeTaskId = computed(() =>
-  typeof route.params.taskId === 'string' ? route.params.taskId : '',
+const routeTaskSlug = computed(() =>
+  typeof route.params.taskSlug === 'string' ? route.params.taskSlug : '',
 )
 const routeDocumentId = computed(() =>
   typeof route.params.documentId === 'string' ? route.params.documentId : '',
@@ -449,10 +454,36 @@ async function goToChatMode() {
   await router.push({ name: 'main' })
 }
 
+function canonicalTaskSlugFromPublicId(publicId: string): string {
+  return taskSlugFromPublicId(publicId)
+}
+
+function canonicalTaskPublicIdFromSlug(taskSlug: string): string {
+  return taskPublicIdFromSlug(taskSlug)
+}
+
+async function pushTaskRoute(publicId: string, replace = false) {
+  const taskSlug = canonicalTaskSlugFromPublicId(publicId)
+  if (replace) {
+    await router.replace({ name: 'tasks-card', params: { taskSlug } })
+    return
+  }
+  await router.push({ name: 'tasks-card', params: { taskSlug } })
+}
+
+async function syncTaskRouteToSelectedTask(replace = false) {
+  const task = tasksStore.selectedTask
+  if (!task) return
+  saveLastOpenedTaskPublicId(task.public_id)
+  const canonicalTaskSlug = canonicalTaskSlugFromPublicId(task.public_id)
+  if (route.name === 'tasks-card' && routeTaskSlug.value === canonicalTaskSlug) return
+  await pushTaskRoute(task.public_id, replace)
+}
+
 async function goToTaskTrackerMode() {
-  const rememberedTaskId = loadLastOpenedTaskId()
-  if (rememberedTaskId) {
-    await router.push({ name: 'tasks-card', params: { taskId: rememberedTaskId } })
+  const rememberedTaskPublicId = loadLastOpenedTaskPublicId()
+  if (rememberedTaskPublicId) {
+    await pushTaskRoute(rememberedTaskPublicId)
     return
   }
   await router.push({ name: 'tasks-list' })
@@ -479,9 +510,9 @@ async function openTaskKanbanRoute() {
   await router.push({ name: 'tasks-kanban' })
 }
 
-async function openTask(id: string) {
-  saveLastOpenedTaskId(id)
-  await router.push({ name: 'tasks-card', params: { taskId: id } })
+async function openTask(publicId: string) {
+  saveLastOpenedTaskPublicId(publicId)
+  await pushTaskRoute(publicId)
 }
 
 async function openDocumentsTeamspacesRoute() {
@@ -510,10 +541,10 @@ async function handleDocumentsDeleted(deletedDocumentIds: string[]) {
   await backToDocuments()
 }
 
-function routeTaskIdMatchesSelected(routeID: string): boolean {
+function routeTaskSlugMatchesSelected(routeSlug: string): boolean {
   const task = tasksStore.selectedTask
   if (!task) return false
-  return task.id === routeID || task.public_id === routeID
+  return task.public_id === canonicalTaskPublicIdFromSlug(routeSlug)
 }
 
 function routeDocumentIdMatchesSelected(routeID: string): boolean {
@@ -548,27 +579,24 @@ function onTaskTrackerFilterChange(value: string | null) {
 }
 
 watch(
-  () => ({ name: route.name, taskId: routeTaskId.value, documentId: routeDocumentId.value, teamspaceId: routeDocumentsTeamspaceId.value }),
-  async ({ name, taskId, documentId, teamspaceId }) => {
+  () => ({ name: route.name, taskSlug: routeTaskSlug.value, documentId: routeDocumentId.value, teamspaceId: routeDocumentsTeamspaceId.value }),
+  async ({ name, taskSlug, documentId, teamspaceId }) => {
     if (name === 'tasks-card') {
-      if (!taskId) {
+      if (!taskSlug || isUuidTaskRouteValue(taskSlug)) {
         await router.replace({ name: lastTaskTrackerNonCardRoute.value })
         return
       }
-      if (routeTaskIdMatchesSelected(taskId)) {
-        if (tasksStore.selectedTask) {
-          saveLastOpenedTaskId(tasksStore.selectedTask.id)
-        }
+      if (routeTaskSlugMatchesSelected(taskSlug)) {
+        await syncTaskRouteToSelectedTask(true)
         return
       }
+      const publicId = canonicalTaskPublicIdFromSlug(taskSlug)
       tasksStore.clearSelectedTask()
-      await tasksStore.selectTask(taskId, true)
-      if (routeTaskIdMatchesSelected(taskId)) {
-        if (tasksStore.selectedTask) {
-          saveLastOpenedTaskId(tasksStore.selectedTask.id)
-        }
+      await tasksStore.selectTaskByPublicId(publicId, true)
+      if (routeTaskSlugMatchesSelected(taskSlug)) {
+        await syncTaskRouteToSelectedTask(true)
       } else {
-        clearLastOpenedTaskId()
+        clearLastOpenedTaskPublicId()
         await router.replace({ name: lastTaskTrackerNonCardRoute.value })
       }
       return
@@ -626,8 +654,8 @@ watch(
 )
 
 // Keep URL in sync when selected task changes from inside the card (subtasks, create dialog).
-watch(() => tasksStore.selectedTask?.id, (taskId) => {
-  if (!taskId || !isTaskTrackerRoute.value) return
+watch(() => tasksStore.selectedTask?.public_id, (taskPublicId) => {
+  if (!taskPublicId || !isTaskTrackerRoute.value) return
   // While browsing the list, avoid re-opening a card due stale task selections.
   // The list should auto-open a card only for freshly created tasks.
   if (
@@ -636,9 +664,7 @@ watch(() => tasksStore.selectedTask?.id, (taskId) => {
   ) {
     return
   }
-  saveLastOpenedTaskId(taskId)
-  if (route.name === 'tasks-card' && routeTaskId.value === taskId) return
-  void router.push({ name: 'tasks-card', params: { taskId } })
+  void syncTaskRouteToSelectedTask(route.name === 'tasks-card')
 })
 
 watch(() => documentsStore.selectedDocument?.id, (documentId) => {

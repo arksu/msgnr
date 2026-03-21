@@ -39,7 +39,7 @@
               draggable="true"
               @dragstart="onCardDragStart(item.id, column.statusId, $event)"
               @dragend="onCardDragEnd"
-              @click="emit('openTask', item.id)"
+              @click="emit('openTask', item.public_id)"
             >
               <div class="kanban-card-id">{{ item.public_id }}</div>
               <div class="kanban-card-title">{{ item.title }}</div>
@@ -85,7 +85,7 @@ import TaskTrackerFilters from './TaskTrackerFilters.vue'
 type TaskFiltersPayload = Pick<TaskListParams, 'search' | 'status_ids' | 'prefixes' | 'field_filters'>
 
 defineProps<{ templateFilter: string | null }>()
-const emit = defineEmits<{ openTask: [id: string] }>()
+const emit = defineEmits<{ openTask: [publicId: string] }>()
 
 const tasksStore = useTasksStore()
 const chatStore = useChatStore()

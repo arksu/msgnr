@@ -101,7 +101,7 @@ export const useTasksStore = defineStore('tasks', () => {
   const listParams = ref<TaskListParams>({
     page: 1,
     page_size: 50,
-    sort_by: 'created_at',
+    sort_by: 'updated_at',
     sort_order: 'desc' as SortOrder,
   })
 
@@ -566,7 +566,7 @@ export const useTasksStore = defineStore('tasks', () => {
   }
 
   function resetListParams(mode: TaskListLoadMode = 'list') {
-    listParams.value = { page: 1, page_size: 50, sort_by: 'created_at', sort_order: 'desc' }
+    listParams.value = { page: 1, page_size: 50, sort_by: 'updated_at', sort_order: 'desc' }
     if (mode === 'grouped') {
       loadGroupedTaskList()
       return
@@ -602,7 +602,7 @@ export const useTasksStore = defineStore('tasks', () => {
     listParams.value = {
       page: 1,
       page_size: 50,
-      sort_by: 'created_at',
+      sort_by: 'updated_at',
       sort_order: 'desc',
     }
   }

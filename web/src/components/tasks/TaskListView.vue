@@ -122,7 +122,7 @@
                     <span class="truncate">{{ creatorDisplayName(item) }}</span>
                   </div>
                 </td>
-                <td class="px-4 py-2.5 text-gray-500 whitespace-nowrap text-xs">{{ formatDate(item.created_at) }}</td>
+                <td class="px-4 py-2.5 text-gray-500 whitespace-nowrap text-xs">{{ formatDate(item.updated_at) }}</td>
               </tr>
             </tbody>
           </table>
@@ -193,7 +193,7 @@ const emit = defineEmits<{ openTask: [id: string] }>()
 const tasksStore = useTasksStore()
 const baseFilters = ref<Pick<TaskListParams, 'search' | 'status_ids' | 'prefixes' | 'field_filters'>>({})
 
-const sortBy = ref<SortBy>('created_at')
+const sortBy = ref<SortBy>('updated_at')
 const sortOrder = ref<SortOrder>('desc')
 
 const viewMode = ref<TaskListViewMode>(loadTaskListViewMode())

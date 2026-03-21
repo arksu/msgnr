@@ -25,6 +25,7 @@ const tasksStoreMock = reactive({
           description_preview: 'Grouped task description',
           status_id: 'st-1',
           created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-02-03T00:00:00Z',
           created_by: { id: 'u-1', display_name: 'User One', avatar_url: '' },
         },
       ],
@@ -105,6 +106,36 @@ describe('TaskListView', () => {
     expect(showMoreButton).toBeTruthy()
     await showMoreButton!.trigger('click')
     expect(tasksStoreMock.loadMoreGroupedStatus).toHaveBeenCalledWith('st-1')
+  })
+
+  it('shows updated date in grouped mode', async () => {
+    localStorage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
+    const wrapper = mount(TaskListView, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskTrackerFilters: { template: '<div><slot name="after-controls" /></div>' },
+          UserAvatar: { template: '<div class="user-avatar-stub" />' },
+          TaskRow: { template: '<tr />' },
+          SortIcon: { template: '<span />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    const createdLabel = new Date('2026-01-01T00:00:00Z').toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })
+    const updatedLabel = new Date('2026-02-03T00:00:00Z').toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })
+
+    expect(wrapper.text()).toContain(updatedLabel)
+    expect(wrapper.text()).not.toContain(createdLabel)
   })
 
   it('applies shared filter payload in grouped mode', async () => {

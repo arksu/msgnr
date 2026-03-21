@@ -1754,7 +1754,7 @@ func methodNotAllowed(w http.ResponseWriter) {
 //	status_id   (repeatable)            filter by status UUID(s)
 //	prefix      (repeatable)            filter by template_snapshot_prefix
 //	sort_by                             id|title|status|created_at|updated_at|<field-def-uuid>
-//	sort_order                          asc (default) | desc
+//	sort_order                          desc (default) | asc
 //	page                                1-based page number (default 1)
 //	page_size                           results per group page (default 20, max 100)
 //
@@ -1776,7 +1776,8 @@ func parseListTasksParams(r *http.Request) (ListTasksParams, error) {
 	if err := validateSortBy(sortBy); err != nil {
 		return ListTasksParams{}, err
 	}
-	sortDesc := strings.ToLower(q.Get("sort_order")) == "desc"
+	sortOrder := strings.ToLower(strings.TrimSpace(q.Get("sort_order")))
+	sortDesc := sortOrder != "asc"
 
 	params, err := parseTaskFilterParams(r)
 	if err != nil {

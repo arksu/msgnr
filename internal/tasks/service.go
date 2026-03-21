@@ -2073,6 +2073,7 @@ type TaskGroupedItem struct {
 	DescriptionPreview string              `json:"description_preview"`
 	StatusID           uuid.UUID           `json:"status_id"`
 	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
 	CreatedBy          TaskListItemCreator `json:"created_by"`
 }
 
@@ -2251,6 +2252,7 @@ func (s *Service) ListTasksGrouped(ctx context.Context, p ListTasksParams, limit
 			&item.DescriptionPreview,
 			&item.StatusID,
 			&item.CreatedAt,
+			&item.UpdatedAt,
 			&creatorID,
 			&item.CreatedBy.DisplayName,
 			&item.CreatedBy.AvatarURL,
@@ -2315,7 +2317,7 @@ func (s *Service) ListTasksStatusPortion(
 
 	query := fmt.Sprintf(
 		`WITH filtered AS (`+
-			` SELECT t.id AS task_id, t.public_id, t.title, LEFT(COALESCE(t.description, ''), %d) AS description_preview, t.status_id, t.created_at,`+
+			` SELECT t.id AS task_id, t.public_id, t.title, LEFT(COALESCE(t.description, ''), %d) AS description_preview, t.status_id, t.created_at, t.updated_at,`+
 			` u.id AS created_by_id, u.display_name, u.avatar_url`+
 			` FROM task t`+
 			` JOIN task_status ts ON ts.id = t.status_id`+
@@ -2324,13 +2326,13 @@ func (s *Service) ListTasksStatusPortion(
 			`),`+
 			` paged AS (`+
 			` SELECT * FROM filtered`+
-			` ORDER BY created_at DESC, task_id DESC`+
+			` ORDER BY updated_at DESC, task_id DESC`+
 			` OFFSET %s LIMIT %s`+
 			`),`+
 			` totals AS (`+
 			` SELECT COUNT(*)::int AS total FROM filtered`+
 			`)`+
-			` SELECT totals.total, paged.task_id, paged.public_id, paged.title, paged.description_preview, paged.status_id, paged.created_at,`+
+			` SELECT totals.total, paged.task_id, paged.public_id, paged.title, paged.description_preview, paged.status_id, paged.created_at, paged.updated_at,`+
 			` paged.created_by_id, paged.display_name, paged.avatar_url`+
 			` FROM totals LEFT JOIN paged ON TRUE`,
 		descriptionPreviewLength, whereWithStatus, offsetPH, limitPH,
@@ -2353,6 +2355,7 @@ func (s *Service) ListTasksStatusPortion(
 			desc       sql.NullString
 			statusIDDB uuid.NullUUID
 			createdAt  sql.NullTime
+			updatedAt  sql.NullTime
 			creatorID  uuid.NullUUID
 			display    sql.NullString
 			avatar     sql.NullString
@@ -2365,6 +2368,7 @@ func (s *Service) ListTasksStatusPortion(
 			&desc,
 			&statusIDDB,
 			&createdAt,
+			&updatedAt,
 			&creatorID,
 			&display,
 			&avatar,
@@ -2386,6 +2390,9 @@ func (s *Service) ListTasksStatusPortion(
 		}
 		if createdAt.Valid {
 			item.CreatedAt = createdAt.Time
+		}
+		if updatedAt.Valid {
+			item.UpdatedAt = updatedAt.Time
 		}
 		if creatorID.Valid {
 			item.CreatedBy.ID = creatorID.UUID
@@ -2465,16 +2472,16 @@ func buildGroupedInitialQuery(p ListTasksParams, limit int) (string, []any) {
 
 	sql := fmt.Sprintf(
 		`WITH ranked AS (`+
-			` SELECT t.id, t.public_id, t.title, LEFT(COALESCE(t.description, ''), %d) AS description_preview, t.status_id, t.created_at,`+
+			` SELECT t.id, t.public_id, t.title, LEFT(COALESCE(t.description, ''), %d) AS description_preview, t.status_id, t.created_at, t.updated_at,`+
 			` u.id AS created_by_id, u.display_name, u.avatar_url,`+
-			` ROW_NUMBER() OVER (PARTITION BY t.status_id ORDER BY t.created_at DESC, t.id DESC) AS rn,`+
+			` ROW_NUMBER() OVER (PARTITION BY t.status_id ORDER BY t.updated_at DESC, t.id DESC) AS rn,`+
 			` COUNT(*) OVER (PARTITION BY t.status_id) AS status_total`+
 			` FROM task t`+
 			` JOIN task_status ts ON ts.id = t.status_id`+
 			` JOIN users u ON u.id = t.created_by`+
 			` %s`+
 			` )`+
-			` SELECT id, public_id, title, description_preview, status_id, created_at, created_by_id, display_name, avatar_url, rn, status_total`+
+			` SELECT id, public_id, title, description_preview, status_id, created_at, updated_at, created_by_id, display_name, avatar_url, rn, status_total`+
 			` FROM ranked`+
 			` WHERE rn <= %s`+
 			` ORDER BY status_id ASC, rn ASC`,
@@ -2591,11 +2598,11 @@ func buildSortExpr(sortBy string, desc bool, args *argList) (join, orderBy strin
 					` ON tfv_sort.task_id = t.id AND tfv_sort.field_definition_id = %s`,
 				ph,
 			)
-			return join, "tfv_sort.value_number " + dir + " NULLS LAST, t.created_at ASC"
+			return join, "tfv_sort.value_number " + dir + " NULLS LAST, t.updated_at DESC"
 		}
 	}
 
-	return "", "t.created_at ASC"
+	return "", "t.updated_at DESC"
 }
 
 // argList is a small helper that accumulates bound values and assigns

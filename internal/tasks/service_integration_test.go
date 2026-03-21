@@ -1897,6 +1897,7 @@ func TestIntegration_ListTasksGrouped_ItemDTOShape(t *testing.T) {
 	assert.Contains(t, decoded, "description_preview")
 	assert.Contains(t, decoded, "status_id")
 	assert.Contains(t, decoded, "created_at")
+	assert.Contains(t, decoded, "updated_at")
 	assert.Contains(t, decoded, "created_by")
 	assert.NotContains(t, decoded, "description")
 	assert.NotContains(t, decoded, "field_values")
@@ -1919,7 +1920,7 @@ func TestIntegration_ListTasksStatusPortion_PaginatesByStatus(t *testing.T) {
 	assert.Equal(t, 5, p1.Total)
 	assert.Len(t, p1.Items, 2)
 	assert.NotEqual(t, uuid.Nil, p1.Items[0].ID)
-	assert.NotEmpty(t, p1.Items[0].DescriptionPreview)
+	assert.False(t, p1.Items[0].UpdatedAt.IsZero())
 	assert.Equal(t, 2, p1.NextOffset)
 	assert.True(t, p1.HasMore)
 

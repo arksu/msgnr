@@ -640,6 +640,10 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    IF TG_TABLE_NAME = 'task'
+       AND current_setting('msgnr.preserve_task_updated_at', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     NEW.updated_at := now();
     RETURN NEW;
 END;

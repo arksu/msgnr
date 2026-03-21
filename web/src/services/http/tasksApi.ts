@@ -595,6 +595,7 @@ export interface TaskGroupedItem {
   description_preview: string
   status_id: string
   created_at: string
+  updated_at: string
   created_by: TaskGroupedItemCreator
 }
 

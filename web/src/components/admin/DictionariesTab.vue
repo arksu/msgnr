@@ -48,7 +48,7 @@
               <button
                 class="text-xs text-green-400 hover:text-green-300 px-2 py-1 rounded hover:bg-green-400/10 transition-colors"
                 @click="() => openNewVersion(d)"
-              >+ New Version</button>
+              >Edit Items</button>
             </td>
           </tr>
         </tbody>
@@ -135,12 +135,12 @@
         </div>
       </div>
 
-      <!-- New version dialog -->
+      <!-- Dictionary items dialog -->
       <div v-if="versionOpen" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="versionOpen = false">
         <div class="bg-[#222529] border border-chat-border rounded-xl shadow-2xl w-full max-w-lg p-6">
-          <h3 class="text-lg font-bold text-white mb-1">New Version</h3>
+          <h3 class="text-lg font-bold text-white mb-1">Edit Items</h3>
           <p class="text-sm text-gray-400 mb-4">Dictionary: <span class="text-gray-200 font-mono">{{ versionDictCode }}</span></p>
-          <div v-if="versionLoading" class="text-center text-gray-500 py-8">Loading previous version...</div>
+          <div v-if="versionLoading" class="text-center text-gray-500 py-8">Loading current items...</div>
           <template v-else>
             <div class="space-y-2 mb-3">
               <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px_56px] gap-3 text-xs text-gray-400 uppercase tracking-wide px-1">
@@ -166,7 +166,7 @@
             <div class="flex gap-3">
               <button class="flex-1 py-2 rounded bg-white/10 hover:bg-white/20 text-gray-200 text-sm transition-colors" @click="versionOpen = false">Cancel</button>
               <button class="flex-1 py-2 rounded bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors" :disabled="versionLoading" @click="submitVersion">
-                {{ versionLoading ? 'Saving...' : 'Save Version' }}
+                {{ versionLoading ? 'Saving...' : 'Save Changes' }}
               </button>
             </div>
           </template>
@@ -202,7 +202,7 @@ const createLoading = ref(false)
 const createError = ref<string | null>(null)
 const createForm = ref({ code: '', name: '' })
 
-// New version dialog
+// Dictionary items dialog
 const versionOpen = ref(false)
 const versionLoading = ref(false)
 const versionError = ref<string | null>(null)
@@ -297,7 +297,7 @@ async function openNewVersion(d: EnumDictionary) {
       versionItems.value = [{ value_code: '', value_name: '', sort_order: 1, is_active: true }]
     }
   } catch (e: unknown) {
-    // If we can't load previous version, just start empty
+    // If we can't load current items, just start empty.
     versionItems.value = [{ value_code: '', value_name: '', sort_order: 1, is_active: true }]
   } finally {
     versionLoading.value = false
@@ -320,7 +320,7 @@ async function submitVersion() {
       await openVersions(activeDictId.value)
     }
   } catch (e: unknown) {
-    versionError.value = e instanceof Error ? e.message : 'Failed to create version'
+    versionError.value = e instanceof Error ? e.message : 'Failed to save items'
   } finally {
     versionLoading.value = false
   }

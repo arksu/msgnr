@@ -152,6 +152,13 @@ type DictionaryItemInput struct {
 	IsActive  bool   `json:"is_active"`
 }
 
+type dictionaryItemSaveMode int
+
+const (
+	dictionaryItemSaveModeCreateVersion dictionaryItemSaveMode = iota
+	dictionaryItemSaveModeUpdateLatest
+)
+
 // ---- Field definition types ----
 
 type FieldRow struct {
@@ -619,9 +626,9 @@ func (s *Service) CreateDictionary(ctx context.Context, p CreateDictionaryParams
 	return mapDictionary(row), nil
 }
 
-// CreateDictionaryVersion creates a new version with the provided items inside
-// a single transaction. The version number is taken from the atomic
-// EnumDictionaryIncrementVersion query result, eliminating the TOCTOU race.
+// CreateDictionaryVersion saves a full dictionary item snapshot. When the
+// submission is additive relative to the latest version, the latest version is
+// updated in place; otherwise a new version is created.
 func (s *Service) CreateDictionaryVersion(
 	ctx context.Context,
 	dictID uuid.UUID,
@@ -631,10 +638,15 @@ func (s *Service) CreateDictionaryVersion(
 	if len(items) == 0 {
 		return DictionaryVersionRow{}, fmt.Errorf("%w: items list must not be empty", ErrBadRequest)
 	}
+	submittedByCode := make(map[string]DictionaryItemInput, len(items))
 	for _, it := range items {
 		if strings.TrimSpace(it.ValueCode) == "" || strings.TrimSpace(it.ValueName) == "" {
 			return DictionaryVersionRow{}, fmt.Errorf("%w: every item needs a value_code and value_name", ErrBadRequest)
 		}
+		if _, exists := submittedByCode[it.ValueCode]; exists {
+			return DictionaryVersionRow{}, fmt.Errorf("%w: duplicate value_code %q in submitted items", ErrConflict, it.ValueCode)
+		}
+		submittedByCode[it.ValueCode] = it
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -643,46 +655,45 @@ func (s *Service) CreateDictionaryVersion(
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// Lock the dictionary row and increment version atomically.
-	// newVersion is read directly from RETURNING — no TOCTOU race.
-	var newVersion int
-	err = tx.QueryRow(ctx,
-		`UPDATE enum_dictionary
-		 SET current_version = current_version + 1, updated_at = now()
-		 WHERE id = $1
-		 RETURNING current_version`,
+	var currentVersion int
+	if err := tx.QueryRow(ctx,
+		`SELECT current_version
+		   FROM enum_dictionary
+		  WHERE id = $1
+		  FOR UPDATE`,
 		dictID,
-	).Scan(&newVersion)
-	if err != nil {
+	).Scan(&currentVersion); err != nil {
 		return DictionaryVersionRow{}, mapNotFound(err, "dictionary")
 	}
 
-	// Insert the version record.
-	var ver queries.EnumDictionaryVersion
-	err = tx.QueryRow(ctx,
-		`INSERT INTO enum_dictionary_version (dictionary_id, version, created_by)
-		 VALUES ($1, $2, $3)
-		 RETURNING id, dictionary_id, version, created_at, created_by`,
-		dictID, newVersion, actorID,
-	).Scan(&ver.ID, &ver.DictionaryID, &ver.Version, &ver.CreatedAt, &ver.CreatedBy)
+	latestVersion, latestItems, err := loadLatestDictionaryVersionTx(ctx, tx, dictID)
 	if err != nil {
-		return DictionaryVersionRow{}, fmt.Errorf("tasks: insert version: %w", err)
+		return DictionaryVersionRow{}, err
 	}
 
-	// Insert all items.
-	for _, it := range items {
-		_, err := tx.Exec(ctx,
-			`INSERT INTO enum_dictionary_version_item
-			 (dictionary_version_id, value_code, value_name, sort_order, is_active)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			ver.ID, it.ValueCode, it.ValueName, it.SortOrder, it.IsActive,
-		)
-		if err != nil {
-			return DictionaryVersionRow{}, mapUniqueViolation(
-				err,
-				fmt.Sprintf("duplicate value_code %q in this version", it.ValueCode),
-			)
+	saveMode := classifyDictionaryItemSaveMode(latestItems, submittedByCode)
+	if latestVersion != nil && saveMode == dictionaryItemSaveModeUpdateLatest {
+		if err := updateDictionaryItemsInLatestVersionTx(ctx, tx, latestVersion.ID, latestItems, submittedByCode); err != nil {
+			return DictionaryVersionRow{}, err
 		}
+		if err := tx.Commit(ctx); err != nil {
+			return DictionaryVersionRow{}, fmt.Errorf("tasks: commit dictionary item update tx: %w", err)
+		}
+		return mapDictionaryVersion(*latestVersion), nil
+	}
+
+	ver, err := createDictionaryVersionTx(ctx, tx, dictID, currentVersion+1, actorID, items)
+	if err != nil {
+		return DictionaryVersionRow{}, err
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE enum_dictionary
+		    SET current_version = $2, updated_at = now()
+		  WHERE id = $1`,
+		dictID, ver.Version,
+	); err != nil {
+		return DictionaryVersionRow{}, fmt.Errorf("tasks: update dictionary current_version: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -697,6 +708,168 @@ func (s *Service) ListDictionaryVersions(ctx context.Context, dictID uuid.UUID) 
 		return nil, fmt.Errorf("tasks: list versions: %w", err)
 	}
 	return mapDictionaryVersions(rows), nil
+}
+
+func loadLatestDictionaryVersionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	dictID uuid.UUID,
+) (*queries.EnumDictionaryVersion, []queries.EnumDictionaryVersionItem, error) {
+	var latest queries.EnumDictionaryVersion
+	err := tx.QueryRow(ctx,
+		`SELECT id, dictionary_id, version, created_at, created_by
+		   FROM enum_dictionary_version
+		  WHERE dictionary_id = $1
+		  ORDER BY version DESC
+		  LIMIT 1`,
+		dictID,
+	).Scan(&latest.ID, &latest.DictionaryID, &latest.Version, &latest.CreatedAt, &latest.CreatedBy)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("tasks: load latest dictionary version: %w", err)
+	}
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, dictionary_version_id, value_code, value_name, sort_order, is_active
+		   FROM enum_dictionary_version_item
+		  WHERE dictionary_version_id = $1
+		  ORDER BY sort_order ASC, value_name ASC`,
+		latest.ID,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tasks: load latest dictionary version items: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]queries.EnumDictionaryVersionItem, 0)
+	for rows.Next() {
+		var item queries.EnumDictionaryVersionItem
+		if err := rows.Scan(
+			&item.ID,
+			&item.DictionaryVersionID,
+			&item.ValueCode,
+			&item.ValueName,
+			&item.SortOrder,
+			&item.IsActive,
+		); err != nil {
+			return nil, nil, fmt.Errorf("tasks: scan latest dictionary version item: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("tasks: iterate latest dictionary version items: %w", err)
+	}
+
+	return &latest, items, nil
+}
+
+func classifyDictionaryItemSaveMode(
+	latestItems []queries.EnumDictionaryVersionItem,
+	submittedByCode map[string]DictionaryItemInput,
+) dictionaryItemSaveMode {
+	if len(latestItems) == 0 {
+		return dictionaryItemSaveModeCreateVersion
+	}
+	for _, latest := range latestItems {
+		submitted, ok := submittedByCode[latest.ValueCode]
+		if !ok {
+			return dictionaryItemSaveModeCreateVersion
+		}
+		if submitted.ValueName != latest.ValueName {
+			return dictionaryItemSaveModeCreateVersion
+		}
+	}
+	return dictionaryItemSaveModeUpdateLatest
+}
+
+func updateDictionaryItemsInLatestVersionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	versionID uuid.UUID,
+	latestItems []queries.EnumDictionaryVersionItem,
+	submittedByCode map[string]DictionaryItemInput,
+) error {
+	latestByCode := make(map[string]queries.EnumDictionaryVersionItem, len(latestItems))
+	for _, latest := range latestItems {
+		latestByCode[latest.ValueCode] = latest
+	}
+
+	for _, latest := range latestItems {
+		submitted := submittedByCode[latest.ValueCode]
+		if _, err := tx.Exec(ctx,
+			`UPDATE enum_dictionary_version_item
+			    SET sort_order = $2,
+			        is_active = $3
+			  WHERE id = $1`,
+			latest.ID,
+			submitted.SortOrder,
+			submitted.IsActive,
+		); err != nil {
+			return fmt.Errorf("tasks: update dictionary version item %s: %w", latest.ID, err)
+		}
+	}
+
+	for code, submitted := range submittedByCode {
+		if _, exists := latestByCode[code]; exists {
+			continue
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO enum_dictionary_version_item
+			 (dictionary_version_id, value_code, value_name, sort_order, is_active)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			versionID,
+			submitted.ValueCode,
+			submitted.ValueName,
+			submitted.SortOrder,
+			submitted.IsActive,
+		); err != nil {
+			return mapUniqueViolation(
+				err,
+				fmt.Sprintf("duplicate value_code %q in this version", submitted.ValueCode),
+			)
+		}
+	}
+
+	return nil
+}
+
+func createDictionaryVersionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	dictID uuid.UUID,
+	version int,
+	actorID uuid.UUID,
+	items []DictionaryItemInput,
+) (queries.EnumDictionaryVersion, error) {
+	var ver queries.EnumDictionaryVersion
+	err := tx.QueryRow(ctx,
+		`INSERT INTO enum_dictionary_version (dictionary_id, version, created_by)
+		 VALUES ($1, $2, $3)
+		 RETURNING id, dictionary_id, version, created_at, created_by`,
+		dictID, version, actorID,
+	).Scan(&ver.ID, &ver.DictionaryID, &ver.Version, &ver.CreatedAt, &ver.CreatedBy)
+	if err != nil {
+		return queries.EnumDictionaryVersion{}, fmt.Errorf("tasks: insert version: %w", err)
+	}
+
+	for _, it := range items {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO enum_dictionary_version_item
+			 (dictionary_version_id, value_code, value_name, sort_order, is_active)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			ver.ID, it.ValueCode, it.ValueName, it.SortOrder, it.IsActive,
+		)
+		if err != nil {
+			return queries.EnumDictionaryVersion{}, mapUniqueViolation(
+				err,
+				fmt.Sprintf("duplicate value_code %q in this version", it.ValueCode),
+			)
+		}
+	}
+
+	return ver, nil
 }
 
 func (s *Service) GetDictionaryVersionItems(ctx context.Context, versionID uuid.UUID) ([]DictionaryItemRow, error) {

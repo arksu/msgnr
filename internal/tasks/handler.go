@@ -598,7 +598,7 @@ func (h *Handler) enumGet(w http.ResponseWriter, r *http.Request, id uuid.UUID) 
 }
 
 // GET /api/admin/enums/:id/versions
-// POST /api/admin/enums/:id/versions  (create new version)
+// POST /api/admin/enums/:id/versions  (save items; may reuse latest version)
 func (h *Handler) enumVersions(w http.ResponseWriter, r *http.Request, p auth.Principal, dictID uuid.UUID) {
 	switch r.Method {
 	case http.MethodGet:

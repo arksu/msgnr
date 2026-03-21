@@ -309,6 +309,119 @@ func TestIntegration_Dictionary_VersionRequiresItems(t *testing.T) {
 	require.ErrorIs(t, err, tasks.ErrBadRequest)
 }
 
+func TestIntegration_Dictionary_AdditiveSaveReusesLatestVersion(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{Code: "env2", Name: "Environment 2"})
+	require.NoError(t, err)
+
+	initial, err := svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "prod", ValueName: "Production", SortOrder: 10, IsActive: true},
+		{ValueCode: "stage", ValueName: "Staging", SortOrder: 20, IsActive: true},
+	}, actor)
+	require.NoError(t, err)
+
+	saved, err := svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "prod", ValueName: "Production", SortOrder: 30, IsActive: false},
+		{ValueCode: "stage", ValueName: "Staging", SortOrder: 10, IsActive: true},
+		{ValueCode: "qa", ValueName: "QA", SortOrder: 20, IsActive: true},
+	}, actor)
+	require.NoError(t, err)
+
+	assert.Equal(t, initial.ID, saved.ID)
+	assert.Equal(t, initial.Version, saved.Version)
+
+	updated, err := svc.GetDictionary(ctx, dict.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.CurrentVersion)
+
+	stored, err := svc.GetDictionaryVersionItems(ctx, saved.ID)
+	require.NoError(t, err)
+	require.Len(t, stored, 3)
+	assert.Equal(t, "stage", stored[0].ValueCode)
+	assert.True(t, stored[0].IsActive)
+	assert.Equal(t, "qa", stored[1].ValueCode)
+	assert.Equal(t, "prod", stored[2].ValueCode)
+	assert.False(t, stored[2].IsActive)
+}
+
+func TestIntegration_Dictionary_RenameCreatesNewVersion(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{Code: "priority2", Name: "Priority 2"})
+	require.NoError(t, err)
+
+	initial, err := svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "high", ValueName: "High", SortOrder: 1, IsActive: true},
+		{ValueCode: "low", ValueName: "Low", SortOrder: 2, IsActive: true},
+	}, actor)
+	require.NoError(t, err)
+
+	renamed, err := svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "high", ValueName: "Urgent", SortOrder: 1, IsActive: true},
+		{ValueCode: "low", ValueName: "Low", SortOrder: 2, IsActive: true},
+	}, actor)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, initial.ID, renamed.ID)
+	assert.Equal(t, initial.Version+1, renamed.Version)
+
+	updated, err := svc.GetDictionary(ctx, dict.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int(renamed.Version), updated.CurrentVersion)
+}
+
+func TestIntegration_Dictionary_RemovalCreatesNewVersion(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{Code: "status2", Name: "Status 2"})
+	require.NoError(t, err)
+
+	initial, err := svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "open", ValueName: "Open", SortOrder: 1, IsActive: true},
+		{ValueCode: "closed", ValueName: "Closed", SortOrder: 2, IsActive: true},
+	}, actor)
+	require.NoError(t, err)
+
+	removed, err := svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "open", ValueName: "Open", SortOrder: 1, IsActive: true},
+	}, actor)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, initial.ID, removed.ID)
+	assert.Equal(t, initial.Version+1, removed.Version)
+
+	stored, err := svc.GetDictionaryVersionItems(ctx, removed.ID)
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	assert.Equal(t, "open", stored[0].ValueCode)
+}
+
+func TestIntegration_Dictionary_DuplicateSubmittedCodesConflict(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{Code: "dupdict", Name: "Duplicate Dict"})
+	require.NoError(t, err)
+
+	_, err = svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "dup", ValueName: "One", SortOrder: 1, IsActive: true},
+		{ValueCode: "dup", ValueName: "Two", SortOrder: 2, IsActive: true},
+	}, actor)
+	require.ErrorIs(t, err, tasks.ErrConflict)
+}
+
 // =========================================================
 // Field definitions
 // =========================================================

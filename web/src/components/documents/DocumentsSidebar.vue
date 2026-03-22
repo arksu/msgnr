@@ -1,5 +1,5 @@
 <template>
-  <aside class="flex h-full w-64 min-w-[256px] flex-col border-r border-white/10 bg-sidebar-bg select-none">
+  <aside class="flex h-full w-full min-w-0 flex-col border-r border-white/10 bg-sidebar-bg select-none">
     <div class="flex items-center justify-between border-b border-white/10 px-4 py-3">
       <span class="font-bold text-white text-[15px]">Documents</span>
     </div>
@@ -72,7 +72,7 @@
 
             <div v-if="!isCollapsed(teamspace.id)" class="space-y-1 py-1">
               <DocumentsTreeNode
-                v-for="node in teamspace.documents"
+                v-for="node in normalizeNodes(teamspace.documents)"
                 :key="node.id"
                 :node="node"
                 :level="0"
@@ -254,8 +254,12 @@ function toggleDocument(documentId: string) {
   collapsedDocumentIds.value = [...collapsedDocumentIds.value, documentId]
 }
 
-function collectDocumentIds(nodes: SidebarDocumentNode[]): string[] {
-  return nodes.flatMap(node => [node.id, ...collectDocumentIds(node.children)])
+function normalizeNodes(nodes: SidebarDocumentNode[] | null | undefined): SidebarDocumentNode[] {
+  return Array.isArray(nodes) ? nodes.filter((node): node is SidebarDocumentNode => !!node) : []
+}
+
+function collectDocumentIds(nodes: SidebarDocumentNode[] | null | undefined): string[] {
+  return normalizeNodes(nodes).flatMap(node => [node.id, ...collectDocumentIds(node.children)])
 }
 
 function openCreateDocument(teamspaceId: string, parentDocumentId: string | null) {

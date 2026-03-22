@@ -645,6 +645,10 @@ BEGIN
        AND current_setting('msgnr.preserve_task_updated_at', true) = 'on' THEN
         RETURN NEW;
     END IF;
+    IF TG_TABLE_NAME = 'document'
+       AND current_setting('msgnr.preserve_document_updated_at', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     NEW.updated_at := now();
     RETURN NEW;
 END;

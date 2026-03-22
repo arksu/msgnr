@@ -11,6 +11,6 @@ export function escapeHtml(input: string): string {
 
 export function renderMarkdownToHtml(input: string): string {
   const safe = escapeHtml(input)
-  return String(marked.parse(safe, { breaks: true }))
+  const rendered = String(marked.parse(safe, { breaks: true }))
+  return rendered.replace(/&lt;br\s*\/?&gt;/gi, '<br>')
 }
-

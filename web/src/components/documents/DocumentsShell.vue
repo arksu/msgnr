@@ -1,12 +1,19 @@
 <template>
   <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="documents-mode">
-    <DocumentsSidebar
-      :selected-teamspace-id="selectedTeamspaceId"
-      :selected-document-id="selectedDocumentId"
-      @open-teamspaces="emit('openTeamspaces')"
-      @open-document="emit('openDocument', $event)"
-      @documents-deleted="emit('documentsDeleted', $event)"
-    />
+    <ResizableSidebar
+      storage-key="msgnr:sidebar-width:documents:v1"
+      :default-width="256"
+      :min-width="220"
+      :max-width="540"
+    >
+      <DocumentsSidebar
+        :selected-teamspace-id="selectedTeamspaceId"
+        :selected-document-id="selectedDocumentId"
+        @open-teamspaces="emit('openTeamspaces')"
+        @open-document="emit('openDocument', $event)"
+        @documents-deleted="emit('documentsDeleted', $event)"
+      />
+    </ResizableSidebar>
     <main class="flex-1 min-w-0 overflow-hidden">
       <DocumentCard
         v-if="viewMode === 'card'"
@@ -28,6 +35,7 @@
 </template>
 
 <script setup lang="ts">
+import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import DocumentsSidebar from '@/components/documents/DocumentsSidebar.vue'
 import TeamspacesView from '@/components/documents/TeamspacesView.vue'
 import DocumentCard from '@/components/documents/DocumentCard.vue'

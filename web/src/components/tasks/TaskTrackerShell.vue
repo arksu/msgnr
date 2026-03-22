@@ -1,12 +1,19 @@
 <template>
   <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="task-tracker">
-    <TaskTrackerSidebar
-      :model-value="modelValue"
-      :current-view="currentView"
-      @update:modelValue="emit('update:modelValue', $event)"
-      @open-list="emit('openList')"
-      @open-kanban="emit('openKanban')"
-    />
+    <ResizableSidebar
+      storage-key="msgnr:sidebar-width:task:v1"
+      :default-width="240"
+      :min-width="220"
+      :max-width="520"
+    >
+      <TaskTrackerSidebar
+        :model-value="modelValue"
+        :current-view="currentView"
+        @update:modelValue="emit('update:modelValue', $event)"
+        @open-list="emit('openList')"
+        @open-kanban="emit('openKanban')"
+      />
+    </ResizableSidebar>
     <main class="flex-1 min-w-0 overflow-hidden">
       <TaskCard
         v-if="viewMode === 'card'"
@@ -29,6 +36,7 @@
 </template>
 
 <script setup lang="ts">
+import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import TaskTrackerSidebar from '@/components/tasks/TaskTrackerSidebar.vue'
 import TaskCard from '@/components/tasks/TaskCard.vue'
 import TaskListView from '@/components/tasks/TaskListView.vue'

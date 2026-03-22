@@ -38,6 +38,12 @@ vi.mock('@/components/AppSidebar.vue', () => ({
   },
 }))
 
+vi.mock('@/components/ResizableSidebar.vue', () => ({
+  default: {
+    template: '<div data-testid="resizable-sidebar"><slot /></div>',
+  },
+}))
+
 async function flushAll() {
   await Promise.resolve()
   await nextTick()

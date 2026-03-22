@@ -65,7 +65,15 @@
         </span>
       </div>
     </aside>
-    <AppSidebar v-if="appMode === 'chat'" @profile="openSettings" @settings="openAudioSettings" />
+    <ResizableSidebar
+      v-if="appMode === 'chat'"
+      storage-key="msgnr:sidebar-width:chat:v1"
+      :default-width="240"
+      :min-width="220"
+      :max-width="420"
+    >
+      <AppSidebar @profile="openSettings" @settings="openAudioSettings" />
+    </ResizableSidebar>
     <main class="flex-1 min-w-0 min-h-0">
       <div
         v-if="showServerUnavailableAlert"
@@ -325,6 +333,7 @@ import {
   taskPublicIdFromSlug,
   taskSlugFromPublicId,
 } from '@/services/taskRoute'
+import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ChatArea from '@/components/ChatArea.vue'
 import CallDock from '@/components/CallDock.vue'

@@ -1,5 +1,5 @@
 <template>
-  <aside class="flex flex-col h-full w-60 min-w-[240px] bg-sidebar-bg select-none border-r border-white/10">
+  <aside class="flex h-full w-full min-w-0 flex-col bg-sidebar-bg select-none border-r border-white/10">
     <!-- Header -->
     <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
       <span class="font-bold text-white text-[15px]">Tasks</span>

@@ -49,6 +49,12 @@ vi.mock('@/components/AppSidebar.vue', () => ({
   },
 }))
 
+vi.mock('@/components/ResizableSidebar.vue', () => ({
+  default: {
+    template: '<div data-testid="resizable-sidebar"><slot /></div>',
+  },
+}))
+
 vi.mock('@/components/ChatArea.vue', () => ({
   default: {
     template: '<section data-testid="chat-area" />',

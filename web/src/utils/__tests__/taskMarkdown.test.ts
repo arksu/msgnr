@@ -55,4 +55,11 @@ describe('task markdown helpers', () => {
     expect(markdown).toContain('- [ ] First item')
     expect(markdown).toContain('- [x] Second item')
   })
+
+  it('renders escaped br tokens inside markdown tables as line breaks', () => {
+    const html = renderTaskMarkdownToHtml('| A |\n| --- |\n| one<br>two |')
+
+    expect(html).toContain('<td>one<br>two</td>')
+    expect(html).not.toContain('&lt;br&gt;')
+  })
 })

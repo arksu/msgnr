@@ -22,7 +22,7 @@
 
   <div v-else-if="documentItem" class="flex h-full flex-col overflow-hidden">
     <div class="flex items-start justify-between gap-4 border-b border-chat-border px-6 py-4">
-      <div class="flex min-w-0 items-center gap-3">
+      <div class="flex min-w-0 flex-1 items-center gap-3">
         <button
           type="button"
           class="shrink-0 text-xs text-gray-500 transition-colors hover:text-white"
@@ -30,40 +30,35 @@
         >
           Back
         </button>
-        <button
-          v-if="documentItem.parent_document_id"
-          type="button"
-          class="shrink-0 text-xs text-gray-500 transition-colors hover:text-white"
-          @click="$emit('openParent', documentItem.parent_document_id)"
-        >
-          {{ documentItem.parent_title ?? 'Parent document' }}
-        </button>
-        <span class="rounded border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent">
-          {{ documentItem.teamspace_name }}
-        </span>
-        <input
-          v-if="titleEditing"
-          ref="titleInputRef"
-          v-model="titleDraft"
-          type="text"
-          class="min-w-0 flex-1 rounded border border-chat-border bg-chat-input px-3 py-1 text-sm text-white outline-none focus:border-accent"
-          @keydown.enter.prevent="saveTitle"
-          @keydown.esc.prevent="cancelTitleEdit"
-          @blur="saveTitle"
-        >
-        <div v-else class="flex min-w-0 items-center gap-2">
-          <h1 class="truncate text-base font-semibold text-white">{{ documentItem.title }}</h1>
-          <button
-            type="button"
-            class="rounded p-1 text-gray-500 transition-colors hover:text-white"
-            title="Edit title"
-            @click="startTitleEdit"
+        <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-xs text-gray-500" data-testid="document-breadcrumb">
+          <template v-for="(segment, index) in documentBreadcrumbSegments" :key="`${segment}:${index}`">
+            <span class="truncate">{{ segment }}</span>
+            <span class="shrink-0 text-gray-600">/</span>
+          </template>
+          <input
+            v-if="titleEditing"
+            ref="titleInputRef"
+            v-model="titleDraft"
+            type="text"
+            class="min-w-0 flex-1 rounded border border-chat-border bg-chat-input px-3 py-1 text-sm text-white outline-none focus:border-accent"
+            @keydown.enter.prevent="saveTitle"
+            @keydown.esc.prevent="cancelTitleEdit"
+            @blur="saveTitle"
           >
-            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-            </svg>
-          </button>
+          <div v-else class="flex min-w-0 items-center gap-2">
+            <h1 class="truncate text-sm font-semibold text-white">{{ documentItem.title }}</h1>
+            <button
+              type="button"
+              class="rounded p-1 text-gray-500 transition-colors hover:text-white"
+              title="Edit title"
+              @click="startTitleEdit"
+            >
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
       <button
@@ -186,7 +181,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import type { DocumentHistoryItem } from '@/services/http/documentsApi'
+import type { DocumentHistoryItem, SidebarDocumentNode } from '@/services/http/documentsApi'
 import { useDocumentsStore } from '@/stores/documents'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
@@ -215,6 +210,22 @@ const historyApplying = ref(false)
 const historyApplyError = ref('')
 
 const documentItem = computed(() => documentsStore.selectedDocument)
+const documentBreadcrumbSegments = computed(() => {
+  const current = documentsStore.selectedDocument
+  if (!current) return []
+
+  const teamspace = documentsStore.sidebarTeamspaces.find(item => item.id === current.teamspace_id)
+  const path = teamspace ? findDocumentPath(teamspace.documents, current.id) : null
+  if (path && path.length > 1) {
+    return [teamspace?.name ?? current.teamspace_name, ...path.slice(0, -1)]
+  }
+
+  const fallbackSegments = [current.teamspace_name]
+  if (current.parent_title) {
+    fallbackSegments.push(current.parent_title)
+  }
+  return fallbackSegments
+})
 
 watch(
   () => documentsStore.selectedDocument,
@@ -243,6 +254,15 @@ function formatDatetime(value: string): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value))
+}
+
+function findDocumentPath(nodes: SidebarDocumentNode[], targetId: string): string[] | null {
+  for (const node of nodes) {
+    if (node.id === targetId) return [node.title]
+    const childPath = findDocumentPath(node.children, targetId)
+    if (childPath) return [node.title, ...childPath]
+  }
+  return null
 }
 
 async function startTitleEdit() {

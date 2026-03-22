@@ -1,7 +1,14 @@
 <template>
   <div class="flex h-screen overflow-hidden">
     <!-- Sidebar -->
-    <AppSidebar />
+    <ResizableSidebar
+      storage-key="msgnr:sidebar-width:chat:v1"
+      :default-width="240"
+      :min-width="220"
+      :max-width="420"
+    >
+      <AppSidebar />
+    </ResizableSidebar>
 
     <!-- Admin panel -->
     <div class="flex-1 min-w-0 flex flex-col bg-chat-bg">
@@ -505,6 +512,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import TemplatesTab from '@/components/admin/TemplatesTab.vue'
 import StatusesTab from '@/components/admin/StatusesTab.vue'

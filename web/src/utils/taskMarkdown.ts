@@ -100,5 +100,5 @@ function renderTaskCheckboxMarkdown(html: string): string {
 
 export function renderTaskMarkdownToHtml(input: string): string {
   const html = taskMarkdown.render(input ?? '')
-  return renderTaskCheckboxMarkdown(html)
+  return renderTaskCheckboxMarkdown(html).replace(/&lt;br\s*\/?&gt;/gi, '<br>')
 }

@@ -61,7 +61,7 @@
 
     <div v-if="hasChildren && !isCollapsed">
       <DocumentsTreeNode
-        v-for="child in node.children"
+        v-for="child in childNodes"
         :key="child.id"
         :node="child"
         :level="level + 1"
@@ -141,7 +141,8 @@ const props = defineProps<{
 }>()
 
 const documentsStore = useDocumentsStore()
-const hasChildren = computed(() => props.node.children.length > 0)
+const childNodes = computed(() => normalizeNodes(props.node.children))
+const hasChildren = computed(() => childNodes.value.length > 0)
 const isCollapsed = computed(() => props.collapsedDocumentIds.includes(props.node.id))
 const menuOpen = ref(false)
 const deleteConfirmOpen = ref(false)
@@ -193,8 +194,12 @@ function closeDeleteConfirm() {
   deleteError.value = ''
 }
 
+function normalizeNodes(nodes: SidebarDocumentNode[] | null | undefined): SidebarDocumentNode[] {
+  return Array.isArray(nodes) ? nodes.filter((node): node is SidebarDocumentNode => !!node) : []
+}
+
 function collectSubtreeIds(node: SidebarDocumentNode): string[] {
-  return [node.id, ...node.children.flatMap(child => collectSubtreeIds(child))]
+  return [node.id, ...normalizeNodes(node.children).flatMap(child => collectSubtreeIds(child))]
 }
 
 async function confirmDelete() {

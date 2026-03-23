@@ -1375,6 +1375,64 @@ func TestIntegration_ThreadReplies_DoNotIncreaseUnreadMessages_AndSubscribeClear
 	assert.False(t, updated.Counter.HasUnreadThreadReplies)
 }
 
+func TestIntegration_SendMessage_ThreadRepliesNotifyOnlyThreadMembers(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	rootAuthorID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	createMember := func(name string) uuid.UUID {
+		var userID uuid.UUID
+		err := pool.QueryRow(ctx,
+			`INSERT INTO users (email, password_hash, display_name, role)
+			 VALUES ($1, 'x', $2, 'member')
+			 RETURNING id`,
+			strings.ToLower(name)+"_"+uuid.New().String()+"@example.com",
+			name,
+		).Scan(&userID)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, userID)
+		require.NoError(t, err)
+		return userID
+	}
+
+	threadReplierID := createMember("ThreadReplier")
+	bystanderID := createMember("Bystander")
+
+	root, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    rootAuthorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "root",
+	})
+	require.NoError(t, err)
+
+	reply, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            threadReplierID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "thread reply",
+		ThreadRootMessageID: root.MessageID,
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, filterDirectDeliveriesByType(reply.DirectDeliveries, packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT))
+
+	threadNotifications := filterDirectDeliveriesByType(reply.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
+	require.Len(t, threadNotifications, 1)
+	assert.Equal(t, rootAuthorID.String(), threadNotifications[0].UserID)
+	assert.Equal(t, packetspb.NotificationType_NOTIFICATION_TYPE_THREAD_REPLY, threadNotifications[0].Event.GetNotificationAdded().GetNotification().GetType())
+
+	for _, delivery := range reply.DirectDeliveries {
+		if delivery.UserID == bystanderID.String() && delivery.Event != nil {
+			assert.Equal(t, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED, delivery.Event.GetEventType())
+		}
+	}
+}
+
 func TestIntegration_ListRecentMessages_ReturnsConversationHistory(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

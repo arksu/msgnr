@@ -40,7 +40,6 @@
           >
             <div class="border-b border-chat-border px-4 py-3">
               <div class="text-sm font-semibold text-white">Call members</div>
-              <div class="mt-0.5 text-xs text-gray-400">{{ activeConversationCall?.participantCount ?? activeCallMembers.length }} people in this call</div>
             </div>
 
             <div v-if="remoteActiveCallMembersLoading" class="px-4 py-5 text-sm text-gray-400">

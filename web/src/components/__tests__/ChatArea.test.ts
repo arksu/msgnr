@@ -870,7 +870,6 @@ describe('ChatArea', () => {
 
     const popover = wrapper.get('[data-testid="call-members-popover"]')
     expect(popover.text()).toContain('Call members')
-    expect(popover.text()).toContain('3 people in this call')
     expect(popover.text()).toContain('Ada')
     expect(popover.text()).toContain('Bob')
     expect(popover.text()).toContain('Eve')
@@ -961,7 +960,6 @@ describe('ChatArea', () => {
     expect(listActiveCallMembersMock).toHaveBeenCalledWith('channel-1')
     expect(listActiveCallMembersMock).toHaveBeenCalledTimes(1)
     const popover = wrapper.get('[data-testid="call-members-popover"]')
-    expect(popover.text()).toContain('2 people in this call')
     expect(popover.text()).toContain('Bob')
     expect(popover.text()).toContain('eve@example.com')
     expect(wrapper.get('[data-testid="call-avatar-user-2"]').attributes('data-avatar-url')).toBe('/api/public/avatars/avatars/user-2/bob.png')

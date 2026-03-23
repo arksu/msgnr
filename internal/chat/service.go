@@ -1352,18 +1352,20 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	}
 	directDeliveries = append(directDeliveries, readCounterDeliveries...)
 
-	directDeliveries = append(directDeliveries, s.buildMessageAlertDeliveries(
-		p.ChannelID,
-		msgID,
-		p.ThreadRootMessageID,
-		p.SenderID,
-		senderName,
-		p.Body,
-		len(attachments),
-		alertRecipients,
-		isDMConversation,
-		skipAlertRecipientIDs,
-	)...)
+	if !isReply {
+		directDeliveries = append(directDeliveries, s.buildMessageAlertDeliveries(
+			p.ChannelID,
+			msgID,
+			p.ThreadRootMessageID,
+			p.SenderID,
+			senderName,
+			p.Body,
+			len(attachments),
+			alertRecipients,
+			isDMConversation,
+			skipAlertRecipientIDs,
+		)...)
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return SendMessageResult{}, fmt.Errorf("chat.SendMessage commit: %w", err)

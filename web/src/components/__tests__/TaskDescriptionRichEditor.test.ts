@@ -154,7 +154,7 @@ describe('TaskDescriptionRichEditor', () => {
     await flushPromises()
 
     expect(fetchOwnedAttachmentBlob).not.toHaveBeenCalled()
-    expect(window.open).toHaveBeenCalledWith('https://openai.com', '_blank')
+    expect(window.open).toHaveBeenCalledWith('https://openai.com/', '_blank')
     const opened = vi.mocked(window.open).mock.results[0]?.value as { focus: ReturnType<typeof vi.fn> }
     expect(opened.focus).toHaveBeenCalled()
   })

@@ -5,6 +5,7 @@
         v-if="block.type === 'markdown'"
         class="markdown-body break-words text-sm text-gray-300"
         v-html="renderMarkdownBlock(block.content)"
+        @click="onMarkdownClick"
       />
 
       <div v-else-if="block.token.kind === 'image'" class="group/image relative w-fit">
@@ -85,8 +86,10 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import router from '@/router'
 import { fetchOwnedAttachmentBlob } from '@/services/http/attachmentOwnersApi'
 import { openBlobInBrowser } from '@/utils/attachmentBrowser'
+import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
   type AttachmentToken,
   splitMarkdownWithAttachmentBlocks,
@@ -109,6 +112,10 @@ const imagePreview = reactive({
 
 function renderMarkdownBlock(value: string): string {
   return renderTaskMarkdownToHtml(value)
+}
+
+function onMarkdownClick(event: MouseEvent) {
+  handleMarkdownLinkClick(event, router)
 }
 
 function attachmentKey(token: AttachmentToken): string {

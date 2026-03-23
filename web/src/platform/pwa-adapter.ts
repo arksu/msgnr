@@ -63,7 +63,18 @@ export class PwaAdapter implements PlatformAdapter {
     },
   }
 
-  system: PlatformAdapter['system'] = {}
+  system: PlatformAdapter['system'] = {
+    openExternalUrl: async (url: string) => {
+      if (typeof window === 'undefined') return
+      const opened = window.open(url, '_blank')
+      if (!opened) return
+      try {
+        opened.opener = null
+      } catch {
+        // Ignore browsers that expose opener as read-only.
+      }
+    },
+  }
   window: PlatformAdapter['window'] = {}
   storage: PlatformAdapter['storage'] = {}
 

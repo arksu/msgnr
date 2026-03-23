@@ -87,6 +87,11 @@ fn request_app_restart(app: AppHandle) -> Result<(), String> {
   Ok(())
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+  tauri_plugin_opener::open_url(url, None::<&str>).map_err(|err| err.to_string())
+}
+
 fn normalize_overlay_label(overlay_label: Option<String>) -> String {
   let trimmed = overlay_label.unwrap_or_else(|| "annotation_overlay".to_string());
   if trimmed.trim().is_empty() {
@@ -244,6 +249,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_notification::init())
+    .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
     .setup(|app| {
       let tray = build_tray(app.handle())?;
@@ -275,6 +281,7 @@ pub fn run() {
       keyring_set,
       keyring_delete,
       request_app_restart,
+      open_external_url,
       annotation_overlay_show,
       annotation_overlay_hide,
       annotation_overlay_clear,

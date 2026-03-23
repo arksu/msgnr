@@ -59,6 +59,11 @@ describe('MessageBubble reactions', () => {
     chatApiMocks.deleteMessage.mockResolvedValue(undefined)
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:attachment-preview')
     globalThis.URL.revokeObjectURL = vi.fn()
+    window.open = vi.fn(() => ({
+      opener: null,
+      focus: vi.fn(),
+      close: vi.fn(),
+    } as unknown as Window))
   })
 
   afterEach(() => {
@@ -365,6 +370,32 @@ describe('MessageBubble reactions', () => {
 
     expect(wrapper.find('[data-testid="message-edit-textarea"]').exists()).toBe(false)
     expect(msg.body).toBe('before')
+    wrapper.unmount()
+  })
+
+  it('opens markdown links from the rendered message body', async () => {
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      body: '[OpenAI](https://openai.com)',
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await flushAll()
+
+    const link = wrapper.get('.markdown-body a')
+    link.element.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }))
+    await flushAll()
+
+    expect(window.open).toHaveBeenCalledWith('https://openai.com/', '_blank')
+
     wrapper.unmount()
   })
 

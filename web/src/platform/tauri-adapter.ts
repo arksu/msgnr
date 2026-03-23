@@ -212,6 +212,9 @@ export class TauriAdapter implements PlatformAdapter {
       }
     },
     invokeNative: async <T>(command: string, args?: Record<string, unknown>) => invokeNative<T>(command, args),
+    openExternalUrl: async (url: string) => {
+      await invokeNative('open_external_url', { url })
+    },
   }
 
   window: PlatformAdapter['window'] = {

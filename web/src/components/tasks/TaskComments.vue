@@ -37,6 +37,7 @@
             v-if="comment.body"
             class="markdown-body break-words text-sm text-gray-300"
             v-html="renderCommentBody(comment.body)"
+            @click="onMarkdownClick"
           />
 
           <div v-if="comment.attachments?.length" class="mt-2 space-y-2">
@@ -297,10 +298,12 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick, reactive } from 'vue'
+import router from '@/router'
 import { useTasksStore } from '@/stores/tasks'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 import { renderMarkdownToHtml } from '@/utils/markdown'
+import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
   tasksListComments,
   tasksCreateComment,
@@ -365,6 +368,10 @@ const canSubmit = computed(() => {
 
 function renderCommentBody(body: string): string {
   return renderMarkdownToHtml(body)
+}
+
+function onMarkdownClick(event: MouseEvent) {
+  handleMarkdownLinkClick(event, router)
 }
 
 const attachButtonTitle = computed(() => {

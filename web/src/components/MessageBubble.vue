@@ -185,6 +185,7 @@
           class="markdown-body"
           :class="bodyTextClass"
           v-html="renderedMessageHtml"
+          @click="onMarkdownClick"
         ></div>
         <p
           v-if="!showHeader && message.editedAt"
@@ -494,8 +495,10 @@ import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
+import router from '@/router'
 import { generateId } from '@/services/id'
 import { renderMarkdownToHtml } from '@/utils/markdown'
+import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
   fetchMessageAttachmentBlob,
   listMessageReactionUsers,
@@ -657,6 +660,10 @@ const renderedMessageHtml = computed(() => {
   if (!props.message.body) return ''
   return renderMarkdownToHtml(props.message.body)
 })
+
+function onMarkdownClick(event: MouseEvent) {
+  handleMarkdownLinkClick(event, router)
+}
 
 // ── Send status actions ──────────────────────────────────────────────────────
 

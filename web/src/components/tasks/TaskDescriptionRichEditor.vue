@@ -234,9 +234,11 @@ import { TextSelection } from '@tiptap/pm/state'
 import { prosemirrorJSONToYXmlFragment } from '@tiptap/y-tiptap'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
+import router from '@/router'
 import { fetchOwnedAttachmentBlob, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
-import { openBlobInBrowser, openHrefInBrowser } from '@/utils/attachmentBrowser'
+import { openBlobInBrowser } from '@/utils/attachmentBrowser'
 import { buildAttachmentUrl, parseAttachmentUrl, type AttachmentOwnerKind } from '@/utils/attachmentMarkdown'
+import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 
@@ -340,29 +342,15 @@ function editorStateSnapshot() {
   }
 }
 
-async function openAttachmentLinkFromEditor(href: string) {
+async function openAttachmentLinkFromEditor(href: string): Promise<void> {
   const parsed = parseAttachmentUrl(href)
-  if (!parsed) return false
+  if (!parsed) return
 
   try {
     await openBlobInBrowser(() => fetchOwnedAttachmentBlob(parsed.ownerKind, parsed.ownerId, parsed.attachmentId))
   } catch {
-    return false
+    return
   }
-
-  return true
-}
-
-function openStandardLinkFromEditor(href: string): boolean {
-  if (!href.trim()) return false
-
-  try {
-    openHrefInBrowser(href)
-  } catch {
-    return false
-  }
-
-  return true
 }
 
 function revokeAttachmentObjectUrls() {
@@ -513,20 +501,9 @@ const editor = useEditor({
     },
     handleDOMEvents: {
       click(_view, event) {
-        const target = event.target
-        if (!(target instanceof HTMLElement)) return false
-
-        const link = target.closest('a[href]')
-        if (!(link instanceof HTMLAnchorElement)) return false
-
-        const href = link.getAttribute('href') ?? ''
-        event.preventDefault()
-        if (parseAttachmentUrl(href)) {
-          void openAttachmentLinkFromEditor(href)
-          return true
-        }
-
-        return openStandardLinkFromEditor(href)
+        return handleMarkdownLinkClick(event as MouseEvent, router, {
+          onAttachmentLink: openAttachmentLinkFromEditor,
+        })
       },
     },
     handlePaste(_view, event) {

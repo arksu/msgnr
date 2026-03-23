@@ -42,6 +42,7 @@ export interface PlatformAdapter {
     setAutoLaunch?(enabled: boolean): Promise<void>
     checkForUpdates?(): Promise<{ updated: boolean; version?: string; error?: string }>
     invokeNative?<T>(command: string, args?: Record<string, unknown>): Promise<T>
+    openExternalUrl?(url: string): Promise<void> | void
   }
 
   window: {

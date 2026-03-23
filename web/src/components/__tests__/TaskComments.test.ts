@@ -61,6 +61,10 @@ describe('TaskComments', () => {
 
     ;(globalThis.URL as any).createObjectURL = vi.fn(() => 'blob:mock')
     ;(globalThis.URL as any).revokeObjectURL = vi.fn()
+    window.open = vi.fn(() => ({
+      opener: null,
+      focus: vi.fn(),
+    } as unknown as Window))
   })
 
   it('uploads dropped files onto the comment textarea', async () => {
@@ -403,5 +407,27 @@ describe('TaskComments', () => {
     const link = wrapper.find('.markdown-body a')
     expect(link.exists()).toBe(true)
     expect(link.attributes('href')).toBe('https://example.com')
+  })
+
+  it('opens markdown links in the system browser when clicked', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-markdown',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: '[link](https://example.com)',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    await wrapper.get('.markdown-body a').trigger('click')
+    await flushPromises()
+
+    expect(window.open).toHaveBeenCalledWith('https://example.com/', '_blank')
   })
 })

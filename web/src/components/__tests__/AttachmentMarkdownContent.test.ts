@@ -49,6 +49,21 @@ describe('AttachmentMarkdownContent', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:attachment')
   })
 
+  it('opens markdown links in the system browser when clicked', async () => {
+    const wrapper = mount(AttachmentMarkdownContent, {
+      props: {
+        markdown: '[Docs](https://example.com/docs)',
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('.markdown-body a').trigger('click')
+    await flushPromises()
+
+    expect(window.open).toHaveBeenCalledWith('https://example.com/docs', '_blank')
+  })
+
   it('does not navigate the current tab when the popup is blocked', async () => {
     window.open = vi.fn(() => null)
 

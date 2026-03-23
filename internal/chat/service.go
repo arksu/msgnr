@@ -925,6 +925,11 @@ type DirectDelivery struct {
 	Event  *packetspb.ServerEvent
 }
 
+type messageAlertRecipient struct {
+	UserID            uuid.UUID
+	NotificationLevel int16
+}
+
 type UploadMessageAttachmentParams struct {
 	ConversationID uuid.UUID
 	ActorID        uuid.UUID
@@ -1105,6 +1110,26 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		}
 	}
 
+	sender, err := s.lookupActiveDMUser(ctx, p.SenderID)
+	if err != nil {
+		return SendMessageResult{}, fmt.Errorf("chat.SendMessage lookup sender: %w", err)
+	}
+	senderName := sender.DisplayName
+	if senderName == "" {
+		senderName = sender.Email
+	}
+
+	alertRecipients, err := s.messageAlertRecipientsTx(ctx, tx, p.ChannelID, p.SenderID)
+	if err != nil {
+		return SendMessageResult{}, fmt.Errorf("chat.SendMessage list alert recipients: %w", err)
+	}
+	conversationKind, err := s.conversationKindTx(ctx, tx, p.ChannelID)
+	if err != nil {
+		return SendMessageResult{}, fmt.Errorf("chat.SendMessage conversation kind: %w", err)
+	}
+	isDMConversation := conversationKind == "dm"
+	skipAlertRecipientIDs := make(map[uuid.UUID]struct{})
+
 	// Insert @uuid mentions.
 	mentionedIDs := extractMentionUUIDs(p.Body)
 	for _, uid := range mentionedIDs {
@@ -1133,6 +1158,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			continue // fully muted — skip notification
 		}
 		// MENTIONS_ONLY and ALL both receive mention notifications.
+		skipAlertRecipientIDs[uid] = struct{}{}
 		delivery, err := s.createNotificationTx(ctx, tx, createNotificationParams{
 			UserID:         uid,
 			ChannelID:      p.ChannelID,
@@ -1251,6 +1277,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			}
 			// Thread replies are treated like mentions for MENTIONS_ONLY:
 			// the user participated in the thread, so they should be notified.
+			skipAlertRecipientIDs[recipientID] = struct{}{}
 			delivery, err := s.createNotificationTx(ctx, tx, createNotificationParams{
 				UserID:         recipientID,
 				ChannelID:      p.ChannelID,
@@ -1265,6 +1292,25 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			directDeliveries = append(directDeliveries, delivery)
 		}
 	}
+
+	readCounterDeliveries, err := s.buildUnreadRecalcDeliveriesForChannelMembersTx(ctx, tx, p.ChannelID)
+	if err != nil {
+		return SendMessageResult{}, fmt.Errorf("chat.SendMessage build unread deliveries: %w", err)
+	}
+	directDeliveries = append(directDeliveries, readCounterDeliveries...)
+
+	directDeliveries = append(directDeliveries, s.buildMessageAlertDeliveries(
+		p.ChannelID,
+		msgID,
+		p.ThreadRootMessageID,
+		p.SenderID,
+		senderName,
+		p.Body,
+		len(attachments),
+		alertRecipients,
+		isDMConversation,
+		skipAlertRecipientIDs,
+	)...)
 
 	if err := tx.Commit(ctx); err != nil {
 		return SendMessageResult{}, fmt.Errorf("chat.SendMessage commit: %w", err)
@@ -2276,6 +2322,48 @@ func (s *Service) listActiveChannelMemberIDsTx(ctx context.Context, tx pgx.Tx, c
 	return memberIDs, nil
 }
 
+func (s *Service) messageAlertRecipientsTx(ctx context.Context, tx pgx.Tx, channelID, senderID uuid.UUID) ([]messageAlertRecipient, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT user_id, notification_level
+		  FROM channel_members
+		 WHERE channel_id = $1
+		   AND is_archived = false
+		   AND user_id <> $2
+		 ORDER BY user_id`,
+		channelID, senderID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	recipients := make([]messageAlertRecipient, 0)
+	for rows.Next() {
+		var recipient messageAlertRecipient
+		if err := rows.Scan(&recipient.UserID, &recipient.NotificationLevel); err != nil {
+			return nil, err
+		}
+		recipients = append(recipients, recipient)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return recipients, nil
+}
+
+func (s *Service) conversationKindTx(ctx context.Context, tx pgx.Tx, channelID uuid.UUID) (string, error) {
+	var kind string
+	if err := tx.QueryRow(ctx, `
+		SELECT kind
+		  FROM channels
+		 WHERE id = $1`,
+		channelID,
+	).Scan(&kind); err != nil {
+		return "", err
+	}
+	return kind, nil
+}
+
 func (s *Service) buildUnreadRecalcDeliveriesForChannelMembersTx(ctx context.Context, tx pgx.Tx, channelID uuid.UUID) ([]DirectDelivery, error) {
 	memberIDs, err := s.listActiveChannelMemberIDsTx(ctx, tx, channelID)
 	if err != nil {
@@ -2738,6 +2826,49 @@ func (s *Service) buildNotificationResolvedDelivery(channelID, userID, notificat
 		},
 	}
 	return DirectDelivery{UserID: userID.String(), Event: serverEvt}
+}
+
+func (s *Service) buildMessageAlertDeliveries(
+	channelID, messageID, threadRootMessageID, senderID uuid.UUID,
+	senderName, body string,
+	attachmentCount int,
+	recipients []messageAlertRecipient,
+	isDMConversation bool,
+	skipRecipientIDs map[uuid.UUID]struct{},
+) []DirectDelivery {
+	deliveries := make([]DirectDelivery, 0, len(recipients))
+	for _, recipient := range recipients {
+		if recipient.NotificationLevel == notificationLevelNothing {
+			continue
+		}
+		if !isDMConversation && recipient.NotificationLevel != notificationLevelAll {
+			continue
+		}
+		if _, skip := skipRecipientIDs[recipient.UserID]; skip {
+			continue
+		}
+		alert := &packetspb.MessageAlertEvent{
+			ConversationId:  channelID.String(),
+			MessageId:       messageID.String(),
+			SenderId:        senderID.String(),
+			SenderName:      senderName,
+			Body:            body,
+			AttachmentCount: int32(attachmentCount),
+		}
+		if threadRootMessageID != uuid.Nil {
+			alert.ThreadRootMessageId = threadRootMessageID.String()
+		}
+		evt := &packetspb.ServerEvent{
+			EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT,
+			ConversationId: channelID.String(),
+			OccurredAt:     timestamppb.Now(),
+			Payload: &packetspb.ServerEvent_MessageAlert{
+				MessageAlert: alert,
+			},
+		}
+		deliveries = append(deliveries, DirectDelivery{UserID: recipient.UserID.String(), Event: evt})
+	}
+	return deliveries
 }
 
 func (s *Service) threadNotificationRecipientsTx(ctx context.Context, tx pgx.Tx, rootMessageID, senderID uuid.UUID) ([]uuid.UUID, error) {

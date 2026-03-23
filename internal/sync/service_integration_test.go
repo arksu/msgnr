@@ -51,10 +51,6 @@ func seedSyncChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, user
 
 func appendStoredEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *events.Store, channelID uuid.UUID, body string, occurredAt time.Time) int64 {
 	t.Helper()
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	defer tx.Rollback(ctx) //nolint:errcheck
-
 	msg := &packetspb.MessageEvent{
 		ConversationId: channelID.String(),
 		MessageId:      uuid.NewString(),
@@ -62,16 +58,33 @@ func appendStoredEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st
 		Body:           body,
 		ChannelSeq:     1,
 	}
+	serverEvt := &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+		ConversationId: channelID.String(),
+		Payload: &packetspb.ServerEvent_MessageCreated{
+			MessageCreated: msg,
+		},
+	}
 	payload, err := protojson.Marshal(msg)
 	require.NoError(t, err)
 
-	stored, err := store.AppendEventTx(ctx, tx, events.AppendParams{
-		EventID:     uuid.NewString(),
-		EventType:   "message_created",
-		ChannelID:   channelID.String(),
-		PayloadJSON: payload,
-		OccurredAt:  occurredAt,
+	return appendStoredProtoEvent(t, ctx, pool, store, events.AppendParams{
+		EventID:      uuid.NewString(),
+		EventType:    "message_created",
+		ChannelID:    channelID.String(),
+		PayloadJSON:  payload,
+		OccurredAt:   occurredAt,
+		ProtoPayload: serverEvt,
 	})
+}
+
+func appendStoredProtoEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *events.Store, params events.AppendParams) int64 {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	stored, err := store.AppendEventTx(ctx, tx, params)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit(ctx))
 	return stored.Seq
@@ -83,7 +96,7 @@ func TestIntegration_SyncSince_ContiguousGap(t *testing.T) {
 
 	store := events.NewStore(pool)
 	cfg := &config.Config{MaxSyncBatch: 10, SyncEventLimit: 10, SyncRetentionWindow: 72}
-	svc := syncsvc.NewService(pool, cfg, store)
+	svc := syncsvc.NewService(pool, cfg, store, nil)
 	userID := seedSyncUser(t, ctx, pool)
 	channelID := seedSyncChannel(t, ctx, pool, userID)
 
@@ -99,6 +112,104 @@ func TestIntegration_SyncSince_ContiguousGap(t *testing.T) {
 	require.Len(t, resp.GetEvents(), 2)
 	assert.Equal(t, int64(1), resp.GetFromSeq())
 	assert.Equal(t, int64(2), resp.GetToSeq())
+	assert.Equal(t, int64(2), resp.GetSyncCursor())
+}
+
+func TestIntegration_SyncSince_FiltersUnauthorizedEventsAndAdvancesCursor(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	userA := seedSyncUser(t, ctx, pool)
+	userB := seedSyncUser(t, ctx, pool)
+	channelA := seedSyncChannel(t, ctx, pool, userA)
+	channelB := seedSyncChannel(t, ctx, pool, userB)
+
+	authorize := func(_ context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool {
+		if payload := evt.GetNotificationAdded(); payload != nil {
+			return payload.GetUserId() == principal.UserID.String()
+		}
+		return evt.GetConversationId() == channelA.String()
+	}
+
+	cfg := &config.Config{MaxSyncBatch: 10, SyncEventLimit: 10, SyncRetentionWindow: 72}
+	svc := syncsvc.NewService(pool, cfg, store, authorize)
+
+	appendStoredEvent(t, ctx, pool, store, channelA, "mine-one", time.Now().Add(-4*time.Minute))
+	appendStoredEvent(t, ctx, pool, store, channelB, "other-channel", time.Now().Add(-3*time.Minute))
+
+	notification := &packetspb.NotificationAddedEvent{
+		UserId: userB.String(),
+		Notification: &packetspb.NotificationSummary{
+			NotificationId: uuid.NewString(),
+			Type:           packetspb.NotificationType_NOTIFICATION_TYPE_MENTION,
+			Title:          "Mention",
+			Body:           "private",
+			ConversationId: channelB.String(),
+		},
+	}
+	notificationJSON, err := protojson.Marshal(notification)
+	require.NoError(t, err)
+	appendStoredProtoEvent(t, ctx, pool, store, events.AppendParams{
+		EventID:     uuid.NewString(),
+		EventType:   "notification_added",
+		ChannelID:   channelB.String(),
+		PayloadJSON: notificationJSON,
+		OccurredAt:  time.Now().Add(-2 * time.Minute),
+		ProtoPayload: &packetspb.ServerEvent{
+			EventType:      packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED,
+			ConversationId: channelB.String(),
+			Payload: &packetspb.ServerEvent_NotificationAdded{
+				NotificationAdded: notification,
+			},
+		},
+	})
+	appendStoredEvent(t, ctx, pool, store, channelA, "mine-two", time.Now().Add(-1*time.Minute))
+
+	resp, err := svc.SyncSince(ctx, auth.Principal{UserID: userA}, &packetspb.SyncSinceRequest{
+		AfterSeq:  0,
+		MaxEvents: 10,
+	})
+	require.NoError(t, err)
+	require.False(t, resp.GetNeedFullBootstrap())
+	require.Len(t, resp.GetEvents(), 2)
+	assert.Equal(t, int64(1), resp.GetFromSeq())
+	assert.Equal(t, int64(4), resp.GetToSeq())
+	assert.Equal(t, int64(4), resp.GetSyncCursor())
+	assert.Equal(t, channelA.String(), resp.GetEvents()[0].GetConversationId())
+	assert.Equal(t, channelA.String(), resp.GetEvents()[1].GetConversationId())
+}
+
+func TestIntegration_SyncSince_EmptyAuthorizedTailStillAdvancesCursor(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	userA := seedSyncUser(t, ctx, pool)
+	userB := seedSyncUser(t, ctx, pool)
+	channelA := seedSyncChannel(t, ctx, pool, userA)
+	channelB := seedSyncChannel(t, ctx, pool, userB)
+
+	authorize := func(_ context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool {
+		return evt.GetConversationId() == channelA.String() && principal.UserID == userA
+	}
+
+	cfg := &config.Config{MaxSyncBatch: 10, SyncEventLimit: 10, SyncRetentionWindow: 72}
+	svc := syncsvc.NewService(pool, cfg, store, authorize)
+
+	appendStoredEvent(t, ctx, pool, store, channelB, "other-one", time.Now().Add(-2*time.Minute))
+	appendStoredEvent(t, ctx, pool, store, channelB, "other-two", time.Now().Add(-1*time.Minute))
+
+	resp, err := svc.SyncSince(ctx, auth.Principal{UserID: userA}, &packetspb.SyncSinceRequest{
+		AfterSeq:  0,
+		MaxEvents: 10,
+	})
+	require.NoError(t, err)
+	require.False(t, resp.GetNeedFullBootstrap())
+	assert.Empty(t, resp.GetEvents())
+	assert.Equal(t, int64(2), resp.GetSyncCursor())
+	assert.Equal(t, int64(0), resp.GetFromSeq())
+	assert.Equal(t, int64(0), resp.GetToSeq())
 }
 
 func TestIntegration_SyncSince_GapTooLarge(t *testing.T) {
@@ -107,7 +218,7 @@ func TestIntegration_SyncSince_GapTooLarge(t *testing.T) {
 
 	store := events.NewStore(pool)
 	cfg := &config.Config{MaxSyncBatch: 10, SyncEventLimit: 1, SyncRetentionWindow: 72}
-	svc := syncsvc.NewService(pool, cfg, store)
+	svc := syncsvc.NewService(pool, cfg, store, nil)
 	userID := seedSyncUser(t, ctx, pool)
 	channelID := seedSyncChannel(t, ctx, pool, userID)
 
@@ -129,7 +240,7 @@ func TestIntegration_SyncSince_GapOutOfRetention(t *testing.T) {
 
 	store := events.NewStore(pool)
 	cfg := &config.Config{MaxSyncBatch: 10, SyncEventLimit: 10, SyncRetentionWindow: 1}
-	svc := syncsvc.NewService(pool, cfg, store)
+	svc := syncsvc.NewService(pool, cfg, store, nil)
 	userID := seedSyncUser(t, ctx, pool)
 	channelID := seedSyncChannel(t, ctx, pool, userID)
 
@@ -151,7 +262,7 @@ func TestIntegration_Ack_IsMonotonic(t *testing.T) {
 
 	store := events.NewStore(pool)
 	cfg := &config.Config{MaxSyncBatch: 10, SyncEventLimit: 10, SyncRetentionWindow: 72}
-	svc := syncsvc.NewService(pool, cfg, store)
+	svc := syncsvc.NewService(pool, cfg, store, nil)
 	userID := seedSyncUser(t, ctx, pool)
 
 	first, err := svc.Ack(ctx, auth.Principal{UserID: userID}, &packetspb.AckRequest{LastAppliedEventSeq: 10})
@@ -172,7 +283,7 @@ func TestIntegration_SyncSince_EmptyTableAfterPruneRequiresBootstrap(t *testing.
 
 	store := events.NewStore(pool)
 	cfg := &config.Config{MaxSyncBatch: 10, SyncEventLimit: 10, SyncRetentionWindow: 1}
-	svc := syncsvc.NewService(pool, cfg, store)
+	svc := syncsvc.NewService(pool, cfg, store, nil)
 	userID := seedSyncUser(t, ctx, pool)
 	channelID := seedSyncChannel(t, ctx, pool, userID)
 

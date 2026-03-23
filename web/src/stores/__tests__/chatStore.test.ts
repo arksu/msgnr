@@ -9,6 +9,7 @@ import {
 } from '@/services/storage/lastConversationStorage'
 import {
   BootstrapResponseSchema,
+  SyncSinceResponseSchema,
   UserSummarySchema,
   ConversationSummarySchema,
   UnreadCounterSchema,
@@ -21,6 +22,7 @@ import {
   ReadCounterUpdatedEventSchema,
   MessageUpdatedEventSchema,
   MessageDeletedEventSchema,
+  MessageAlertEventSchema,
   ThreadSummaryUpdatedEventSchema,
   TaskStatusChangedEventSchema,
   ServerEventSchema,
@@ -327,7 +329,7 @@ describe('chatStore phase 6 flows', () => {
     expect(loadLastOpenedConversation('workspace-1', 'user-1')).toBe('channel-1')
   })
 
-  it('requests SyncSince when a live event arrives with a gap', () => {
+  it('accepts authorized live events even when global seq values skip filtered events', () => {
     const chat = useChatStore()
     const ws = useWsStore()
     ws.sendSyncSince = vi.fn()
@@ -357,8 +359,51 @@ describe('chatStore phase 6 flows', () => {
       },
     }))
 
-    expect(ws.setRecoveringGap).toHaveBeenCalled()
-    expect(ws.sendSyncSince).toHaveBeenCalledWith(5n, 200)
+    expect(ws.setRecoveringGap).not.toHaveBeenCalled()
+    expect(ws.sendSyncSince).not.toHaveBeenCalled()
+    expect(chat.lastAppliedEventSeq).toBe(7n)
+    expect(chat.messages['channel-1']).toHaveLength(1)
+  })
+
+  it('continues sync pagination when auth-filtered replay returns fewer than the page size', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSyncSince = vi.fn()
+    ws.setLiveSynced = vi.fn()
+
+    chat.bootstrapped = true
+    chat.lastAppliedEventSeq = 10n
+
+    chat.handleSyncSinceResponse(create(SyncSinceResponseSchema, {
+      events: [
+        create(ServerEventSchema, {
+          eventSeq: 12n,
+          eventId: 'evt-12',
+          eventType: EventType.MESSAGE_CREATED,
+          conversationId: 'channel-1',
+          payload: {
+            case: 'messageCreated',
+            value: create(MessageEventSchema, {
+              conversationId: 'channel-1',
+              messageId: 'message-12',
+              senderId: 'user-2',
+              body: 'visible after filtered event',
+              channelSeq: 12n,
+              threadRootMessageId: '',
+              threadSeq: 0n,
+              mentionedUserIds: [],
+              mentionEveryone: false,
+            }),
+          },
+        }),
+      ],
+      syncCursor: 40n,
+      needFullBootstrap: false,
+    }))
+
+    expect(chat.lastAppliedEventSeq).toBe(40n)
+    expect(ws.sendSyncSince).toHaveBeenCalledWith(40n, 200)
+    expect(ws.setLiveSynced).not.toHaveBeenCalled()
   })
 
   it('sends UpdateReadCursor when selecting a conversation with unread messages', () => {
@@ -744,6 +789,43 @@ describe('chatStore phase 6 flows', () => {
     expect(ws.sendBootstrap).toHaveBeenCalledTimes(1)
   })
 
+  it('uses notification title as sender fallback for inactive durable notifications', () => {
+    const chat = useChatStore()
+    chat.setClientActive(false)
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-notif-sender-fallback-1',
+      eventType: EventType.NOTIFICATION_ADDED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'notificationAdded',
+        value: create(NotificationAddedEventSchema, {
+          userId: 'user-1',
+          notification: create(NotificationSummarySchema, {
+            notificationId: 'notification-sender-fallback-1',
+            type: 5,
+            title: 'Mention',
+            body: 'You were mentioned',
+            conversationId: 'channel-1',
+            isRead: false,
+          }),
+        }),
+      },
+    }))
+
+    expect(onIncoming).toHaveBeenCalledWith(expect.objectContaining({
+      senderName: 'Mention',
+      messageId: 'notification-sender-fallback-1',
+    }))
+
+    off()
+  })
+
   it('tracks active calls from call_state_changed ACTIVE and ENDED events', () => {
     const chat = useChatStore()
     chat.bootstrapped = true
@@ -786,7 +868,7 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.activeCalls).toEqual([])
   })
 
-  it('defers active-conversation read mark when tab is hidden and flushes on focus', () => {
+  it('defers active-conversation read mark when tab is hidden and leaves unread state to server counters', () => {
     const chat = useChatStore()
     const ws = useWsStore()
     ws.sendUpdateReadCursor = vi.fn()
@@ -829,7 +911,7 @@ describe('chatStore phase 6 flows', () => {
     }))
 
     expect(ws.sendUpdateReadCursor).not.toHaveBeenCalled()
-    expect(chat.channels[0].unread).toBe(1)
+    expect(chat.channels[0].unread).toBe(0)
 
     chat.setClientActive(true)
     chat.onClientFocus()
@@ -838,7 +920,7 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.channels[0].unread).toBe(0)
   })
 
-  it('defers active-conversation read mark when window is blurred (visibility still visible)', () => {
+  it('defers active-conversation read mark when window is blurred and leaves unread state to server counters', () => {
     const chat = useChatStore()
     const ws = useWsStore()
     ws.sendUpdateReadCursor = vi.fn()
@@ -881,7 +963,7 @@ describe('chatStore phase 6 flows', () => {
     }))
 
     expect(ws.sendUpdateReadCursor).not.toHaveBeenCalled()
-    expect(chat.channels[0].unread).toBe(1)
+    expect(chat.channels[0].unread).toBe(0)
 
     chat.setClientActive(true)
     chat.onClientFocus()
@@ -890,7 +972,7 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.channels[0].unread).toBe(0)
   })
 
-  it('emits inactive incoming-message notifications when level allows', () => {
+  it('emits inactive incoming-message notifications from backend-routed message_alert events', () => {
     const chat = useChatStore()
     chat.setClientActive(false)
     chat.workspace = {
@@ -917,20 +999,18 @@ describe('chatStore phase 6 flows', () => {
     chat.handleServerEvent(create(ServerEventSchema, {
       eventSeq: 1n,
       eventId: 'evt-msg-sound-1',
-      eventType: EventType.MESSAGE_CREATED,
+      eventType: EventType.MESSAGE_ALERT,
       conversationId: 'channel-1',
       payload: {
-        case: 'messageCreated',
-        value: create(MessageEventSchema, {
+        case: 'messageAlert',
+        value: create(MessageAlertEventSchema, {
           conversationId: 'channel-1',
           messageId: 'message-sound-1',
           senderId: 'user-2',
+          senderName: 'user-2',
           body: 'hello',
-          channelSeq: 2n,
           threadRootMessageId: '',
-          threadSeq: 0n,
-          mentionEveryone: false,
-          mentionedUserIds: [],
+          attachmentCount: 0,
         }),
       },
     }))
@@ -947,7 +1027,7 @@ describe('chatStore phase 6 flows', () => {
     off()
   })
 
-  it('respects MENTIONS_ONLY for inactive channel messages but always allows DMs', () => {
+  it('emits backend-routed message_alert events for inactive direct messages', () => {
     const chat = useChatStore()
     chat.setClientActive(false)
     chat.workspace = {
@@ -980,46 +1060,23 @@ describe('chatStore phase 6 flows', () => {
     const onIncoming = vi.fn()
     const off = chat.onIncomingMessageNotification(onIncoming)
 
-    // Non-mention channel message should NOT trigger in MENTIONS_ONLY mode.
+    // Generic message alerts are backend-routed and already recipient-filtered.
+    // The store should emit when it receives a direct message_alert event.
     chat.handleServerEvent(create(ServerEventSchema, {
-      eventSeq: 1n,
+      eventSeq: 0n,
       eventId: 'evt-msg-sound-mentions-only-1',
-      eventType: EventType.MESSAGE_CREATED,
-      conversationId: 'channel-1',
-      payload: {
-        case: 'messageCreated',
-        value: create(MessageEventSchema, {
-          conversationId: 'channel-1',
-          messageId: 'message-sound-mentions-only-1',
-          senderId: 'user-2',
-          body: 'no mention',
-          channelSeq: 2n,
-          threadRootMessageId: '',
-          threadSeq: 0n,
-          mentionEveryone: false,
-          mentionedUserIds: [],
-        }),
-      },
-    }))
-
-    // DM message should trigger in MENTIONS_ONLY mode.
-    chat.handleServerEvent(create(ServerEventSchema, {
-      eventSeq: 2n,
-      eventId: 'evt-msg-sound-mentions-only-2',
-      eventType: EventType.MESSAGE_CREATED,
+      eventType: EventType.MESSAGE_ALERT,
       conversationId: 'dm-1',
       payload: {
-        case: 'messageCreated',
-        value: create(MessageEventSchema, {
+        case: 'messageAlert',
+        value: create(MessageAlertEventSchema, {
           conversationId: 'dm-1',
           messageId: 'message-sound-mentions-only-2',
           senderId: 'user-2',
+          senderName: 'Bob',
           body: 'dm ping',
-          channelSeq: 2n,
           threadRootMessageId: '',
-          threadSeq: 0n,
-          mentionEveryone: false,
-          mentionedUserIds: [],
+          attachmentCount: 0,
         }),
       },
     }))
@@ -1309,7 +1366,7 @@ describe('chatStore phase 6 flows', () => {
     })
   })
 
-  it('marks conversation with unread thread replies when receiving non-self thread reply', () => {
+  it('tracks thread summary from thread replies but leaves unread-thread state to read-counter events', () => {
     const chat = useChatStore()
     const ws = useWsStore()
     ws.state = 'LIVE_SYNCED'
@@ -1351,7 +1408,7 @@ describe('chatStore phase 6 flows', () => {
       },
     }))
 
-    expect(chat.channels[0].hasUnreadThreadReplies).toBe(true)
+    expect(chat.channels[0].hasUnreadThreadReplies).toBe(false)
     expect(chat.threadSummaries['root-1'].replyCount).toBe(1)
     expect(chat.threadSummaries['root-1'].lastThreadSeq).toBe(1n)
   })

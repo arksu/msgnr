@@ -105,7 +105,7 @@ func TestIntegration_Bootstrap_FirstPageAndContinuation(t *testing.T) {
 		SyncEventLimit:           100,
 		SyncRetentionWindow:      72,
 	}
-	syncSvc := sync.NewService(pool, cfg, store)
+	syncSvc := sync.NewService(pool, cfg, store, nil)
 	bootstrapSvc := bootstrap.NewService(pool, cfg)
 
 	seedBootstrapWorkspace(t, ctx, pool)

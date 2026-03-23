@@ -71,6 +71,28 @@ func seedChannelForUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, u
 	return channelID
 }
 
+func setChannelMemberNotificationLevel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID, userID uuid.UUID, level int16) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+		UPDATE channel_members
+		   SET notification_level = $3
+		 WHERE channel_id = $1
+		   AND user_id = $2`,
+		channelID, userID, level,
+	)
+	require.NoError(t, err)
+}
+
+func filterDirectDeliveriesByType(deliveries []chat.DirectDelivery, eventType packetspb.EventType) []chat.DirectDelivery {
+	filtered := make([]chat.DirectDelivery, 0)
+	for _, delivery := range deliveries {
+		if delivery.Event != nil && delivery.Event.GetEventType() == eventType {
+			filtered = append(filtered, delivery)
+		}
+	}
+	return filtered
+}
+
 func TestIntegration_SendMessage_Basic(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -98,6 +120,90 @@ func TestIntegration_SendMessage_Basic(t *testing.T) {
 	).Scan(&evtType)
 	require.NoError(t, err)
 	assert.Equal(t, "message_created", evtType)
+}
+
+func TestIntegration_SendMessage_MessageAlertForChannelMember(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	authorID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	var peerID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'Peer', 'member')
+		 RETURNING id`,
+		"peer_"+uuid.New().String()+"@example.com",
+	).Scan(&peerID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, peerID)
+	require.NoError(t, err)
+
+	result, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "hello channel",
+	})
+	require.NoError(t, err)
+	alertDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT)
+	require.Len(t, alertDeliveries, 1)
+	assert.Equal(t, peerID.String(), alertDeliveries[0].UserID)
+	alert := alertDeliveries[0].Event.GetMessageAlert()
+	require.NotNil(t, alert)
+	assert.Equal(t, channelID.String(), alert.GetConversationId())
+	assert.Equal(t, "hello channel", alert.GetBody())
+	assert.Equal(t, int32(0), alert.GetAttachmentCount())
+
+	readCounterDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)
+	require.Len(t, readCounterDeliveries, 2)
+}
+
+func TestIntegration_SendMessage_MessageAlertRespectsNotificationLevel(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	authorID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	insertMember := func(name string) uuid.UUID {
+		var userID uuid.UUID
+		err := pool.QueryRow(ctx,
+			`INSERT INTO users (email, password_hash, display_name, role)
+			 VALUES ($1, 'x', $2, 'member')
+			 RETURNING id`,
+			strings.ToLower(name)+"_"+uuid.New().String()+"@example.com",
+			name,
+		).Scan(&userID)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, userID)
+		require.NoError(t, err)
+		return userID
+	}
+
+	allID := insertMember("All")
+	mentionsID := insertMember("Mentions")
+	nothingID := insertMember("Nothing")
+
+	setChannelMemberNotificationLevel(t, ctx, pool, channelID, mentionsID, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY))
+	setChannelMemberNotificationLevel(t, ctx, pool, channelID, nothingID, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_NOTHING))
+
+	result, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "plain message",
+	})
+	require.NoError(t, err)
+	alertDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT)
+	require.Len(t, alertDeliveries, 1)
+	assert.Equal(t, allID.String(), alertDeliveries[0].UserID)
+
+	readCounterDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)
+	require.Len(t, readCounterDeliveries, 4)
 }
 
 func TestIntegration_SendMessage_Dedup(t *testing.T) {
@@ -546,6 +652,131 @@ func TestIntegration_SendMessage_ReopensArchivedDMPeerWithUnread(t *testing.T) {
 	assert.Equal(t, "hello after leave", messages[0].Body)
 }
 
+func TestIntegration_SendMessage_MessageAlertForDirectMessagePeer(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	var userA uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'User A', 'member')
+		 RETURNING id`,
+		"usera_"+uuid.New().String()+"@example.com",
+	).Scan(&userA)
+	require.NoError(t, err)
+
+	var userB uuid.UUID
+	err = pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'User B', 'member')
+		 RETURNING id`,
+		"userb_"+uuid.New().String()+"@example.com",
+	).Scan(&userB)
+	require.NoError(t, err)
+
+	dm, err := svc.CreateOrOpenDirectMessage(ctx, userA, userB)
+	require.NoError(t, err)
+
+	result, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   dm.DM.ConversationID,
+		SenderID:    userA,
+		ClientMsgID: uuid.New().String(),
+		Body:        "hello dm",
+	})
+	require.NoError(t, err)
+	alertDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT)
+	require.Len(t, alertDeliveries, 1)
+	assert.Equal(t, userB.String(), alertDeliveries[0].UserID)
+
+	readCounterDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)
+	require.Len(t, readCounterDeliveries, 2)
+}
+
+func TestIntegration_SendMessage_MessageAlertForDirectMessageHonorsHardMute(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	var userA uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'User A', 'member')
+		 RETURNING id`,
+		"usera_"+uuid.New().String()+"@example.com",
+	).Scan(&userA)
+	require.NoError(t, err)
+
+	var userB uuid.UUID
+	err = pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'User B', 'member')
+		 RETURNING id`,
+		"userb_"+uuid.New().String()+"@example.com",
+	).Scan(&userB)
+	require.NoError(t, err)
+
+	dm, err := svc.CreateOrOpenDirectMessage(ctx, userA, userB)
+	require.NoError(t, err)
+	setChannelMemberNotificationLevel(t, ctx, pool, dm.DM.ConversationID, userB, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_NOTHING))
+
+	result, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   dm.DM.ConversationID,
+		SenderID:    userA,
+		ClientMsgID: uuid.New().String(),
+		Body:        "hello muted dm",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT))
+	readCounterDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)
+	require.Len(t, readCounterDeliveries, 2)
+}
+
+func TestIntegration_SendMessage_MessageAlertForDirectMessageAllowsMentionsOnly(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	var userA uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'User A', 'member')
+		 RETURNING id`,
+		"usera_"+uuid.New().String()+"@example.com",
+	).Scan(&userA)
+	require.NoError(t, err)
+
+	var userB uuid.UUID
+	err = pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'User B', 'member')
+		 RETURNING id`,
+		"userb_"+uuid.New().String()+"@example.com",
+	).Scan(&userB)
+	require.NoError(t, err)
+
+	dm, err := svc.CreateOrOpenDirectMessage(ctx, userA, userB)
+	require.NoError(t, err)
+	setChannelMemberNotificationLevel(t, ctx, pool, dm.DM.ConversationID, userB, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY))
+
+	result, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   dm.DM.ConversationID,
+		SenderID:    userA,
+		ClientMsgID: uuid.New().String(),
+		Body:        "hello dm mentions only",
+	})
+	require.NoError(t, err)
+	alertDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT)
+	require.Len(t, alertDeliveries, 1)
+	assert.Equal(t, userB.String(), alertDeliveries[0].UserID)
+}
+
 func TestIntegration_LeaveConversation_ArchivesMembershipAndIsIdempotent(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -932,9 +1163,11 @@ func TestIntegration_UpdateReadCursor_ResolvesMentionNotifications(t *testing.T)
 		Body:        "hello @" + mentionedUserID.String(),
 	})
 	require.NoError(t, err)
-	require.Len(t, msg.DirectDeliveries, 1)
-	assert.Equal(t, mentionedUserID.String(), msg.DirectDeliveries[0].UserID)
-	assert.Equal(t, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED, msg.DirectDeliveries[0].Event.GetEventType())
+	notificationDeliveries := filterDirectDeliveriesByType(msg.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
+	require.Len(t, notificationDeliveries, 1)
+	assert.Equal(t, mentionedUserID.String(), notificationDeliveries[0].UserID)
+	readCounterDeliveries := filterDirectDeliveriesByType(msg.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)
+	require.Len(t, readCounterDeliveries, 2)
 
 	var unresolvedBefore int
 	err = pool.QueryRow(ctx,

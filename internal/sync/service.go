@@ -17,21 +17,34 @@ import (
 	"msgnr/internal/gen/queries"
 )
 
+type EventAuthorizer func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool
+
 type Service struct {
 	cfg        *config.Config
 	q          *queries.Queries
 	eventStore *events.Store
+	authorize  EventAuthorizer
 	pruneMu    sync.Mutex
 	lastPrune  time.Time
 }
 
 const pruneInterval = time.Minute
+const (
+	minSyncScanBatch = 64
+	maxSyncScanBatch = 1024
+)
 
-func NewService(pool *pgxpool.Pool, cfg *config.Config, eventStore *events.Store) *Service {
+func NewService(pool *pgxpool.Pool, cfg *config.Config, eventStore *events.Store, authorize EventAuthorizer) *Service {
+	if authorize == nil {
+		authorize = func(_ context.Context, _ auth.Principal, _ *packetspb.ServerEvent) bool {
+			return true
+		}
+	}
 	return &Service{
 		cfg:        cfg,
 		q:          queries.New(stdlib.OpenDBFromPool(pool)),
 		eventStore: eventStore,
+		authorize:  authorize,
 	}
 }
 
@@ -56,7 +69,7 @@ func (s *Service) Ack(ctx context.Context, principal auth.Principal, req *packet
 	}, nil
 }
 
-func (s *Service) SyncSince(ctx context.Context, _ auth.Principal, req *packetspb.SyncSinceRequest) (*packetspb.SyncSinceResponse, error) {
+func (s *Service) SyncSince(ctx context.Context, principal auth.Principal, req *packetspb.SyncSinceRequest) (*packetspb.SyncSinceResponse, error) {
 	if req == nil || req.GetAfterSeq() < 0 {
 		return nil, fmt.Errorf("invalid sync request")
 	}
@@ -101,34 +114,59 @@ func (s *Service) SyncSince(ctx context.Context, _ auth.Principal, req *packetsp
 		limit = s.cfg.MaxSyncBatch
 	}
 
-	storedEvents, err := s.eventStore.ListEventsAfterSeq(ctx, req.GetAfterSeq(), limit)
-	if err != nil {
-		return nil, fmt.Errorf("sync list events: %w", err)
-	}
-	if len(storedEvents) == 0 {
-		if latestSeq > req.GetAfterSeq() {
-			resp.NeedFullBootstrap = true
-			resp.NeedFullBootstrapReason = packetspb.SyncBootstrapReason_SYNC_BOOTSTRAP_REASON_DATA_RECOVERY
-			return resp, nil
-		}
-		return resp, nil
-	}
-
+	scanCursor := req.GetAfterSeq()
 	expectedSeq := req.GetAfterSeq() + 1
-	resp.Events = make([]*packetspb.ServerEvent, 0, len(storedEvents))
-	for _, stored := range storedEvents {
-		if stored.Seq != expectedSeq {
-			resp.Events = nil
-			resp.NeedFullBootstrap = true
-			resp.NeedFullBootstrapReason = packetspb.SyncBootstrapReason_SYNC_BOOTSTRAP_REASON_DATA_RECOVERY
-			return resp, nil
-		}
-		resp.Events = append(resp.Events, stored.Proto)
-		expectedSeq++
+	resp.Events = make([]*packetspb.ServerEvent, 0, limit)
+
+	scanBatch := limit * 4
+	if scanBatch <= 0 || scanBatch > maxSyncScanBatch {
+		scanBatch = maxSyncScanBatch
+	}
+	if scanBatch < minSyncScanBatch {
+		scanBatch = minSyncScanBatch
 	}
 
-	resp.FromSeq = storedEvents[0].Seq
-	resp.ToSeq = storedEvents[len(storedEvents)-1].Seq
+	for scanCursor < latestSeq && len(resp.Events) < limit {
+		storedEvents, err := s.eventStore.ListEventsAfterSeq(ctx, scanCursor, scanBatch)
+		if err != nil {
+			return nil, fmt.Errorf("sync list events: %w", err)
+		}
+		if len(storedEvents) == 0 {
+			if latestSeq > scanCursor {
+				resp.NeedFullBootstrap = true
+				resp.NeedFullBootstrapReason = packetspb.SyncBootstrapReason_SYNC_BOOTSTRAP_REASON_DATA_RECOVERY
+				return resp, nil
+			}
+			break
+		}
+
+		for _, stored := range storedEvents {
+			if stored.Seq != expectedSeq {
+				resp.Events = nil
+				resp.NeedFullBootstrap = true
+				resp.NeedFullBootstrapReason = packetspb.SyncBootstrapReason_SYNC_BOOTSTRAP_REASON_DATA_RECOVERY
+				return resp, nil
+			}
+			scanCursor = stored.Seq
+			expectedSeq++
+			if s.authorize(ctx, principal, stored.Proto) {
+				resp.Events = append(resp.Events, stored.Proto)
+				if resp.FromSeq == 0 {
+					resp.FromSeq = stored.Seq
+				}
+				resp.ToSeq = stored.Seq
+				if len(resp.Events) >= limit {
+					break
+				}
+			}
+		}
+
+		if len(storedEvents) < scanBatch {
+			break
+		}
+	}
+
+	resp.SyncCursor = scanCursor
 	return resp, nil
 }
 

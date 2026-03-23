@@ -206,12 +206,47 @@ func (s *Service) Unsubscribe(ctx context.Context, userID uuid.UUID, endpoint st
 // PushNotifier interface implementation (called by ws.Server)
 // ---------------------------------------------------------------------------
 
-// PushChatDeliveries sends push notifications for chat DirectDeliveries whose
-// target users are offline. Only NOTIFICATION_ADDED events produce push.
+// PushChatDeliveries sends push notifications for backend-routed chat
+// DirectDeliveries after ws.Server has applied active-window gating.
 func (s *Service) PushChatDeliveries(deliveries []chat.DirectDelivery) {
-	// Chat pushes are driven from MESSAGE_CREATED bus events so that we can
-	// notify on every new message without duplicating mention/thread pushes.
-	_ = deliveries
+	if !s.Enabled() {
+		return
+	}
+	for _, d := range deliveries {
+		if d.Event == nil {
+			continue
+		}
+		switch d.Event.EventType {
+		case packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT:
+			alert := d.Event.GetMessageAlert()
+			if alert == nil {
+				continue
+			}
+			s.sendToUser(d.UserID, PushPayload{
+				Type:           "message",
+				Title:          defaultMessageAlertTitle(alert.GetSenderName()),
+				Body:           messagePushBody(alert.GetBody(), alert.GetAttachmentCount() > 0),
+				ConversationID: alert.GetConversationId(),
+				MessageID:      alert.GetMessageId(),
+				URL:            "/",
+			})
+
+		case packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED:
+			na := d.Event.GetNotificationAdded()
+			if na == nil || na.Notification == nil {
+				continue
+			}
+			n := na.Notification
+			s.sendToUser(d.UserID, PushPayload{
+				Type:           "message",
+				Title:          truncate(n.Title, 120),
+				Body:           truncate(n.Body, 200),
+				ConversationID: n.ConversationId,
+				MessageID:      n.NotificationId,
+				URL:            "/",
+			})
+		}
+	}
 }
 
 // PushMessageCreated sends pushes for a message_created event to offline
@@ -464,4 +499,12 @@ func messagePushBody(body string, hasAttachment bool) string {
 		return "Sent an attachment"
 	}
 	return "New message"
+}
+
+func defaultMessageAlertTitle(senderName string) string {
+	senderName = strings.TrimSpace(senderName)
+	if senderName == "" {
+		return "New message"
+	}
+	return senderName
 }

@@ -34,6 +34,7 @@ import type {
   ActiveCallSummary,
   CallInviteSummary,
   PresenceEvent,
+  MessageAlertEvent,
 } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
 import { useAuthStore } from '@/stores/auth'
@@ -1413,6 +1414,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function handleSyncSinceResponse(resp: SyncSinceResponse) {
     const ws = useWsStore()
+    const previousCursor = lastAppliedEventSeq.value
     if (resp.needFullBootstrap) {
       ws.setStaleRebootstrap()
       startBootstrap()
@@ -1420,6 +1422,8 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (resp.events.length === 0) {
+      advanceSyncCursor(resp.syncCursor)
+      scheduleAckFlush()
       ws.setLiveSynced()
       drainBufferedEvents()
       _reloadActiveChannelHistory()
@@ -1427,14 +1431,12 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     for (const event of resp.events) {
-      if (!applyContiguousEvent(event)) {
-        ws.setStaleRebootstrap()
-        startBootstrap()
-        return
-      }
+      applySequencedEvent(event)
     }
+    advanceSyncCursor(resp.syncCursor)
+    scheduleAckFlush()
 
-    if (resp.events.length >= DEFAULT_SYNC_BATCH) {
+    if (resp.events.length >= DEFAULT_SYNC_BATCH || resp.syncCursor > previousCursor) {
       ws.sendSyncSince(lastAppliedEventSeq.value, DEFAULT_SYNC_BATCH)
       return
     }
@@ -1566,7 +1568,6 @@ export const useChatStore = defineStore('chat', () => {
   function addMessage(msg: Message) {
     if (!messages.value[msg.channelId]) messages.value[msg.channelId] = []
     messages.value[msg.channelId].push(msg)
-    incrementUnread(msg.channelId)
   }
 
   function queueReactionOp(clientOpId: string, channelId: string, messageId: string, emoji: string, op: 'add' | 'remove') {
@@ -1661,35 +1662,22 @@ export const useChatStore = defineStore('chat', () => {
 
   function drainBufferedEvents() {
     if (bufferedServerEvents.length === 0) return
-    const ws = useWsStore()
     const queued = bufferedServerEvents.slice()
     bufferedServerEvents = []
     for (const evt of queued) {
       applySequencedEvent(evt)
-      if (ws.state === 'RECOVERING_GAP' || ws.state === 'STALE_REBOOTSTRAP') {
-        break
-      }
     }
   }
 
   function applySequencedEvent(evt: ServerEvent) {
-    const ws = useWsStore()
     if (evt.eventSeq <= lastAppliedEventSeq.value) return
-    if (evt.eventSeq > lastAppliedEventSeq.value + 1n) {
-      bufferServerEvent(evt)
-      ws.setRecoveringGap()
-      ws.sendSyncSince(lastAppliedEventSeq.value, DEFAULT_SYNC_BATCH)
-      return
-    }
     applyContiguousEvent(evt)
   }
 
   function applyContiguousEvent(evt: ServerEvent): boolean {
     if (evt.eventSeq <= lastAppliedEventSeq.value) return true
-    if (evt.eventSeq !== lastAppliedEventSeq.value + 1n) return false
     if (evt.eventId && seenEventIds.has(evt.eventId)) {
-      lastAppliedEventSeq.value = evt.eventSeq
-      saveLastAppliedEventSeq(lastAppliedEventSeq.value)
+      advanceSyncCursor(evt.eventSeq)
       return true
     }
 
@@ -1702,11 +1690,16 @@ export const useChatStore = defineStore('chat', () => {
         seenEventIds = new Set(ids)
       }
     }
-    lastAppliedEventSeq.value = evt.eventSeq
-    saveLastAppliedEventSeq(lastAppliedEventSeq.value)
+    advanceSyncCursor(evt.eventSeq)
     pendingAckEventCount += 1
     scheduleAckFlush()
     return true
+  }
+
+  function advanceSyncCursor(nextSeq: bigint) {
+    if (nextSeq <= lastAppliedEventSeq.value) return
+    lastAppliedEventSeq.value = nextSeq
+    saveLastAppliedEventSeq(lastAppliedEventSeq.value)
   }
 
   function scheduleAckFlush() {
@@ -1777,6 +1770,9 @@ export const useChatStore = defineStore('chat', () => {
       case 'taskStatusChanged':
         emitTaskStatusChangedNotification(evt.payload.value)
         break
+      case 'messageAlert':
+        applyMessageAlert(evt.payload.value)
+        break
       default:
         break
     }
@@ -1794,6 +1790,7 @@ export const useChatStore = defineStore('chat', () => {
       || evt.payload.case === 'forcePasswordChange'
       || evt.payload.case === 'notificationLevelChanged'
       || evt.payload.case === 'taskStatusChanged'
+      || evt.payload.case === 'messageAlert'
   }
 
   function applyConversationSummary(summary?: ConversationSummary) {
@@ -1862,12 +1859,35 @@ export const useChatStore = defineStore('chat', () => {
       notificationSummaryToItem(evt.notification),
       ...notifications.value.filter(item => item.id !== evt.notification?.notificationId),
     ]
+    if (!isClientTabActive()) {
+      emitIncomingMessageNotification({
+        conversationId: evt.notification.conversationId,
+        messageId: evt.notification.notificationId,
+        senderId: '',
+        senderName: evt.notification.title || 'Msgnr',
+        body: evt.notification.body,
+        attachmentCount: 0,
+      })
+    }
     const conversationId = evt.notification.conversationId
     if (!conversationId) return
     if (conversationExists(conversationId)) return
     const ws = useWsStore()
     if (ws.state === 'BOOTSTRAPPING' || ws.state === 'RECOVERING_GAP' || ws.state === 'STALE_REBOOTSTRAP') return
     startBootstrap()
+  }
+
+  function applyMessageAlert(evt: MessageAlertEvent) {
+    if (isClientTabActive()) return
+    emitIncomingMessageNotification({
+      conversationId: evt.conversationId,
+      messageId: evt.messageId,
+      threadRootMessageId: evt.threadRootMessageId || undefined,
+      senderId: evt.senderId,
+      senderName: evt.senderName,
+      body: evt.body,
+      attachmentCount: evt.attachmentCount,
+    })
   }
 
   function applyNotificationLevelChanged(evt: NotificationLevelChangedEvent) {
@@ -2003,38 +2023,6 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function isDirectMessageConversation(conversationId: string): boolean {
-    return directMessages.value.some(dm => dm.id === conversationId)
-  }
-
-  function isMentionsOnlyMessageRelevant(evt: ProtoMessageEvent): boolean {
-    if (isDirectMessageConversation(evt.conversationId)) return true
-    if (evt.threadRootMessageId) return true
-    if (evt.mentionEveryone) return true
-    const selfUserId = workspace.value?.selfUserId
-    if (!selfUserId) return false
-    return evt.mentionedUserIds?.includes(selfUserId) ?? false
-  }
-
-  function maybeEmitIncomingMessageNotification(evt: ProtoMessageEvent, isSelfAuthored: boolean) {
-    if (isSelfAuthored) return
-    if (isClientTabActive()) return
-
-    const level = currentNotificationLevel(evt.conversationId)
-    if (level === NotificationLevel.NOTHING) return
-    if (level === NotificationLevel.MENTIONS_ONLY && !isMentionsOnlyMessageRelevant(evt)) return
-
-    emitIncomingMessageNotification({
-      conversationId: evt.conversationId,
-      messageId: evt.messageId,
-      threadRootMessageId: evt.threadRootMessageId || undefined,
-      senderId: evt.senderId,
-      senderName: resolveDisplayName(evt.senderId),
-      body: evt.body,
-      attachmentCount: evt.attachments?.length ?? 0,
-    })
-  }
-
   function applyUserIdentityUpdated(evt: { userId: string; displayName: string; avatarUrl: string }) {
     registerUserIdentity(evt.userId, evt.displayName, undefined, evt.avatarUrl)
     refreshSenderLabels(evt.userId)
@@ -2127,29 +2115,9 @@ export const useChatStore = defineStore('chat', () => {
     return channels.value.some(channel => channel.id === conversationId) || directMessages.value.some(dm => dm.id === conversationId)
   }
 
-  function incrementUnread(conversationId: string, mentionedUserIds?: string[]) {
-    if (conversationId === activeChannelId.value) return
-    const level = currentNotificationLevel(conversationId)
-    if (level === NotificationLevel.NOTHING) return
-    if (level === NotificationLevel.MENTIONS_ONLY) {
-      // Only increment if the current user is @mentioned in this message.
-      const selfUserId = workspace.value?.selfUserId
-      if (!selfUserId || !mentionedUserIds?.includes(selfUserId)) return
-    }
-    incrementUnreadDirect(conversationId)
-  }
-
-  function incrementUnreadDirect(conversationId: string) {
-    const channel = channels.value.find(item => item.id === conversationId)
-    if (channel) channel.unread += 1
-    const dm = directMessages.value.find(item => item.id === conversationId)
-    if (dm) dm.unread += 1
-  }
-
   function _onMessageCreated(evt: ProtoMessageEvent) {
     const channelId = evt.conversationId
     const msg = _messageEventToMessage(evt, channelId)
-    const isSelfAuthored = evt.senderId === workspace.value?.selfUserId
 
     if (evt.threadRootMessageId) {
       const rootId = evt.threadRootMessageId
@@ -2169,23 +2137,12 @@ export const useChatStore = defineStore('chat', () => {
         lastReplyAt: msg.createdAt,
         lastReplyUserId: evt.senderId,
       })
-      if (!isSelfAuthored && currentNotificationLevel(channelId) !== NotificationLevel.NOTHING) {
-        const channel = channels.value.find(item => item.id === channelId)
-        if (channel) channel.hasUnreadThreadReplies = true
-        const dm = directMessages.value.find(item => item.id === channelId)
-        if (dm) dm.hasUnreadThreadReplies = true
-      }
-      if (!alreadyPresentInThread) {
-        maybeEmitIncomingMessageNotification(evt, isSelfAuthored)
-      }
       return
     }
 
     if (!messages.value[channelId]) messages.value[channelId] = []
     const alreadyPresent = messages.value[channelId].some(m => m.id === evt.messageId)
     if (alreadyPresent) return
-
-    maybeEmitIncomingMessageNotification(evt, isSelfAuthored)
 
     messages.value[channelId].push(msg)
     // Write-through to IndexedDB (fire-and-forget)
@@ -2199,23 +2156,8 @@ export const useChatStore = defineStore('chat', () => {
         requestReadMark(channelId, evt.channelSeq)
       } else {
         queuePendingReadMark(channelId, evt.channelSeq)
-        if (!isSelfAuthored) {
-          const level = currentNotificationLevel(channelId)
-          if (level === NotificationLevel.ALL) {
-            incrementUnreadDirect(channelId)
-          } else if (level === NotificationLevel.MENTIONS_ONLY) {
-            const selfUserId = workspace.value?.selfUserId
-            if (selfUserId && evt.mentionedUserIds?.includes(selfUserId)) {
-              incrementUnreadDirect(channelId)
-            }
-          }
-          // NOTHING: no increment
-        }
       }
       return
-    }
-    if (!isSelfAuthored) {
-      incrementUnread(channelId, evt.mentionedUserIds)
     }
   }
 

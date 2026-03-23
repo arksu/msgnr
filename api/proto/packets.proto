@@ -139,6 +139,9 @@ enum EventType {
   EVENT_TYPE_MESSAGE_UPDATED = 16;
   EVENT_TYPE_MESSAGE_DELETED = 17;
   EVENT_TYPE_TASK_STATUS_CHANGED = 18;
+  // Direct-only backend-routed alert for generic new-message notifications.
+  // Not persisted in workspace_events and not included in bootstrap snapshots.
+  EVENT_TYPE_MESSAGE_ALERT = 19;
 }
 
 message Envelope {
@@ -528,9 +531,11 @@ message SyncSinceRequest {
 }
 
 message SyncSinceResponse {
-  // Inclusive returned range. Events must be contiguous when need_full_bootstrap=false.
+  // Inclusive range of the returned authorized events when events[] is non-empty.
   int64 from_seq = 1;
   int64 to_seq = 2;
+  // Ordered events authorized for the current user. Sequence numbers may skip
+  // global workspace events that the user is not allowed to observe.
   repeated ServerEvent events = 3;
   // If true, server cannot provide a safe contiguous tail and client must re-bootstrap.
   bool need_full_bootstrap = 4;
@@ -539,6 +544,10 @@ message SyncSinceResponse {
   uint32 suggested_retry_after_sec = 6;
   // Server-side safety limit that may trigger forced full bootstrap for large gaps.
   uint32 server_sync_event_limit = 7;
+  // Highest global workspace event_seq scanned while building this response.
+  // Clients should resume from this cursor, even when some scanned events were
+  // filtered out for authorization.
+  int64 sync_cursor = 8;
 }
 
 message AckRequest {
@@ -681,8 +690,19 @@ message TaskStatusChangedEvent {
   google.protobuf.Timestamp updated_at = 6;
 }
 
+message MessageAlertEvent {
+  string conversation_id = 1;
+  string message_id = 2;
+  string thread_root_message_id = 3;
+  string sender_id = 4;
+  string sender_name = 5;
+  string body = 6;
+  int32 attachment_count = 7;
+}
+
 message ServerEvent {
   // Global strictly monotonic event sequence for the whole workspace stream.
+  // Direct-only events that are not persisted may carry 0.
   int64 event_seq = 1;
   // Stable idempotency key for deduplication.
   string event_id = 2;
@@ -710,5 +730,6 @@ message ServerEvent {
     MessageUpdatedEvent message_updated = 25;
     MessageDeletedEvent message_deleted = 26;
     TaskStatusChangedEvent task_status_changed = 27;
+    MessageAlertEvent message_alert = 28;
   }
 }

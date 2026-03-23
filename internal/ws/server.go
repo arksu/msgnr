@@ -660,7 +660,7 @@ func (s *Server) taskCollabSubscribeResponse(taskID string, session chan outboun
 }
 
 func (s *Server) sendDirectServerEvents(deliveries []chat.DirectDelivery) {
-	var offlineDeliveries []chat.DirectDelivery
+	var pushDeliveries []chat.DirectDelivery
 	for _, delivery := range deliveries {
 		if delivery.UserID == "" || delivery.Event == nil {
 			continue
@@ -671,12 +671,25 @@ func (s *Server) sendDirectServerEvents(deliveries []chat.DirectDelivery) {
 				ServerEvent: delivery.Event,
 			},
 		})
-		if s.pushNotifier != nil && !s.HasActiveSessions(delivery.UserID) {
-			offlineDeliveries = append(offlineDeliveries, delivery)
+		if s.pushNotifier != nil && s.shouldPushChatDelivery(delivery) {
+			pushDeliveries = append(pushDeliveries, delivery)
 		}
 	}
-	if len(offlineDeliveries) > 0 {
-		go s.pushNotifier.PushChatDeliveries(offlineDeliveries)
+	if len(pushDeliveries) > 0 {
+		go s.pushNotifier.PushChatDeliveries(pushDeliveries)
+	}
+}
+
+func (s *Server) shouldPushChatDelivery(delivery chat.DirectDelivery) bool {
+	if delivery.UserID == "" || delivery.Event == nil {
+		return false
+	}
+	switch delivery.Event.GetEventType() {
+	case packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT,
+		packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED:
+		return !s.HasActiveWindowSessions(delivery.UserID)
+	default:
+		return false
 	}
 }
 

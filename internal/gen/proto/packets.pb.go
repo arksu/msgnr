@@ -817,6 +817,9 @@ const (
 	EventType_EVENT_TYPE_MESSAGE_UPDATED            EventType = 16
 	EventType_EVENT_TYPE_MESSAGE_DELETED            EventType = 17
 	EventType_EVENT_TYPE_TASK_STATUS_CHANGED        EventType = 18
+	// Direct-only backend-routed alert for generic new-message notifications.
+	// Not persisted in workspace_events and not included in bootstrap snapshots.
+	EventType_EVENT_TYPE_MESSAGE_ALERT EventType = 19
 )
 
 // Enum value maps for EventType.
@@ -841,6 +844,7 @@ var (
 		16: "EVENT_TYPE_MESSAGE_UPDATED",
 		17: "EVENT_TYPE_MESSAGE_DELETED",
 		18: "EVENT_TYPE_TASK_STATUS_CHANGED",
+		19: "EVENT_TYPE_MESSAGE_ALERT",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":                0,
@@ -862,6 +866,7 @@ var (
 		"EVENT_TYPE_MESSAGE_UPDATED":            16,
 		"EVENT_TYPE_MESSAGE_DELETED":            17,
 		"EVENT_TYPE_TASK_STATUS_CHANGED":        18,
+		"EVENT_TYPE_MESSAGE_ALERT":              19,
 	}
 )
 
@@ -4664,10 +4669,12 @@ func (x *SyncSinceRequest) GetMaxEvents() uint32 {
 
 type SyncSinceResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Inclusive returned range. Events must be contiguous when need_full_bootstrap=false.
-	FromSeq int64          `protobuf:"varint,1,opt,name=from_seq,json=fromSeq,proto3" json:"from_seq,omitempty"`
-	ToSeq   int64          `protobuf:"varint,2,opt,name=to_seq,json=toSeq,proto3" json:"to_seq,omitempty"`
-	Events  []*ServerEvent `protobuf:"bytes,3,rep,name=events,proto3" json:"events,omitempty"`
+	// Inclusive range of the returned authorized events when events[] is non-empty.
+	FromSeq int64 `protobuf:"varint,1,opt,name=from_seq,json=fromSeq,proto3" json:"from_seq,omitempty"`
+	ToSeq   int64 `protobuf:"varint,2,opt,name=to_seq,json=toSeq,proto3" json:"to_seq,omitempty"`
+	// Ordered events authorized for the current user. Sequence numbers may skip
+	// global workspace events that the user is not allowed to observe.
+	Events []*ServerEvent `protobuf:"bytes,3,rep,name=events,proto3" json:"events,omitempty"`
 	// If true, server cannot provide a safe contiguous tail and client must re-bootstrap.
 	NeedFullBootstrap       bool                `protobuf:"varint,4,opt,name=need_full_bootstrap,json=needFullBootstrap,proto3" json:"need_full_bootstrap,omitempty"`
 	NeedFullBootstrapReason SyncBootstrapReason `protobuf:"varint,5,opt,name=need_full_bootstrap_reason,json=needFullBootstrapReason,proto3,enum=packets.v1.SyncBootstrapReason" json:"need_full_bootstrap_reason,omitempty"`
@@ -4675,8 +4682,12 @@ type SyncSinceResponse struct {
 	SuggestedRetryAfterSec uint32 `protobuf:"varint,6,opt,name=suggested_retry_after_sec,json=suggestedRetryAfterSec,proto3" json:"suggested_retry_after_sec,omitempty"`
 	// Server-side safety limit that may trigger forced full bootstrap for large gaps.
 	ServerSyncEventLimit uint32 `protobuf:"varint,7,opt,name=server_sync_event_limit,json=serverSyncEventLimit,proto3" json:"server_sync_event_limit,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Highest global workspace event_seq scanned while building this response.
+	// Clients should resume from this cursor, even when some scanned events were
+	// filtered out for authorization.
+	SyncCursor    int64 `protobuf:"varint,8,opt,name=sync_cursor,json=syncCursor,proto3" json:"sync_cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SyncSinceResponse) Reset() {
@@ -4754,6 +4765,13 @@ func (x *SyncSinceResponse) GetSuggestedRetryAfterSec() uint32 {
 func (x *SyncSinceResponse) GetServerSyncEventLimit() uint32 {
 	if x != nil {
 		return x.ServerSyncEventLimit
+	}
+	return 0
+}
+
+func (x *SyncSinceResponse) GetSyncCursor() int64 {
+	if x != nil {
+		return x.SyncCursor
 	}
 	return 0
 }
@@ -6171,9 +6189,102 @@ func (x *TaskStatusChangedEvent) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+type MessageAlertEvent struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ConversationId      string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	MessageId           string                 `protobuf:"bytes,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	ThreadRootMessageId string                 `protobuf:"bytes,3,opt,name=thread_root_message_id,json=threadRootMessageId,proto3" json:"thread_root_message_id,omitempty"`
+	SenderId            string                 `protobuf:"bytes,4,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
+	SenderName          string                 `protobuf:"bytes,5,opt,name=sender_name,json=senderName,proto3" json:"sender_name,omitempty"`
+	Body                string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
+	AttachmentCount     int32                  `protobuf:"varint,7,opt,name=attachment_count,json=attachmentCount,proto3" json:"attachment_count,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *MessageAlertEvent) Reset() {
+	*x = MessageAlertEvent{}
+	mi := &file_api_proto_packets_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MessageAlertEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MessageAlertEvent) ProtoMessage() {}
+
+func (x *MessageAlertEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_packets_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MessageAlertEvent.ProtoReflect.Descriptor instead.
+func (*MessageAlertEvent) Descriptor() ([]byte, []int) {
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *MessageAlertEvent) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *MessageAlertEvent) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *MessageAlertEvent) GetThreadRootMessageId() string {
+	if x != nil {
+		return x.ThreadRootMessageId
+	}
+	return ""
+}
+
+func (x *MessageAlertEvent) GetSenderId() string {
+	if x != nil {
+		return x.SenderId
+	}
+	return ""
+}
+
+func (x *MessageAlertEvent) GetSenderName() string {
+	if x != nil {
+		return x.SenderName
+	}
+	return ""
+}
+
+func (x *MessageAlertEvent) GetBody() string {
+	if x != nil {
+		return x.Body
+	}
+	return ""
+}
+
+func (x *MessageAlertEvent) GetAttachmentCount() int32 {
+	if x != nil {
+		return x.AttachmentCount
+	}
+	return 0
+}
+
 type ServerEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Global strictly monotonic event sequence for the whole workspace stream.
+	// Direct-only events that are not persisted may carry 0.
 	EventSeq int64 `protobuf:"varint,1,opt,name=event_seq,json=eventSeq,proto3" json:"event_seq,omitempty"`
 	// Stable idempotency key for deduplication.
 	EventId    string                 `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
@@ -6201,6 +6312,7 @@ type ServerEvent struct {
 	//	*ServerEvent_MessageUpdated
 	//	*ServerEvent_MessageDeleted
 	//	*ServerEvent_TaskStatusChanged
+	//	*ServerEvent_MessageAlert
 	Payload       isServerEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6208,7 +6320,7 @@ type ServerEvent struct {
 
 func (x *ServerEvent) Reset() {
 	*x = ServerEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[70]
+	mi := &file_api_proto_packets_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6220,7 +6332,7 @@ func (x *ServerEvent) String() string {
 func (*ServerEvent) ProtoMessage() {}
 
 func (x *ServerEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[70]
+	mi := &file_api_proto_packets_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6233,7 +6345,7 @@ func (x *ServerEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerEvent.ProtoReflect.Descriptor instead.
 func (*ServerEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{70}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ServerEvent) GetEventSeq() int64 {
@@ -6440,6 +6552,15 @@ func (x *ServerEvent) GetTaskStatusChanged() *TaskStatusChangedEvent {
 	return nil
 }
 
+func (x *ServerEvent) GetMessageAlert() *MessageAlertEvent {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerEvent_MessageAlert); ok {
+			return x.MessageAlert
+		}
+	}
+	return nil
+}
+
 type isServerEvent_Payload interface {
 	isServerEvent_Payload()
 }
@@ -6516,6 +6637,10 @@ type ServerEvent_TaskStatusChanged struct {
 	TaskStatusChanged *TaskStatusChangedEvent `protobuf:"bytes,27,opt,name=task_status_changed,json=taskStatusChanged,proto3,oneof"`
 }
 
+type ServerEvent_MessageAlert struct {
+	MessageAlert *MessageAlertEvent `protobuf:"bytes,28,opt,name=message_alert,json=messageAlert,proto3,oneof"`
+}
+
 func (*ServerEvent_ConversationUpserted) isServerEvent_Payload() {}
 
 func (*ServerEvent_ConversationRemoved) isServerEvent_Payload() {}
@@ -6551,6 +6676,8 @@ func (*ServerEvent_MessageUpdated) isServerEvent_Payload() {}
 func (*ServerEvent_MessageDeleted) isServerEvent_Payload() {}
 
 func (*ServerEvent_TaskStatusChanged) isServerEvent_Payload() {}
+
+func (*ServerEvent_MessageAlert) isServerEvent_Payload() {}
 
 var File_api_proto_packets_proto protoreflect.FileDescriptor
 
@@ -6861,7 +6988,7 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x10SyncSinceRequest\x12\x1b\n" +
 	"\tafter_seq\x18\x01 \x01(\x03R\bafterSeq\x12\x1d\n" +
 	"\n" +
-	"max_events\x18\x02 \x01(\rR\tmaxEvents\"\xf6\x02\n" +
+	"max_events\x18\x02 \x01(\rR\tmaxEvents\"\x97\x03\n" +
 	"\x11SyncSinceResponse\x12\x19\n" +
 	"\bfrom_seq\x18\x01 \x01(\x03R\afromSeq\x12\x15\n" +
 	"\x06to_seq\x18\x02 \x01(\x03R\x05toSeq\x12/\n" +
@@ -6869,7 +6996,9 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x13need_full_bootstrap\x18\x04 \x01(\bR\x11needFullBootstrap\x12\\\n" +
 	"\x1aneed_full_bootstrap_reason\x18\x05 \x01(\x0e2\x1f.packets.v1.SyncBootstrapReasonR\x17needFullBootstrapReason\x129\n" +
 	"\x19suggested_retry_after_sec\x18\x06 \x01(\rR\x16suggestedRetryAfterSec\x125\n" +
-	"\x17server_sync_event_limit\x18\a \x01(\rR\x14serverSyncEventLimit\"A\n" +
+	"\x17server_sync_event_limit\x18\a \x01(\rR\x14serverSyncEventLimit\x12\x1f\n" +
+	"\vsync_cursor\x18\b \x01(\x03R\n" +
+	"syncCursor\"A\n" +
 	"\n" +
 	"AckRequest\x123\n" +
 	"\x16last_applied_event_seq\x18\x01 \x01(\x03R\x13lastAppliedEventSeq\"M\n" +
@@ -6967,7 +7096,17 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\n" +
 	"updated_by\x18\x05 \x01(\tR\tupdatedBy\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x8f\x0e\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x8d\x02\n" +
+	"\x11MessageAlertEvent\x12'\n" +
+	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x02 \x01(\tR\tmessageId\x123\n" +
+	"\x16thread_root_message_id\x18\x03 \x01(\tR\x13threadRootMessageId\x12\x1b\n" +
+	"\tsender_id\x18\x04 \x01(\tR\bsenderId\x12\x1f\n" +
+	"\vsender_name\x18\x05 \x01(\tR\n" +
+	"senderName\x12\x12\n" +
+	"\x04body\x18\x06 \x01(\tR\x04body\x12)\n" +
+	"\x10attachment_count\x18\a \x01(\x05R\x0fattachmentCount\"\xd5\x0e\n" +
 	"\vServerEvent\x12\x1b\n" +
 	"\tevent_seq\x18\x01 \x01(\x03R\beventSeq\x12\x19\n" +
 	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12;\n" +
@@ -6994,7 +7133,8 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x1anotification_level_changed\x18\x18 \x01(\v2).packets.v1.NotificationLevelChangedEventH\x00R\x18notificationLevelChanged\x12J\n" +
 	"\x0fmessage_updated\x18\x19 \x01(\v2\x1f.packets.v1.MessageUpdatedEventH\x00R\x0emessageUpdated\x12J\n" +
 	"\x0fmessage_deleted\x18\x1a \x01(\v2\x1f.packets.v1.MessageDeletedEventH\x00R\x0emessageDeleted\x12T\n" +
-	"\x13task_status_changed\x18\x1b \x01(\v2\".packets.v1.TaskStatusChangedEventH\x00R\x11taskStatusChangedB\t\n" +
+	"\x13task_status_changed\x18\x1b \x01(\v2\".packets.v1.TaskStatusChangedEventH\x00R\x11taskStatusChanged\x12D\n" +
+	"\rmessage_alert\x18\x1c \x01(\v2\x1d.packets.v1.MessageAlertEventH\x00R\fmessageAlertB\t\n" +
 	"\apayload*\x9c\x01\n" +
 	"\x10ConversationType\x12!\n" +
 	"\x1dCONVERSATION_TYPE_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -7082,7 +7222,7 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	" TaskDescriptionCollabMessageKind\x124\n" +
 	"0TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_UNSPECIFIED\x10\x00\x12-\n" +
 	")TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC\x10\x01\x122\n" +
-	".TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS\x10\x02*\xb3\x05\n" +
+	".TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS\x10\x02*\xd1\x05\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12$\n" +
 	" EVENT_TYPE_CONVERSATION_UPSERTED\x10\x01\x12#\n" +
@@ -7103,7 +7243,8 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"%EVENT_TYPE_NOTIFICATION_LEVEL_CHANGED\x10\x0f\x12\x1e\n" +
 	"\x1aEVENT_TYPE_MESSAGE_UPDATED\x10\x10\x12\x1e\n" +
 	"\x1aEVENT_TYPE_MESSAGE_DELETED\x10\x11\x12\"\n" +
-	"\x1eEVENT_TYPE_TASK_STATUS_CHANGED\x10\x12B$Z\"msgnr/internal/gen/proto;packetspbb\x06proto3"
+	"\x1eEVENT_TYPE_TASK_STATUS_CHANGED\x10\x12\x12\x1c\n" +
+	"\x18EVENT_TYPE_MESSAGE_ALERT\x10\x13B$Z\"msgnr/internal/gen/proto;packetspbb\x06proto3"
 
 var (
 	file_api_proto_packets_proto_rawDescOnce sync.Once
@@ -7118,7 +7259,7 @@ func file_api_proto_packets_proto_rawDescGZIP() []byte {
 }
 
 var file_api_proto_packets_proto_enumTypes = make([]protoimpl.EnumInfo, 15)
-var file_api_proto_packets_proto_msgTypes = make([]protoimpl.MessageInfo, 71)
+var file_api_proto_packets_proto_msgTypes = make([]protoimpl.MessageInfo, 72)
 var file_api_proto_packets_proto_goTypes = []any{
 	(ConversationType)(0),                           // 0: packets.v1.ConversationType
 	(CallStatus)(0),                                 // 1: packets.v1.CallStatus
@@ -7205,8 +7346,9 @@ var file_api_proto_packets_proto_goTypes = []any{
 	(*TaskDescriptionCollabMessage)(nil),            // 82: packets.v1.TaskDescriptionCollabMessage
 	(*NotificationLevelChangedEvent)(nil),           // 83: packets.v1.NotificationLevelChangedEvent
 	(*TaskStatusChangedEvent)(nil),                  // 84: packets.v1.TaskStatusChangedEvent
-	(*ServerEvent)(nil),                             // 85: packets.v1.ServerEvent
-	(*timestamppb.Timestamp)(nil),                   // 86: google.protobuf.Timestamp
+	(*MessageAlertEvent)(nil),                       // 85: packets.v1.MessageAlertEvent
+	(*ServerEvent)(nil),                             // 86: packets.v1.ServerEvent
+	(*timestamppb.Timestamp)(nil),                   // 87: google.protobuf.Timestamp
 }
 var file_api_proto_packets_proto_depIdxs = []int32{
 	16,  // 0: packets.v1.Envelope.client_hello:type_name -> packets.v1.ClientHello
@@ -7232,7 +7374,7 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	57,  // 20: packets.v1.Envelope.bootstrap_response:type_name -> packets.v1.BootstrapResponse
 	58,  // 21: packets.v1.Envelope.sync_since_request:type_name -> packets.v1.SyncSinceRequest
 	59,  // 22: packets.v1.Envelope.sync_since_response:type_name -> packets.v1.SyncSinceResponse
-	85,  // 23: packets.v1.Envelope.server_event:type_name -> packets.v1.ServerEvent
+	86,  // 23: packets.v1.Envelope.server_event:type_name -> packets.v1.ServerEvent
 	60,  // 24: packets.v1.Envelope.ack_request:type_name -> packets.v1.AckRequest
 	61,  // 25: packets.v1.Envelope.ack_response:type_name -> packets.v1.AckResponse
 	27,  // 26: packets.v1.Envelope.subscribe_thread_request:type_name -> packets.v1.SubscribeThreadRequest
@@ -7257,16 +7399,16 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	11,  // 45: packets.v1.AuthResponse.user_role:type_name -> packets.v1.WorkspaceRole
 	3,   // 46: packets.v1.Error.code:type_name -> packets.v1.ErrorCode
 	0,   // 47: packets.v1.SendMessageRequest.conversation_type:type_name -> packets.v1.ConversationType
-	86,  // 48: packets.v1.SendMessageAck.created_at:type_name -> google.protobuf.Timestamp
-	86,  // 49: packets.v1.MessageEvent.created_at:type_name -> google.protobuf.Timestamp
+	87,  // 48: packets.v1.SendMessageAck.created_at:type_name -> google.protobuf.Timestamp
+	87,  // 49: packets.v1.MessageEvent.created_at:type_name -> google.protobuf.Timestamp
 	26,  // 50: packets.v1.MessageEvent.reactions:type_name -> packets.v1.ReactionAggregate
 	25,  // 51: packets.v1.MessageEvent.attachments:type_name -> packets.v1.MessageAttachment
-	86,  // 52: packets.v1.MessageEvent.edited_at:type_name -> google.protobuf.Timestamp
+	87,  // 52: packets.v1.MessageEvent.edited_at:type_name -> google.protobuf.Timestamp
 	24,  // 53: packets.v1.SubscribeThreadResponse.replay:type_name -> packets.v1.MessageEvent
-	86,  // 54: packets.v1.TypingEvent.expires_at:type_name -> google.protobuf.Timestamp
+	87,  // 54: packets.v1.TypingEvent.expires_at:type_name -> google.protobuf.Timestamp
 	2,   // 55: packets.v1.SetPresenceRequest.desired_presence:type_name -> packets.v1.PresenceStatus
 	2,   // 56: packets.v1.PresenceEvent.effective_presence:type_name -> packets.v1.PresenceStatus
-	86,  // 57: packets.v1.PresenceEvent.last_active_at:type_name -> google.protobuf.Timestamp
+	87,  // 57: packets.v1.PresenceEvent.last_active_at:type_name -> google.protobuf.Timestamp
 	0,   // 58: packets.v1.CreateCallRequest.conversation_type:type_name -> packets.v1.ConversationType
 	1,   // 59: packets.v1.CreateCallResponse.status:type_name -> packets.v1.CallStatus
 	0,   // 60: packets.v1.InviteCallMembersRequest.conversation_type:type_name -> packets.v1.ConversationType
@@ -7276,24 +7418,24 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	11,  // 64: packets.v1.WorkspaceSummary.self_role:type_name -> packets.v1.WorkspaceRole
 	0,   // 65: packets.v1.ConversationSummary.conversation_type:type_name -> packets.v1.ConversationType
 	10,  // 66: packets.v1.ConversationSummary.notification_level:type_name -> packets.v1.NotificationLevel
-	86,  // 67: packets.v1.ConversationSummary.last_activity_at:type_name -> google.protobuf.Timestamp
+	87,  // 67: packets.v1.ConversationSummary.last_activity_at:type_name -> google.protobuf.Timestamp
 	2,   // 68: packets.v1.ConversationSummary.presence:type_name -> packets.v1.PresenceStatus
 	1,   // 69: packets.v1.ActiveCallSummary.status:type_name -> packets.v1.CallStatus
-	86,  // 70: packets.v1.CallInviteSummary.created_at:type_name -> google.protobuf.Timestamp
-	86,  // 71: packets.v1.CallInviteSummary.expires_at:type_name -> google.protobuf.Timestamp
+	87,  // 70: packets.v1.CallInviteSummary.created_at:type_name -> google.protobuf.Timestamp
+	87,  // 71: packets.v1.CallInviteSummary.expires_at:type_name -> google.protobuf.Timestamp
 	5,   // 72: packets.v1.CallInviteSummary.state:type_name -> packets.v1.InviteState
 	9,   // 73: packets.v1.NotificationSummary.type:type_name -> packets.v1.NotificationType
-	86,  // 74: packets.v1.NotificationSummary.created_at:type_name -> google.protobuf.Timestamp
+	87,  // 74: packets.v1.NotificationSummary.created_at:type_name -> google.protobuf.Timestamp
 	49,  // 75: packets.v1.BootstrapResponse.workspace:type_name -> packets.v1.WorkspaceSummary
 	51,  // 76: packets.v1.BootstrapResponse.conversations:type_name -> packets.v1.ConversationSummary
 	52,  // 77: packets.v1.BootstrapResponse.unread:type_name -> packets.v1.UnreadCounter
 	53,  // 78: packets.v1.BootstrapResponse.active_calls:type_name -> packets.v1.ActiveCallSummary
 	54,  // 79: packets.v1.BootstrapResponse.pending_invites:type_name -> packets.v1.CallInviteSummary
 	55,  // 80: packets.v1.BootstrapResponse.notifications:type_name -> packets.v1.NotificationSummary
-	86,  // 81: packets.v1.BootstrapResponse.bootstrap_expires_at:type_name -> google.protobuf.Timestamp
+	87,  // 81: packets.v1.BootstrapResponse.bootstrap_expires_at:type_name -> google.protobuf.Timestamp
 	36,  // 82: packets.v1.BootstrapResponse.presence:type_name -> packets.v1.PresenceEvent
 	11,  // 83: packets.v1.BootstrapResponse.user_role:type_name -> packets.v1.WorkspaceRole
-	85,  // 84: packets.v1.SyncSinceResponse.events:type_name -> packets.v1.ServerEvent
+	86,  // 84: packets.v1.SyncSinceResponse.events:type_name -> packets.v1.ServerEvent
 	4,   // 85: packets.v1.SyncSinceResponse.need_full_bootstrap_reason:type_name -> packets.v1.SyncBootstrapReason
 	51,  // 86: packets.v1.ConversationUpsertedEvent.conversation:type_name -> packets.v1.ConversationSummary
 	8,   // 87: packets.v1.ConversationRemovedEvent.reason:type_name -> packets.v1.ConversationRemovedReason
@@ -7303,14 +7445,14 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	54,  // 91: packets.v1.CallInviteCreatedEvent.invite:type_name -> packets.v1.CallInviteSummary
 	6,   // 92: packets.v1.CallInviteCancelledEvent.reason:type_name -> packets.v1.InviteCancelReason
 	1,   // 93: packets.v1.CallStateChangedEvent.status:type_name -> packets.v1.CallStatus
-	86,  // 94: packets.v1.ThreadSummaryUpdatedEvent.last_thread_reply_at:type_name -> google.protobuf.Timestamp
-	86,  // 95: packets.v1.MessageUpdatedEvent.edited_at:type_name -> google.protobuf.Timestamp
+	87,  // 94: packets.v1.ThreadSummaryUpdatedEvent.last_thread_reply_at:type_name -> google.protobuf.Timestamp
+	87,  // 95: packets.v1.MessageUpdatedEvent.edited_at:type_name -> google.protobuf.Timestamp
 	10,  // 96: packets.v1.SetNotificationLevelRequest.level:type_name -> packets.v1.NotificationLevel
 	10,  // 97: packets.v1.SetNotificationLevelResponse.level:type_name -> packets.v1.NotificationLevel
 	13,  // 98: packets.v1.TaskDescriptionCollabMessage.kind:type_name -> packets.v1.TaskDescriptionCollabMessageKind
 	10,  // 99: packets.v1.NotificationLevelChangedEvent.level:type_name -> packets.v1.NotificationLevel
-	86,  // 100: packets.v1.TaskStatusChangedEvent.updated_at:type_name -> google.protobuf.Timestamp
-	86,  // 101: packets.v1.ServerEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	87,  // 100: packets.v1.TaskStatusChangedEvent.updated_at:type_name -> google.protobuf.Timestamp
+	87,  // 101: packets.v1.ServerEvent.occurred_at:type_name -> google.protobuf.Timestamp
 	14,  // 102: packets.v1.ServerEvent.event_type:type_name -> packets.v1.EventType
 	62,  // 103: packets.v1.ServerEvent.conversation_upserted:type_name -> packets.v1.ConversationUpsertedEvent
 	63,  // 104: packets.v1.ServerEvent.conversation_removed:type_name -> packets.v1.ConversationRemovedEvent
@@ -7330,11 +7472,12 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	73,  // 118: packets.v1.ServerEvent.message_updated:type_name -> packets.v1.MessageUpdatedEvent
 	74,  // 119: packets.v1.ServerEvent.message_deleted:type_name -> packets.v1.MessageDeletedEvent
 	84,  // 120: packets.v1.ServerEvent.task_status_changed:type_name -> packets.v1.TaskStatusChangedEvent
-	121, // [121:121] is the sub-list for method output_type
-	121, // [121:121] is the sub-list for method input_type
-	121, // [121:121] is the sub-list for extension type_name
-	121, // [121:121] is the sub-list for extension extendee
-	0,   // [0:121] is the sub-list for field type_name
+	85,  // 121: packets.v1.ServerEvent.message_alert:type_name -> packets.v1.MessageAlertEvent
+	122, // [122:122] is the sub-list for method output_type
+	122, // [122:122] is the sub-list for method input_type
+	122, // [122:122] is the sub-list for extension type_name
+	122, // [122:122] is the sub-list for extension extendee
+	0,   // [0:122] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_packets_proto_init() }
@@ -7386,7 +7529,7 @@ func file_api_proto_packets_proto_init() {
 		(*Envelope_TaskDescriptionCollabUnsubscribeRequest)(nil),
 		(*Envelope_TaskDescriptionCollabMessage)(nil),
 	}
-	file_api_proto_packets_proto_msgTypes[70].OneofWrappers = []any{
+	file_api_proto_packets_proto_msgTypes[71].OneofWrappers = []any{
 		(*ServerEvent_ConversationUpserted)(nil),
 		(*ServerEvent_ConversationRemoved)(nil),
 		(*ServerEvent_MembershipChanged)(nil),
@@ -7405,6 +7548,7 @@ func file_api_proto_packets_proto_init() {
 		(*ServerEvent_MessageUpdated)(nil),
 		(*ServerEvent_MessageDeleted)(nil),
 		(*ServerEvent_TaskStatusChanged)(nil),
+		(*ServerEvent_MessageAlert)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -7412,7 +7556,7 @@ func file_api_proto_packets_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_packets_proto_rawDesc), len(file_api_proto_packets_proto_rawDesc)),
 			NumEnums:      15,
-			NumMessages:   71,
+			NumMessages:   72,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

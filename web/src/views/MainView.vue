@@ -886,7 +886,7 @@ function toMessagePreview(event: IncomingMessageNotification): string {
 function conversationNotificationBody(event: IncomingMessageNotification): string {
   const preview = toMessagePreview(event)
   const isChannelConversation = chatStore.channels.some(item => item.id === event.conversationId)
-  if (isChannelConversation) {
+  if (isChannelConversation && event.senderName) {
     return `${event.senderName}: ${preview}`
   }
   return preview

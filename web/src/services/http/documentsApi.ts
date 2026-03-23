@@ -133,6 +133,10 @@ export async function documentsUpdateTeamspace(id: string, payload: UpsertTeamsp
   return apiCall(http.patch<Teamspace>(`/api/documents/teamspaces/${id}`, payload))
 }
 
+export async function documentsDeleteTeamspace(id: string): Promise<void> {
+  return apiCallNoContent(http.delete(`/api/documents/teamspaces/${id}`))
+}
+
 export async function documentsJoinTeamspace(id: string): Promise<Teamspace> {
   return apiCall(http.post<Teamspace>(`/api/documents/teamspaces/${id}/join`))
 }

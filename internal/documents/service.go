@@ -250,7 +250,9 @@ func (s *Service) UpdateTeamspace(ctx context.Context, teamspaceID uuid.UUID, pa
 	if err := tx.QueryRow(ctx,
 		`SELECT owner_user_id
 		   FROM teamspace
-		  WHERE id = $1`,
+		  WHERE id = $1
+		    AND deleted_at IS NULL
+		  FOR UPDATE`,
 		teamspaceID,
 	).Scan(&ownerUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -309,12 +311,79 @@ func (s *Service) UpdateTeamspace(ctx context.Context, teamspaceID uuid.UUID, pa
 	return s.getVisibleTeamspace(ctx, teamspaceID, params.ActorID, params.ActorRole)
 }
 
+func (s *Service) DeleteTeamspace(ctx context.Context, teamspaceID, actorID uuid.UUID, actorRole string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("documents: begin delete teamspace tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var (
+		ownerUserID uuid.UUID
+		deletedAt   sql.NullTime
+	)
+	if err := tx.QueryRow(ctx,
+		`SELECT owner_user_id, deleted_at
+		   FROM teamspace
+		  WHERE id = $1
+		  FOR UPDATE`,
+		teamspaceID,
+	).Scan(&ownerUserID, &deletedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: teamspace", ErrNotFound)
+		}
+		return fmt.Errorf("documents: load teamspace for delete: %w", err)
+	}
+	if deletedAt.Valid {
+		return fmt.Errorf("%w: teamspace", ErrNotFound)
+	}
+	if !canManageTeamspace(ownerUserID, actorID, actorRole) {
+		return fmt.Errorf("%w: teamspace", ErrForbidden)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE teamspace
+		    SET deleted_at = now()
+		  WHERE id = $1`,
+		teamspaceID,
+	); err != nil {
+		return classifyMutationError("delete teamspace", err)
+	}
+
+	// All documents in a teamspace share the same teamspace_id, so a flat
+	// update is the correct delete shape here.
+	if _, err := tx.Exec(ctx,
+		`UPDATE document
+		    SET archived_at = now(),
+		        updated_by = $2,
+		        updated_at = now()
+		  WHERE teamspace_id = $1
+		    AND archived_at IS NULL`,
+		teamspaceID, actorID,
+	); err != nil {
+		return classifyMutationError("archive teamspace documents", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("documents: commit delete teamspace tx: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) JoinTeamspace(ctx context.Context, teamspaceID, userID uuid.UUID, actorRole string) (TeamspaceRow, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TeamspaceRow{}, fmt.Errorf("documents: begin join teamspace tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	var isPrivate bool
-	if err := s.pool.QueryRow(ctx,
+	if err := tx.QueryRow(ctx,
 		`SELECT is_private
 		   FROM teamspace
-		  WHERE id = $1`,
+		  WHERE id = $1
+		    AND deleted_at IS NULL
+		  FOR UPDATE`,
 		teamspaceID,
 	).Scan(&isPrivate); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -326,13 +395,17 @@ func (s *Service) JoinTeamspace(ctx context.Context, teamspaceID, userID uuid.UU
 		return TeamspaceRow{}, fmt.Errorf("%w: teamspace", ErrForbidden)
 	}
 
-	if _, err := s.pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO teamspace_member (teamspace_id, user_id)
 		 VALUES ($1, $2)
 		 ON CONFLICT DO NOTHING`,
 		teamspaceID, userID,
 	); err != nil {
 		return TeamspaceRow{}, classifyMutationError("join teamspace", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return TeamspaceRow{}, fmt.Errorf("documents: commit join teamspace tx: %w", err)
 	}
 
 	return s.getVisibleTeamspace(ctx, teamspaceID, userID, actorRole)
@@ -345,6 +418,7 @@ func (s *Service) ListSidebar(ctx context.Context, userID uuid.UUID) ([]SidebarT
 		   JOIN teamspace_member tm
 		     ON tm.teamspace_id = t.id
 		    AND tm.user_id = $1
+		  WHERE t.deleted_at IS NULL
 		  ORDER BY lower(t.name), t.created_at ASC`,
 		userID,
 	)
@@ -373,6 +447,9 @@ func (s *Service) ListSidebar(ctx context.Context, userID uuid.UUID) ([]SidebarT
 	docRows, err := s.pool.Query(ctx,
 		`SELECT d.id, d.teamspace_id, d.parent_document_id, d.title
 		   FROM document d
+		   JOIN teamspace t
+		     ON t.id = d.teamspace_id
+		    AND t.deleted_at IS NULL
 		   JOIN teamspace_member tm
 		     ON tm.teamspace_id = d.teamspace_id
 		    AND tm.user_id = $1
@@ -463,9 +540,12 @@ func (s *Service) CreateDocument(ctx context.Context, params CreateDocumentParam
 	if params.ParentDocumentID != nil {
 		var parentTeamspaceID uuid.UUID
 		if err := tx.QueryRow(ctx,
-			`SELECT teamspace_id
-			   FROM document
-			  WHERE id = $1
+			`SELECT d.teamspace_id
+			   FROM document d
+			   JOIN teamspace t
+			     ON t.id = d.teamspace_id
+			    AND t.deleted_at IS NULL
+			  WHERE d.id = $1
 			    AND archived_at IS NULL`,
 			*params.ParentDocumentID,
 		).Scan(&parentTeamspaceID); err != nil {
@@ -516,6 +596,7 @@ func (s *Service) GetDocument(ctx context.Context, documentID, userID uuid.UUID)
 		   FROM document d
 		   JOIN teamspace t
 		     ON t.id = d.teamspace_id
+		    AND t.deleted_at IS NULL
 		   JOIN teamspace_member tm
 		     ON tm.teamspace_id = d.teamspace_id
 		    AND tm.user_id = $2
@@ -577,6 +658,9 @@ func (s *Service) UpdateDocument(ctx context.Context, documentID uuid.UUID, para
 	if err := s.pool.QueryRow(ctx,
 		`SELECT d.title, d.content_markdown
 		   FROM document d
+		   JOIN teamspace t
+		     ON t.id = d.teamspace_id
+		    AND t.deleted_at IS NULL
 		   JOIN teamspace_member tm
 		     ON tm.teamspace_id = d.teamspace_id
 		    AND tm.user_id = $2
@@ -929,7 +1013,8 @@ func (s *Service) listVisibleTeamspaces(ctx context.Context, q queryer, userID u
 		  WHERE (
 		            t.is_private = false
 		         OR membership.is_member
-		        )`+filter+`
+		        )
+		    AND t.deleted_at IS NULL`+filter+`
 		  ORDER BY CASE
 		               WHEN t.owner_user_id = $1 THEN 0
 		               WHEN membership.is_member THEN 1
@@ -1095,6 +1180,9 @@ func (s *Service) ensureDocumentReadable(ctx context.Context, documentID, userID
 		`SELECT EXISTS (
 		     SELECT 1
 		       FROM document d
+		       JOIN teamspace t
+		         ON t.id = d.teamspace_id
+		        AND t.deleted_at IS NULL
 		       JOIN teamspace_member tm
 		         ON tm.teamspace_id = d.teamspace_id
 		        AND tm.user_id = $2
@@ -1116,9 +1204,12 @@ func (s *Service) documentAccessError(ctx context.Context, documentID, userID uu
 	if err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (
 		     SELECT 1
-		       FROM document
-		      WHERE id = $1
-		        AND archived_at IS NULL
+		       FROM document d
+		       JOIN teamspace t
+		         ON t.id = d.teamspace_id
+		        AND t.deleted_at IS NULL
+		      WHERE d.id = $1
+		        AND d.archived_at IS NULL
 		 )`,
 		documentID,
 	).Scan(&exists); err != nil {
@@ -1131,24 +1222,31 @@ func (s *Service) documentAccessError(ctx context.Context, documentID, userID uu
 }
 
 func ensureTeamspaceMember(ctx context.Context, q queryer, teamspaceID, userID uuid.UUID) error {
-	var (
-		exists   bool
-		isMember bool
-	)
+	var existsMarker int
 	if err := q.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM teamspace WHERE id = $1),
-		        EXISTS (
-		            SELECT 1
-		              FROM teamspace_member
-		             WHERE teamspace_id = $1
-		               AND user_id = $2
-		        )`,
-		teamspaceID, userID,
-	).Scan(&exists, &isMember); err != nil {
+		`SELECT 1
+		   FROM teamspace
+		  WHERE id = $1
+		    AND deleted_at IS NULL
+		  FOR UPDATE`,
+		teamspaceID,
+	).Scan(&existsMarker); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: teamspace", ErrNotFound)
+		}
 		return fmt.Errorf("documents: check teamspace access: %w", err)
 	}
-	if !exists {
-		return fmt.Errorf("%w: teamspace", ErrNotFound)
+	var isMember bool
+	if err := q.QueryRow(ctx,
+		`SELECT EXISTS (
+		     SELECT 1
+		       FROM teamspace_member
+		      WHERE teamspace_id = $1
+		        AND user_id = $2
+		 )`,
+		teamspaceID, userID,
+	).Scan(&isMember); err != nil {
+		return fmt.Errorf("documents: check teamspace membership: %w", err)
 	}
 	if !isMember {
 		return fmt.Errorf("%w: teamspace", ErrForbidden)

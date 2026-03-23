@@ -346,12 +346,13 @@ type TaskTemplateSequence struct {
 }
 
 type Teamspace struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	OwnerUserID uuid.UUID `json:"owner_user_id"`
-	IsPrivate   bool      `json:"is_private"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uuid.UUID    `json:"id"`
+	Name        string       `json:"name"`
+	OwnerUserID uuid.UUID    `json:"owner_user_id"`
+	IsPrivate   bool         `json:"is_private"`
+	DeletedAt   sql.NullTime `json:"deleted_at"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
 }
 
 type TeamspaceMember struct {

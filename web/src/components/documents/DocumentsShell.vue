@@ -24,11 +24,13 @@
         v-else-if="viewMode === 'teamspace'"
         :selected-teamspace-id="selectedTeamspaceId"
         @open-teamspace="emit('openTeamspace', $event)"
+        @open-teamspaces="emit('openTeamspaces')"
       />
       <TeamspacesView
         v-else
         :selected-teamspace-id="null"
         @open-teamspace="emit('openTeamspace', $event)"
+        @open-teamspaces="emit('openTeamspaces')"
       />
     </main>
   </div>

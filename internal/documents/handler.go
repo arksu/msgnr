@@ -106,33 +106,39 @@ func (h *Handler) teamspacesItem(w http.ResponseWriter, r *http.Request, p auth.
 }
 
 func (h *Handler) teamspaceItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {
-	if r.Method != http.MethodPatch {
+	switch r.Method {
+	case http.MethodPatch:
+		var req struct {
+			Name      string      `json:"name"`
+			IsPrivate bool        `json:"is_private"`
+			MemberIDs []uuid.UUID `json:"member_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+			return
+		}
+
+		row, err := h.svc.UpdateTeamspace(r.Context(), id, UpdateTeamspaceParams{
+			Name:      req.Name,
+			IsPrivate: req.IsPrivate,
+			MemberIDs: req.MemberIDs,
+			ActorID:   p.UserID,
+			ActorRole: p.Role,
+		})
+		if err != nil {
+			h.serviceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, row)
+	case http.MethodDelete:
+		if err := h.svc.DeleteTeamspace(r.Context(), id, p.UserID, p.Role); err != nil {
+			h.serviceError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
 		methodNotAllowed(w)
-		return
 	}
-
-	var req struct {
-		Name      string      `json:"name"`
-		IsPrivate bool        `json:"is_private"`
-		MemberIDs []uuid.UUID `json:"member_ids"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
-		return
-	}
-
-	row, err := h.svc.UpdateTeamspace(r.Context(), id, UpdateTeamspaceParams{
-		Name:      req.Name,
-		IsPrivate: req.IsPrivate,
-		MemberIDs: req.MemberIDs,
-		ActorID:   p.UserID,
-		ActorRole: p.Role,
-	})
-	if err != nil {
-		h.serviceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, row)
 }
 
 func (h *Handler) teamspaceJoin(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {

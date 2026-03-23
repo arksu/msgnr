@@ -34,7 +34,7 @@
             v-for="teamspace in documentsStore.teamspaces"
             :key="teamspace.id"
             class="border-b border-chat-border/80 text-sm text-gray-200"
-            :class="selectedTeamspaceId === teamspace.id ? 'bg-white/5' : ''"
+            :class="props.selectedTeamspaceId === teamspace.id ? 'bg-white/5' : ''"
           >
             <td class="px-4 py-3">
               <button
@@ -79,14 +79,23 @@
               >
             </td>
             <td class="px-4 py-3 text-right">
-              <button
-                v-if="teamspace.can_manage"
-                type="button"
-                class="rounded border border-chat-border px-2 py-1 text-xs text-gray-300 transition-colors hover:text-white"
-                @click="openEditModal(teamspace.id)"
-              >
-                Edit
-              </button>
+              <div v-if="teamspace.can_manage" class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  class="rounded border border-chat-border px-2 py-1 text-xs text-gray-300 transition-colors hover:text-white"
+                  @click="openEditModal(teamspace.id)"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  class="rounded border border-red-500/40 px-2 py-1 text-xs text-red-300 transition-colors hover:border-red-400 hover:text-red-200"
+                  :data-testid="`teamspace-delete-${teamspace.id}`"
+                  @click="openDeleteConfirm(teamspace.id)"
+                >
+                  Delete
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -113,6 +122,41 @@
           size="xs"
         />
         <span class="truncate">{{ member.display_name }}</span>
+      </div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div
+      v-if="deleteConfirmOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      @click.self="closeDeleteConfirm"
+    >
+      <div class="w-full max-w-sm rounded-xl border border-chat-border bg-chat-header p-5 shadow-2xl">
+        <h3 class="text-base font-semibold text-white">Delete teamspace?</h3>
+        <p class="mt-2 text-sm text-gray-300">
+          This will hide "{{ deleteTeamspaceName }}" and archive all documents in it.
+        </p>
+        <p v-if="deleteError" class="mt-3 text-xs text-red-400">{{ deleteError }}</p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            class="rounded border border-chat-border px-3 py-1.5 text-sm text-gray-300 transition-colors hover:text-white"
+            :disabled="deleteSaving"
+            @click="closeDeleteConfirm"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-50"
+            :disabled="deleteSaving"
+            data-testid="teamspace-delete-confirm"
+            @click="confirmDeleteTeamspace"
+          >
+            {{ deleteSaving ? 'Deleting...' : 'Delete' }}
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -209,12 +253,13 @@ import UserAvatar from '@/components/UserAvatar.vue'
 import { useDocumentsStore } from '@/stores/documents'
 import type { TeamspaceMemberPreview } from '@/services/http/documentsApi'
 
-defineProps<{
+const props = defineProps<{
   selectedTeamspaceId: string | null
 }>()
 
 const emit = defineEmits<{
   openTeamspace: [id: string]
+  openTeamspaces: []
 }>()
 
 const documentsStore = useDocumentsStore()
@@ -225,6 +270,11 @@ const modalError = ref('')
 const joinError = ref('')
 const editingTeamspaceId = ref<string | null>(null)
 const selectedMemberIds = ref<string[]>([])
+const deleteConfirmOpen = ref(false)
+const deleteSaving = ref(false)
+const deleteError = ref('')
+const deleteTeamspaceId = ref<string | null>(null)
+const deleteTeamspaceName = ref('')
 const form = reactive({
   name: '',
   is_private: false,
@@ -321,5 +371,43 @@ function openMembersPopup(teamspaceId: string, event: MouseEvent) {
 function closeMembersPopup(teamspaceId: string) {
   if (membersPopup.value?.teamspaceId !== teamspaceId) return
   membersPopup.value = null
+}
+
+function openDeleteConfirm(teamspaceId: string) {
+  const teamspace = documentsStore.teamspaces.find(item => item.id === teamspaceId)
+  if (!teamspace) return
+  deleteTeamspaceId.value = teamspaceId
+  deleteTeamspaceName.value = teamspace.name
+  deleteError.value = ''
+  deleteConfirmOpen.value = true
+}
+
+function closeDeleteConfirm() {
+  if (deleteSaving.value) return
+  deleteConfirmOpen.value = false
+  deleteError.value = ''
+  deleteTeamspaceId.value = null
+  deleteTeamspaceName.value = ''
+}
+
+async function confirmDeleteTeamspace() {
+  if (!deleteTeamspaceId.value) return
+  deleteSaving.value = true
+  deleteError.value = ''
+  const targetId = deleteTeamspaceId.value
+  try {
+    await documentsStore.deleteTeamspace(targetId)
+  } catch (e) {
+    deleteError.value = e instanceof Error ? e.message : 'Failed to delete teamspace'
+  } finally {
+    deleteSaving.value = false
+  }
+
+  if (deleteError.value) return
+
+  closeDeleteConfirm()
+  if (props.selectedTeamspaceId === targetId) {
+    emit('openTeamspaces')
+  }
 }
 </script>

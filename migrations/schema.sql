@@ -996,6 +996,7 @@ CREATE TABLE IF NOT EXISTS teamspace (
     name          text         NOT NULL,
     owner_user_id uuid         NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     is_private    boolean      NOT NULL DEFAULT false,
+    deleted_at    timestamptz  NULL,
     created_at    timestamptz  NOT NULL DEFAULT now(),
     updated_at    timestamptz  NOT NULL DEFAULT now(),
 

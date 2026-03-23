@@ -4,6 +4,7 @@ import {
   documentsCreateDocument,
   documentsCreateTeamspace,
   documentsDeleteDocument,
+  documentsDeleteTeamspace,
   documentsGetDocument,
   documentsJoinTeamspace,
   documentsListDocumentHistory,
@@ -121,6 +122,14 @@ export const useDocumentsStore = defineStore('documents', () => {
     return row
   }
 
+  async function deleteTeamspace(id: string) {
+    await documentsDeleteTeamspace(id)
+    if (selectedDocument.value?.teamspace_id === id) {
+      clearSelectedDocument()
+    }
+    await Promise.all([loadTeamspaces(true), loadSidebar(true)])
+  }
+
   async function joinTeamspace(id: string) {
     const row = await documentsJoinTeamspace(id)
     await Promise.all([loadTeamspaces(true), loadSidebar(true)])
@@ -175,6 +184,7 @@ export const useDocumentsStore = defineStore('documents', () => {
     clearSelectedDocument,
     createTeamspace,
     updateTeamspace,
+    deleteTeamspace,
     joinTeamspace,
     createDocument,
     updateDocument,

@@ -237,6 +237,9 @@ describe('MainView server unavailable state', () => {
     vi.spyOn(documentsStore, 'selectDocument').mockImplementation(async (id: string) => {
       documentsStore.selectedDocument = { id, teamspace_id: 'teamspace-1' } as any
     })
+    vi.spyOn(documentsStore, 'clearSelectedDocument').mockImplementation(() => {
+      documentsStore.selectedDocument = null
+    })
     vi.spyOn(documentsStore, 'loadTeamspaces').mockResolvedValue()
     vi.spyOn(documentsStore, 'loadSidebar').mockResolvedValue()
   })
@@ -428,6 +431,22 @@ describe('MainView server unavailable state', () => {
     expect(wrapper.find('[data-testid="documents-mode"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="documents-sidebar"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="teamspaces-view"]').exists()).toBe(true)
+  })
+
+  it('returns to the documents browser from a teamspace route', async () => {
+    const router = createMainRouter()
+    router.push('/documents/teamspaces/teamspace-1')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    const documentsStore = useDocumentsStore(pinia)
+    await router.push({ name: 'documents-teamspaces' })
+    await flushUi()
+
+    expect(router.currentRoute.value.name).toBe('documents-teamspaces')
+    expect(documentsStore.selectedDocument).toBeNull()
   })
 
   it('keeps documents card mode and loads document on direct /documents/:documentId entry', async () => {

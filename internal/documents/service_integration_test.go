@@ -5,6 +5,7 @@ package documents_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"io"
 	"testing"
 
@@ -74,6 +75,92 @@ func TestIntegration_ListTeamspacesVisibilityAndJoin(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.True(t, rows[0].IsMember)
 	assert.Equal(t, 3, rows[0].MemberCount)
+}
+
+func TestIntegration_DeleteTeamspaceArchivesDocsAndHidesIt(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := documents.NewService(pool, nil)
+
+	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
+	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
+	outsiderID := seedDocumentUser(t, ctx, pool, "Outsider", "member")
+
+	teamspace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:      "Delete docs",
+		MemberIDs: []uuid.UUID{memberID},
+		ActorID:   ownerID,
+	}, "member")
+	require.NoError(t, err)
+
+	rootDoc, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID: teamspace.ID,
+		Title:       "Root doc",
+		ActorID:     ownerID,
+	})
+	require.NoError(t, err)
+
+	childDoc, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:      teamspace.ID,
+		ParentDocumentID: &rootDoc.ID,
+		Title:            "Child doc",
+		ActorID:          memberID,
+	})
+	require.NoError(t, err)
+
+	err = svc.DeleteTeamspace(ctx, teamspace.ID, ownerID, "member")
+	require.NoError(t, err)
+
+	var teamspaceDeletedAt sql.NullTime
+	require.NoError(t, pool.QueryRow(ctx, `SELECT deleted_at FROM teamspace WHERE id = $1`, teamspace.ID).Scan(&teamspaceDeletedAt))
+	require.True(t, teamspaceDeletedAt.Valid)
+
+	for _, documentID := range []uuid.UUID{rootDoc.ID, childDoc.ID} {
+		var archivedAt sql.NullTime
+		require.NoError(t, pool.QueryRow(ctx, `SELECT archived_at FROM document WHERE id = $1`, documentID).Scan(&archivedAt))
+		require.True(t, archivedAt.Valid)
+
+		_, err = svc.GetDocument(ctx, documentID, ownerID)
+		require.ErrorIs(t, err, documents.ErrNotFound)
+	}
+
+	rows, err := svc.ListTeamspaces(ctx, ownerID, "member")
+	require.NoError(t, err)
+	require.Empty(t, rows)
+
+	sidebar, err := svc.ListSidebar(ctx, ownerID)
+	require.NoError(t, err)
+	require.Empty(t, sidebar)
+
+	sidebar, err = svc.ListSidebar(ctx, memberID)
+	require.NoError(t, err)
+	require.Empty(t, sidebar)
+
+	rows, err = svc.ListTeamspaces(ctx, outsiderID, "member")
+	require.NoError(t, err)
+	require.Empty(t, rows)
+}
+
+func TestIntegration_DeleteTeamspaceRejectsNonManagers(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := documents.NewService(pool, nil)
+
+	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
+	outsiderID := seedDocumentUser(t, ctx, pool, "Outsider", "member")
+
+	teamspace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:    "Managed docs",
+		ActorID: ownerID,
+	}, "member")
+	require.NoError(t, err)
+
+	err = svc.DeleteTeamspace(ctx, teamspace.ID, outsiderID, "member")
+	require.ErrorIs(t, err, documents.ErrForbidden)
+
+	rows, err := svc.ListTeamspaces(ctx, ownerID, "member")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
 }
 
 func TestIntegration_SidebarHierarchyMemberOnly(t *testing.T) {

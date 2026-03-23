@@ -169,3 +169,45 @@ func TestIntegration_Handler_ListMessageReactionUsers_MessageNotFoundForConversa
 	require.Equal(t, 404, rec.Code)
 	assert.Contains(t, rec.Body.String(), "message not found")
 }
+
+func TestIntegration_Handler_ListActiveCallMembers_Success(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store)
+	h := NewHandler(svc, nil, &config.Config{ChatHistoryPageSize: 50})
+
+	member := seedReactionTestUser(t, ctx, pool, "Member")
+	other := seedReactionTestUser(t, ctx, pool, "Other")
+	outsider := seedReactionTestUser(t, ctx, pool, "Outsider")
+	channelID := seedReactionTestChannel(t, ctx, pool, member, "main")
+	addReactionMember(t, ctx, pool, channelID, member)
+	addReactionMember(t, ctx, pool, channelID, other)
+
+	callID := uuid.New()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO calls (id, channel_id, status, livekit_room, created_by, started_at)
+		VALUES ($1, $2, 'active', $3, $4, now())`,
+		callID, channelID, "call-"+callID.String(), member,
+	)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO call_participants (call_id, user_id, joined_at, left_at)
+		VALUES ($1, $2, now(), NULL), ($1, $3, now(), NULL), ($1, $4, now(), now())`,
+		callID, member, other, outsider,
+	)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/api/conversations/active-call-members?conversation_id="+channelID.String(), nil)
+	rec := httptest.NewRecorder()
+
+	h.listActiveCallMembers(rec, req, auth.Principal{UserID: member})
+
+	require.Equal(t, 200, rec.Code)
+	var body []conversationMemberResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body, 2)
+	assert.Equal(t, "Member", body[0].DisplayName)
+	assert.Equal(t, "Other", body[1].DisplayName)
+}

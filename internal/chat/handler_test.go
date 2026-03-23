@@ -76,3 +76,14 @@ func TestListMessageReactionUsers_RequiresEmoji(t *testing.T) {
 	require.Equal(t, 400, rec.Code)
 	assert.Contains(t, rec.Body.String(), "emoji is required")
 }
+
+func TestListActiveCallMembers_InvalidConversationID(t *testing.T) {
+	h := NewHandler(nil, nil, &config.Config{ChatHistoryPageSize: 50})
+	req := httptest.NewRequest("GET", "/api/conversations/active-call-members?conversation_id=bad", nil)
+	rec := httptest.NewRecorder()
+
+	h.listActiveCallMembers(rec, req, auth.Principal{})
+
+	require.Equal(t, 400, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid conversation_id")
+}

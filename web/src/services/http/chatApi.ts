@@ -154,6 +154,15 @@ export async function listConversationMembers(conversationId: string): Promise<C
   } catch (e) { handleError(e) }
 }
 
+export async function listActiveCallMembers(conversationId: string): Promise<ConversationMemberItem[]> {
+  try {
+    const { data } = await http.get<ConversationMemberItem[]>('/api/conversations/active-call-members', {
+      params: { conversation_id: conversationId },
+    })
+    return data
+  } catch (e) { handleError(e) }
+}
+
 export async function listConversationMessages(
   conversationId: string,
   beforeChannelSeq?: bigint,

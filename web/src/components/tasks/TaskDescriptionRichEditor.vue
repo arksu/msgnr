@@ -206,8 +206,17 @@
       </div>
     </FloatingMenu>
 
+    <div
+      v-if="showRenderedFallback"
+      data-testid="task-description-editor-fallback"
+      class="min-h-[140px] px-3 py-2"
+    >
+      <AttachmentMarkdownContent :markdown="markdownDraft" />
+    </div>
+
     <EditorContent
       v-if="editor"
+      v-show="!showRenderedFallback"
       :editor="editor"
       class="task-description-editor-content markdown-body"
       data-testid="task-description-editor-content"
@@ -235,6 +244,7 @@ import { prosemirrorJSONToYXmlFragment } from '@tiptap/y-tiptap'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
 import router from '@/router'
+import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
 import { fetchOwnedAttachmentBlob, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
 import { openBlobInBrowser } from '@/utils/attachmentBrowser'
 import { buildAttachmentUrl, parseAttachmentUrl, type AttachmentOwnerKind } from '@/utils/attachmentMarkdown'
@@ -279,11 +289,17 @@ const markdownDraft = ref(props.modelValue ?? '')
 const suppressEditorSync = ref(false)
 const syncingFromEditor = ref(false)
 const syncingFromModel = ref(0)
+const editorContentEmpty = ref(true)
 let seedInProgress = false
 const DEBUG_TASK_DESC = import.meta.env.DEV
 
 const collabEnabled = computed(() => !!props.collabDoc)
 const editable = computed(() => !!props.editable)
+const showRenderedFallback = computed(() =>
+  collabEnabled.value &&
+  markdownDraft.value.trim() !== '' &&
+  editorContentEmpty.value,
+)
 const attachmentObjectUrls = new Map<string, string>()
 const attachmentLoadsInFlight = new Set<string>()
 
@@ -529,9 +545,11 @@ const editor = useEditor({
     emit('blur')
   },
   onCreate() {
+    syncEditorContentEmpty('onCreate')
     queueResolveEditorAttachmentImages()
   },
   onUpdate({ editor: nextEditor }) {
+    syncEditorContentEmpty('onUpdate:start')
     if (suppressEditorSync.value) return
     const nextMarkdown = tiptapJsonToMarkdown(nextEditor.getJSON())
     descLog('onUpdate', {
@@ -552,6 +570,7 @@ const editor = useEditor({
     markdownDraft.value = nextMarkdown
     emit('update:modelValue', nextMarkdown)
     syncingFromEditor.value = false
+    syncEditorContentEmpty('onUpdate:done')
     queueResolveEditorAttachmentImages()
   },
 })
@@ -603,6 +622,7 @@ function setEditorContentFromMarkdown(markdown: string, emitUpdate: boolean, rea
       afterSnapshot: editorStateSnapshot(),
       afterMarkdown: markdownSignature(tiptapJsonToMarkdown(editor.value.getJSON())),
     })
+    syncEditorContentEmpty(`setEditorContentFromMarkdown:${reason}`)
     queueResolveEditorAttachmentImages()
   } catch (error) {
     descLog('setEditorContentFromMarkdown:error', {
@@ -625,6 +645,18 @@ function isEditorEffectivelyEmpty(): boolean {
   if (!editor.value) return true
   const currentMarkdown = tiptapJsonToMarkdown(editor.value.getJSON()).trim()
   return currentMarkdown.length === 0
+}
+
+function syncEditorContentEmpty(reason: string) {
+  const empty = isEditorEffectivelyEmpty()
+  editorContentEmpty.value = empty
+  descLog('syncEditorContentEmpty', {
+    reason,
+    collab: collabEnabled.value,
+    empty,
+    markdown: markdownSignature(markdownDraft.value),
+    snapshot: editorStateSnapshot(),
+  })
 }
 
 function maybeSeedCollabEditorFromDraft(reason: string) {
@@ -747,6 +779,7 @@ watch(
 watch(editor, (next) => {
   if (!next) return
   next.on('transaction', ({ transaction }) => {
+    syncEditorContentEmpty('transaction')
     descLog('transaction', {
       collab: collabEnabled.value,
       docChanged: transaction.docChanged,
@@ -759,10 +792,23 @@ watch(editor, (next) => {
   })
   if (collabEnabled.value) {
     descLog('watch:editor', { collab: true, skip: true })
+    syncEditorContentEmpty('watch-editor:collab')
     maybeSeedCollabEditorFromDraft('watch-editor-collab-initial-seed')
     return
   }
+  syncEditorContentEmpty('watch-editor:non-collab')
   setEditorContentFromMarkdown(markdownDraft.value, false, 'watch-editor-immediate')
+}, { immediate: true })
+
+watch(showRenderedFallback, (next, prev) => {
+  if (!collabEnabled.value) return
+  if (next === prev) return
+  console.debug('[task-desc-editor]', next ? 'render-fallback:on' : 'render-fallback:off', {
+    collab: collabEnabled.value,
+    allowLocalDraftSeed: props.allowLocalDraftSeed,
+    markdown: markdownSignature(markdownDraft.value),
+    snapshot: editorStateSnapshot(),
+  })
 }, { immediate: true })
 
 onBeforeUnmount(() => {

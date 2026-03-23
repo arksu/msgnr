@@ -51,6 +51,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/channels/join", h.requireAuth(h.joinChannels))
 	mux.HandleFunc("/api/conversations/leave", h.requireAuth(h.leaveConversation))
 	mux.HandleFunc("/api/conversations/members", h.requireAuth(h.listConversationMembers))
+	mux.HandleFunc("/api/conversations/active-call-members", h.requireAuth(h.listActiveCallMembers))
 	mux.HandleFunc("/api/conversations/invite", h.requireAuth(h.inviteToConversation))
 	mux.HandleFunc("/api/messages", h.requireAuth(h.listConversationMessages))
 	mux.HandleFunc("/api/messages/reaction-users", h.requireAuth(h.listMessageReactionUsers))
@@ -321,6 +322,42 @@ func (h *Handler) listConversationMembers(w http.ResponseWriter, r *http.Request
 			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		default:
 			h.log.Error("listConversationMembers error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+
+	resp := make([]conversationMemberResponse, 0, len(members))
+	for _, member := range members {
+		resp = append(resp, conversationMemberResponse{
+			UserID:      member.UserID.String(),
+			DisplayName: member.DisplayName,
+			Email:       member.Email,
+			AvatarURL:   member.AvatarURL,
+		})
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listActiveCallMembers(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodGet {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	conversationID, err := uuid.Parse(r.URL.Query().Get("conversation_id"))
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
+		return
+	}
+
+	members, err := h.svc.ListActiveCallMembers(r.Context(), principal.UserID, conversationID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
+		default:
+			h.log.Error("listActiveCallMembers error", zap.Error(err))
 			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		}
 		return

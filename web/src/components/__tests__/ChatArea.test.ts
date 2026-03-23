@@ -8,19 +8,22 @@ import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 import { useWsStore } from '@/stores/ws'
-import { listConversationMembers } from '@/services/http/chatApi'
+import { listActiveCallMembers, listConversationMembers } from '@/services/http/chatApi'
 
 vi.mock('@/services/http/chatApi', () => ({
+  listActiveCallMembers: vi.fn(),
   listConversationMembers: vi.fn(),
   listMessageReactionUsers: vi.fn(),
 }))
 
+const listActiveCallMembersMock = vi.mocked(listActiveCallMembers)
 const listConversationMembersMock = vi.mocked(listConversationMembers)
 
 describe('ChatArea', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    listActiveCallMembersMock.mockResolvedValue([])
     listConversationMembersMock.mockResolvedValue([])
   })
 
@@ -801,6 +804,168 @@ describe('ChatArea', () => {
     expect(wrapper.find('[data-testid="invite-avatar-user-2"]').attributes('data-avatar-url')).toBe('/api/public/avatars/a/bob.png')
     expect(wrapper.find('[data-testid="invite-avatar-user-2"]').attributes('data-display-name')).toBe('Bob')
     expect(wrapper.find('[data-testid="invite-avatar-user-3"]').attributes('data-display-name')).toBe('eve@example.com')
+  })
+
+  it('shows the active call member roster on hover and includes the current user', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    const callStore = useCallStore()
+    wsStore.state = 'LIVE_SYNCED'
+
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfAvatarUrl: '/api/public/avatars/avatars/user-1/self.png',
+      selfRole: 'member',
+    }
+    authStore.user = {
+      id: 'user-1',
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      avatarUrl: '/api/public/avatars/avatars/user-1/self.png',
+      role: 'member',
+    }
+    chatStore.registerUserIdentity('user-2', 'Bob', 'bob@example.com', '/api/public/avatars/avatars/user-2/bob.png')
+    chatStore.registerUserIdentity('user-3', 'Eve', 'eve@example.com', '/api/public/avatars/avatars/user-3/eve.png')
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.activeCalls = [
+      { id: 'call-1', conversationId: 'channel-1', status: '1', participantCount: 3 },
+    ]
+    callStore.activeConversationId = 'channel-1'
+    callStore.room = {
+      localParticipant: { identity: 'user-1' },
+      remoteParticipants: new Map([
+        ['sid-user-2', { identity: 'user-2' }],
+        ['sid-user-3', { identity: 'user-3' }],
+      ]),
+    } as never
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+          UserAvatar: {
+            props: ['userId', 'displayName', 'avatarUrl'],
+            template: '<div :data-testid="`call-avatar-${userId}`" :data-display-name="displayName" :data-avatar-url="avatarUrl"></div>',
+          },
+        },
+      },
+    })
+
+    const trigger = wrapper.get('[data-testid="active-call-members-trigger"]')
+    await trigger.trigger('mouseenter')
+    await nextTick()
+
+    const popover = wrapper.get('[data-testid="call-members-popover"]')
+    expect(popover.text()).toContain('Call members')
+    expect(popover.text()).toContain('3 people in this call')
+    expect(popover.text()).toContain('Ada')
+    expect(popover.text()).toContain('Bob')
+    expect(popover.text()).toContain('Eve')
+    expect(popover.text()).toContain('You')
+    expect(wrapper.get('[data-testid="call-avatar-user-1"]').attributes('data-avatar-url')).toBe('/api/public/avatars/avatars/user-1/self.png')
+    expect(wrapper.get('[data-testid="call-avatar-user-2"]').attributes('data-display-name')).toBe('Bob')
+    expect(wrapper.get('[data-testid="call-avatar-user-3"]').attributes('data-avatar-url')).toBe('/api/public/avatars/avatars/user-3/eve.png')
+
+    callStore.room = {
+      localParticipant: { identity: 'user-1' },
+      remoteParticipants: new Map([
+        ['sid-user-2', { identity: 'user-2' }],
+        ['sid-user-4', { identity: 'user-4' }],
+      ]),
+    } as never
+    chatStore.registerUserIdentity('user-4', 'Cara', 'cara@example.com', '/api/public/avatars/avatars/user-4/cara.png')
+    callStore.mediaVersion += 1
+    await nextTick()
+
+    const updatedPopover = wrapper.get('[data-testid="call-members-popover"]')
+    expect(updatedPopover.text()).toContain('Ada')
+    expect(updatedPopover.text()).toContain('Bob')
+    expect(updatedPopover.text()).toContain('Cara')
+    expect(updatedPopover.text()).not.toContain('Eve')
+  })
+
+  it('loads active call members for calls the user has not joined', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    const callStore = useCallStore()
+    wsStore.state = 'LIVE_SYNCED'
+
+    authStore.user = {
+      id: 'user-1',
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      avatarUrl: '/api/public/avatars/avatars/user-1/self.png',
+      role: 'member',
+    }
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfAvatarUrl: '/api/public/avatars/avatars/user-1/self.png',
+      selfRole: 'member',
+    }
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.activeCalls = [
+      { id: 'call-remote-1', conversationId: 'channel-1', status: '1', participantCount: 2 },
+    ]
+    callStore.activeConversationId = 'channel-2'
+    callStore.room = {
+      localParticipant: { identity: 'user-1' },
+      remoteParticipants: new Map(),
+    } as never
+    listActiveCallMembersMock.mockResolvedValue([
+      { user_id: 'user-2', display_name: 'Bob', email: 'bob@example.com', avatar_url: '/api/public/avatars/avatars/user-2/bob.png' },
+      { user_id: 'user-3', display_name: '', email: 'eve@example.com', avatar_url: '' },
+    ])
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+          UserAvatar: {
+            props: ['userId', 'displayName', 'avatarUrl'],
+            template: '<div :data-testid="`call-avatar-${userId}`" :data-display-name="displayName" :data-avatar-url="avatarUrl"></div>',
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="active-call-members-trigger"]').trigger('mouseenter')
+    await Promise.resolve()
+    await nextTick()
+
+    expect(listActiveCallMembersMock).toHaveBeenCalledWith('channel-1')
+    expect(listActiveCallMembersMock).toHaveBeenCalledTimes(1)
+    const popover = wrapper.get('[data-testid="call-members-popover"]')
+    expect(popover.text()).toContain('2 people in this call')
+    expect(popover.text()).toContain('Bob')
+    expect(popover.text()).toContain('eve@example.com')
+    expect(wrapper.get('[data-testid="call-avatar-user-2"]').attributes('data-avatar-url')).toBe('/api/public/avatars/avatars/user-2/bob.png')
+    expect(wrapper.get('[data-testid="call-avatar-user-3"]').attributes('data-display-name')).toBe('eve@example.com')
   })
 
   it('does nothing when clicking call active while already in the same call', async () => {

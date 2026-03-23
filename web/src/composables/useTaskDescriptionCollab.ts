@@ -393,6 +393,14 @@ export function useTaskDescriptionCollab(params: {
     })
     subscribeError.value = null
     pendingPersistedMarkdown = shouldSeedPersisted ? resp.persistedMarkdown : null
+    if (!shouldSeedPersisted && resp.persistedMarkdown.trim() !== '' && isDocEmpty(doc.value)) {
+      collabLog('seed:persisted:withheld', {
+        taskId,
+        subscriberCount: resp.subscriberCount,
+        persisted: markdownSignature(resp.persistedMarkdown),
+        doc: docMarkdownSignature(doc.value),
+      })
+    }
     receivedMeaningfulRemoteSync = false
     requestPeerState(taskId, 'subscribe-response')
     if (shouldSeedPersisted) {

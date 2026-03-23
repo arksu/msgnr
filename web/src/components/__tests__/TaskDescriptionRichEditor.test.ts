@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as Y from 'yjs'
 import TaskDescriptionRichEditor from '@/components/tasks/TaskDescriptionRichEditor.vue'
 import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
 
@@ -75,6 +76,24 @@ describe('TaskDescriptionRichEditor', () => {
     expect(items[0].find('label').exists()).toBe(true)
     expect(items[0].find('div').exists()).toBe(true)
     expect(items[0].text()).toContain('text')
+  })
+
+  it('falls back to rendered markdown when collab doc stays empty', async () => {
+    const collabDoc = new Y.Doc()
+    collabDoc.getXmlFragment('task_description')
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '**Bold** text',
+        collabDoc,
+        allowLocalDraftSeed: false,
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    expect(wrapper.get('[data-testid="task-description-editor-fallback"] .markdown-body strong').text()).toBe('Bold')
   })
 
   it('uploads image files from the rendered editor and serializes them back to markdown tokens', async () => {

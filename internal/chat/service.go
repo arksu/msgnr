@@ -313,6 +313,59 @@ func (s *Service) ListConversationMembers(ctx context.Context, requesterID, conv
 	return members, nil
 }
 
+// ListActiveCallMembers returns active participants for the current active call in a conversation.
+func (s *Service) ListActiveCallMembers(ctx context.Context, requesterID, conversationID uuid.UUID) ([]ConversationMember, error) {
+	isMember, err := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
+		ChannelID: conversationID,
+		UserID:    requesterID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListActiveCallMembers membership check: %w", err)
+	}
+	if !isMember {
+		return nil, ErrNotMember
+	}
+
+	rows, err := s.pool.Query(ctx, `
+			SELECT member_id, display_name, email, avatar_url
+			  FROM (
+					SELECT DISTINCT
+						u.id AS member_id,
+						u.display_name,
+						u.email,
+						u.avatar_url
+					  FROM calls c
+					  JOIN call_participants cp
+					    ON cp.call_id = c.id
+					   AND cp.left_at IS NULL
+					  JOIN users u
+					    ON u.id = cp.user_id
+					 WHERE c.channel_id = $1
+					   AND c.status = 'active'
+					   AND u.status = 'active'
+			  ) active_members
+			 ORDER BY lower(COALESCE(NULLIF(display_name, ''), email)), member_id`,
+		conversationID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListActiveCallMembers query: %w", err)
+	}
+	defer rows.Close()
+
+	members := make([]ConversationMember, 0)
+	for rows.Next() {
+		var member ConversationMember
+		if err := rows.Scan(&member.UserID, &member.DisplayName, &member.Email, &member.AvatarURL); err != nil {
+			return nil, fmt.Errorf("chat.ListActiveCallMembers scan: %w", err)
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chat.ListActiveCallMembers rows: %w", err)
+	}
+	return members, nil
+}
+
 // JoinPublicChannels adds requester membership to eligible public channels and
 // returns joined channels in the same order as requested IDs.
 func (s *Service) JoinPublicChannels(ctx context.Context, requesterID uuid.UUID, channelIDs []uuid.UUID) ([]JoinableChannel, error) {

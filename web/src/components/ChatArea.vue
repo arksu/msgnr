@@ -10,7 +10,73 @@
       </div>
       <div v-if="conversation" class="h-5 w-px bg-chat-border mx-1 shrink-0" />
       <div class="ml-auto flex items-center gap-2 shrink-0">
+        <div
+          v-if="activeConversationCall"
+          class="relative"
+          data-testid="active-call-members-trigger"
+          @mouseenter="openCallMembersPopover"
+          @mouseleave="closeCallMembersPopover"
+          @focusin="openCallMembersPopover"
+          @focusout="handleCallMembersFocusOut"
+        >
+          <button
+            class="p-1.5 rounded transition-colors flex items-center gap-1 text-sm"
+            :class="activeConversationCall ? 'bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25' : 'hover:bg-white/10 text-gray-400 hover:text-white'"
+            :disabled="!conversation"
+            :aria-expanded="callMembersPopoverOpen"
+            aria-haspopup="true"
+            @click="handleCallClick"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.63 2.63a2 2 0 0 1-.45 2.11L8.1 9.91a16 16 0 0 0 6 6l1.45-1.19a2 2 0 0 1 2.11-.45c.85.3 1.73.51 2.63.63A2 2 0 0 1 22 16.92z"/>
+            </svg>
+            <span class="hidden sm:inline">Call active</span>
+          </button>
+
+          <div
+            v-show="callMembersPopoverOpen"
+            data-testid="call-members-popover"
+            class="absolute right-0 top-full z-40 mt-2 w-80 overflow-hidden rounded-xl border border-chat-border bg-chat-header shadow-2xl ring-1 ring-black/20"
+          >
+            <div class="border-b border-chat-border px-4 py-3">
+              <div class="text-sm font-semibold text-white">Call members</div>
+              <div class="mt-0.5 text-xs text-gray-400">{{ activeConversationCall?.participantCount ?? activeCallMembers.length }} people in this call</div>
+            </div>
+
+            <div v-if="remoteActiveCallMembersLoading" class="px-4 py-5 text-sm text-gray-400">
+              Loading active members...
+            </div>
+
+            <div v-else-if="remoteActiveCallMembersError" class="px-4 py-5 text-sm text-red-300">
+              {{ remoteActiveCallMembersError }}
+            </div>
+
+            <div v-else-if="activeCallMembers.length === 0" class="px-4 py-5 text-sm text-gray-400">
+              No active members
+            </div>
+
+            <div v-else class="max-h-72 overflow-y-auto py-1">
+              <div
+                v-for="member in activeCallMembers"
+                :key="member.userId"
+                class="flex items-center gap-3 px-4 py-2.5"
+              >
+                <UserAvatar
+                  :user-id="member.userId"
+                  :display-name="member.displayName"
+                  :avatar-url="member.avatarUrl"
+                  size="sm"
+                />
+                <div class="min-w-0">
+                  <div class="truncate text-sm text-white">{{ member.displayName }}</div>
+                  <div v-if="member.isSelf" class="text-xs text-emerald-300">You</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <button
+          v-else
           class="p-1.5 rounded transition-colors flex items-center gap-1 text-sm"
           :class="activeConversationCall ? 'bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25' : 'hover:bg-white/10 text-gray-400 hover:text-white'"
           :disabled="!conversation"
@@ -19,7 +85,7 @@
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.63 2.63a2 2 0 0 1-.45 2.11L8.1 9.91a16 16 0 0 0 6 6l1.45-1.19a2 2 0 0 1 2.11-.45c.85.3 1.73.51 2.63.63A2 2 0 0 1 22 16.92z"/>
           </svg>
-          <span class="hidden sm:inline">{{ activeConversationCall ? 'Call active' : 'Call' }}</span>
+          <span class="hidden sm:inline">Call</span>
         </button>
         <button class="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -212,7 +278,7 @@ import { useChatStore, type Message } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
 import { useCallStore } from '@/stores/call'
-import { listConversationMembers } from '@/services/http/chatApi'
+import { listActiveCallMembers, listConversationMembers } from '@/services/http/chatApi'
 import { generateId } from '@/services/id'
 import MessageBubble from './MessageBubble.vue'
 import MessageInput from './MessageInput.vue'
@@ -271,6 +337,65 @@ const activeConversationCall = computed(() => {
   if (!conversationId) return null
   return chatStore.activeCalls.find(call => call.conversationId === conversationId) ?? null
 })
+type ActiveCallMember = {
+  userId: string
+  displayName: string
+  avatarUrl: string
+  isSelf: boolean
+}
+const callMembersPopoverOpen = ref(false)
+const remoteActiveCallMembers = ref<ActiveCallMember[]>([])
+const remoteActiveCallMembersLoading = ref(false)
+const remoteActiveCallMembersError = ref('')
+let remoteActiveCallMembersRequestSeq = 0
+const hasLiveActiveCallRoom = computed(() =>
+  Boolean(
+    activeConversationCall.value
+    && callStore.room
+    && callStore.activeConversationId === activeConversationCall.value.conversationId,
+  ),
+)
+const liveActiveCallMembers = computed<ActiveCallMember[]>(() => {
+  void callStore.mediaVersion
+  if (!activeConversationCall.value || !hasLiveActiveCallRoom.value) return []
+  const currentRoom = callStore.room
+  if (!currentRoom) return []
+
+  const selfUserId = currentRoom.localParticipant.identity?.trim()
+    || chatStore.workspace?.selfUserId
+    || authStore.user?.id
+    || ''
+  const members = new Map<string, ActiveCallMember>()
+
+  if (selfUserId) {
+    members.set(selfUserId, {
+      userId: selfUserId,
+      displayName: chatStore.resolveDisplayName(selfUserId),
+      avatarUrl: chatStore.resolveAvatarUrl(selfUserId),
+      isSelf: true,
+    })
+  }
+
+  for (const participant of currentRoom.remoteParticipants.values()) {
+    const userId = participant.identity?.trim()
+    if (!userId || members.has(userId)) continue
+    members.set(userId, {
+      userId,
+      displayName: chatStore.resolveDisplayName(userId),
+      avatarUrl: chatStore.resolveAvatarUrl(userId),
+      isSelf: false,
+    })
+  }
+
+  return Array.from(members.values()).sort((a, b) => {
+    if (a.isSelf && !b.isSelf) return -1
+    if (!a.isSelf && b.isSelf) return 1
+    return a.displayName.localeCompare(b.displayName) || a.userId.localeCompare(b.userId)
+  })
+})
+const activeCallMembers = computed<ActiveCallMember[]>(() =>
+  hasLiveActiveCallRoom.value ? liveActiveCallMembers.value : remoteActiveCallMembers.value
+)
 const typingLabel = computed(() => {
   const entries = chatStore.typingByConversationId[chatStore.activeChannelId] ?? []
   const visible = entries.filter(entry => entry.userId !== chatStore.workspace?.selfUserId)
@@ -310,6 +435,62 @@ const statusLabel = computed(() => {
 const showConversationLoadingOverlay = computed(() =>
   chatStore.isConversationInitialLoading(chatStore.activeChannelId)
 )
+
+function openCallMembersPopover() {
+  if (!activeConversationCall.value) return
+  callMembersPopoverOpen.value = true
+}
+
+function closeCallMembersPopover() {
+  callMembersPopoverOpen.value = false
+}
+
+function handleCallMembersFocusOut(event: FocusEvent) {
+  const nextTarget = event.relatedTarget as Node | null
+  if (nextTarget && (event.currentTarget as HTMLElement | null)?.contains(nextTarget)) return
+  closeCallMembersPopover()
+}
+
+function resetRemoteActiveCallMembers() {
+  remoteActiveCallMembers.value = []
+  remoteActiveCallMembersLoading.value = false
+  remoteActiveCallMembersError.value = ''
+}
+
+async function refreshActiveCallMembers() {
+  const currentConversationId = conversation.value?.id ?? ''
+  if (!currentConversationId || !activeConversationCall.value) {
+    resetRemoteActiveCallMembers()
+    return
+  }
+  if (hasLiveActiveCallRoom.value) {
+    remoteActiveCallMembersError.value = ''
+    remoteActiveCallMembersLoading.value = false
+    return
+  }
+
+  const requestSeq = ++remoteActiveCallMembersRequestSeq
+  remoteActiveCallMembersLoading.value = true
+  remoteActiveCallMembersError.value = ''
+  try {
+    const members = await listActiveCallMembers(currentConversationId)
+    if (requestSeq !== remoteActiveCallMembersRequestSeq || conversation.value?.id !== currentConversationId) return
+    remoteActiveCallMembers.value = members.map(member => ({
+      userId: member.user_id,
+      displayName: member.display_name || member.email,
+      avatarUrl: member.avatar_url,
+      isSelf: member.user_id === (authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''),
+    }))
+  } catch (err) {
+    if (requestSeq !== remoteActiveCallMembersRequestSeq || conversation.value?.id !== currentConversationId) return
+    remoteActiveCallMembers.value = []
+    remoteActiveCallMembersError.value = err instanceof Error ? err.message : 'Failed to load active members'
+  } finally {
+    if (requestSeq === remoteActiveCallMembersRequestSeq && conversation.value?.id === currentConversationId) {
+      remoteActiveCallMembersLoading.value = false
+    }
+  }
+}
 
 function chatComposerScrollDebug(event: string, payload: Record<string, unknown>) {
   if (!DEBUG_CHAT_COMPOSER_SCROLL) return
@@ -847,6 +1028,27 @@ watch(() => showConversationLoadingOverlay.value, (loading) => {
   if (!loading) {
     void flushPendingSwitchAutoScroll('loading-overlay-watch')
   }
+})
+
+watch(() => [
+  callMembersPopoverOpen.value,
+  conversation.value?.id ?? '',
+  activeConversationCall.value?.id ?? '',
+  activeConversationCall.value?.participantCount ?? 0,
+  hasLiveActiveCallRoom.value,
+], ([isOpen, conversationId, activeCallId]) => {
+  if (!isOpen) return
+  if (!conversationId || !activeCallId) {
+    resetRemoteActiveCallMembers()
+    return
+  }
+  void refreshActiveCallMembers()
+})
+
+watch(() => chatStore.activeChannelId, () => {
+  remoteActiveCallMembersRequestSeq += 1
+  resetRemoteActiveCallMembers()
+  closeCallMembersPopover()
 })
 
 onBeforeUnmount(() => {

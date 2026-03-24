@@ -10,6 +10,7 @@ import {
 export interface PendingOutboundMessage {
   conversationId: string
   body: string
+  entities?: Array<{ kind: 'user' | 'task' | 'document'; targetId: string; label: string; href: string; start: number; end: number }>
   clientMsgId: string
   threadRootMessageId?: string
   attachmentIds?: string[]
@@ -40,6 +41,7 @@ export function useOfflineQueue() {
     void enqueueOutbound({
       conversationId: msg.conversationId,
       body: msg.body,
+      entities: msg.entities,
       clientMsgId: msg.clientMsgId,
       threadRootMessageId: msg.threadRootMessageId,
       attachmentIds: msg.attachmentIds,
@@ -72,6 +74,7 @@ export function useOfflineQueue() {
         msg.clientMsgId,
         msg.threadRootMessageId,
         msg.attachmentIds ?? [],
+        msg.entities ?? [],
       )
 
       if (sent) {
@@ -117,6 +120,7 @@ export function useOfflineQueue() {
       const loaded: PendingOutboundMessage[] = stored.map(item => ({
         conversationId: item.conversationId,
         body: item.body,
+        entities: item.entities,
         clientMsgId: item.clientMsgId,
         threadRootMessageId: item.threadRootMessageId,
         attachmentIds: item.attachmentIds,

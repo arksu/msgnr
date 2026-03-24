@@ -14,3 +14,13 @@ export function renderMarkdownToHtml(input: string): string {
   const rendered = String(marked.parse(safe, { breaks: true }))
   return rendered.replace(/&lt;br\s*\/?&gt;/gi, '<br>')
 }
+
+export function renderMarkdownInlineToHtml(input: string): string {
+  if (!input) return ''
+  const safe = escapeHtml(input).replace(/\r\n/g, '\n')
+  return safe
+    .split('\n')
+    .map(part => String(marked.parseInline(part)))
+    .join('<br>')
+    .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
+}

@@ -169,6 +169,18 @@ type MessageAttachment struct {
 	CreatedAt      time.Time     `json:"created_at"`
 }
 
+type MessageEntity struct {
+	MessageID   uuid.UUID `json:"message_id"`
+	Ordinal     int       `json:"ordinal"`
+	Kind        string    `json:"kind"`
+	TargetID    uuid.UUID `json:"target_id"`
+	Label       string    `json:"label"`
+	Href        string    `json:"href"`
+	StartOffset int       `json:"start_offset"`
+	EndOffset   int       `json:"end_offset"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type MessageMention struct {
 	MessageID uuid.UUID `json:"message_id"`
 	UserID    uuid.UUID `json:"user_id"`

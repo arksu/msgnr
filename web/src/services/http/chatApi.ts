@@ -84,6 +84,7 @@ export interface ConversationMessageItem {
   sender_id: string
   sender_name: string
   body: string
+  entities: MessageEntityItem[]
   channel_seq: string | number
   thread_seq: string | number
   thread_root_message_id: string
@@ -101,6 +102,17 @@ export interface ChatMessageAttachmentItem {
   file_name: string
   file_size: number
   mime_type: string
+}
+
+export type MessageEntityKind = 'user' | 'task' | 'document'
+
+export interface MessageEntityItem {
+  kind: MessageEntityKind
+  target_id: string
+  label: string
+  href: string
+  start: number
+  end: number
 }
 
 export interface ConversationHistoryPage {
@@ -123,6 +135,36 @@ interface ReactionUsersResponse {
 interface EditMessageResponse {
   message_id: string
   edited_at: string
+  entities: MessageEntityItem[]
+}
+
+export interface TagSearchUserItem {
+  user_id: string
+  display_name: string
+  email: string
+  avatar_url: string
+  presence: 'online' | 'away' | 'offline'
+}
+
+export interface TagSearchTaskItem {
+  task_id: string
+  public_id: string
+  title: string
+  label: string
+  href: string
+}
+
+export interface TagSearchDocumentItem {
+  document_id: string
+  title: string
+  label: string
+  href: string
+}
+
+export interface TagSearchResponse {
+  users: TagSearchUserItem[]
+  tasks: TagSearchTaskItem[]
+  documents: TagSearchDocumentItem[]
 }
 
 export async function listDmCandidates(): Promise<DmCandidateItem[]> {
@@ -216,6 +258,22 @@ export async function listMessageReactionUsers(
   } catch (e) { handleError(e) }
 }
 
+export async function searchTagEntities(conversationId: string, q = ''): Promise<TagSearchResponse> {
+  try {
+    const { data } = await http.get<TagSearchResponse>('/api/chat/tag-search', {
+      params: {
+        conversation_id: conversationId,
+        q,
+      },
+    })
+    return {
+      users: data.users ?? [],
+      tasks: data.tasks ?? [],
+      documents: data.documents ?? [],
+    }
+  } catch (e) { handleError(e) }
+}
+
 export async function uploadChatAttachment(
   conversationId: string,
   file: File,
@@ -243,9 +301,9 @@ export async function deleteChatAttachment(attachmentId: string): Promise<void> 
   } catch (e) { handleError(e) }
 }
 
-export async function editMessage(messageId: string, body: string): Promise<EditMessageResponse> {
+export async function editMessage(messageId: string, body: string, entities: MessageEntityItem[] = []): Promise<EditMessageResponse> {
   try {
-    const { data } = await http.patch<EditMessageResponse>(`/api/messages/${messageId}`, { body })
+    const { data } = await http.patch<EditMessageResponse>(`/api/messages/${messageId}`, { body, entities })
     return data
   } catch (e) { handleError(e) }
 }

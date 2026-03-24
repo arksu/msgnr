@@ -250,6 +250,7 @@ message SendMessageRequest {
   string thread_root_message_id = 5;
   // Pre-uploaded attachment ids to bind to the new message.
   repeated string attachment_ids = 6;
+  repeated MessageEntity entities = 7;
 }
 
 message SendMessageAck {
@@ -259,6 +260,22 @@ message SendMessageAck {
   google.protobuf.Timestamp created_at = 4;
   string client_msg_id = 5;
   bool deduped = 6;
+}
+
+enum MessageEntityKind {
+  MESSAGE_ENTITY_KIND_UNSPECIFIED = 0;
+  MESSAGE_ENTITY_KIND_USER = 1;
+  MESSAGE_ENTITY_KIND_TASK = 2;
+  MESSAGE_ENTITY_KIND_DOCUMENT = 3;
+}
+
+message MessageEntity {
+  MessageEntityKind kind = 1;
+  string target_id = 2;
+  string label = 3;
+  string href = 4;
+  int32 start = 5;
+  int32 end = 6;
 }
 
 message MessageEvent {
@@ -277,6 +294,7 @@ message MessageEvent {
   repeated ReactionAggregate reactions = 11;
   repeated MessageAttachment attachments = 12;
   google.protobuf.Timestamp edited_at = 13;
+  repeated MessageEntity entities = 14;
 }
 
 message MessageAttachment {
@@ -629,6 +647,7 @@ message MessageUpdatedEvent {
   repeated string mentioned_user_ids = 4;
   bool mention_everyone = 5;
   google.protobuf.Timestamp edited_at = 6;
+  repeated MessageEntity entities = 7;
 }
 
 message MessageDeletedEvent {

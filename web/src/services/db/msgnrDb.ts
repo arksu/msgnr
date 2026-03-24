@@ -33,6 +33,14 @@ export interface CachedMessage {
   senderName: string
   senderAvatarUrl?: string
   body: string
+  entities?: Array<{
+    kind: 'user' | 'task' | 'document'
+    targetId: string
+    label: string
+    href: string
+    start: number
+    end: number
+  }>
   /** bigint as decimal string */
   channelSeq: string
   /** bigint as decimal string */
@@ -70,6 +78,14 @@ export interface QueuedOutboundAction {
   id?: number
   conversationId: string
   body: string
+  entities?: Array<{
+    kind: 'user' | 'task' | 'document'
+    targetId: string
+    label: string
+    href: string
+    start: number
+    end: number
+  }>
   clientMsgId: string
   threadRootMessageId?: string
   attachmentIds?: string[]

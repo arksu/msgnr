@@ -1107,12 +1107,45 @@ func (s *Server) handleDomainPayload(
 			}
 			attachmentIDs = append(attachmentIDs, attachmentID)
 		}
+		entities := make([]chat.MessageEntity, 0, len(req.GetEntities()))
+		for _, rawEntity := range req.GetEntities() {
+			if rawEntity == nil {
+				badReq("send_message_request: invalid entities")
+				return
+			}
+			targetID, err := uuid.Parse(rawEntity.GetTargetId())
+			if err != nil {
+				badReq("send_message_request: invalid entities")
+				return
+			}
+			var kind chat.MessageEntityKind
+			switch rawEntity.GetKind() {
+			case packetspb.MessageEntityKind_MESSAGE_ENTITY_KIND_USER:
+				kind = chat.MessageEntityKindUser
+			case packetspb.MessageEntityKind_MESSAGE_ENTITY_KIND_TASK:
+				kind = chat.MessageEntityKindTask
+			case packetspb.MessageEntityKind_MESSAGE_ENTITY_KIND_DOCUMENT:
+				kind = chat.MessageEntityKindDocument
+			default:
+				badReq("send_message_request: invalid entities")
+				return
+			}
+			entities = append(entities, chat.MessageEntity{
+				Kind:     kind,
+				TargetID: targetID,
+				Label:    rawEntity.GetLabel(),
+				Href:     rawEntity.GetHref(),
+				Start:    rawEntity.GetStart(),
+				End:      rawEntity.GetEnd(),
+			})
+		}
 
 		result, err := s.chatSvc.SendMessage(ctx, chat.SendMessageParams{
 			ChannelID:           channelID,
 			SenderID:            principal.UserID,
 			ClientMsgID:         req.GetClientMsgId(),
 			Body:                req.GetBody(),
+			Entities:            entities,
 			ThreadRootMessageID: threadRootID,
 			AttachmentIDs:       attachmentIDs,
 		})
@@ -1129,6 +1162,7 @@ func (s *Server) handleDomainPayload(
 				errors.Is(err, chat.ErrAttachmentNotStaged) ||
 				errors.Is(err, chat.ErrAttachmentOwnership) ||
 				errors.Is(err, chat.ErrInvalidAttachment) ||
+				errors.Is(err, chat.ErrInvalidMessageEntity) ||
 				errors.Is(err, chat.ErrEmptyMessage) {
 				badReq("send_message_request: invalid attachments or body")
 				return

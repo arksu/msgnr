@@ -271,6 +271,26 @@ CREATE INDEX IF NOT EXISTS idx_message_mentions_user
   ON message_mentions(user_id);
 
 -- ---------------------------------------------------------------------------
+-- Message entities
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS message_entities (
+  message_id  UUID        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  ordinal     INT         NOT NULL CHECK (ordinal >= 0),
+  kind        TEXT        NOT NULL CHECK (kind IN ('user', 'task', 'document')),
+  target_id   UUID        NOT NULL,
+  label       TEXT        NOT NULL CHECK (btrim(label) <> ''),
+  href        TEXT        NOT NULL DEFAULT '',
+  start_offset INT        NOT NULL CHECK (start_offset >= 0),
+  end_offset   INT        NOT NULL CHECK (end_offset > start_offset),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (message_id, ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_entities_message
+  ON message_entities(message_id, ordinal);
+
+-- ---------------------------------------------------------------------------
 -- Reactions
 -- ---------------------------------------------------------------------------
 

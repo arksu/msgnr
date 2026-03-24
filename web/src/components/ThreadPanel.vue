@@ -144,8 +144,8 @@ function handleComposerResize(deltaPx: number) {
   }
 }
 
-function sendReply(payload: { body: string; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> }) {
-  chat.sendThreadReply(payload.body, payload.attachmentIds, payload.attachments)
+function sendReply(payload: { body: string; entities: NonNullable<Message['entities']>; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> }) {
+  chat.sendThreadReply(payload.body, payload.attachmentIds, payload.attachments, payload.entities)
   scheduleGuaranteedBottomScroll()
 }
 

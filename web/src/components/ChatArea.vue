@@ -572,10 +572,10 @@ function closeThreadPanel() {
 }
 
 function handleSend(
-  body: string | { body: string; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> },
+  body: string | { body: string; entities: NonNullable<Message['entities']>; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> },
 ) {
   const payload = typeof body === 'string'
-    ? { body, attachmentIds: [], attachments: [] as Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> }
+    ? { body, entities: [] as NonNullable<Message['entities']>, attachmentIds: [], attachments: [] as Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> }
     : body
   const messageBody = payload.body
   const channelId = chatStore.activeChannelId
@@ -612,9 +612,10 @@ function handleSend(
     senderName,
     senderAvatarUrl: senderAvatarUrl || undefined,
     body: messageBody,
+    entities: payload.entities,
     channelSeq: 0n,
     threadSeq: 0n,
-    mentionedUserIds: [],
+    mentionedUserIds: payload.entities.filter(entity => entity.kind === 'user').map(entity => entity.targetId),
     mentionEveryone: false,
     createdAt: now,
     reactions: [],
@@ -631,9 +632,9 @@ function handleSend(
 
   if (isOffline) {
     // Queue for delivery after reconnect
-    offlineQueue.enqueue({ conversationId: channelId, body: messageBody, clientMsgId })
+    offlineQueue.enqueue({ conversationId: channelId, body: messageBody, entities: payload.entities, clientMsgId })
   } else {
-    const sent = wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds)
+    const sent = wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds, payload.entities)
     if (!sent) {
       chatStore.updateSendStatus(channelId, clientMsgId, 'failed', 'Connection lost')
     } else {

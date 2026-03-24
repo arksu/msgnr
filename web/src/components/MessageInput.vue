@@ -48,7 +48,10 @@
         rows="1"
         @keydown.enter.exact.prevent="submit"
         @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
-        @input="autoResize"
+        @keydown="handleTextareaKeydown"
+        @click="captureSelectionAndRefreshTagSearch"
+        @keyup="captureSelectionAndRefreshTagSearch"
+        @input="handleTextareaInput"
         @paste="onPaste"
         @dragenter.prevent="onDragEnter"
         @dragover.prevent="onDragOver"
@@ -152,13 +155,32 @@
     </div>
     <p v-else-if="attachmentWarning" class="mt-1 pl-1 text-[11px] text-amber-300">{{ attachmentWarning }}</p>
     <p v-else-if="attachmentError" class="mt-1 pl-1 text-[11px] text-red-400">{{ attachmentError }}</p>
+    <MessageTagPicker
+      :open="tagPickerOpen"
+      :loading="tagPickerLoading"
+      :error="tagPickerError"
+      :style="tagPickerStyle"
+      :selected-index="selectedTagIndex"
+      :users="tagPickerUsers"
+      :tasks="tagPickerTasks"
+      :documents="tagPickerDocuments"
+      @select="selectTagItem"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { uploadChatAttachment, deleteChatAttachment } from '@/services/http/chatApi'
+import { uploadChatAttachment, deleteChatAttachment, searchTagEntities, type TagSearchResponse } from '@/services/http/chatApi'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
+import type { MessageEntity } from '@/stores/chat'
+import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
+import {
+  applyTextEditToEntities,
+  findMentionQuery,
+  removeEntityAroundCursor,
+  replaceTextRangeWithEntity,
+} from '@/utils/messageEntities'
 
 interface ComposerAttachment {
   id: string
@@ -169,6 +191,7 @@ interface ComposerAttachment {
 
 interface ComposerSendPayload {
   body: string
+  entities: MessageEntity[]
   attachmentIds: string[]
   attachments: ComposerAttachment[]
 }
@@ -190,6 +213,7 @@ const emit = defineEmits<{
 }>()
 
 const text = ref('')
+const entities = ref<MessageEntity[]>([])
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const attachments = ref<ComposerAttachment[]>([])
@@ -201,6 +225,26 @@ const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
 let dragDepth = 0
 let lastTextareaHeight = 0
+let lastSelectionStart = 0
+let lastSelectionEnd = 0
+let lastTextSnapshot = ''
+let searchRequestToken = 0
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+const tagPickerOpen = ref(false)
+const tagPickerLoading = ref(false)
+const tagPickerError = ref('')
+const tagPickerStyle = ref<Record<string, string>>({
+  top: '0px',
+  left: '0px',
+})
+const tagQueryRange = ref<{ start: number; end: number } | null>(null)
+const tagSearchResults = ref<TagSearchResponse>({
+  users: [],
+  tasks: [],
+  documents: [],
+})
+const selectedTagIndex = ref(0)
 
 function logComposerAutogrow(event: string, payload: Record<string, unknown>) {
   if (!DEBUG_COMPOSER_AUTOGROW) return
@@ -241,17 +285,74 @@ const attachButtonTitle = computed(() => {
   return 'Attach file'
 })
 
+const flatTagItems = computed(() => [
+  ...tagPickerUsers.value,
+  ...tagPickerTasks.value,
+  ...tagPickerDocuments.value,
+])
+
+const tagPickerUsers = computed<MessageTagPickerItem[]>(() =>
+  (tagSearchResults.value.users ?? []).map((item, index) => ({
+    kind: 'user',
+    id: item.user_id,
+    label: `@${item.display_name || item.email}`,
+    subtitle: item.email,
+    href: '',
+    icon: '@',
+    flatIndex: index,
+    meta: {
+      email: item.email,
+      presence: item.presence,
+    },
+  })),
+)
+
+const tagPickerTasks = computed<MessageTagPickerItem[]>(() =>
+  (tagSearchResults.value.tasks ?? []).map((item, index) => ({
+    kind: 'task',
+    id: item.task_id,
+    label: item.label,
+    subtitle: item.title,
+    href: item.href,
+    icon: '#',
+    flatIndex: tagPickerUsers.value.length + index,
+  })),
+)
+
+const tagPickerDocuments = computed<MessageTagPickerItem[]>(() =>
+  (tagSearchResults.value.documents ?? []).map((item, index) => ({
+    kind: 'document',
+    id: item.document_id,
+    label: item.label,
+    subtitle: item.title,
+    href: item.href,
+    icon: 'D',
+    flatIndex: tagPickerUsers.value.length + tagPickerTasks.value.length + index,
+  })),
+)
+
 function submit() {
   if (!canSend.value) return
   const body = text.value.trim()
+  const trimmedDelta = text.value.length - text.value.trimStart().length
+  const nextEntities = entities.value
+    .map(entity => ({
+      ...entity,
+      start: entity.start - trimmedDelta,
+      end: entity.end - trimmedDelta,
+    }))
+    .filter(entity => entity.start >= 0 && entity.end <= body.length)
   emit('send', {
     body,
+    entities: nextEntities,
     attachmentIds: attachments.value.map(item => item.id),
     attachments: attachments.value.slice(),
   })
   text.value = ''
+  entities.value = []
   attachments.value = []
   attachmentError.value = ''
+  closeTagPicker()
   closeEmojiPicker()
   emitTyping(false)
   nextTick(() => {
@@ -270,6 +371,7 @@ function insertEmojiAtCursor(emoji: string) {
   const start = el.selectionStart ?? text.value.length
   const end = el.selectionEnd ?? start
   text.value = `${text.value.slice(0, start)}${emoji}${text.value.slice(end)}`
+  entities.value = applyTextEditToEntities(entities.value, start, end, emoji.length)
 
   nextTick(() => {
     const cursor = start + emoji.length
@@ -285,12 +387,185 @@ function onShiftEnter(event: KeyboardEvent) {
   const start = el.selectionStart ?? text.value.length
   const end = el.selectionEnd ?? start
   text.value = text.value.slice(0, start) + '\n' + text.value.slice(end)
+  entities.value = applyTextEditToEntities(entities.value, start, end, 1)
   nextTick(() => {
     const cursor = start + 1
     el.selectionStart = cursor
     el.selectionEnd = cursor
     autoResize()
   })
+}
+
+function closeTagPicker() {
+  tagPickerOpen.value = false
+  tagPickerLoading.value = false
+  tagPickerError.value = ''
+  tagQueryRange.value = null
+  selectedTagIndex.value = 0
+}
+
+function updateTagPickerPosition() {
+  const el = inputEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  tagPickerStyle.value = {
+    position: 'fixed',
+    top: `${rect.top - 8}px`,
+    left: `${rect.left}px`,
+    transform: 'translateY(-100%)',
+  }
+}
+
+function captureSelection() {
+  const el = inputEl.value
+  if (!el) return
+  lastSelectionStart = el.selectionStart ?? text.value.length
+  lastSelectionEnd = el.selectionEnd ?? lastSelectionStart
+  lastTextSnapshot = text.value
+}
+
+function refreshTagSearch() {
+  const el = inputEl.value
+  if (!el || !props.conversationId) {
+    closeTagPicker()
+    return
+  }
+  if ((el.selectionStart ?? 0) !== (el.selectionEnd ?? 0)) {
+    closeTagPicker()
+    return
+  }
+
+  const cursor = el.selectionStart ?? text.value.length
+  const match = findMentionQuery(text.value, cursor, entities.value)
+  if (!match) {
+    closeTagPicker()
+    return
+  }
+
+  tagQueryRange.value = { start: match.start, end: match.end }
+  tagPickerOpen.value = true
+  updateTagPickerPosition()
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(async () => {
+    const token = ++searchRequestToken
+    tagPickerLoading.value = true
+    tagPickerError.value = ''
+    try {
+      const results = await searchTagEntities(props.conversationId!, match.query)
+      if (token !== searchRequestToken) return
+      tagSearchResults.value = results
+      selectedTagIndex.value = 0
+    } catch (error) {
+      if (token !== searchRequestToken) return
+      tagPickerError.value = error instanceof Error ? error.message : 'Search failed'
+      tagSearchResults.value = { users: [], tasks: [], documents: [] }
+    } finally {
+      if (token === searchRequestToken) {
+        tagPickerLoading.value = false
+      }
+    }
+  }, 120)
+}
+
+function captureSelectionAndRefreshTagSearch() {
+  captureSelection()
+  refreshTagSearch()
+}
+
+function selectTagItem(item: MessageTagPickerItem) {
+  if (!tagQueryRange.value) return
+  const next = replaceTextRangeWithEntity(
+    text.value,
+    entities.value,
+    tagQueryRange.value.start,
+    tagQueryRange.value.end,
+    {
+      kind: item.kind,
+      targetId: item.id,
+      label: item.label,
+      href: item.href,
+      start: tagQueryRange.value.start,
+      end: tagQueryRange.value.end,
+    },
+  )
+  text.value = next.text
+  entities.value = next.entities
+  closeTagPicker()
+  nextTick(() => {
+    const el = inputEl.value
+    if (!el) return
+    el.focus()
+    el.selectionStart = next.nextCursor
+    el.selectionEnd = next.nextCursor
+    captureSelection()
+    autoResize()
+  })
+}
+
+function handleTextareaKeydown(event: KeyboardEvent) {
+  captureSelection()
+  if (tagPickerOpen.value && flatTagItems.value.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectedTagIndex.value = (selectedTagIndex.value + 1) % flatTagItems.value.length
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectedTagIndex.value = (selectedTagIndex.value - 1 + flatTagItems.value.length) % flatTagItems.value.length
+      return
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      const item = flatTagItems.value[selectedTagIndex.value]
+      if (item) selectTagItem(item)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeTagPicker()
+      return
+    }
+  }
+
+  if (!inputEl.value) return
+  if ((event.key === 'Backspace' || event.key === 'Delete') && inputEl.value.selectionStart === inputEl.value.selectionEnd) {
+    const cursor = inputEl.value.selectionStart ?? 0
+    const removed = removeEntityAroundCursor(
+      text.value,
+      entities.value,
+      cursor,
+      event.key === 'Backspace' ? 'backward' : 'forward',
+    )
+    if (removed) {
+      event.preventDefault()
+      text.value = removed.text
+      entities.value = removed.entities
+      nextTick(() => {
+        const el = inputEl.value
+        if (!el) return
+        el.selectionStart = removed.nextCursor
+        el.selectionEnd = removed.nextCursor
+        captureSelectionAndRefreshTagSearch()
+        autoResize()
+      })
+    }
+  }
+}
+
+function handleTextareaInput() {
+  const el = inputEl.value
+  const currentSelectionStart = el?.selectionStart ?? text.value.length
+  const replacedLength = lastSelectionEnd - lastSelectionStart
+  const insertedLength = text.value.length - (lastTextSnapshot.length - replacedLength)
+  entities.value = applyTextEditToEntities(
+    entities.value,
+    lastSelectionStart,
+    lastSelectionEnd,
+    insertedLength,
+  ).filter(entity => text.value.slice(entity.start, entity.end) === entity.label)
+  captureSelectionAndRefreshTagSearch()
+  autoResize()
 }
 
 function autoResize() {
@@ -506,6 +781,7 @@ async function cleanupStagedAttachments() {
 
 watch(() => props.conversationId, (next, prev) => {
   closeEmojiPicker()
+  closeTagPicker()
   if (prev && prev !== next && attachments.value.length > 0) {
     void cleanupStagedAttachments()
   }
@@ -516,6 +792,11 @@ watch(text, () => {
 })
 
 onBeforeUnmount(() => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
+  closeTagPicker()
   closeEmojiPicker()
   if (attachments.value.length > 0) {
     void cleanupStagedAttachments()
@@ -523,7 +804,10 @@ onBeforeUnmount(() => {
 })
 
 onMounted(() => {
-  nextTick(() => resizeTextarea())
+  nextTick(() => {
+    resizeTextarea()
+    captureSelection()
+  })
 })
 
 

@@ -1160,7 +1160,17 @@ func TestIntegration_UpdateReadCursor_ResolvesMentionNotifications(t *testing.T)
 		ChannelID:   channelID,
 		SenderID:    authorID,
 		ClientMsgID: uuid.New().String(),
-		Body:        "hello @" + mentionedUserID.String(),
+		Body:        "hello @Mentioned",
+		Entities: []chat.MessageEntity{
+			{
+				Kind:     chat.MessageEntityKindUser,
+				TargetID: mentionedUserID,
+				Label:    "@Mentioned",
+				Href:     "",
+				Start:    6,
+				End:      16,
+			},
+		},
 	})
 	require.NoError(t, err)
 	notificationDeliveries := filterDirectDeliveriesByType(msg.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
@@ -1220,6 +1230,84 @@ func TestIntegration_UpdateReadCursor_ResolvesMentionNotifications(t *testing.T)
 	).Scan(&readCounterEvents)
 	require.NoError(t, err)
 	assert.Equal(t, 0, readCounterEvents)
+}
+
+func TestIntegration_EditMessage_NewMentionCreatesSingleNotification(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	authorID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	var mentionedUserID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'Mentioned', 'member')
+		 RETURNING id`,
+		"mentioned_edit_"+uuid.New().String()+"@example.com",
+	).Scan(&mentionedUserID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, mentionedUserID)
+	require.NoError(t, err)
+	setChannelMemberNotificationLevel(t, ctx, pool, channelID, mentionedUserID, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY))
+
+	sent, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "plain message",
+	})
+	require.NoError(t, err)
+	require.Empty(t, filterDirectDeliveriesByType(sent.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED))
+
+	editResult, err := svc.EditMessage(ctx, chat.EditMessageParams{
+		MessageID: sent.MessageID,
+		ActorID:   authorID,
+		Body:      "plain @Mentioned",
+		Entities: []chat.MessageEntity{
+			{
+				Kind:     chat.MessageEntityKindUser,
+				TargetID: mentionedUserID,
+				Label:    "@Mentioned",
+				Href:     "",
+				Start:    6,
+				End:      16,
+			},
+		},
+	})
+	require.NoError(t, err)
+	notificationDeliveries := filterDirectDeliveriesByType(editResult.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
+	require.Len(t, notificationDeliveries, 1)
+	assert.Equal(t, mentionedUserID.String(), notificationDeliveries[0].UserID)
+
+	var mentionRows int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM message_mentions WHERE message_id = $1 AND user_id = $2`,
+		sent.MessageID,
+		mentionedUserID,
+	).Scan(&mentionRows)
+	require.NoError(t, err)
+	assert.Equal(t, 1, mentionRows)
+
+	editResult, err = svc.EditMessage(ctx, chat.EditMessageParams{
+		MessageID: sent.MessageID,
+		ActorID:   authorID,
+		Body:      "plain @Mentioned again",
+		Entities: []chat.MessageEntity{
+			{
+				Kind:     chat.MessageEntityKindUser,
+				TargetID: mentionedUserID,
+				Label:    "@Mentioned",
+				Href:     "",
+				Start:    6,
+				End:      16,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, filterDirectDeliveriesByType(editResult.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED))
 }
 
 func TestIntegration_SubscribeThread_AdvancesThreadReadState(t *testing.T) {
@@ -1304,6 +1392,57 @@ func TestIntegration_SubscribeThread_WithZeroReplies_ReturnsEmptyReplayAndNoErro
 	assert.Len(t, resp.Replay, 0)
 	require.Len(t, resp.DirectDeliveries, 1)
 	assert.Equal(t, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED, resp.DirectDeliveries[0].Event.GetEventType())
+}
+
+func TestIntegration_SubscribeThread_ReplayIncludesEntities(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	userID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	root, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    userID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "root",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            userID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "hi @Test User",
+		ThreadRootMessageID: root.MessageID,
+		Entities: []chat.MessageEntity{
+			{
+				Kind:     chat.MessageEntityKindUser,
+				TargetID: userID,
+				Label:    "@Test User",
+				Href:     "",
+				Start:    3,
+				End:      13,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.SubscribeThread(ctx, chat.SubscribeThreadParams{
+		ChannelID:           channelID,
+		ThreadRootMessageID: root.MessageID,
+		RequesterID:         userID,
+		LastThreadSeq:       0,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Replay, 1)
+	require.Len(t, resp.Replay[0].GetEntities(), 1)
+	assert.Equal(t, packetspb.MessageEntityKind_MESSAGE_ENTITY_KIND_USER, resp.Replay[0].GetEntities()[0].GetKind())
+	assert.Equal(t, userID.String(), resp.Replay[0].GetEntities()[0].GetTargetId())
+	assert.Equal(t, "@Test User", resp.Replay[0].GetEntities()[0].GetLabel())
+	assert.Equal(t, []string{userID.String()}, resp.Replay[0].GetMentionedUserIds())
 }
 
 func TestIntegration_ThreadReplies_DoNotIncreaseUnreadMessages_AndSubscribeClearsThreadUnread(t *testing.T) {

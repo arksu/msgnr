@@ -56,6 +56,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/messages", h.requireAuth(h.listConversationMessages))
 	mux.HandleFunc("/api/messages/reaction-users", h.requireAuth(h.listMessageReactionUsers))
 	mux.HandleFunc("/api/messages/", h.requireAuth(h.messageItem))
+	mux.HandleFunc("/api/chat/tag-search", h.requireAuth(h.searchTagEntities))
 	mux.HandleFunc("/api/chat/attachments", h.requireAuth(h.chatAttachments))
 	mux.HandleFunc("/api/chat/attachments/", h.requireAuth(h.chatAttachmentItem))
 	mux.HandleFunc("/api/dm-candidates", h.requireAuth(h.listDMCandidates))
@@ -117,6 +118,7 @@ type conversationMessageResponse struct {
 	SenderID            string                      `json:"sender_id"`
 	SenderName          string                      `json:"sender_name"`
 	Body                string                      `json:"body"`
+	Entities            []messageEntityResponse     `json:"entities"`
 	ChannelSeq          int64                       `json:"channel_seq"`
 	ThreadSeq           int64                       `json:"thread_seq"`
 	ThreadRootMessageID string                      `json:"thread_root_message_id"`
@@ -134,6 +136,24 @@ type messageAttachmentResponse struct {
 	FileName string `json:"file_name"`
 	FileSize int64  `json:"file_size"`
 	MimeType string `json:"mime_type"`
+}
+
+type messageEntityRequest struct {
+	Kind     string `json:"kind"`
+	TargetID string `json:"target_id"`
+	Label    string `json:"label"`
+	Href     string `json:"href"`
+	Start    int32  `json:"start"`
+	End      int32  `json:"end"`
+}
+
+type messageEntityResponse struct {
+	Kind     string `json:"kind"`
+	TargetID string `json:"target_id"`
+	Label    string `json:"label"`
+	Href     string `json:"href"`
+	Start    int32  `json:"start"`
+	End      int32  `json:"end"`
 }
 
 type reactionAggregateResponse struct {
@@ -159,7 +179,77 @@ type conversationMessagesPageResponse struct {
 }
 
 type editMessageRequest struct {
-	Body string `json:"body"`
+	Body     string                 `json:"body"`
+	Entities []messageEntityRequest `json:"entities"`
+}
+
+type editMessageResponse struct {
+	MessageID string                  `json:"message_id"`
+	EditedAt  string                  `json:"edited_at"`
+	Entities  []messageEntityResponse `json:"entities"`
+}
+
+type tagSearchUserResponse struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	AvatarURL   string `json:"avatar_url"`
+	Presence    string `json:"presence"`
+}
+
+type tagSearchTaskResponse struct {
+	TaskID   string `json:"task_id"`
+	PublicID string `json:"public_id"`
+	Title    string `json:"title"`
+	Label    string `json:"label"`
+	Href     string `json:"href"`
+}
+
+type tagSearchDocumentResponse struct {
+	DocumentID string `json:"document_id"`
+	Title      string `json:"title"`
+	Label      string `json:"label"`
+	Href       string `json:"href"`
+}
+
+type tagSearchResponse struct {
+	Users     []tagSearchUserResponse     `json:"users"`
+	Tasks     []tagSearchTaskResponse     `json:"tasks"`
+	Documents []tagSearchDocumentResponse `json:"documents"`
+}
+
+func decodeMessageEntities(raw []messageEntityRequest) ([]MessageEntity, error) {
+	entities := make([]MessageEntity, 0, len(raw))
+	for _, item := range raw {
+		targetID, err := uuid.Parse(item.TargetID)
+		if err != nil {
+			return nil, ErrInvalidMessageEntity
+		}
+		entities = append(entities, MessageEntity{
+			Kind:     MessageEntityKind(item.Kind),
+			TargetID: targetID,
+			Label:    item.Label,
+			Href:     item.Href,
+			Start:    item.Start,
+			End:      item.End,
+		})
+	}
+	return entities, nil
+}
+
+func encodeMessageEntities(raw []MessageEntity) []messageEntityResponse {
+	entities := make([]messageEntityResponse, 0, len(raw))
+	for _, item := range raw {
+		entities = append(entities, messageEntityResponse{
+			Kind:     string(item.Kind),
+			TargetID: item.TargetID.String(),
+			Label:    item.Label,
+			Href:     item.Href,
+			Start:    item.Start,
+			End:      item.End,
+		})
+	}
+	return entities
 }
 
 func (h *Handler) listChannels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -214,6 +304,64 @@ func (h *Handler) listAvailableChannels(w http.ResponseWriter, r *http.Request, 
 			Kind:           ch.Kind,
 			Visibility:     ch.Visibility,
 			LastActivityAt: ch.LastActivityAt.UTC().Format("2006-01-02T15:04:05Z"),
+		})
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) searchTagEntities(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodGet {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	conversationID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("conversation_id")))
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
+		return
+	}
+
+	result, err := h.svc.SearchTagEntities(r.Context(), principal.UserID, conversationID, r.URL.Query().Get("q"))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
+		default:
+			h.log.Error("searchTagEntities error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+
+	resp := tagSearchResponse{
+		Users:     make([]tagSearchUserResponse, 0, len(result.Users)),
+		Tasks:     make([]tagSearchTaskResponse, 0, len(result.Tasks)),
+		Documents: make([]tagSearchDocumentResponse, 0, len(result.Documents)),
+	}
+	for _, item := range result.Users {
+		resp.Users = append(resp.Users, tagSearchUserResponse{
+			UserID:      item.UserID.String(),
+			DisplayName: item.DisplayName,
+			Email:       item.Email,
+			AvatarURL:   item.AvatarURL,
+			Presence:    item.Presence,
+		})
+	}
+	for _, item := range result.Tasks {
+		resp.Tasks = append(resp.Tasks, tagSearchTaskResponse{
+			TaskID:   item.TaskID.String(),
+			PublicID: item.PublicID,
+			Title:    item.Title,
+			Label:    item.Label(),
+			Href:     item.Href(),
+		})
+	}
+	for _, item := range result.Documents {
+		resp.Documents = append(resp.Documents, tagSearchDocumentResponse{
+			DocumentID: item.DocumentID.String(),
+			Title:      item.Title,
+			Label:      item.Label(),
+			Href:       item.Href(),
 		})
 	}
 	httputil.WriteJSON(w, http.StatusOK, resp)
@@ -456,6 +604,7 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 			SenderID:            msg.SenderID.String(),
 			SenderName:          msg.SenderName,
 			Body:                msg.Body,
+			Entities:            encodeMessageEntities(msg.Entities),
 			ChannelSeq:          msg.ChannelSeq,
 			ThreadSeq:           msg.ThreadSeq,
 			ThreadRootMessageID: threadRootID,
@@ -686,10 +835,16 @@ func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal
 		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
 		return
 	}
+	entities, err := decodeMessageEntities(req.Entities)
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid entities"))
+		return
+	}
 	result, err := h.svc.EditMessage(r.Context(), EditMessageParams{
 		MessageID: messageID,
 		ActorID:   principal.UserID,
 		Body:      req.Body,
+		Entities:  entities,
 	})
 	if err != nil {
 		switch {
@@ -701,6 +856,8 @@ func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal
 			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("only author can edit this message"))
 		case errors.Is(err, ErrEmptyMessage):
 			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("message body and attachments are both empty"))
+		case errors.Is(err, ErrInvalidMessageEntity):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid entities"))
 		default:
 			h.log.Error("patchMessage error", zap.Error(err))
 			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
@@ -714,9 +871,10 @@ func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal
 	if result.EditedAt != nil {
 		editedAt = result.EditedAt.AsTime().UTC().Format("2006-01-02T15:04:05Z")
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{
-		"message_id": messageID.String(),
-		"edited_at":  editedAt,
+	httputil.WriteJSON(w, http.StatusOK, editMessageResponse{
+		MessageID: messageID.String(),
+		EditedAt:  editedAt,
+		Entities:  encodeMessageEntities(result.Entities),
 	})
 }
 

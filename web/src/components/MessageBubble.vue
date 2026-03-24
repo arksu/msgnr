@@ -167,10 +167,14 @@
       <!-- Message body -->
       <div v-if="isEditing" class="mt-1">
         <textarea
+          ref="editTextarea"
           v-model="editBody"
           data-testid="message-edit-textarea"
           class="w-full min-h-[72px] rounded border border-white/10 bg-chat-input px-2.5 py-2 text-[14px] text-gray-100 outline-none focus:border-accent"
           :disabled="editSaving"
+          @input="handleEditTextareaInput"
+          @click="captureEditSelectionAndRefreshTagSearch"
+          @keyup="captureEditSelectionAndRefreshTagSearch"
           @keydown="handleEditTextareaKeydown"
         />
         <div class="mt-1.5 flex items-center justify-between gap-2">
@@ -325,7 +329,7 @@
         </button>
 
         <!-- Add reaction button (visible when reactions exist) -->
-        <div ref="pickerRoot" class="relative inline-flex">
+        <div class="relative inline-flex">
           <button
             ref="pickerToggleButton"
             class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs border border-white/10 bg-transparent text-gray-300 hover:text-gray-100 hover:bg-white/10 transition-colors opacity-0 group-hover:opacity-100"
@@ -341,9 +345,23 @@
   </div>
 
   <Teleport to="body">
+    <MessageTagPicker
+      :open="editTagPickerOpen"
+      :loading="editTagPickerLoading"
+      :error="editTagPickerError"
+      :style="editTagPickerStyle"
+      :selected-index="editSelectedTagIndex"
+      :users="editTagPickerUsers"
+      :tasks="editTagPickerTasks"
+      :documents="editTagPickerDocuments"
+      @select="selectEditTagItem"
+    />
+  </Teleport>
+
+  <Teleport to="body">
     <div
       v-if="showEmojiPicker"
-      ref="pickerRoot"
+      ref="emojiPickerRoot"
       class="z-20 emoji-picker-dark"
       :style="emojiPickerStyle"
       @click.stop
@@ -370,6 +388,36 @@
         class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
       >
         Loading emoji...
+      </div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div
+      v-if="activeUserCard"
+      class="fixed z-[10030] w-64 rounded-xl border border-chat-border bg-chat-header p-3 shadow-2xl"
+      :style="{ top: `${activeUserCard.top}px`, left: `${activeUserCard.left}px` }"
+      @click.stop
+    >
+      <div class="flex items-center gap-3">
+        <UserAvatar
+          :user-id="activeUserCard.userId"
+          :display-name="chat.userNames[activeUserCard.userId] || chat.userEmails[activeUserCard.userId] || activeUserCard.userId"
+          :avatar-url="chat.userAvatars[activeUserCard.userId]"
+          :presence="activeUserPresence"
+          size="md"
+        />
+        <div class="min-w-0">
+          <div class="truncate text-sm font-semibold text-white">
+            {{ chat.userNames[activeUserCard.userId] || chat.userEmails[activeUserCard.userId] || activeUserCard.userId }}
+          </div>
+          <div class="truncate text-xs text-gray-400">
+            {{ chat.userEmails[activeUserCard.userId] || 'No email available' }}
+          </div>
+          <div class="mt-1 text-[11px] uppercase tracking-[0.12em] text-gray-500">
+            {{ activeUserPresence || 'offline' }}
+          </div>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -495,18 +543,28 @@ import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
+import { PresenceStatus } from '@/shared/proto/packets_pb'
 import router from '@/router'
 import { generateId } from '@/services/id'
-import { renderMarkdownToHtml } from '@/utils/markdown'
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
   fetchMessageAttachmentBlob,
   listMessageReactionUsers,
   editMessage as editMessageApi,
   deleteMessage as deleteMessageApi,
+  searchTagEntities,
+  type TagSearchResponse,
 } from '@/services/http/chatApi'
 import UserAvatar from './UserAvatar.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
+import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
+import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
+import {
+  applyTextEditToEntities,
+  findMentionQuery,
+  removeEntityAroundCursor,
+  replaceTextRangeWithEntity,
+} from '@/utils/messageEntities'
 
 const props = withDefaults(defineProps<{
   message: Message
@@ -527,7 +585,7 @@ defineEmits<{
 const showEmojiPicker = ref(false)
 const showContextMenu = ref(false)
 const contextMenuStyle = ref<{ top: string; left: string }>({ top: '0px', left: '0px' })
-const pickerRoot = ref<HTMLElement | null>(null)
+const emojiPickerRoot = ref<HTMLElement | null>(null)
 const pickerToggleButton = ref<HTMLElement | null>(null)
 const contextMenuTrigger = ref<HTMLElement | null>(null)
 const pickerComponent = shallowRef<any>(null)
@@ -578,13 +636,28 @@ const imagePreview = ref<{ open: boolean; src: string; fileName: string }>({
 })
 const isEditing = ref(false)
 const editBody = ref('')
+const editEntities = ref<NonNullable<Message['entities']>>([])
 const editSaving = ref(false)
 const editError = ref('')
+const editTextarea = ref<HTMLTextAreaElement | null>(null)
+let lastEditSelectionStart = 0
+let lastEditSelectionEnd = 0
+let lastEditTextSnapshot = ''
+let editTagSearchToken = 0
+let editTagSearchDebounce: ReturnType<typeof setTimeout> | null = null
+const editTagPickerOpen = ref(false)
+const editTagPickerLoading = ref(false)
+const editTagPickerError = ref('')
+const editTagPickerStyle = ref<Record<string, string>>({ top: '0px', left: '0px', position: 'fixed' })
+const editTagRange = ref<{ start: number; end: number } | null>(null)
+const editTagSearchResults = ref<TagSearchResponse>({ users: [], tasks: [], documents: [] })
+const editSelectedTagIndex = ref(0)
 const isDeleting = ref(false)
 const ws = useWsStore()
 const chat = useChatStore()
 const auth = useAuthStore()
 const DEBUG_REACTIONS = false
+const activeUserCard = ref<{ userId: string; top: number; left: number } | null>(null)
 
 function debugReaction(label: string, payload?: unknown) {
   if (!DEBUG_REACTIONS) return
@@ -658,11 +731,182 @@ const bodyTextClass = computed(() => {
 
 const renderedMessageHtml = computed(() => {
   if (!props.message.body) return ''
-  return renderMarkdownToHtml(props.message.body)
+  return renderMessageBodyWithEntities(props.message.body, props.message.entities ?? [])
+})
+
+const editTagPickerUsers = computed<MessageTagPickerItem[]>(() =>
+  (editTagSearchResults.value.users ?? []).map((item, index) => ({
+    kind: 'user',
+    id: item.user_id,
+    label: `@${item.display_name || item.email}`,
+    subtitle: item.email,
+    href: '',
+    icon: '@',
+    flatIndex: index,
+  })),
+)
+
+const editTagPickerTasks = computed<MessageTagPickerItem[]>(() =>
+  (editTagSearchResults.value.tasks ?? []).map((item, index) => ({
+    kind: 'task',
+    id: item.task_id,
+    label: item.label,
+    subtitle: item.title,
+    href: item.href,
+    icon: '#',
+    flatIndex: editTagPickerUsers.value.length + index,
+  })),
+)
+
+const editTagPickerDocuments = computed<MessageTagPickerItem[]>(() =>
+  (editTagSearchResults.value.documents ?? []).map((item, index) => ({
+    kind: 'document',
+    id: item.document_id,
+    label: item.label,
+    subtitle: item.title,
+    href: item.href,
+    icon: 'D',
+    flatIndex: editTagPickerUsers.value.length + editTagPickerTasks.value.length + index,
+  })),
+)
+
+const editFlatTagItems = computed(() => [
+  ...editTagPickerUsers.value,
+  ...editTagPickerTasks.value,
+  ...editTagPickerDocuments.value,
+])
+
+const activeUserPresence = computed<'online' | 'away' | 'offline' | undefined>(() => {
+  const userId = activeUserCard.value?.userId
+  if (!userId) return undefined
+  const status = chat.presenceByUserId[userId]?.effectivePresence
+  if (status === PresenceStatus.ONLINE) return 'online'
+  if (status === PresenceStatus.AWAY) return 'away'
+  return 'offline'
 })
 
 function onMarkdownClick(event: MouseEvent) {
+  const target = event.target
+  if (target instanceof HTMLElement) {
+    const entityNode = target.closest('[data-message-entity-kind="user"][data-target-id]')
+    if (entityNode instanceof HTMLElement) {
+      event.preventDefault()
+      const targetId = entityNode.getAttribute('data-target-id') ?? ''
+      const rect = entityNode.getBoundingClientRect()
+      activeUserCard.value = {
+        userId: targetId,
+        top: rect.bottom + 8,
+        left: rect.left,
+      }
+      return
+    }
+  }
   handleMarkdownLinkClick(event, router)
+}
+
+function captureEditSelection() {
+  if (!editTextarea.value) return
+  lastEditSelectionStart = editTextarea.value.selectionStart ?? editBody.value.length
+  lastEditSelectionEnd = editTextarea.value.selectionEnd ?? lastEditSelectionStart
+  lastEditTextSnapshot = editBody.value
+}
+
+function closeEditTagPicker() {
+  editTagPickerOpen.value = false
+  editTagPickerLoading.value = false
+  editTagPickerError.value = ''
+  editTagRange.value = null
+}
+
+function refreshEditTagSearch() {
+  if (!editTextarea.value || !props.message.channelId) {
+    closeEditTagPicker()
+    return
+  }
+  if ((editTextarea.value.selectionStart ?? 0) !== (editTextarea.value.selectionEnd ?? 0)) {
+    closeEditTagPicker()
+    return
+  }
+  const cursor = editTextarea.value.selectionStart ?? editBody.value.length
+  const match = findMentionQuery(editBody.value, cursor, editEntities.value)
+  if (!match) {
+    closeEditTagPicker()
+    return
+  }
+  editTagRange.value = { start: match.start, end: match.end }
+  editTagPickerOpen.value = true
+  const rect = editTextarea.value.getBoundingClientRect()
+  editTagPickerStyle.value = {
+    position: 'fixed',
+    top: `${rect.top - 8}px`,
+    left: `${rect.left}px`,
+    transform: 'translateY(-100%)',
+  }
+  if (editTagSearchDebounce) clearTimeout(editTagSearchDebounce)
+  editTagSearchDebounce = setTimeout(async () => {
+    const token = ++editTagSearchToken
+    editTagPickerLoading.value = true
+    editTagPickerError.value = ''
+    try {
+      const results = await searchTagEntities(props.message.channelId, match.query)
+      if (token !== editTagSearchToken) return
+      editTagSearchResults.value = results
+      editSelectedTagIndex.value = 0
+    } catch (error) {
+      if (token !== editTagSearchToken) return
+      editTagPickerError.value = error instanceof Error ? error.message : 'Search failed'
+      editTagSearchResults.value = { users: [], tasks: [], documents: [] }
+    } finally {
+      if (token === editTagSearchToken) {
+        editTagPickerLoading.value = false
+      }
+    }
+  }, 120)
+}
+
+function captureEditSelectionAndRefreshTagSearch() {
+  captureEditSelection()
+  refreshEditTagSearch()
+}
+
+function handleEditTextareaInput() {
+  const replacedLength = lastEditSelectionEnd - lastEditSelectionStart
+  const insertedLength = editBody.value.length - (lastEditTextSnapshot.length - replacedLength)
+  editEntities.value = applyTextEditToEntities(
+    editEntities.value,
+    lastEditSelectionStart,
+    lastEditSelectionEnd,
+    insertedLength,
+  ).filter(entity => editBody.value.slice(entity.start, entity.end) === entity.label)
+  captureEditSelectionAndRefreshTagSearch()
+}
+
+function selectEditTagItem(item: MessageTagPickerItem) {
+  if (!editTagRange.value) return
+  const next = replaceTextRangeWithEntity(
+    editBody.value,
+    editEntities.value,
+    editTagRange.value.start,
+    editTagRange.value.end,
+    {
+      kind: item.kind,
+      targetId: item.id,
+      label: item.label,
+      href: item.href,
+      start: editTagRange.value.start,
+      end: editTagRange.value.end,
+    },
+  )
+  editBody.value = next.text
+  editEntities.value = next.entities
+  closeEditTagPicker()
+  nextTick(() => {
+    if (!editTextarea.value) return
+    editTextarea.value.focus()
+    editTextarea.value.selectionStart = next.nextCursor
+    editTextarea.value.selectionEnd = next.nextCursor
+    captureEditSelection()
+  })
 }
 
 // ── Send status actions ──────────────────────────────────────────────────────
@@ -1105,7 +1349,7 @@ function handleDocumentClick(evt: MouseEvent) {
   // Close emoji picker
   if (showEmojiPicker.value) {
     if (pickerToggleButton.value?.contains(target)) return
-    if (pickerRoot.value?.contains(target)) return
+    if (emojiPickerRoot.value?.contains(target)) return
     showEmojiPicker.value = false
     if (activeEmojiPickerId.value === instanceId) {
       activeEmojiPickerId.value = null
@@ -1123,6 +1367,12 @@ function handleDocumentClick(evt: MouseEvent) {
       closeReactionUsersPopup()
     }
   }
+  if (activeUserCard.value) {
+    activeUserCard.value = null
+  }
+  if (editTagPickerOpen.value) {
+    closeEditTagPicker()
+  }
 }
 
 function handleEscape(evt: KeyboardEvent) {
@@ -1137,13 +1387,15 @@ function handleEscape(evt: KeyboardEvent) {
   showEmojiPicker.value = false
   showContextMenu.value = false
   closeReactionUsersPopup()
+  activeUserCard.value = null
+  closeEditTagPicker()
   debugReaction('picker:escape-close')
 }
 
 watch(
-  [showEmojiPicker, showContextMenu, () => imagePreview.value.open, reactionPopupVisible, isEditing],
-  ([pickerVisible, menuVisible, previewVisible, popupVisible, editingVisible]) => {
-  const anyOpen = pickerVisible || menuVisible || previewVisible || popupVisible || editingVisible
+  [showEmojiPicker, showContextMenu, () => imagePreview.value.open, reactionPopupVisible, isEditing, editTagPickerOpen, activeUserCard],
+  ([pickerVisible, menuVisible, previewVisible, popupVisible, editingVisible, editPickerVisible, userCardVisible]) => {
+  const anyOpen = pickerVisible || menuVisible || previewVisible || popupVisible || editingVisible || editPickerVisible || Boolean(userCardVisible)
   if (anyOpen) {
     document.addEventListener('click', handleDocumentClick)
     document.addEventListener('keydown', handleEscape)
@@ -1213,7 +1465,12 @@ function startEdit() {
   showContextMenu.value = false
   editError.value = ''
   editBody.value = props.message.body
+  editEntities.value = (props.message.entities ?? []).map(entity => ({ ...entity }))
   isEditing.value = true
+  nextTick(() => {
+    editTextarea.value?.focus()
+    captureEditSelection()
+  })
 }
 
 function cancelEdit() {
@@ -1221,13 +1478,55 @@ function cancelEdit() {
   isEditing.value = false
   editError.value = ''
   editBody.value = ''
+  editEntities.value = []
+  editTagPickerOpen.value = false
 }
 
 function handleEditTextareaKeydown(evt: KeyboardEvent) {
+  captureEditSelection()
+  if (editTagPickerOpen.value && editFlatTagItems.value.length > 0) {
+    if (evt.key === 'ArrowDown') {
+      evt.preventDefault()
+      editSelectedTagIndex.value = (editSelectedTagIndex.value + 1) % editFlatTagItems.value.length
+      return
+    }
+    if (evt.key === 'ArrowUp') {
+      evt.preventDefault()
+      editSelectedTagIndex.value = (editSelectedTagIndex.value - 1 + editFlatTagItems.value.length) % editFlatTagItems.value.length
+      return
+    }
+    if (evt.key === 'Enter' && !evt.shiftKey) {
+      evt.preventDefault()
+      const item = editFlatTagItems.value[editSelectedTagIndex.value]
+      if (item) selectEditTagItem(item)
+      return
+    }
+  }
   if (evt.key === 'Escape') {
     evt.preventDefault()
     cancelEdit()
     return
+  }
+  if ((evt.key === 'Backspace' || evt.key === 'Delete') && editTextarea.value && editTextarea.value.selectionStart === editTextarea.value.selectionEnd) {
+    const cursor = editTextarea.value.selectionStart ?? 0
+    const removed = removeEntityAroundCursor(
+      editBody.value,
+      editEntities.value,
+      cursor,
+      evt.key === 'Backspace' ? 'backward' : 'forward',
+    )
+    if (removed) {
+      evt.preventDefault()
+      editBody.value = removed.text
+      editEntities.value = removed.entities
+      nextTick(() => {
+        if (!editTextarea.value) return
+        editTextarea.value.selectionStart = removed.nextCursor
+        editTextarea.value.selectionEnd = removed.nextCursor
+        captureEditSelectionAndRefreshTagSearch()
+      })
+      return
+    }
   }
   if (evt.key !== 'Enter') return
   if (evt.shiftKey || evt.isComposing) return
@@ -1241,12 +1540,41 @@ async function saveEdit() {
   editSaving.value = true
   editError.value = ''
   const nextBody = editBody.value.trim()
+  const trimmedDelta = editBody.value.length - editBody.value.trimStart().length
+  const nextEntities = editEntities.value
+    .map(entity => ({
+      ...entity,
+      start: entity.start - trimmedDelta,
+      end: entity.end - trimmedDelta,
+    }))
+    .filter(entity => entity.start >= 0 && entity.end <= nextBody.length)
   try {
-    const resp = await editMessageApi(props.message.id, nextBody)
-    props.message.body = nextBody
-    props.message.editedAt = resp.edited_at || new Date().toISOString()
+    const resp = await editMessageApi(props.message.id, nextBody, nextEntities.map(entity => ({
+      kind: entity.kind,
+      target_id: entity.targetId,
+      label: entity.label,
+      href: entity.href,
+      start: entity.start,
+      end: entity.end,
+    })))
+    const normalizedEntities = (resp.entities ?? []).map(entity => ({
+      kind: entity.kind,
+      targetId: entity.target_id,
+      label: entity.label,
+      href: entity.href,
+      start: entity.start,
+      end: entity.end,
+    }))
+    chat.applyLocalMessageEdited(
+      props.message.channelId,
+      props.message.id,
+      nextBody,
+      normalizedEntities,
+      resp.edited_at || new Date().toISOString(),
+    )
     isEditing.value = false
     editBody.value = ''
+    editEntities.value = []
   } catch (error) {
     editError.value = error instanceof Error ? error.message : 'Failed to edit message'
   } finally {

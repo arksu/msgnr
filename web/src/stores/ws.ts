@@ -21,9 +21,11 @@ import {
   type SetNotificationLevelResponse,
   type TaskDescriptionCollabSubscribeResponse,
   type TaskDescriptionCollabMessage,
+  MessageEntitySchema,
   FeatureCapability,
   ErrorCode,
   ConversationType,
+  MessageEntityKind,
   WorkspaceRole,
   NotificationLevel,
   TaskDescriptionCollabMessageKind,
@@ -416,7 +418,20 @@ export const useWsStore = defineStore('ws', () => {
     clientMsgId: string,
     threadRootMessageId?: string,
     attachmentIds: string[] = [],
+    entities: Array<{ kind: 'user' | 'task' | 'document'; targetId: string; label: string; href: string; start: number; end: number }> = [],
   ): boolean {
+    const protoEntities = entities.map(entity => create(MessageEntitySchema, {
+      kind: entity.kind === 'user'
+        ? MessageEntityKind.USER
+        : entity.kind === 'task'
+          ? MessageEntityKind.TASK
+          : MessageEntityKind.DOCUMENT,
+      targetId: entity.targetId,
+      label: entity.label,
+      href: entity.href,
+      start: entity.start,
+      end: entity.end,
+    }))
     return sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
       traceId: generateId(),
@@ -430,6 +445,7 @@ export const useWsStore = defineStore('ws', () => {
           body,
           threadRootMessageId: threadRootMessageId ?? '',
           attachmentIds,
+          entities: protoEntities,
         },
       },
     }))

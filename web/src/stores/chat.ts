@@ -46,7 +46,8 @@ import {
   clearLastOpenedConversation,
 } from '@/services/storage/lastConversationStorage'
 import { listConversationMessages, listDmCandidates } from '@/services/http/chatApi'
-import type { ConversationMessageItem } from '@/services/http/chatApi'
+import type { ConversationMessageItem, MessageEntityItem } from '@/services/http/chatApi'
+import type { MessageEntity as ProtoMessageEntity } from '@/shared/proto/packets_pb'
 import { getOrCreateClientInstanceId } from '@/services/storage/clientInstanceStorage'
 import { generateId } from '@/services/id'
 import { getPlatformOrNull } from '@/platform'
@@ -106,6 +107,17 @@ export interface MessageAttachment {
   mimeType: string
 }
 
+export type MessageEntityKind = 'user' | 'task' | 'document'
+
+export interface MessageEntity {
+  kind: MessageEntityKind
+  targetId: string
+  label: string
+  href: string
+  start: number
+  end: number
+}
+
 export type SendStatus = 'sending' | 'queued' | 'failed'
 
 export interface Message {
@@ -115,6 +127,7 @@ export interface Message {
   senderName: string
   senderAvatarUrl?: string
   body: string
+  entities?: MessageEntity[]
   channelSeq: bigint
   threadSeq: bigint
   threadRootMessageId?: string
@@ -238,6 +251,38 @@ interface BootstrapStage {
   presence: Map<string, PresenceEvent>
 }
 
+function normalizeMessageEntities(raw: Array<MessageEntityItem | ProtoMessageEntity> | undefined | null): MessageEntity[] {
+  return (raw ?? []).map(entity => ({
+    kind: typeof entity.kind === 'string'
+      ? entity.kind
+      : entity.kind === 1
+        ? 'user'
+        : entity.kind === 2
+          ? 'task'
+          : 'document',
+    targetId: 'target_id' in entity ? entity.target_id : entity.targetId,
+    label: entity.label,
+    href: entity.href,
+    start: entity.start,
+    end: entity.end,
+  }))
+}
+
+function mentionedUserIdsFromEntities(entities: MessageEntity[]): string[] {
+  return entities.filter(entity => entity.kind === 'user').map(entity => entity.targetId)
+}
+
+function mentionedUserIdsFromPayload(
+  rawEntities: Array<MessageEntityItem | ProtoMessageEntity> | undefined | null,
+  fallbackMentionedUserIds: readonly string[] | undefined | null,
+): string[] {
+  const entities = normalizeMessageEntities(rawEntities)
+  if (entities.length > 0) {
+    return mentionedUserIdsFromEntities(entities)
+  }
+  return [...(fallbackMentionedUserIds ?? [])]
+}
+
 const ACK_BATCH_SIZE = 20
 const ACK_INTERVAL_MS = 2000
 const DEFAULT_SYNC_BATCH = 200
@@ -337,6 +382,7 @@ export const useChatStore = defineStore('chat', () => {
   const activeThreadRootId = ref('')
   const activeThreadConversationId = ref('')
   const userNames = ref<Record<string, string>>({})
+  const userEmails = ref<Record<string, string>>({})
   const userAvatars = ref<Record<string, string>>({})
   const pendingReactionOps = ref<Record<string, PendingReactionOp>>({})
   /** Tracks active send timeouts by clientMsgId. Cleared on ACK or discard. */
@@ -560,6 +606,9 @@ export const useChatStore = defineStore('chat', () => {
     if (resolved) {
       userNames.value[userId] = resolved
     }
+    if (normalizedEmail) {
+      userEmails.value[userId] = normalizedEmail
+    }
     if (normalizedAvatar || avatarUrl === '') {
       userAvatars.value[userId] = normalizedAvatar
     }
@@ -722,6 +771,7 @@ export const useChatStore = defineStore('chat', () => {
     activeThreadConversationId.value = ''
 
     userNames.value = {}
+    userEmails.value = {}
     userAvatars.value = {}
     pendingReactionOps.value = {}
     toast.value = null
@@ -815,13 +865,14 @@ export const useChatStore = defineStore('chat', () => {
           body: msg.body,
           clientMsgId,
           attachmentIds: msg.attachments?.map(a => a.id),
+          entities: msg.entities,
         })
       })
       return
     }
     msg.sendStatus = 'sending'
     msg.failReason = undefined
-    const sent = ws.sendMessage(channelId, msg.body, clientMsgId, undefined, msg.attachments?.map(a => a.id) ?? [])
+    const sent = ws.sendMessage(channelId, msg.body, clientMsgId, undefined, msg.attachments?.map(a => a.id) ?? [], msg.entities)
     if (!sent) {
       msg.sendStatus = 'failed'
       msg.failReason = 'Connection lost'
@@ -847,13 +898,14 @@ export const useChatStore = defineStore('chat', () => {
           clientMsgId,
           threadRootMessageId: rootMessageId,
           attachmentIds: msg.attachments?.map(a => a.id),
+          entities: msg.entities,
         })
       })
       return
     }
     msg.sendStatus = 'sending'
     msg.failReason = undefined
-    const sent = ws.sendMessage(msg.channelId, msg.body, clientMsgId, rootMessageId, msg.attachments?.map(a => a.id) ?? [])
+    const sent = ws.sendMessage(msg.channelId, msg.body, clientMsgId, rootMessageId, msg.attachments?.map(a => a.id) ?? [], msg.entities)
     if (!sent) {
       msg.sendStatus = 'failed'
       msg.failReason = 'Connection lost'
@@ -904,7 +956,7 @@ export const useChatStore = defineStore('chat', () => {
     activeThreadConversationId.value = ''
   }
 
-  function sendThreadReply(body: string, attachmentIds: string[] = [], attachments: MessageAttachment[] = []) {
+  function sendThreadReply(body: string, attachmentIds: string[] = [], attachments: MessageAttachment[] = [], entities: MessageEntity[] = []) {
     const text = body.trim()
     if (!text && attachmentIds.length === 0) return
     if (!isThreadPanelOpen.value) return
@@ -936,10 +988,11 @@ export const useChatStore = defineStore('chat', () => {
       senderId,
       senderName,
       body: text,
+      entities,
       channelSeq: 0n,
       threadSeq: nextThreadSeq,
       threadRootMessageId: rootId,
-      mentionedUserIds: [],
+      mentionedUserIds: mentionedUserIdsFromEntities(entities),
       mentionEveryone: false,
       createdAt: now,
       reactions: [],
@@ -960,10 +1013,10 @@ export const useChatStore = defineStore('chat', () => {
     if (isOffline) {
       // Lazy-import to avoid circular deps — queue for delivery after reconnect
       import('@/composables/useOfflineQueue').then(({ useOfflineQueue }) => {
-        useOfflineQueue().enqueue({ conversationId: channelId, body: text, clientMsgId, threadRootMessageId: rootId })
+        useOfflineQueue().enqueue({ conversationId: channelId, body: text, clientMsgId, threadRootMessageId: rootId, entities })
       })
     } else {
-      const sent = ws.sendMessage(channelId, text, clientMsgId, rootId, attachmentIds)
+      const sent = ws.sendMessage(channelId, text, clientMsgId, rootId, attachmentIds, entities)
       if (!sent) {
         updateThreadSendStatus(rootId, clientMsgId, 'failed', 'Connection lost')
       } else {
@@ -1166,10 +1219,11 @@ export const useChatStore = defineStore('chat', () => {
             senderId: userId,
             senderName: workspace.value?.selfDisplayName ?? '',
             body: q.body,
+            entities: q.entities ?? [],
             channelSeq: 0n,
             threadSeq: 0n,
             threadRootMessageId: q.threadRootMessageId,
-            mentionedUserIds: [],
+            mentionedUserIds: mentionedUserIdsFromEntities(q.entities ?? []),
             mentionEveryone: false,
             createdAt: new Date().toISOString(),
             reactions: [],
@@ -2260,8 +2314,10 @@ export const useChatStore = defineStore('chat', () => {
 
   function _onMessageUpdated(evt: MessageUpdatedEvent) {
     const apply = (msg: Message) => {
+      const entities = normalizeMessageEntities(evt.entities)
       msg.body = evt.body
-      msg.mentionedUserIds = evt.mentionedUserIds ?? []
+      msg.entities = entities
+      msg.mentionedUserIds = mentionedUserIdsFromPayload(evt.entities, evt.mentionedUserIds)
       msg.mentionEveryone = evt.mentionEveryone ?? false
       if (evt.editedAt) {
         msg.editedAt = new Date(Number(evt.editedAt.seconds) * 1000).toISOString()
@@ -2334,6 +2390,29 @@ export const useChatStore = defineStore('chat', () => {
     } as MessageDeletedEvent)
   }
 
+  function applyLocalMessageEdited(
+    conversationId: string,
+    messageId: string,
+    body: string,
+    entities: MessageEntity[] = [],
+    editedAt?: string,
+  ) {
+    _onMessageUpdated({
+      conversationId,
+      messageId,
+      body,
+      entities,
+      mentionedUserIds: mentionedUserIdsFromEntities(entities),
+      mentionEveryone: body.includes('@everyone') || body.includes('@channel'),
+      editedAt: editedAt
+        ? {
+            seconds: BigInt(Math.floor(new Date(editedAt).getTime() / 1000)),
+            nanos: 0,
+          }
+        : undefined,
+    } as unknown as MessageUpdatedEvent)
+  }
+
   function _upsertThreadMessage(rootId: string, msg: Message) {
     if (!threadMessages.value[rootId]) threadMessages.value[rootId] = []
     const list = threadMessages.value[rootId]
@@ -2360,10 +2439,11 @@ export const useChatStore = defineStore('chat', () => {
       senderName: resolveDisplayName(evt.senderId),
       senderAvatarUrl: resolveAvatarUrl(evt.senderId),
       body: evt.body,
+      entities: normalizeMessageEntities(evt.entities),
       channelSeq: evt.channelSeq,
       threadSeq: evt.threadSeq,
       threadRootMessageId: evt.threadRootMessageId || undefined,
-      mentionedUserIds: evt.mentionedUserIds ?? [],
+      mentionedUserIds: mentionedUserIdsFromPayload(evt.entities, evt.mentionedUserIds),
       mentionEveryone: evt.mentionEveryone ?? false,
       createdAt: evt.createdAt
         ? new Date(Number(evt.createdAt.seconds) * 1000).toISOString()
@@ -2399,10 +2479,11 @@ export const useChatStore = defineStore('chat', () => {
         senderName: item.sender_name || resolveDisplayName(item.sender_id),
         senderAvatarUrl: resolveAvatarUrl(item.sender_id),
         body: item.body,
+        entities: normalizeMessageEntities(item.entities),
         channelSeq: BigInt(item.channel_seq),
         threadSeq: BigInt(item.thread_seq),
         threadRootMessageId: item.thread_root_message_id || undefined,
-        mentionedUserIds: [],
+        mentionedUserIds: mentionedUserIdsFromEntities(normalizeMessageEntities(item.entities)),
         mentionEveryone: item.mention_everyone,
         createdAt: item.created_at,
         editedAt: item.edited_at || undefined,
@@ -2515,6 +2596,7 @@ export const useChatStore = defineStore('chat', () => {
     threadMessages,
     threadSummaries,
     userNames,
+    userEmails,
     userAvatars,
     toast,
     lastAppliedEventSeq,
@@ -2540,6 +2622,7 @@ export const useChatStore = defineStore('chat', () => {
     handleTypingEvent,
     handleServerEvent,
     applyLocalMessageDeleted,
+    applyLocalMessageEdited,
     handleSendMessageAck,
     handleReactionAck,
     handleSubscribeThreadResponse,

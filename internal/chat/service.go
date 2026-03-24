@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"regexp"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,10 +44,8 @@ var (
 	ErrEmptyMessage               = errors.New("message body and attachments are both empty")
 	ErrAttachmentStoreUnavailable = errors.New("attachment storage is unavailable")
 	ErrInvalidNotificationLevel   = errors.New("invalid notification level")
+	ErrInvalidMessageEntity       = errors.New("invalid message entity")
 )
-
-// mentionRe matches @uuid patterns in message bodies.
-var mentionRe = regexp.MustCompile(`@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
 
 // Service handles messaging, reactions, and thread subscriptions.
 type Service struct {
@@ -68,6 +67,12 @@ type AttachmentStorage interface {
 	PutObject(ctx context.Context, key string, r io.Reader, size int64, mimeType string) error
 	GetObject(ctx context.Context, key string) (body io.ReadCloser, size int64, mimeType string, err error)
 	DeleteObject(ctx context.Context, key string) error
+}
+
+type queryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }
 
 // ByteCounter reports bytes consumed by a streaming upload reader.
@@ -133,6 +138,7 @@ type ConversationMessage struct {
 	SenderID            uuid.UUID
 	SenderName          string
 	Body                string
+	Entities            []MessageEntity
 	ChannelSeq          int64
 	ThreadSeq           int64
 	ThreadRootMessageID uuid.UUID
@@ -160,6 +166,66 @@ type MessageAttachment struct {
 	StorageKey     string    `json:"-"`
 	UploadedBy     uuid.UUID `json:"uploaded_by"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+type MessageEntityKind string
+
+const (
+	MessageEntityKindUser     MessageEntityKind = "user"
+	MessageEntityKindTask     MessageEntityKind = "task"
+	MessageEntityKindDocument MessageEntityKind = "document"
+)
+
+type MessageEntity struct {
+	Kind     MessageEntityKind `json:"kind"`
+	TargetID uuid.UUID         `json:"target_id"`
+	Label    string            `json:"label"`
+	Href     string            `json:"href"`
+	Start    int32             `json:"start"`
+	End      int32             `json:"end"`
+}
+
+type TagSearchUserResult struct {
+	UserID      uuid.UUID
+	DisplayName string
+	Email       string
+	AvatarURL   string
+	Presence    string
+}
+
+type TagSearchTaskResult struct {
+	TaskID    uuid.UUID
+	PublicID  string
+	Title     string
+	UpdatedAt time.Time
+}
+
+func (r TagSearchTaskResult) Label() string {
+	return "@" + strings.TrimSpace(r.PublicID+" "+r.Title)
+}
+
+func (r TagSearchTaskResult) Href() string {
+	return normalizeTaskHref(r.PublicID)
+}
+
+type TagSearchDocumentResult struct {
+	DocumentID uuid.UUID
+	Title      string
+	UpdatedAt  time.Time
+}
+
+func (r TagSearchDocumentResult) Label() string {
+	return "@" + strings.TrimSpace(r.Title)
+}
+
+func (r TagSearchDocumentResult) Href() string {
+	return normalizeDocumentHref(r.DocumentID)
+}
+
+type TagSearchResult struct {
+	Users     []TagSearchUserResult
+	Tasks     []TagSearchTaskResult
+	Documents []TagSearchDocumentResult
 }
 
 // NewService creates a chat Service.
@@ -311,6 +377,169 @@ func (s *Service) ListConversationMembers(ctx context.Context, requesterID, conv
 		return nil, fmt.Errorf("chat.ListConversationMembers rows: %w", err)
 	}
 	return members, nil
+}
+
+func (s *Service) SearchTagEntities(ctx context.Context, requesterID, conversationID uuid.UUID, query string) (TagSearchResult, error) {
+	isMember, err := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
+		ChannelID: conversationID,
+		UserID:    requesterID,
+	})
+	if err != nil {
+		return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities membership check: %w", err)
+	}
+	if !isMember {
+		return TagSearchResult{}, ErrNotMember
+	}
+
+	query = strings.TrimSpace(query)
+	likeQuery := "%" + query + "%"
+
+	result := TagSearchResult{
+		Users:     make([]TagSearchUserResult, 0, 5),
+		Tasks:     make([]TagSearchTaskResult, 0, 5),
+		Documents: make([]TagSearchDocumentResult, 0, 5),
+	}
+
+	userSQL := `
+		SELECT u.id,
+		       COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
+		       u.email,
+		       u.avatar_url,
+		       COALESCE(up.status, 'offline') AS presence
+		  FROM channel_members cm
+		  JOIN users u
+		    ON u.id = cm.user_id
+		  LEFT JOIN user_presence up
+		    ON up.user_id = u.id
+		 WHERE cm.channel_id = $1
+		   AND cm.user_id <> $2
+		   AND cm.is_archived = false
+		   AND u.status = 'active'`
+	userArgs := []any{conversationID, requesterID}
+	if query != "" {
+		userSQL += `
+		   AND (
+		     COALESCE(NULLIF(u.display_name, ''), u.email) ILIKE $3
+		     OR u.email ILIKE $3
+		   )
+		 ORDER BY lower(COALESCE(NULLIF(u.display_name, ''), u.email)), u.id
+		 LIMIT 5`
+		userArgs = append(userArgs, likeQuery)
+	} else {
+		userSQL += `
+		 ORDER BY (
+		   SELECT MAX(m.created_at)
+		     FROM messages m
+		    WHERE m.channel_id = cm.channel_id
+		      AND m.sender_id = cm.user_id
+		 ) DESC NULLS LAST,
+		 lower(COALESCE(NULLIF(u.display_name, ''), u.email)),
+		 u.id
+		 LIMIT 5`
+	}
+
+	taskSQL := `
+		SELECT id, public_id, title, updated_at
+		  FROM task`
+	taskArgs := []any{}
+	if query != "" {
+		taskSQL += `
+		 WHERE public_id ILIKE $1
+		    OR title ILIKE $1
+		 ORDER BY updated_at DESC, public_id ASC
+		 LIMIT 5`
+		taskArgs = append(taskArgs, likeQuery)
+	} else {
+		taskSQL += `
+		 ORDER BY updated_at DESC, public_id ASC
+		 LIMIT 5`
+	}
+
+	documentSQL := `
+		SELECT d.id, d.title, d.updated_at
+		  FROM document d
+		  JOIN teamspace_member tm
+		    ON tm.teamspace_id = d.teamspace_id
+		   AND tm.user_id = $1
+		 WHERE d.archived_at IS NULL`
+	documentArgs := []any{requesterID}
+	if query != "" {
+		documentSQL += `
+		   AND d.title ILIKE $2
+		 ORDER BY d.updated_at DESC, d.title ASC, d.id ASC
+		 LIMIT 5`
+		documentArgs = append(documentArgs, likeQuery)
+	} else {
+		documentSQL += `
+		 ORDER BY d.updated_at DESC, d.title ASC, d.id ASC
+		 LIMIT 5`
+	}
+
+	batch := &pgx.Batch{}
+	batch.Queue(userSQL, userArgs...)
+	batch.Queue(taskSQL, taskArgs...)
+	batch.Queue(documentSQL, documentArgs...)
+
+	results := s.pool.SendBatch(ctx, batch)
+	closeResults := true
+	defer func() {
+		if closeResults {
+			_ = results.Close()
+		}
+	}()
+
+	userRows, err := results.Query()
+	if err != nil {
+		return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities users: %w", err)
+	}
+	for userRows.Next() {
+		var row TagSearchUserResult
+		if err := userRows.Scan(&row.UserID, &row.DisplayName, &row.Email, &row.AvatarURL, &row.Presence); err != nil {
+			return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities scan user: %w", err)
+		}
+		result.Users = append(result.Users, row)
+	}
+	if err := userRows.Err(); err != nil {
+		return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities users rows: %w", err)
+	}
+	userRows.Close()
+
+	taskRows, err := results.Query()
+	if err != nil {
+		return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities tasks: %w", err)
+	}
+	for taskRows.Next() {
+		var row TagSearchTaskResult
+		if err := taskRows.Scan(&row.TaskID, &row.PublicID, &row.Title, &row.UpdatedAt); err != nil {
+			return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities scan task: %w", err)
+		}
+		result.Tasks = append(result.Tasks, row)
+	}
+	if err := taskRows.Err(); err != nil {
+		return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities tasks rows: %w", err)
+	}
+	taskRows.Close()
+
+	documentRows, err := results.Query()
+	if err != nil {
+		return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities documents: %w", err)
+	}
+	for documentRows.Next() {
+		var row TagSearchDocumentResult
+		if err := documentRows.Scan(&row.DocumentID, &row.Title, &row.UpdatedAt); err != nil {
+			return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities scan document: %w", err)
+		}
+		result.Documents = append(result.Documents, row)
+	}
+	if err := documentRows.Err(); err != nil {
+		return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities documents rows: %w", err)
+	}
+	if err := results.Close(); err != nil {
+		return TagSearchResult{}, fmt.Errorf("chat.SearchTagEntities batch close: %w", err)
+	}
+	closeResults = false
+
+	return result, nil
 }
 
 // ListActiveCallMembers returns active participants for the current active call in a conversation.
@@ -587,6 +816,18 @@ func (s *Service) ListMessagePage(
 		messages = messages[:limit]
 	}
 
+	messageIDs := make([]uuid.UUID, 0, len(messages))
+	for _, message := range messages {
+		messageIDs = append(messageIDs, message.ID)
+	}
+	entitiesByMessageID, err := s.loadMessageEntitiesByMessageIDs(ctx, s.pool, messageIDs)
+	if err != nil {
+		return nil, false, fmt.Errorf("chat.ListMessagePage load entities: %w", err)
+	}
+	for i := range messages {
+		messages[i].Entities = entitiesByMessageID[messages[i].ID.String()]
+	}
+
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
@@ -610,6 +851,260 @@ func normalizeJSONValue(v any) ([]byte, error) {
 		}
 		return b, nil
 	}
+}
+
+func (s *Service) loadMessageEntitiesByMessageIDs(ctx context.Context, q queryer, messageIDs []uuid.UUID) (map[string][]MessageEntity, error) {
+	result := make(map[string][]MessageEntity, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := q.Query(ctx, `
+		SELECT message_id, kind, target_id, label, href, start_offset, end_offset
+		  FROM message_entities
+		 WHERE message_id = ANY($1::uuid[])
+		 ORDER BY message_id ASC, ordinal ASC`,
+		messageIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			messageID uuid.UUID
+			entity    MessageEntity
+		)
+		if err := rows.Scan(&messageID, &entity.Kind, &entity.TargetID, &entity.Label, &entity.Href, &entity.Start, &entity.End); err != nil {
+			return nil, err
+		}
+		result[messageID.String()] = append(result[messageID.String()], entity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *Service) insertMessageEntitiesTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID, entities []MessageEntity) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM message_entities WHERE message_id = $1`, messageID); err != nil {
+		return err
+	}
+	if len(entities) == 0 {
+		return nil
+	}
+
+	batch := &pgx.Batch{}
+	for idx, entity := range entities {
+		batch.Queue(`
+			INSERT INTO message_entities (message_id, ordinal, kind, target_id, label, href, start_offset, end_offset)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			messageID, idx, entity.Kind, entity.TargetID, entity.Label, entity.Href, entity.Start, entity.End,
+		)
+	}
+	results := tx.SendBatch(ctx, batch)
+	closeResults := true
+	defer func() {
+		if closeResults {
+			_ = results.Close()
+		}
+	}()
+	for range entities {
+		if _, err := results.Exec(); err != nil {
+			return err
+		}
+	}
+	if err := results.Close(); err != nil {
+		return err
+	}
+	closeResults = false
+	return nil
+}
+
+func normalizeTaskHref(publicID string) string {
+	return "/tasks/" + strings.ToLower(strings.TrimSpace(publicID))
+}
+
+func normalizeDocumentHref(documentID uuid.UUID) string {
+	return "/documents/" + documentID.String()
+}
+
+func validateEntityHref(raw string, expected string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("href is required")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	actual := parsed.Path
+	if parsed.RawQuery != "" {
+		actual += "?" + parsed.RawQuery
+	}
+	if parsed.Fragment != "" {
+		actual += "#" + parsed.Fragment
+	}
+	if actual != expected {
+		return fmt.Errorf("expected href %q", expected)
+	}
+	return nil
+}
+
+func mentionedUserIDsFromEntities(entities []MessageEntity) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(entities))
+	result := make([]uuid.UUID, 0, len(entities))
+	for _, entity := range entities {
+		if entity.Kind != MessageEntityKindUser {
+			continue
+		}
+		if _, ok := seen[entity.TargetID]; ok {
+			continue
+		}
+		seen[entity.TargetID] = struct{}{}
+		result = append(result, entity.TargetID)
+	}
+	return result
+}
+
+func toProtoMessageEntityKind(kind MessageEntityKind) packetspb.MessageEntityKind {
+	switch kind {
+	case MessageEntityKindUser:
+		return packetspb.MessageEntityKind_MESSAGE_ENTITY_KIND_USER
+	case MessageEntityKindTask:
+		return packetspb.MessageEntityKind_MESSAGE_ENTITY_KIND_TASK
+	case MessageEntityKindDocument:
+		return packetspb.MessageEntityKind_MESSAGE_ENTITY_KIND_DOCUMENT
+	default:
+		return packetspb.MessageEntityKind_MESSAGE_ENTITY_KIND_UNSPECIFIED
+	}
+}
+
+func toProtoMessageEntities(entities []MessageEntity) []*packetspb.MessageEntity {
+	if len(entities) == 0 {
+		return nil
+	}
+	result := make([]*packetspb.MessageEntity, 0, len(entities))
+	for _, entity := range entities {
+		result = append(result, &packetspb.MessageEntity{
+			Kind:     toProtoMessageEntityKind(entity.Kind),
+			TargetId: entity.TargetID.String(),
+			Label:    entity.Label,
+			Href:     entity.Href,
+			Start:    entity.Start,
+			End:      entity.End,
+		})
+	}
+	return result
+}
+
+func (s *Service) validateAndNormalizeMessageEntities(
+	ctx context.Context,
+	q queryer,
+	conversationID uuid.UUID,
+	actorID uuid.UUID,
+	body string,
+	entities []MessageEntity,
+) ([]MessageEntity, error) {
+	if len(entities) == 0 {
+		return nil, nil
+	}
+
+	runes := []rune(body)
+	normalized := make([]MessageEntity, 0, len(entities))
+	for _, entity := range entities {
+		entity.Label = strings.TrimSpace(entity.Label)
+		if entity.Label == "" || entity.TargetID == uuid.Nil {
+			return nil, ErrInvalidMessageEntity
+		}
+		if entity.Start < 0 || entity.End <= entity.Start || int(entity.End) > len(runes) {
+			return nil, ErrInvalidMessageEntity
+		}
+		substr := string(runes[entity.Start:entity.End])
+		if substr != entity.Label {
+			return nil, ErrInvalidMessageEntity
+		}
+
+		switch entity.Kind {
+		case MessageEntityKindUser:
+			var isMember bool
+			err := q.QueryRow(ctx, `
+				SELECT EXISTS (
+					SELECT 1
+					  FROM channel_members cm
+					  JOIN users u ON u.id = cm.user_id
+					 WHERE cm.channel_id = $1
+					   AND cm.user_id = $2
+					   AND cm.is_archived = false
+					   AND u.status = 'active'
+				)`,
+				conversationID,
+				entity.TargetID,
+			).Scan(&isMember)
+			if err != nil {
+				return nil, fmt.Errorf("chat.validateAndNormalizeMessageEntities user check: %w", err)
+			}
+			if !isMember {
+				return nil, ErrInvalidMessageEntity
+			}
+			entity.Href = ""
+		case MessageEntityKindTask:
+			var publicID string
+			err := q.QueryRow(ctx, `SELECT public_id FROM task WHERE id = $1`, entity.TargetID).Scan(&publicID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrInvalidMessageEntity
+			}
+			if err != nil {
+				return nil, fmt.Errorf("chat.validateAndNormalizeMessageEntities task check: %w", err)
+			}
+			expectedHref := normalizeTaskHref(publicID)
+			if err := validateEntityHref(entity.Href, expectedHref); err != nil {
+				return nil, ErrInvalidMessageEntity
+			}
+			entity.Href = expectedHref
+		case MessageEntityKindDocument:
+			var documentID uuid.UUID
+			err := q.QueryRow(ctx, `
+				SELECT d.id
+				  FROM document d
+				  JOIN teamspace_member tm
+				    ON tm.teamspace_id = d.teamspace_id
+				   AND tm.user_id = $2
+				 WHERE d.id = $1
+				   AND d.archived_at IS NULL`,
+				entity.TargetID,
+				actorID,
+			).Scan(&documentID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrInvalidMessageEntity
+			}
+			if err != nil {
+				return nil, fmt.Errorf("chat.validateAndNormalizeMessageEntities document check: %w", err)
+			}
+			expectedHref := normalizeDocumentHref(documentID)
+			if err := validateEntityHref(entity.Href, expectedHref); err != nil {
+				return nil, ErrInvalidMessageEntity
+			}
+			entity.Href = expectedHref
+		default:
+			return nil, ErrInvalidMessageEntity
+		}
+		normalized = append(normalized, entity)
+	}
+
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].Start != normalized[j].Start {
+			return normalized[i].Start < normalized[j].Start
+		}
+		return normalized[i].End < normalized[j].End
+	})
+	for idx := 1; idx < len(normalized); idx++ {
+		if normalized[idx-1].End > normalized[idx].Start {
+			return nil, ErrInvalidMessageEntity
+		}
+	}
+	return normalized, nil
 }
 
 func (s *Service) ListReactionUsers(
@@ -918,6 +1413,7 @@ type SendMessageParams struct {
 	SenderID            uuid.UUID
 	ClientMsgID         string
 	Body                string
+	Entities            []MessageEntity
 	ThreadRootMessageID uuid.UUID // zero value = not a thread reply
 	AttachmentIDs       []uuid.UUID
 }
@@ -949,12 +1445,14 @@ type EditMessageParams struct {
 	MessageID uuid.UUID
 	ActorID   uuid.UUID
 	Body      string
+	Entities  []MessageEntity
 }
 
 type EditMessageResult struct {
 	ChannelID        uuid.UUID
 	MessageID        uuid.UUID
 	Body             string
+	Entities         []MessageEntity
 	MentionEveryone  bool
 	MentionedUserIDs []uuid.UUID
 	EditedAt         *timestamppb.Timestamp
@@ -1044,6 +1542,10 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	}
 
 	attachments, err := s.lockAndValidateStagedAttachmentsTx(ctx, tx, p.ChannelID, p.SenderID, p.AttachmentIDs)
+	if err != nil {
+		return SendMessageResult{}, err
+	}
+	normalizedEntities, err := s.validateAndNormalizeMessageEntities(ctx, tx, p.ChannelID, p.SenderID, p.Body, p.Entities)
 	if err != nil {
 		return SendMessageResult{}, err
 	}
@@ -1148,6 +1650,9 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			attachments[i].MessageID = msgID
 		}
 	}
+	if err := s.insertMessageEntitiesTx(ctx, tx, msgID, normalizedEntities); err != nil {
+		return SendMessageResult{}, fmt.Errorf("chat.SendMessage insert entities: %w", err)
+	}
 
 	directDeliveries := make([]DirectDelivery, 0)
 
@@ -1183,8 +1688,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	isDMConversation := conversationKind == "dm"
 	skipAlertRecipientIDs := make(map[uuid.UUID]struct{})
 
-	// Insert @uuid mentions.
-	mentionedIDs := extractMentionUUIDs(p.Body)
+	mentionedIDs := mentionedUserIDsFromEntities(normalizedEntities)
 	for _, uid := range mentionedIDs {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO message_mentions (message_id, user_id, created_at) VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
@@ -1200,6 +1704,9 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			return SendMessageResult{}, fmt.Errorf("chat.SendMessage mention membership check: %w", err)
 		}
 		if !isMentionTargetMember {
+			continue
+		}
+		if isDMConversation {
 			continue
 		}
 		// Check notification level before creating a mention notification.
@@ -1243,6 +1750,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		MentionedUserIds: mentionedStrs,
 		MentionEveryone:  mentionEveryone,
 		Attachments:      toProtoMessageAttachments(attachments),
+		Entities:         toProtoMessageEntities(normalizedEntities),
 	}
 	if isReply {
 		msgProto.ThreadRootMessageId = p.ThreadRootMessageID.String()
@@ -1494,6 +2002,15 @@ func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMes
 	if p.Body == "" && attachmentCount == 0 {
 		return EditMessageResult{}, ErrEmptyMessage
 	}
+	normalizedEntities, err := s.validateAndNormalizeMessageEntities(ctx, tx, target.ChannelID, p.ActorID, p.Body, p.Entities)
+	if err != nil {
+		return EditMessageResult{}, err
+	}
+	previousEntitiesByMessageID, err := s.loadMessageEntitiesByMessageIDs(ctx, tx, []uuid.UUID{p.MessageID})
+	if err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage load previous entities: %w", err)
+	}
+	previousMentionedUserIDs := mentionedUserIDsFromEntities(previousEntitiesByMessageID[p.MessageID.String()])
 
 	mentionEveryone := strings.Contains(p.Body, "@everyone") || strings.Contains(p.Body, "@channel")
 	var editedAt time.Time
@@ -1515,7 +2032,10 @@ func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMes
 	if _, err := tx.Exec(ctx, `DELETE FROM message_mentions WHERE message_id = $1`, p.MessageID); err != nil {
 		return EditMessageResult{}, fmt.Errorf("chat.EditMessage clear mentions: %w", err)
 	}
-	mentionedIDs := extractMentionUUIDs(p.Body)
+	if err := s.insertMessageEntitiesTx(ctx, tx, p.MessageID, normalizedEntities); err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage save entities: %w", err)
+	}
+	mentionedIDs := mentionedUserIDsFromEntities(normalizedEntities)
 	for _, uid := range mentionedIDs {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO message_mentions (message_id, user_id, created_at) VALUES ($1, $2, now()) ON CONFLICT DO NOTHING`,
@@ -1525,10 +2045,58 @@ func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMes
 		}
 	}
 
-	directDeliveries, err := s.buildUnreadRecalcDeliveriesForChannelMembersTx(ctx, tx, target.ChannelID)
+	previousMentionSet := make(map[uuid.UUID]struct{}, len(previousMentionedUserIDs))
+	for _, uid := range previousMentionedUserIDs {
+		previousMentionSet[uid] = struct{}{}
+	}
+	directDeliveries := make([]DirectDelivery, 0)
+	conversationKind, err := s.conversationKindTx(ctx, tx, target.ChannelID)
+	if err != nil {
+		return EditMessageResult{}, fmt.Errorf("chat.EditMessage conversation kind: %w", err)
+	}
+	for _, uid := range mentionedIDs {
+		if uid == p.ActorID {
+			continue
+		}
+		if _, existed := previousMentionSet[uid]; existed {
+			continue
+		}
+		isMentionTargetMember, err := s.isChannelMemberTx(ctx, tx, target.ChannelID, uid)
+		if err != nil {
+			return EditMessageResult{}, fmt.Errorf("chat.EditMessage mention membership check: %w", err)
+		}
+		if !isMentionTargetMember {
+			continue
+		}
+		if conversationKind == "dm" {
+			continue
+		}
+		mentionTargetLevel, err := s.getNotificationLevelTx(ctx, tx, target.ChannelID, uid)
+		if err != nil {
+			return EditMessageResult{}, fmt.Errorf("chat.EditMessage mention notification level check: %w", err)
+		}
+		if mentionTargetLevel == notificationLevelNothing {
+			continue
+		}
+		delivery, err := s.createNotificationTx(ctx, tx, createNotificationParams{
+			UserID:         uid,
+			ChannelID:      target.ChannelID,
+			Type:           "mention",
+			Title:          "Mention",
+			Body:           p.Body,
+			ConversationID: target.ChannelID.String(),
+		})
+		if err != nil {
+			return EditMessageResult{}, fmt.Errorf("chat.EditMessage create mention notification: %w", err)
+		}
+		directDeliveries = append(directDeliveries, delivery)
+	}
+
+	unreadDeliveries, err := s.buildUnreadRecalcDeliveriesForChannelMembersTx(ctx, tx, target.ChannelID)
 	if err != nil {
 		return EditMessageResult{}, fmt.Errorf("chat.EditMessage build unread deliveries: %w", err)
 	}
+	directDeliveries = append(directDeliveries, unreadDeliveries...)
 
 	mentionedUserIDs := make([]string, 0, len(mentionedIDs))
 	for _, id := range mentionedIDs {
@@ -1541,6 +2109,7 @@ func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMes
 		MentionedUserIds: mentionedUserIDs,
 		MentionEveryone:  mentionEveryone,
 		EditedAt:         timestamppb.New(editedAt),
+		Entities:         toProtoMessageEntities(normalizedEntities),
 	}
 	updatedServerEvt := &packetspb.ServerEvent{
 		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_UPDATED,
@@ -1573,6 +2142,7 @@ func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMes
 		ChannelID:        target.ChannelID,
 		MessageID:        p.MessageID,
 		Body:             p.Body,
+		Entities:         normalizedEntities,
 		MentionEveryone:  mentionEveryone,
 		MentionedUserIDs: mentionedIDs,
 		EditedAt:         timestamppb.New(editedAt),
@@ -1952,18 +2522,30 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 	if err != nil {
 		return SubscribeThreadResult{}, fmt.Errorf("chat.SubscribeThread load attachments: %w", err)
 	}
+	entitiesByMessageID, err := s.loadMessageEntitiesByMessageIDs(ctx, tx, messageIDs)
+	if err != nil {
+		return SubscribeThreadResult{}, fmt.Errorf("chat.SubscribeThread load entities: %w", err)
+	}
 
 	replay := make([]*packetspb.MessageEvent, 0, len(msgs))
 	for _, m := range msgs {
+		entities := entitiesByMessageID[m.ID.String()]
+		mentionedUserIDs := mentionedUserIDsFromEntities(entities)
+		mentionedUserIDStrings := make([]string, 0, len(mentionedUserIDs))
+		for _, mentionedUserID := range mentionedUserIDs {
+			mentionedUserIDStrings = append(mentionedUserIDStrings, mentionedUserID.String())
+		}
 		evt := &packetspb.MessageEvent{
-			ConversationId: p.ChannelID.String(),
-			MessageId:      m.ID.String(),
-			SenderId:       m.SenderID.String(),
-			Body:           m.Body,
-			ChannelSeq:     m.ChannelSeq,
-			CreatedAt:      timestamppb.New(m.CreatedAt),
-			ThreadSeq:      m.ThreadSeq,
-			Attachments:    toProtoMessageAttachments(attachmentsByMessageID[m.ID]),
+			ConversationId:   p.ChannelID.String(),
+			MessageId:        m.ID.String(),
+			SenderId:         m.SenderID.String(),
+			Body:             m.Body,
+			ChannelSeq:       m.ChannelSeq,
+			CreatedAt:        timestamppb.New(m.CreatedAt),
+			ThreadSeq:        m.ThreadSeq,
+			MentionedUserIds: mentionedUserIDStrings,
+			Entities:         toProtoMessageEntities(entities),
+			Attachments:      toProtoMessageAttachments(attachmentsByMessageID[m.ID]),
 		}
 		if m.EditedAt.Valid {
 			evt.EditedAt = timestamppb.New(m.EditedAt.Time)
@@ -2206,24 +2788,6 @@ func uniqueUUIDs(ids []uuid.UUID) []uuid.UUID {
 		unique = append(unique, id)
 	}
 	return unique
-}
-
-// extractMentionUUIDs finds all @<uuid> patterns in the body and returns valid UUIDs.
-func extractMentionUUIDs(body string) []uuid.UUID {
-	matches := mentionRe.FindAllStringSubmatch(body, -1)
-	seen := make(map[uuid.UUID]struct{})
-	var ids []uuid.UUID
-	for _, m := range matches {
-		uid, err := uuid.Parse(m[1])
-		if err != nil {
-			continue
-		}
-		if _, ok := seen[uid]; !ok {
-			seen[uid] = struct{}{}
-			ids = append(ids, uid)
-		}
-	}
-	return ids
 }
 
 func sanitiseFileNameForStorageKey(name string) string {

@@ -31,7 +31,7 @@ vi.mock('@/composables/useSessionOrchestrator', () => ({
 
 vi.mock('@/services/sound', () => ({
   useNotificationSoundEngine: () => ({
-    playIncomingMessage: vi.fn(),
+    playMessagePing: vi.fn().mockResolvedValue(undefined),
     startCallInviteRing: vi.fn().mockResolvedValue(undefined),
     stopCallInviteRing: vi.fn(),
   }),

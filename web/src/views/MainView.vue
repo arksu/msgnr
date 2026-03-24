@@ -1122,13 +1122,16 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 
 onMounted(async () => {
   unsubscribeIncomingMessageSound = chatStore.onIncomingMessageNotification((event) => {
+    const windowActive = isChatWindowActive()
     if (platform?.type === 'tauri') {
-      void platform.notifications.show({
-        title: conversationNotificationTitle(event.conversationId),
-        body: conversationNotificationBody(event),
-        conversationId: event.conversationId,
-        tag: `conv:${event.conversationId}`,
-      })
+      if (!windowActive) {
+        void platform.notifications.show({
+          title: conversationNotificationTitle(event.conversationId),
+          body: conversationNotificationBody(event),
+          conversationId: event.conversationId,
+          tag: `conv:${event.conversationId}`,
+        })
+      }
       void platform.notifications.playSound?.('message-ping')
       return
     }

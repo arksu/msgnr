@@ -4,6 +4,7 @@ import {
   CallStatus,
   ConversationType,
   NotificationLevel,
+  NotificationType,
   PresenceStatus,
   WorkspaceRole,
 } from '@/shared/proto/packets_pb'
@@ -204,6 +205,7 @@ export interface PendingInviteItem {
 }
 
 export interface IncomingMessageNotification {
+  reason: 'message_alert' | 'mention' | 'notification'
   conversationId: string
   messageId: string
   threadRootMessageId?: string
@@ -1913,8 +1915,10 @@ export const useChatStore = defineStore('chat', () => {
       notificationSummaryToItem(evt.notification),
       ...notifications.value.filter(item => item.id !== evt.notification?.notificationId),
     ]
-    if (!isClientTabActive()) {
+    const shouldEmitIncoming = evt.notification.type === NotificationType.MENTION || !isClientTabActive()
+    if (shouldEmitIncoming) {
       emitIncomingMessageNotification({
+        reason: evt.notification.type === NotificationType.MENTION ? 'mention' : 'notification',
         conversationId: evt.notification.conversationId,
         messageId: evt.notification.notificationId,
         senderId: '',
@@ -1934,6 +1938,7 @@ export const useChatStore = defineStore('chat', () => {
   function applyMessageAlert(evt: MessageAlertEvent) {
     if (isClientTabActive()) return
     emitIncomingMessageNotification({
+      reason: 'message_alert',
       conversationId: evt.conversationId,
       messageId: evt.messageId,
       threadRootMessageId: evt.threadRootMessageId || undefined,

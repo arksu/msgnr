@@ -819,6 +819,7 @@ describe('chatStore phase 6 flows', () => {
     }))
 
     expect(onIncoming).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'notification',
       senderName: 'Mention',
       messageId: 'notification-sender-fallback-1',
     }))
@@ -1016,6 +1017,7 @@ describe('chatStore phase 6 flows', () => {
     }))
 
     expect(onIncoming).toHaveBeenCalledWith({
+      reason: 'message_alert',
       conversationId: 'channel-1',
       messageId: 'message-sound-1',
       threadRootMessageId: undefined,
@@ -1083,6 +1085,7 @@ describe('chatStore phase 6 flows', () => {
 
     expect(onIncoming).toHaveBeenCalledTimes(1)
     expect(onIncoming).toHaveBeenCalledWith({
+      reason: 'message_alert',
       conversationId: 'dm-1',
       messageId: 'message-sound-mentions-only-2',
       threadRootMessageId: undefined,
@@ -1091,6 +1094,48 @@ describe('chatStore phase 6 flows', () => {
       body: 'dm ping',
       attachmentCount: 0,
     })
+    off()
+  })
+
+  it('emits mention notifications even when the client is active', () => {
+    const chat = useChatStore()
+    chat.setClientActive(true)
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-mention-active-1',
+      eventType: EventType.NOTIFICATION_ADDED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'notificationAdded',
+        value: create(NotificationAddedEventSchema, {
+          userId: 'user-1',
+          notification: create(NotificationSummarySchema, {
+            notificationId: 'mention-active-1',
+            type: 1,
+            title: 'Mention',
+            body: 'You were mentioned',
+            conversationId: 'channel-1',
+            isRead: false,
+          }),
+        }),
+      },
+    }))
+
+    expect(onIncoming).toHaveBeenCalledWith({
+      reason: 'mention',
+      conversationId: 'channel-1',
+      messageId: 'mention-active-1',
+      senderId: '',
+      senderName: 'Mention',
+      body: 'You were mentioned',
+      attachmentCount: 0,
+    })
+
     off()
   })
 

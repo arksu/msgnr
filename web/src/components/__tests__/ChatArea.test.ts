@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
@@ -25,6 +25,10 @@ describe('ChatArea', () => {
     vi.clearAllMocks()
     listActiveCallMembersMock.mockResolvedValue([])
     listConversationMembersMock.mockResolvedValue([])
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('sends a message using bootstrap self identity when auth user is not hydrated', async () => {
@@ -1004,5 +1008,75 @@ describe('ChatArea', () => {
     await callButton!.trigger('click')
 
     expect(callStore.startOrJoinCall).not.toHaveBeenCalled()
+  })
+
+  it('rate-limits typing notifications and hides them after one second of inactivity', async () => {
+    vi.useFakeTimers()
+
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+
+    authStore.user = {
+      id: 'user-1',
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      avatarUrl: '',
+      role: 'member',
+    }
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfAvatarUrl: '',
+      selfRole: 'member',
+    }
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    wsStore.state = 'LIVE_SYNCED'
+    wsStore.sendTyping = vi.fn()
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          ConnectionBanner: true,
+          MembersPanel: true,
+          MessageBubble: true,
+          ThreadPanel: true,
+          UserAvatar: true,
+          MessageInput: {
+            template: `
+              <div>
+                <button data-testid="typing-on" @click="$emit('typing', true)">typing-on</button>
+                <button data-testid="typing-off" @click="$emit('typing', false)">typing-off</button>
+              </div>
+            `,
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="typing-on"]').trigger('click')
+    await wrapper.get('[data-testid="typing-on"]').trigger('click')
+
+    expect(wsStore.sendTyping).toHaveBeenCalledTimes(1)
+    expect(wsStore.sendTyping).toHaveBeenLastCalledWith('channel-1', true)
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(wsStore.sendTyping).toHaveBeenCalledTimes(2)
+    expect(wsStore.sendTyping).toHaveBeenLastCalledWith('channel-1', false)
+
+    await wrapper.get('[data-testid="typing-off"]').trigger('click')
+
+    expect(wsStore.sendTyping).toHaveBeenCalledTimes(2)
   })
 })

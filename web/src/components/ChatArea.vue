@@ -434,6 +434,39 @@ const statusLabel = computed(() => {
 const showConversationLoadingOverlay = computed(() =>
   chatStore.isConversationInitialLoading(chatStore.activeChannelId)
 )
+let typingIdleTimer: ReturnType<typeof setTimeout> | null = null
+let typingConversationId = ''
+let typingIsActive = false
+let typingLastSentAtMs = 0
+
+function clearTypingIdleTimer() {
+  if (typingIdleTimer) {
+    clearTimeout(typingIdleTimer)
+    typingIdleTimer = null
+  }
+}
+
+function stopTypingPresence(sendStop: boolean) {
+  clearTypingIdleTimer()
+  if (sendStop && typingIsActive && typingConversationId && wsStore.state === 'LIVE_SYNCED') {
+    wsStore.sendTyping(typingConversationId, false)
+  }
+  typingIsActive = false
+  typingConversationId = ''
+  typingLastSentAtMs = 0
+}
+
+function scheduleTypingIdleStop() {
+  clearTypingIdleTimer()
+  typingIdleTimer = setTimeout(() => {
+    typingIdleTimer = null
+    if (!typingIsActive || !typingConversationId || wsStore.state !== 'LIVE_SYNCED') return
+    wsStore.sendTyping(typingConversationId, false)
+    typingIsActive = false
+    typingConversationId = ''
+    typingLastSentAtMs = 0
+  }, 1000)
+}
 
 function openCallMembersPopover() {
   if (!activeConversationCall.value) return
@@ -735,7 +768,34 @@ onMounted(() => {
 function handleTyping(active: boolean) {
   const channelId = chatStore.activeChannelId
   if (!channelId || wsStore.state !== 'LIVE_SYNCED') return
-  wsStore.sendTyping(channelId, active)
+  if (!active) {
+    if (typingConversationId === channelId) {
+      stopTypingPresence(true)
+      return
+    }
+    stopTypingPresence(false)
+    return
+  }
+
+  if (typingConversationId !== channelId) {
+    if (typingConversationId) {
+      stopTypingPresence(true)
+    }
+    typingConversationId = channelId
+    typingIsActive = true
+    typingLastSentAtMs = performance.now()
+    wsStore.sendTyping(channelId, true)
+    scheduleTypingIdleStop()
+    return
+  }
+
+  typingIsActive = true
+  scheduleTypingIdleStop()
+  const now = performance.now()
+  if (now - typingLastSentAtMs >= 1000) {
+    typingLastSentAtMs = now
+    wsStore.sendTyping(channelId, true)
+  }
 }
 
 async function handleCallClick() {
@@ -1051,11 +1111,24 @@ watch(() => chatStore.activeChannelId, () => {
   closeCallMembersPopover()
 })
 
+watch(() => chatStore.activeChannelId, (conversationId) => {
+  if (typingConversationId && typingConversationId !== conversationId) {
+    stopTypingPresence(true)
+  }
+})
+
+watch(() => wsStore.state, (state) => {
+  if (state !== 'LIVE_SYNCED') {
+    stopTypingPresence(false)
+  }
+})
+
 onBeforeUnmount(() => {
   if (forceScrollResetTimer) {
     clearTimeout(forceScrollResetTimer)
     forceScrollResetTimer = null
   }
   stopSwitchFollowWindow('unmount')
+  stopTypingPresence(true)
 })
 </script>

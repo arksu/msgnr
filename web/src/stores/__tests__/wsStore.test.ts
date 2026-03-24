@@ -112,7 +112,7 @@ function makeInviteCallMembersResponseEnvelope(): ArrayBuffer {
   return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
 }
 
-function makeTaskDescriptionCollabSubscribeResponseEnvelope(): ArrayBuffer {
+function makeTaskDescriptionCollabSubscribeResponseEnvelope(roomSnapshot: Uint8Array = new Uint8Array()): ArrayBuffer {
   const env = create(EnvelopeSchema, {
     requestId: '6',
     protocolVersion: 1,
@@ -122,6 +122,7 @@ function makeTaskDescriptionCollabSubscribeResponseEnvelope(): ArrayBuffer {
         taskId: 'task-1',
         persistedMarkdown: '## persisted',
         subscriberCount: 1,
+        roomSnapshot,
       },
     },
   })
@@ -480,10 +481,27 @@ describe('wsStore state machine', () => {
       taskId: 'task-1',
       persistedMarkdown: '## persisted',
       subscriberCount: 1,
+      roomSnapshot: expect.any(Uint8Array),
     }))
     expect(onCollab).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 'task-1',
       kind: TaskDescriptionCollabMessageKind.SYNC,
+    }))
+  })
+
+  it('preserves a non-empty room snapshot in subscribe callbacks', () => {
+    const store = useWsStore()
+    const onSubscribe = vi.fn()
+    const roomSnapshot = new Uint8Array([9, 8, 7, 6])
+    store.onTaskDescriptionCollabSubscribeResponse(onSubscribe)
+
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeTaskDescriptionCollabSubscribeResponseEnvelope(roomSnapshot))
+
+    expect(onSubscribe).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-1',
+      roomSnapshot,
     }))
   })
 })

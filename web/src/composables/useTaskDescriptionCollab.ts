@@ -13,11 +13,13 @@ const SYNC_MAGIC_0 = 0x54 // 'T'
 const SYNC_MAGIC_1 = 0x44 // 'D'
 const SYNC_PROTOCOL_V1 = 1
 const PERSISTED_SEED_DELAY_MS = 250
+const FULL_STATE_SNAPSHOT_DEBOUNCE_MS = 150
 
 const SyncFrameType = {
   UPDATE: 1,
   STATE_VECTOR: 2,
   STATE_UPDATE: 3,
+  FULL_STATE: 4,
 } as const
 
 type SyncFrameTypeValue = typeof SyncFrameType[keyof typeof SyncFrameType]
@@ -41,7 +43,7 @@ const READY_STATES: WsState[] = [
   'RECOVERING_GAP',
   'STALE_REBOOTSTRAP',
 ]
-const DEBUG_TASK_COLLAB = true
+const DEBUG_TASK_COLLAB = import.meta.env.DEV
 
 function isWsReady(state: WsState): boolean {
   return READY_STATES.includes(state)
@@ -97,7 +99,12 @@ function decodeSyncFrame(input: Uint8Array): SyncFrame {
     input[2] === SYNC_PROTOCOL_V1
   ) {
     const type = input[3]
-    if (type === SyncFrameType.UPDATE || type === SyncFrameType.STATE_VECTOR || type === SyncFrameType.STATE_UPDATE) {
+    if (
+      type === SyncFrameType.UPDATE ||
+      type === SyncFrameType.STATE_VECTOR ||
+      type === SyncFrameType.STATE_UPDATE ||
+      type === SyncFrameType.FULL_STATE
+    ) {
       return {
         type,
         payload: input.subarray(4),
@@ -136,6 +143,8 @@ export function useTaskDescriptionCollab(params: {
   let subscribeResponseCount = 0
   let pendingPersistedMarkdown: string | null = null
   let seedFallbackTimer: ReturnType<typeof setTimeout> | null = null
+  let fullStateSnapshotTimer: ReturnType<typeof setTimeout> | null = null
+  let subscriptionReady = false
 
   function awarenessPeerSnapshot(awareness: Awareness | null | undefined): { local: number; clients: number[]; hasRemote: boolean } {
     if (!awareness) return { local: -1, clients: [], hasRemote: false }
@@ -172,6 +181,12 @@ export function useTaskDescriptionCollab(params: {
     seedFallbackTimer = null
   }
 
+  function clearFullStateSnapshotTimer() {
+    if (!fullStateSnapshotTimer) return
+    clearTimeout(fullStateSnapshotTimer)
+    fullStateSnapshotTimer = null
+  }
+
   function sendSyncFrame(taskId: string, type: SyncFrameTypeValue, payload: Uint8Array, reason: string) {
     const framed = encodeSyncFrame(type, payload)
     collabLog('sync:send', {
@@ -192,6 +207,27 @@ export function useTaskDescriptionCollab(params: {
     if (!doc.value) return
     const stateVector = Y.encodeStateVector(doc.value)
     sendSyncFrame(taskId, SyncFrameType.STATE_VECTOR, stateVector, reason)
+  }
+
+  function publishFullStateSnapshot(taskId: string, reason: string) {
+    if (!doc.value) return
+    const snapshot = Y.encodeStateAsUpdate(doc.value)
+    sendSyncFrame(taskId, SyncFrameType.FULL_STATE, snapshot, reason)
+  }
+
+  function scheduleFullStateSnapshot(taskId: string, reason: string) {
+    clearFullStateSnapshotTimer()
+    fullStateSnapshotTimer = setTimeout(() => {
+      fullStateSnapshotTimer = null
+      if (taskId !== params.taskId.value) return
+      publishFullStateSnapshot(taskId, reason)
+    }, FULL_STATE_SNAPSHOT_DEBOUNCE_MS)
+  }
+
+  function flushScheduledFullStateSnapshot(taskId: string, reason: string) {
+    if (!fullStateSnapshotTimer) return
+    clearFullStateSnapshotTimer()
+    publishFullStateSnapshot(taskId, reason)
   }
 
   function schedulePersistedSeed(taskId: string) {
@@ -228,8 +264,13 @@ export function useTaskDescriptionCollab(params: {
   }
 
   function flushPending(taskId: string) {
-    if (!isWsReady(wsStore.state)) return
-    collabLog('flushPending:start', { taskId, queue: pending.length, wsState: wsStore.state })
+    if (!isWsReady(wsStore.state) || !subscriptionReady) return
+    collabLog('flushPending:start', {
+      taskId,
+      queue: pending.length,
+      wsState: wsStore.state,
+      subscriptionReady,
+    })
     while (pending.length > 0) {
       const next = pending[0]
       const ok = wsStore.sendTaskDescriptionCollabMessage(taskId, next.kind, next.payload)
@@ -242,6 +283,16 @@ export function useTaskDescriptionCollab(params: {
   function sendOrQueue(taskId: string, msg: CollabPayload) {
     if (!isWsReady(wsStore.state)) {
       collabLog('sendOrQueue:queue:ws-not-ready', { taskId, kind: msg.kind, bytes: msg.payload.length, wsState: wsStore.state })
+      pending.push(msg)
+      return
+    }
+    if (!subscriptionReady) {
+      collabLog('sendOrQueue:queue:subscribe-not-ready', {
+        taskId,
+        kind: msg.kind,
+        bytes: msg.payload.length,
+        wsState: wsStore.state,
+      })
       pending.push(msg)
       return
     }
@@ -282,14 +333,18 @@ export function useTaskDescriptionCollab(params: {
     subscribeResponseCount = 0
     pendingPersistedMarkdown = null
     clearSeedFallbackTimer()
+    clearFullStateSnapshotTimer()
     serverMarkdown.value = null
     allowLocalDraftSeed.value = false
+    subscriptionReady = false
     pending.length = 0
     collabLog('cleanupDoc:done', { taskId: params.taskId.value })
   }
 
   function subscribe(taskId: string) {
     if (!isWsReady(wsStore.state)) return
+    subscriptionReady = false
+    allowLocalDraftSeed.value = false
     subscribeAttempt += 1
     collabLog('subscribe', {
       taskId,
@@ -299,12 +354,13 @@ export function useTaskDescriptionCollab(params: {
     })
     wsStore.sendTaskDescriptionCollabSubscribe(taskId)
     subscribedTaskId.value = taskId
-    flushPending(taskId)
   }
 
   function unsubscribe(taskId: string) {
     if (!taskId) return
+    flushScheduledFullStateSnapshot(taskId, 'unsubscribe')
     collabLog('unsubscribe', { taskId, wsState: wsStore.state })
+    subscriptionReady = false
     if (isWsReady(wsStore.state)) {
       wsStore.sendTaskDescriptionCollabUnsubscribe(taskId)
     }
@@ -333,6 +389,7 @@ export function useTaskDescriptionCollab(params: {
         doc: docMarkdownSignature(nextDoc),
       })
       if (origin === 'remote') return
+      scheduleFullStateSnapshot(taskId, 'doc-update-full-state')
       sendSyncFrame(taskId, SyncFrameType.UPDATE, update, 'doc-update')
     }
     nextDoc.on('update', docListener)
@@ -379,34 +436,40 @@ export function useTaskDescriptionCollab(params: {
     const taskId = params.taskId.value
     if (!taskId || resp.taskId !== taskId) return
     subscribeResponseCount += 1
-    const shouldSeedPersisted = resp.subscriberCount <= 1
-    allowLocalDraftSeed.value = shouldSeedPersisted
+    const roomSnapshot = resp.roomSnapshot ?? new Uint8Array()
+    const hasRoomSnapshot = roomSnapshot.length > 0
+    subscriptionReady = true
+    allowLocalDraftSeed.value = !hasRoomSnapshot
     collabLog('onSubscribeResponse', {
       taskId,
       subscribeAttempt,
       subscribeResponseCount,
       subscriberCount: resp.subscriberCount,
-      shouldSeedPersisted,
+      hasRoomSnapshot,
+      roomSnapshotBytes: roomSnapshot.length,
       hasLocalEdits,
       persisted: markdownSignature(resp.persistedMarkdown),
       doc: docMarkdownSignature(doc.value),
     })
     subscribeError.value = null
-    pendingPersistedMarkdown = shouldSeedPersisted ? resp.persistedMarkdown : null
-    if (!shouldSeedPersisted && resp.persistedMarkdown.trim() !== '' && isDocEmpty(doc.value)) {
-      collabLog('seed:persisted:withheld', {
-        taskId,
-        subscriberCount: resp.subscriberCount,
-        persisted: markdownSignature(resp.persistedMarkdown),
-        doc: docMarkdownSignature(doc.value),
-      })
-    }
     receivedMeaningfulRemoteSync = false
-    requestPeerState(taskId, 'subscribe-response')
-    if (shouldSeedPersisted) {
-      schedulePersistedSeed(taskId)
-    } else {
+    if (hasRoomSnapshot && doc.value) {
+      const before = docMarkdownSignature(doc.value)
+      Y.applyUpdate(doc.value, roomSnapshot, 'remote')
+      const after = docMarkdownSignature(doc.value)
+      receivedMeaningfulRemoteSync = true
+      pendingPersistedMarkdown = null
       clearSeedFallbackTimer()
+      collabLog('seed:room-snapshot:apply', {
+        taskId,
+        bytes: roomSnapshot.length,
+        before,
+        after,
+      })
+    } else {
+      pendingPersistedMarkdown = resp.persistedMarkdown
+      requestPeerState(taskId, 'subscribe-response')
+      schedulePersistedSeed(taskId)
     }
     flushPending(taskId)
   })
@@ -434,7 +497,11 @@ export function useTaskDescriptionCollab(params: {
         sendSyncFrame(taskId, SyncFrameType.STATE_UPDATE, stateUpdate, 'state-vector-request')
         return
       }
-      if (frame.type === SyncFrameType.UPDATE || frame.type === SyncFrameType.STATE_UPDATE) {
+      if (
+        frame.type === SyncFrameType.UPDATE ||
+        frame.type === SyncFrameType.STATE_UPDATE ||
+        frame.type === SyncFrameType.FULL_STATE
+      ) {
         Y.applyUpdate(doc.value, frame.payload, 'remote')
         const after = docMarkdownSignature(doc.value)
         const changed = after !== before
@@ -511,7 +578,11 @@ export function useTaskDescriptionCollab(params: {
       const taskId = params.taskId.value
       if (!taskId) return
       collabLog('watch:wsState', { taskId, prev, next, doc: docMarkdownSignature(doc.value) })
-      if (!isWsReady(next)) return
+      if (!isWsReady(next)) {
+        subscriptionReady = false
+        return
+      }
+      if (isWsReady(prev)) return
       subscribe(taskId)
     },
   )

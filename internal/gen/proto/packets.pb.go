@@ -6054,6 +6054,7 @@ type TaskDescriptionCollabSubscribeResponse struct {
 	TaskId            string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	PersistedMarkdown string                 `protobuf:"bytes,2,opt,name=persisted_markdown,json=persistedMarkdown,proto3" json:"persisted_markdown,omitempty"`
 	SubscriberCount   int32                  `protobuf:"varint,3,opt,name=subscriber_count,json=subscriberCount,proto3" json:"subscriber_count,omitempty"`
+	RoomSnapshot      []byte                 `protobuf:"bytes,4,opt,name=room_snapshot,json=roomSnapshot,proto3" json:"room_snapshot,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -6107,6 +6108,13 @@ func (x *TaskDescriptionCollabSubscribeResponse) GetSubscriberCount() int32 {
 		return x.SubscriberCount
 	}
 	return 0
+}
+
+func (x *TaskDescriptionCollabSubscribeResponse) GetRoomSnapshot() []byte {
+	if x != nil {
+		return x.RoomSnapshot
+	}
+	return nil
 }
 
 type TaskDescriptionCollabUnsubscribeRequest struct {
@@ -7243,11 +7251,12 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x1cSetNotificationLevelResponse\x123\n" +
 	"\x05level\x18\x01 \x01(\x0e2\x1d.packets.v1.NotificationLevelR\x05level\"@\n" +
 	"%TaskDescriptionCollabSubscribeRequest\x12\x17\n" +
-	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\x9b\x01\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\xc0\x01\n" +
 	"&TaskDescriptionCollabSubscribeResponse\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12-\n" +
 	"\x12persisted_markdown\x18\x02 \x01(\tR\x11persistedMarkdown\x12)\n" +
-	"\x10subscriber_count\x18\x03 \x01(\x05R\x0fsubscriberCount\"B\n" +
+	"\x10subscriber_count\x18\x03 \x01(\x05R\x0fsubscriberCount\x12#\n" +
+	"\rroom_snapshot\x18\x04 \x01(\fR\froomSnapshot\"B\n" +
 	"'TaskDescriptionCollabUnsubscribeRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\x93\x01\n" +
 	"\x1cTaskDescriptionCollabMessage\x12\x17\n" +

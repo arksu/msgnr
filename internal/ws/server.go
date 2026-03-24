@@ -34,6 +34,21 @@ import (
 
 const protocolVersion uint32 = 1
 
+const (
+	taskCollabSyncMagic0    = 0x54 // 'T'
+	taskCollabSyncMagic1    = 0x44 // 'D'
+	taskCollabSyncProtocolV = 1
+)
+
+type taskCollabSyncFrameType byte
+
+const (
+	taskCollabSyncFrameTypeUpdate      taskCollabSyncFrameType = 1
+	taskCollabSyncFrameTypeStateVector taskCollabSyncFrameType = 2
+	taskCollabSyncFrameTypeStateUpdate taskCollabSyncFrameType = 3
+	taskCollabSyncFrameTypeFullState   taskCollabSyncFrameType = 4
+)
+
 func markdownSignatureForLog(input string) string {
 	hasher := fnv.New32a()
 	_, _ = hasher.Write([]byte(input))
@@ -66,6 +81,11 @@ type sessionState struct {
 	windowActive bool
 }
 
+type taskCollabRoom struct {
+	subscribers map[chan outboundMsg]struct{}
+	snapshot    []byte
+}
+
 // PushNotifier is called for DirectDeliveries targeting users with no active
 // WebSocket sessions. Implementations send Web Push notifications.
 type PushNotifier interface {
@@ -92,7 +112,7 @@ type Server struct {
 	typingMu                 sync.Mutex
 	typingExpiry             map[string]time.Time
 	taskCollabMu             sync.RWMutex
-	taskCollabSubscribers    map[string]map[chan outboundMsg]struct{}
+	taskCollabRooms          map[string]*taskCollabRoom
 	taskCollabTasksBySession map[chan outboundMsg]map[string]struct{}
 	pushNotifier             PushNotifier // optional; nil means push disabled
 }
@@ -116,7 +136,7 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, boots
 		log:                      logger.Logger,
 		sessionsByUser:           make(map[string]map[chan outboundMsg]*sessionState),
 		typingExpiry:             make(map[string]time.Time),
-		taskCollabSubscribers:    make(map[string]map[chan outboundMsg]struct{}),
+		taskCollabRooms:          make(map[string]*taskCollabRoom),
 		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
 	}
 }
@@ -557,30 +577,70 @@ func (s *Server) sendDirectEnvelope(userIDs []string, env *packetspb.Envelope) {
 	}
 }
 
-func (s *Server) joinTaskCollabRoom(taskID string, session chan outboundMsg) {
+func cloneTaskCollabBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]byte, len(src))
+	copy(out, src)
+	return out
+}
+
+// decodeTaskCollabSyncFrame returns a payload view into the caller-owned buffer.
+// Callers must clone it before storing beyond the scope of the current handler.
+func decodeTaskCollabSyncFrame(payload []byte) (taskCollabSyncFrameType, []byte, bool) {
+	if len(payload) < 4 ||
+		payload[0] != taskCollabSyncMagic0 ||
+		payload[1] != taskCollabSyncMagic1 ||
+		payload[2] != taskCollabSyncProtocolV {
+		return 0, nil, false
+	}
+	frameType := taskCollabSyncFrameType(payload[3])
+	return frameType, payload[4:], true
+}
+
+func isKnownTaskCollabSyncFrameType(frameType taskCollabSyncFrameType) bool {
+	switch frameType {
+	case taskCollabSyncFrameTypeUpdate,
+		taskCollabSyncFrameTypeStateVector,
+		taskCollabSyncFrameTypeStateUpdate,
+		taskCollabSyncFrameTypeFullState:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) joinTaskCollabRoom(taskID string, session chan outboundMsg) ([]byte, int32) {
 	s.taskCollabMu.Lock()
 	defer s.taskCollabMu.Unlock()
 
-	if s.taskCollabSubscribers[taskID] == nil {
-		s.taskCollabSubscribers[taskID] = make(map[chan outboundMsg]struct{})
+	room := s.taskCollabRooms[taskID]
+	if room == nil {
+		room = &taskCollabRoom{
+			subscribers: make(map[chan outboundMsg]struct{}),
+		}
+		s.taskCollabRooms[taskID] = room
 	}
-	s.taskCollabSubscribers[taskID][session] = struct{}{}
+	room.subscribers[session] = struct{}{}
 
 	if s.taskCollabTasksBySession[session] == nil {
 		s.taskCollabTasksBySession[session] = make(map[string]struct{})
 	}
 	s.taskCollabTasksBySession[session][taskID] = struct{}{}
+
+	return cloneTaskCollabBytes(room.snapshot), int32(len(room.subscribers))
 }
 
 func (s *Server) leaveTaskCollabRoom(taskID string, session chan outboundMsg) {
 	s.taskCollabMu.Lock()
 	defer s.taskCollabMu.Unlock()
 
-	subscribers := s.taskCollabSubscribers[taskID]
-	if subscribers != nil {
-		delete(subscribers, session)
-		if len(subscribers) == 0 {
-			delete(s.taskCollabSubscribers, taskID)
+	room := s.taskCollabRooms[taskID]
+	if room != nil {
+		delete(room.subscribers, session)
+		if len(room.subscribers) == 0 {
+			delete(s.taskCollabRooms, taskID)
 		}
 	}
 
@@ -603,13 +663,13 @@ func (s *Server) removeTaskCollabSession(session chan outboundMsg) {
 	}
 
 	for taskID := range taskSet {
-		subscribers := s.taskCollabSubscribers[taskID]
-		if subscribers == nil {
+		room := s.taskCollabRooms[taskID]
+		if room == nil {
 			continue
 		}
-		delete(subscribers, session)
-		if len(subscribers) == 0 {
-			delete(s.taskCollabSubscribers, taskID)
+		delete(room.subscribers, session)
+		if len(room.subscribers) == 0 {
+			delete(s.taskCollabRooms, taskID)
 		}
 	}
 	delete(s.taskCollabTasksBySession, session)
@@ -618,11 +678,11 @@ func (s *Server) removeTaskCollabSession(session chan outboundMsg) {
 func (s *Server) isTaskCollabSubscribed(taskID string, session chan outboundMsg) bool {
 	s.taskCollabMu.RLock()
 	defer s.taskCollabMu.RUnlock()
-	subscribers := s.taskCollabSubscribers[taskID]
-	if subscribers == nil {
+	room := s.taskCollabRooms[taskID]
+	if room == nil {
 		return false
 	}
-	_, ok := subscribers[session]
+	_, ok := room.subscribers[session]
 	return ok
 }
 
@@ -630,12 +690,12 @@ func (s *Server) taskCollabRecipients(taskID string, exclude chan outboundMsg) [
 	s.taskCollabMu.RLock()
 	defer s.taskCollabMu.RUnlock()
 
-	subscribers := s.taskCollabSubscribers[taskID]
-	if subscribers == nil {
+	room := s.taskCollabRooms[taskID]
+	if room == nil {
 		return nil
 	}
-	out := make([]chan outboundMsg, 0, len(subscribers))
-	for session := range subscribers {
+	out := make([]chan outboundMsg, 0, len(room.subscribers))
+	for session := range room.subscribers {
 		if session == exclude {
 			continue
 		}
@@ -647,15 +707,35 @@ func (s *Server) taskCollabRecipients(taskID string, exclude chan outboundMsg) [
 func (s *Server) taskCollabSubscriberCount(taskID string) int {
 	s.taskCollabMu.RLock()
 	defer s.taskCollabMu.RUnlock()
-	return len(s.taskCollabSubscribers[taskID])
+	room := s.taskCollabRooms[taskID]
+	if room == nil {
+		return 0
+	}
+	return len(room.subscribers)
+}
+
+func (s *Server) setTaskCollabRoomSnapshot(taskID string, session chan outboundMsg, snapshot []byte) bool {
+	s.taskCollabMu.Lock()
+	defer s.taskCollabMu.Unlock()
+
+	room := s.taskCollabRooms[taskID]
+	if room == nil {
+		return false
+	}
+	if _, ok := room.subscribers[session]; !ok {
+		return false
+	}
+	room.snapshot = cloneTaskCollabBytes(snapshot)
+	return true
 }
 
 func (s *Server) taskCollabSubscribeResponse(taskID string, session chan outboundMsg, persistedMarkdown string) *packetspb.TaskDescriptionCollabSubscribeResponse {
-	s.joinTaskCollabRoom(taskID, session)
+	roomSnapshot, subscriberCount := s.joinTaskCollabRoom(taskID, session)
 	return &packetspb.TaskDescriptionCollabSubscribeResponse{
 		TaskId:            taskID,
 		PersistedMarkdown: persistedMarkdown,
-		SubscriberCount:   int32(s.taskCollabSubscriberCount(taskID)),
+		SubscriberCount:   subscriberCount,
+		RoomSnapshot:      roomSnapshot,
 	}
 }
 
@@ -1806,6 +1886,7 @@ func (s *Server) handleDomainPayload(
 			zap.String("session_id", principal.SessionID.String()),
 			zap.String("persisted_sig", markdownSignatureForLog(persistedMarkdown)),
 			zap.Int32("subscribers", subscribeResp.GetSubscriberCount()),
+			zap.Int("room_snapshot_bytes", len(subscribeResp.GetRoomSnapshot())),
 		)
 		enqueue(&packetspb.Envelope{
 			RequestId:       reqID,
@@ -1850,6 +1931,30 @@ func (s *Server) handleDomainPayload(
 			req.GetKind() != packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS {
 			badReq("task_description_collab_message: invalid kind")
 			return
+		}
+		if req.GetKind() == packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC {
+			frameType, framePayload, framed := decodeTaskCollabSyncFrame(req.GetPayload())
+			if framed && !isKnownTaskCollabSyncFrameType(frameType) {
+				badReq("task_description_collab_message: invalid sync frame")
+				return
+			}
+			if framed && frameType == taskCollabSyncFrameTypeFullState {
+				taskIDText := taskID.String()
+				if !s.setTaskCollabRoomSnapshot(taskIDText, outboundCh, framePayload) {
+					forbidden("not subscribed to task")
+					return
+				}
+				// FULL_STATE frames update the server's late-join snapshot cache only.
+				// Active peers converge via the regular incremental UPDATE frame that
+				// is sent for the same local document change.
+				s.log.Info("ws task collab snapshot cache",
+					zap.String("task_id", taskIDText),
+					zap.String("user_id", principal.UserID.String()),
+					zap.String("session_id", principal.SessionID.String()),
+					zap.Int("snapshot_bytes", len(framePayload)),
+				)
+				return
+			}
 		}
 		taskIDText := taskID.String()
 		if !s.isTaskCollabSubscribed(taskIDText, outboundCh) {

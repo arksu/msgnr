@@ -32,7 +32,7 @@ func newTestServer(bus *events.Bus) *Server {
 			return true
 		},
 		sessionsByUser:           make(map[string]map[chan outboundMsg]*sessionState),
-		taskCollabSubscribers:    make(map[string]map[chan outboundMsg]struct{}),
+		taskCollabRooms:          make(map[string]*taskCollabRoom),
 		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
 	}
 }
@@ -251,8 +251,8 @@ func TestTaskCollabCleanupRemovesSessionFromAllRooms(t *testing.T) {
 
 	assert.False(t, srv.isTaskCollabSubscribed("task-1", ch))
 	assert.False(t, srv.isTaskCollabSubscribed("task-2", ch))
-	assert.Empty(t, srv.taskCollabSubscribers["task-1"])
-	assert.Empty(t, srv.taskCollabSubscribers["task-2"])
+	assert.Nil(t, srv.taskCollabRooms["task-1"])
+	assert.Nil(t, srv.taskCollabRooms["task-2"])
 }
 
 func TestTaskCollabSubscribeResponseIncludesSubscriberCount(t *testing.T) {
@@ -267,6 +267,29 @@ func TestTaskCollabSubscribeResponseIncludesSubscriberCount(t *testing.T) {
 	assert.Equal(t, int32(2), second.GetSubscriberCount())
 	assert.Equal(t, "aabb", first.GetPersistedMarkdown())
 	assert.Equal(t, "aabb", second.GetPersistedMarkdown())
+}
+
+func TestTaskCollabSubscribeResponseIncludesRoomSnapshot(t *testing.T) {
+	srv := newTestServer(nil)
+	ch := make(chan outboundMsg, 1)
+	srv.joinTaskCollabRoom("task-1", ch)
+	ok := srv.setTaskCollabRoomSnapshot("task-1", ch, []byte{9, 8, 7})
+
+	assert.True(t, ok)
+	resp := srv.taskCollabSubscribeResponse("task-1", ch, "aabb")
+
+	assert.Equal(t, []byte{9, 8, 7}, resp.GetRoomSnapshot())
+	assert.Equal(t, int32(1), resp.GetSubscriberCount())
+}
+
+func TestSetTaskCollabRoomSnapshotDoesNotCreateGhostRoom(t *testing.T) {
+	srv := newTestServer(nil)
+	ch := make(chan outboundMsg, 1)
+
+	ok := srv.setTaskCollabRoomSnapshot("task-1", ch, []byte{9, 8, 7})
+
+	assert.False(t, ok)
+	assert.Nil(t, srv.taskCollabRooms["task-1"])
 }
 
 func TestSendTaskStatusChangedBroadcastsToActiveSessions(t *testing.T) {

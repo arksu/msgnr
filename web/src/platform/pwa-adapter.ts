@@ -2,6 +2,35 @@ import { normalizeNotificationPermission } from '@/platform/types'
 import type { AppNotificationOptions, PlatformAdapter } from '@/platform/types'
 import { useNotificationSoundEngine } from '@/services/sound'
 
+type SaveFilePickerWindow = Window & {
+  showSaveFilePicker?: (options?: {
+    suggestedName?: string
+    excludeAcceptAllOption?: boolean
+    types?: Array<{
+      description?: string
+      accept: Record<string, string[]>
+    }>
+  }) => Promise<{
+    createWritable: () => Promise<{
+      write: (data: Blob) => Promise<void>
+      close: () => Promise<void>
+    }>
+  }>
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function downloadBlob(blob: Blob, suggestedName: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = suggestedName
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export class PwaAdapter implements PlatformAdapter {
   readonly type = 'pwa' as const
   private readonly soundEngine = useNotificationSoundEngine()
@@ -77,6 +106,38 @@ export class PwaAdapter implements PlatformAdapter {
   }
   window: PlatformAdapter['window'] = {}
   storage: PlatformAdapter['storage'] = {}
+  files: PlatformAdapter['files'] = {
+    saveBlob: async ({ blob, suggestedName, mimeType }) => {
+      if (typeof window !== 'undefined') {
+        const pickerWindow = window as SaveFilePickerWindow
+        if (typeof pickerWindow.showSaveFilePicker === 'function') {
+          try {
+            const handle = await pickerWindow.showSaveFilePicker({
+              suggestedName,
+              excludeAcceptAllOption: false,
+              types: [{
+                description: 'PDF document',
+                accept: {
+                  [mimeType || blob.type || 'application/pdf']: ['.pdf'],
+                },
+              }],
+            })
+            const writable = await handle.createWritable()
+            await writable.write(blob)
+            await writable.close()
+            return { saved: true }
+          } catch (error) {
+            if (isAbortError(error)) {
+              return { saved: false }
+            }
+          }
+        }
+      }
+
+      downloadBlob(blob, suggestedName)
+      return { saved: true }
+    },
+  }
 
   lifecycle: PlatformAdapter['lifecycle'] = {
     init: async () => {

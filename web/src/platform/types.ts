@@ -22,6 +22,12 @@ export interface AppNotificationOptions {
   onClick?: () => void
 }
 
+export interface SaveBlobOptions {
+  blob: Blob
+  suggestedName: string
+  mimeType?: string
+}
+
 export interface PlatformAdapter {
   readonly type: PlatformType
 
@@ -57,6 +63,10 @@ export interface PlatformAdapter {
     getSecureItem?(key: string): Promise<string | null>
     setSecureItem?(key: string, value: string): Promise<void>
     deleteSecureItem?(key: string): Promise<void>
+  }
+
+  files: {
+    saveBlob(options: SaveBlobOptions): Promise<{ saved: boolean }>
   }
 
   lifecycle: {

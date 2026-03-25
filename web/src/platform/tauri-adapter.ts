@@ -4,6 +4,7 @@ import type {
 } from '@/platform/types'
 import { normalizeNotificationPermission } from '@/platform/types'
 import { useNotificationSoundEngine } from '@/services/sound'
+import { PwaAdapter } from '@/platform/pwa-adapter'
 
 type TauriNotificationBridge = {
   isPermissionGranted?: () => Promise<boolean>
@@ -71,9 +72,37 @@ async function invokeNative<T = unknown>(command: string, args?: Record<string, 
   return invoke<T>(command, args)
 }
 
+function encodeBase64(bytes: Uint8Array): string {
+  const maybeBuffer = (globalThis as {
+    Buffer?: {
+      from(data: Uint8Array): { toString(encoding: 'base64'): string }
+    }
+  }).Buffer
+
+  if (typeof btoa !== 'function' && maybeBuffer) {
+    return maybeBuffer.from(bytes).toString('base64')
+  }
+
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const slice = bytes.subarray(index, index + chunkSize)
+    binary += String.fromCharCode(...slice)
+  }
+  return btoa(binary)
+}
+
+async function blobToBytes(blob: Blob): Promise<Uint8Array> {
+  if (typeof blob.arrayBuffer === 'function') {
+    return new Uint8Array(await blob.arrayBuffer())
+  }
+  return new Uint8Array(await new Response(blob).arrayBuffer())
+}
+
 export class TauriAdapter implements PlatformAdapter {
   readonly type = 'tauri' as const
   private readonly soundEngine = useNotificationSoundEngine()
+  private readonly pwaFallback = new PwaAdapter()
 
   notifications: PlatformAdapter['notifications'] = {
     requestPermission: async () => {
@@ -246,6 +275,20 @@ export class TauriAdapter implements PlatformAdapter {
     },
     deleteSecureItem: async (key: string) => {
       await invokeNative('keyring_delete', { key })
+    },
+  }
+  files: PlatformAdapter['files'] = {
+    saveBlob: async ({ blob, suggestedName, mimeType }) => {
+      if (typeof tauriBridge().core?.invoke !== 'function') {
+        return this.pwaFallback.files.saveBlob({ blob, suggestedName, mimeType })
+      }
+
+      const bytes = await blobToBytes(blob)
+      return invokeNative<{ saved: boolean }>('save_pdf_file', {
+        suggestedName,
+        mimeType: mimeType || blob.type || 'application/pdf',
+        base64: encodeBase64(bytes),
+      })
     },
   }
 

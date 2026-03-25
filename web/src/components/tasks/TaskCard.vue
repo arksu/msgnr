@@ -71,7 +71,17 @@
         </div>
       </div>
 
-      <div class="flex items-center gap-2 shrink-0" />
+      <div class="flex items-center gap-2 shrink-0">
+        <button
+          type="button"
+          data-testid="task-export-pdf"
+          class="btn-secondary text-xs"
+          :disabled="exportingPdf"
+          @click="exportTaskPdf"
+        >
+          {{ exportingPdf ? 'Exporting...' : 'Export to PDF' }}
+        </button>
+      </div>
     </div>
 
     <!-- Save error -->
@@ -505,6 +515,8 @@ import { useAuthStore } from '@/stores/auth'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
 import { useTaskDescriptionCollab, type TaskDescriptionCollabUser } from '@/composables/useTaskDescriptionCollab'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
+import { getPlatformOrNull, initPlatform } from '@/platform'
+import { exportTaskToPdfBlob } from '@/services/taskPdfExport'
 import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
@@ -545,6 +557,7 @@ const descriptionRestoreApplying = ref(false)
 const descriptionRestoreError = ref('')
 const descriptionEditorRenderKey = ref(0)
 const descriptionForceLocalSyncToken = ref(0)
+const exportingPdf = ref(false)
 let descriptionDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionMaxFlushTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionRetryTimer: ReturnType<typeof setTimeout> | null = null
@@ -890,6 +903,38 @@ async function saveTitle() {
 function normalizeDescription(value: string): string | null {
   const trimmed = value.trim()
   return trimmed === '' ? null : trimmed
+}
+
+function exportTitleValue(): string {
+  if (!task.value) return ''
+  const draft = titleDraft.value.trim()
+  if (titleEditing.value && draft !== '') {
+    return draft
+  }
+  return task.value.title
+}
+
+async function exportTaskPdf() {
+  if (!task.value || exportingPdf.value) return
+
+  exportingPdf.value = true
+  try {
+    const blob = await exportTaskToPdfBlob({
+      public_id: task.value.public_id,
+      title: exportTitleValue(),
+      description: descriptionDraft.value,
+    })
+    const platform = getPlatformOrNull() ?? await initPlatform()
+    await platform.files.saveBlob({
+      blob,
+      suggestedName: `${task.value.public_id}.pdf`,
+      mimeType: 'application/pdf',
+    })
+  } catch (error) {
+    chatStore.showToast(error instanceof Error ? error.message : 'Failed to export PDF.')
+  } finally {
+    exportingPdf.value = false
+  }
 }
 
 function clearDescriptionTimers() {
@@ -1244,6 +1289,7 @@ watch(() => task.value?.id, (_nextTaskID, prevTaskID) => {
   descriptionRestoreError.value = ''
   descriptionEditorRenderKey.value += 1
   descriptionForceLocalSyncToken.value = 0
+  exportingPdf.value = false
   showSubtaskForm.value = false
   subtaskError.value = ''
   showSubtaskValidation.value = false

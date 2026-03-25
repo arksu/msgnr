@@ -5,6 +5,7 @@
   "windows": ["main", "annotation_overlay"],
   "permissions": [
     "core:default",
+    "dialog:default",
     "notification:default",
     "opener:default",
     "updater:default"

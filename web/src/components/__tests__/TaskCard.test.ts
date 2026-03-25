@@ -4,6 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskCard from '@/components/tasks/TaskCard.vue'
 import type { TaskDescriptionHistoryItem } from '@/services/http/tasksApi'
 
+const platformMocks = vi.hoisted(() => ({
+  getPlatformOrNull: vi.fn(),
+  initPlatform: vi.fn(),
+  exportTaskToPdfBlob: vi.fn(),
+}))
+
 const selectedTask = {
   id: 'task-1',
   public_id: 'TASK-1',
@@ -120,6 +126,15 @@ vi.mock('@/stores/auth', () => ({
   }),
 }))
 
+vi.mock('@/platform', () => ({
+  getPlatformOrNull: platformMocks.getPlatformOrNull,
+  initPlatform: platformMocks.initPlatform,
+}))
+
+vi.mock('@/services/taskPdfExport', () => ({
+  exportTaskToPdfBlob: platformMocks.exportTaskToPdfBlob,
+}))
+
 vi.mock('@/composables/useTaskDescriptionCollab', () => ({
   useTaskDescriptionCollab: () => ({
     doc: ref({}),
@@ -133,6 +148,14 @@ vi.mock('@/composables/useTaskDescriptionCollab', () => ({
 describe('TaskCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    const platform = {
+      files: {
+        saveBlob: vi.fn(async () => ({ saved: true })),
+      },
+    }
+    platformMocks.getPlatformOrNull.mockReturnValue(platform)
+    platformMocks.initPlatform.mockResolvedValue(platform)
+    platformMocks.exportTaskToPdfBlob.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }))
     tasksStoreMock.listTaskDescriptionHistory = vi.fn(async (): Promise<TaskDescriptionHistoryItem[]> => [])
     tasksStoreMock.selectedTask = {
       ...selectedTask,
@@ -352,5 +375,40 @@ describe('TaskCard', () => {
 
     expect(tasksStoreMock.updateTaskDescription).toHaveBeenCalledWith('task-1', '## Older', { forceSnapshot: true })
     wrapper.unmount()
+  })
+
+  it('exports the current task to PDF and saves it through the platform adapter', async () => {
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          UserAvatar: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: {
+            props: ['modelValue'],
+            emits: ['update:modelValue'],
+            template: '<textarea data-testid="description-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="description-stub"]').setValue('## Exported body')
+    await wrapper.get('[data-testid="task-export-pdf"]').trigger('click')
+    await flushPromises()
+
+    expect(platformMocks.exportTaskToPdfBlob).toHaveBeenCalledWith({
+      public_id: 'TASK-1',
+      title: 'Initial title',
+      description: '## Exported body',
+    })
+    const platform = platformMocks.getPlatformOrNull.mock.results[0]?.value
+    expect(platform.files.saveBlob).toHaveBeenCalledWith(expect.objectContaining({
+      suggestedName: 'TASK-1.pdf',
+      mimeType: 'application/pdf',
+    }))
   })
 })

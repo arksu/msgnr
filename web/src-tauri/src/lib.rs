@@ -1,9 +1,11 @@
+use base64::Engine;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Position, Size, WebviewUrl, WindowEvent};
+use tauri_plugin_dialog::DialogExt;
 
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 
@@ -90,6 +92,35 @@ fn request_app_restart(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
   tauri_plugin_opener::open_url(url, None::<&str>).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn save_pdf_file(app: AppHandle, suggested_name: String, _mime_type: String, base64: String) -> Result<SaveFileResult, String> {
+  let selected = app
+    .dialog()
+    .file()
+    .add_filter("PDF document", &["pdf"])
+    .set_file_name(&suggested_name)
+    .blocking_save_file();
+
+  let Some(path) = selected else {
+    return Ok(SaveFileResult { saved: false });
+  };
+
+  let path = path
+    .into_path()
+    .map_err(|_| "Selected file path is unavailable on this platform.".to_string())?;
+  let bytes = base64::engine::general_purpose::STANDARD
+    .decode(base64)
+    .map_err(|err| err.to_string())?;
+
+  std::fs::write(path, bytes).map_err(|err| err.to_string())?;
+  Ok(SaveFileResult { saved: true })
+}
+
+#[derive(serde::Serialize)]
+struct SaveFileResult {
+  saved: bool,
 }
 
 fn normalize_overlay_label(overlay_label: Option<String>) -> String {
@@ -248,6 +279,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
 
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
@@ -282,6 +314,7 @@ pub fn run() {
       keyring_delete,
       request_app_restart,
       open_external_url,
+      save_pdf_file,
       annotation_overlay_show,
       annotation_overlay_hide,
       annotation_overlay_clear,

@@ -46,11 +46,10 @@
         :placeholder="`Message #${channelName}`"
         :disabled="disabled"
         rows="1"
-        @keydown.enter.exact.prevent="submit"
         @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
         @keydown="handleTextareaKeydown"
         @click="captureSelectionAndRefreshTagSearch"
-        @keyup="captureSelectionAndRefreshTagSearch"
+        @keyup="handleTextareaKeyup"
         @input="handleTextareaInput"
         @paste="onPaste"
         @dragenter.prevent="onDragEnter"
@@ -299,6 +298,7 @@ const tagPickerUsers = computed<MessageTagPickerItem[]>(() =>
     subtitle: item.email,
     href: '',
     icon: '@',
+    avatarUrl: item.avatar_url,
     flatIndex: index,
     meta: {
       email: item.email,
@@ -504,13 +504,15 @@ function selectTagItem(item: MessageTagPickerItem) {
 
 function handleTextareaKeydown(event: KeyboardEvent) {
   captureSelection()
-  if (tagPickerOpen.value && flatTagItems.value.length > 0) {
+  if (tagPickerOpen.value) {
     if (event.key === 'ArrowDown') {
+      if (flatTagItems.value.length === 0) return
       event.preventDefault()
       selectedTagIndex.value = (selectedTagIndex.value + 1) % flatTagItems.value.length
       return
     }
     if (event.key === 'ArrowUp') {
+      if (flatTagItems.value.length === 0) return
       event.preventDefault()
       selectedTagIndex.value = (selectedTagIndex.value - 1 + flatTagItems.value.length) % flatTagItems.value.length
       return
@@ -526,6 +528,12 @@ function handleTextareaKeydown(event: KeyboardEvent) {
       closeTagPicker()
       return
     }
+  }
+
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault()
+    submit()
+    return
   }
 
   if (!inputEl.value) return
@@ -551,6 +559,13 @@ function handleTextareaKeydown(event: KeyboardEvent) {
       })
     }
   }
+}
+
+function handleTextareaKeyup(event: KeyboardEvent) {
+  if (tagPickerOpen.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    return
+  }
+  captureSelectionAndRefreshTagSearch()
 }
 
 function handleTextareaInput() {

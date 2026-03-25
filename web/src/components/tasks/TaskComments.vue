@@ -8,6 +8,111 @@
 
     <p v-if="error" class="mb-2 text-xs text-red-400">{{ error }}</p>
 
+    <div class="space-y-2">
+      <div v-if="stagedAttachments.length > 0" class="rounded-lg border border-chat-border bg-chat-input/70 p-2">
+        <p class="mb-1 text-[11px] text-gray-500">Attachments ({{ stagedAttachments.length }}/{{ MAX_ATTACHMENTS }})</p>
+        <ul class="space-y-1">
+          <li
+            v-for="attachment in stagedAttachments"
+            :key="attachment.id"
+            class="flex items-center justify-between gap-2 rounded border border-chat-border bg-chat-input px-2 py-1"
+          >
+            <div class="min-w-0">
+              <p class="truncate text-xs text-gray-200">{{ attachment.file_name }}</p>
+              <p class="text-[11px] text-gray-500">{{ formatFileSize(attachment.file_size) }}</p>
+            </div>
+            <button
+              class="rounded p-1 text-gray-400 hover:bg-white/10 hover:text-white"
+              title="Remove attachment"
+              :disabled="removingAttachmentIds.has(attachment.id)"
+              @click="removeStagedAttachment(attachment.id)"
+            >
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </li>
+        </ul>
+      </div>
+
+      <div
+        class="flex flex-col gap-2 rounded-lg border px-3 py-2 transition-colors"
+        :class="isDragOver ? 'border-accent bg-chat-input/90' : 'border-chat-border bg-chat-input'"
+      >
+        <input
+          ref="fileInputEl"
+          type="file"
+          class="hidden"
+          multiple
+          @change="onFileInputChange"
+        >
+        <textarea
+          ref="inputEl"
+          v-model="newBody"
+          class="min-h-[24px] resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
+          placeholder="Add a comment…"
+          :disabled="submitting"
+          rows="1"
+          @keydown.enter.exact.prevent="submit"
+          @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
+          @input="autoResize"
+          @paste="onPaste"
+          @dragenter.prevent="onDragEnter"
+          @dragover.prevent="onDragOver"
+          @dragleave.prevent="onDragLeave"
+          @drop.prevent="onDrop"
+        />
+
+        <div data-testid="task-comment-controls-row" class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <button
+              data-testid="task-comment-attach-button"
+              class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="submitting || uploading || stagedAttachments.length >= MAX_ATTACHMENTS"
+              :title="attachButtonTitle"
+              @click="openFilePicker"
+            >
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </button>
+
+            <button
+              ref="pickerToggleButton"
+              data-testid="task-comment-emoji-button"
+              class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="submitting"
+              title="Add emoji"
+              @click.stop="toggleEmojiPicker"
+            >
+              <span class="text-lg leading-none">🙂</span>
+            </button>
+          </div>
+
+          <button
+            data-testid="task-comment-send-button"
+            class="shrink-0 rounded p-1.5 transition-colors"
+            :class="canSubmit
+              ? 'bg-accent text-white hover:bg-accent-hover'
+              : 'cursor-not-allowed text-gray-600'"
+            :disabled="!canSubmit"
+            @click="submit"
+          >
+            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <span v-if="uploading" class="text-[11px] text-gray-500">Uploading attachments...</span>
+        <span v-else-if="attachmentError" class="text-[11px] text-red-400">{{ attachmentError }}</span>
+        <span v-else class="text-xs text-gray-500">Enter to post · Shift+Enter for new line</span>
+        <span class="text-xs text-gray-500">{{ submitting ? 'Posting…' : '' }}</span>
+      </div>
+    </div>
+
     <div v-if="loading" class="text-sm text-gray-500 italic">Loading…</div>
 
     <p v-else-if="!comments.length && !submitting" class="mb-3 text-sm text-gray-500 italic">
@@ -127,111 +232,6 @@
         </div>
       </li>
     </ul>
-
-    <div class="space-y-2">
-      <div v-if="stagedAttachments.length > 0" class="rounded-lg border border-chat-border bg-chat-input/70 p-2">
-        <p class="mb-1 text-[11px] text-gray-500">Attachments ({{ stagedAttachments.length }}/{{ MAX_ATTACHMENTS }})</p>
-        <ul class="space-y-1">
-          <li
-            v-for="attachment in stagedAttachments"
-            :key="attachment.id"
-            class="flex items-center justify-between gap-2 rounded border border-chat-border bg-chat-input px-2 py-1"
-          >
-            <div class="min-w-0">
-              <p class="truncate text-xs text-gray-200">{{ attachment.file_name }}</p>
-              <p class="text-[11px] text-gray-500">{{ formatFileSize(attachment.file_size) }}</p>
-            </div>
-            <button
-              class="rounded p-1 text-gray-400 hover:bg-white/10 hover:text-white"
-              title="Remove attachment"
-              :disabled="removingAttachmentIds.has(attachment.id)"
-              @click="removeStagedAttachment(attachment.id)"
-            >
-              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </li>
-        </ul>
-      </div>
-
-      <div
-        class="flex flex-col gap-2 rounded-lg border px-3 py-2 transition-colors"
-        :class="isDragOver ? 'border-accent bg-chat-input/90' : 'border-chat-border bg-chat-input'"
-      >
-        <input
-          ref="fileInputEl"
-          type="file"
-          class="hidden"
-          multiple
-          @change="onFileInputChange"
-        >
-        <textarea
-          ref="inputEl"
-          v-model="newBody"
-          class="min-h-[24px] resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
-          placeholder="Add a comment…"
-          :disabled="submitting"
-          rows="1"
-          @keydown.enter.exact.prevent="submit"
-          @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
-          @input="autoResize"
-          @paste="onPaste"
-          @dragenter.prevent="onDragEnter"
-          @dragover.prevent="onDragOver"
-          @dragleave.prevent="onDragLeave"
-          @drop.prevent="onDrop"
-        />
-
-        <div data-testid="task-comment-controls-row" class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <button
-              data-testid="task-comment-attach-button"
-              class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="submitting || uploading || stagedAttachments.length >= MAX_ATTACHMENTS"
-              :title="attachButtonTitle"
-              @click="openFilePicker"
-            >
-              <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path d="M12 5v14M5 12h14"/>
-              </svg>
-            </button>
-
-            <button
-              ref="pickerToggleButton"
-              data-testid="task-comment-emoji-button"
-              class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="submitting"
-              title="Add emoji"
-              @click.stop="toggleEmojiPicker"
-            >
-              <span class="text-lg leading-none">🙂</span>
-            </button>
-          </div>
-
-          <button
-            data-testid="task-comment-send-button"
-            class="shrink-0 rounded p-1.5 transition-colors"
-            :class="canSubmit
-              ? 'bg-accent text-white hover:bg-accent-hover'
-              : 'cursor-not-allowed text-gray-600'"
-            :disabled="!canSubmit"
-            @click="submit"
-          >
-            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-between">
-        <span v-if="uploading" class="text-[11px] text-gray-500">Uploading attachments...</span>
-        <span v-else-if="attachmentError" class="text-[11px] text-red-400">{{ attachmentError }}</span>
-        <span v-else class="text-xs text-gray-500">Enter to post · Shift+Enter for new line</span>
-        <span class="text-xs text-gray-500">{{ submitting ? 'Posting…' : '' }}</span>
-      </div>
-    </div>
 
     <Teleport to="body">
       <div
@@ -383,7 +383,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    comments.value = await tasksListComments(props.taskId)
+    comments.value = sortCommentsNewestFirst(await tasksListComments(props.taskId))
     preloadAttachmentUrls()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load comments'
@@ -615,7 +615,7 @@ async function submit() {
       body,
       attachment_ids: stagedAttachments.value.map(item => item.id),
     })
-    comments.value.push(comment)
+    comments.value = sortCommentsNewestFirst([comment, ...comments.value])
     newBody.value = ''
     stagedAttachments.value = []
     nextTick(() => autoResize())
@@ -637,6 +637,14 @@ function authorName(authorId: string): string {
 function authorAvatar(authorId: string): string {
   const user = tasksStore.users.find(u => u.id === authorId)
   return user?.avatar_url ?? ''
+}
+
+function sortCommentsNewestFirst(items: TaskComment[]): TaskComment[] {
+  return [...items].sort((a, b) => {
+    const createdA = new Date(a.created_at).getTime()
+    const createdB = new Date(b.created_at).getTime()
+    return createdB - createdA
+  })
 }
 
 function formatDatetime(v: string): string {

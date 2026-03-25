@@ -138,6 +138,28 @@ describe('TaskComments', () => {
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('renders the composer before the comments list', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-1',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'hello',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    const textarea = wrapper.get('textarea')
+    const commentsList = wrapper.get('ul.mb-4')
+    const position = textarea.element.compareDocumentPosition(commentsList.element)
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('inserts selected emoji at cursor into comment textarea', async () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
@@ -278,6 +300,39 @@ describe('TaskComments', () => {
     expect(wrapper.find('audio').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('photo.jpg')
     expect(wrapper.text()).toContain('1.0 KB')
+  })
+
+  it('renders newest comments first', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([
+      {
+        id: 'comment-old',
+        task_id: 'task-1',
+        author_id: 'user-1',
+        body: 'older comment',
+        created_at: '2026-03-10T12:00:00Z',
+        updated_at: '2026-03-10T12:00:00Z',
+        attachments: [],
+      },
+      {
+        id: 'comment-new',
+        task_id: 'task-1',
+        author_id: 'user-1',
+        body: 'newer comment',
+        created_at: '2026-03-10T12:05:00Z',
+        updated_at: '2026-03-10T12:05:00Z',
+        attachments: [],
+      },
+    ])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    const bodies = wrapper.findAll('.markdown-body')
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0].text()).toContain('newer comment')
+    expect(bodies[1].text()).toContain('older comment')
   })
 
   it('uses compact image thumbnail contract and restrained lightbox for comment images', async () => {

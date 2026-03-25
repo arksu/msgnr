@@ -174,7 +174,7 @@
           :disabled="editSaving"
           @input="handleEditTextareaInput"
           @click="captureEditSelectionAndRefreshTagSearch"
-          @keyup="captureEditSelectionAndRefreshTagSearch"
+          @keyup="handleEditTextareaKeyup"
           @keydown="handleEditTextareaKeydown"
         />
         <div class="mt-1.5 flex items-center justify-between gap-2">
@@ -742,6 +742,7 @@ const editTagPickerUsers = computed<MessageTagPickerItem[]>(() =>
     subtitle: item.email,
     href: '',
     icon: '@',
+    avatarUrl: item.avatar_url,
     flatIndex: index,
   })),
 )
@@ -1484,13 +1485,15 @@ function cancelEdit() {
 
 function handleEditTextareaKeydown(evt: KeyboardEvent) {
   captureEditSelection()
-  if (editTagPickerOpen.value && editFlatTagItems.value.length > 0) {
+  if (editTagPickerOpen.value) {
     if (evt.key === 'ArrowDown') {
+      if (editFlatTagItems.value.length === 0) return
       evt.preventDefault()
       editSelectedTagIndex.value = (editSelectedTagIndex.value + 1) % editFlatTagItems.value.length
       return
     }
     if (evt.key === 'ArrowUp') {
+      if (editFlatTagItems.value.length === 0) return
       evt.preventDefault()
       editSelectedTagIndex.value = (editSelectedTagIndex.value - 1 + editFlatTagItems.value.length) % editFlatTagItems.value.length
       return
@@ -1499,6 +1502,11 @@ function handleEditTextareaKeydown(evt: KeyboardEvent) {
       evt.preventDefault()
       const item = editFlatTagItems.value[editSelectedTagIndex.value]
       if (item) selectEditTagItem(item)
+      return
+    }
+    if (evt.key === 'Escape') {
+      evt.preventDefault()
+      closeEditTagPicker()
       return
     }
   }
@@ -1533,6 +1541,13 @@ function handleEditTextareaKeydown(evt: KeyboardEvent) {
   evt.preventDefault()
   if (!canSaveEdit.value) return
   void saveEdit()
+}
+
+function handleEditTextareaKeyup(evt: KeyboardEvent) {
+  if (editTagPickerOpen.value && (evt.key === 'ArrowDown' || evt.key === 'ArrowUp')) {
+    return
+  }
+  captureEditSelectionAndRefreshTagSearch()
 }
 
 async function saveEdit() {

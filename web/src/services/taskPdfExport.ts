@@ -233,22 +233,44 @@ function buildStyles(): string {
     .task-pdf-export .markdown-body ul,
     .task-pdf-export .markdown-body ol {
       margin-left: 0;
-      padding-left: 28px;
-      list-style-position: outside;
+      padding-left: 0;
+      list-style: none;
     }
-    .task-pdf-export .markdown-body ul > li:not([data-type='taskItem']),
-    .task-pdf-export .markdown-body ol > li:not([data-type='taskItem']) {
-      margin-bottom: 6px;
-      padding-left: 2px;
-      line-height: 1.6;
+    .task-pdf-export .task-pdf-export__list {
+      margin: 0 0 12px;
+      padding: 0;
+      list-style: none;
     }
-    .task-pdf-export .markdown-body ul > li:not([data-type='taskItem'])::marker,
-    .task-pdf-export .markdown-body ol > li:not([data-type='taskItem'])::marker {
+    .task-pdf-export .task-pdf-export__list-item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+      column-gap: 8px;
+      margin: 0 0 6px;
+      list-style: none;
+    }
+    .task-pdf-export .task-pdf-export__list-marker {
+      min-width: 20px;
       color: #000000 !important;
       font-family: Arial, Helvetica, sans-serif;
       font-size: 14px;
       line-height: 1.6;
+      text-align: right;
       font-variant-numeric: tabular-nums;
+    }
+    .task-pdf-export .task-pdf-export__list--unordered > .task-pdf-export__list-item > .task-pdf-export__list-marker {
+      font-size: 16px;
+      line-height: 1.45;
+    }
+    .task-pdf-export .task-pdf-export__list-content {
+      min-width: 0;
+      line-height: 1.6;
+    }
+    .task-pdf-export .task-pdf-export__list-content > ul,
+    .task-pdf-export .task-pdf-export__list-content > ol {
+      margin-top: 6px;
+      margin-bottom: 0;
+      padding-left: 20px;
     }
     .task-pdf-export .markdown-body li[data-type='taskItem'] {
       display: flex;
@@ -385,6 +407,47 @@ function buildStyles(): string {
   `
 }
 
+function normalizeRenderedLists(root: HTMLElement) {
+  const lists = Array.from(root.querySelectorAll('ol, ul')).reverse()
+
+  for (const list of lists) {
+    const listElement = list as HTMLOListElement | HTMLUListElement
+    if (listElement.dataset.type === 'taskList') continue
+
+    const ordered = listElement.tagName === 'OL'
+    listElement.classList.add('task-pdf-export__list')
+    listElement.classList.toggle('task-pdf-export__list--ordered', ordered)
+    listElement.classList.toggle('task-pdf-export__list--unordered', !ordered)
+
+    const items = Array.from(listElement.children).filter((child): child is HTMLLIElement => child.tagName === 'LI')
+    let index = 1
+
+    for (const item of items) {
+      if (item.dataset.type === 'taskItem' || item.dataset.pdfListNormalized === 'true') {
+        index += 1
+        continue
+      }
+
+      item.dataset.pdfListNormalized = 'true'
+      item.classList.add('task-pdf-export__list-item')
+
+      const marker = document.createElement('span')
+      marker.className = 'task-pdf-export__list-marker'
+      marker.textContent = ordered ? `${index}.` : '•'
+
+      const content = document.createElement('div')
+      content.className = 'task-pdf-export__list-content'
+      const existingNodes = Array.from(item.childNodes)
+      for (const node of existingNodes) {
+        content.appendChild(node)
+      }
+
+      item.replaceChildren(marker, content)
+      index += 1
+    }
+  }
+}
+
 function renderTaskPdfExportRoot(documentModel: TaskPdfExportDocument): {
   host: HTMLElement
   captureTarget: HTMLElement
@@ -414,6 +477,7 @@ function renderTaskPdfExportRoot(documentModel: TaskPdfExportDocument): {
       const section = document.createElement('div')
       section.className = 'task-pdf-export__section markdown-body'
       section.innerHTML = block.html
+      normalizeRenderedLists(section)
       container.appendChild(section)
       continue
     }

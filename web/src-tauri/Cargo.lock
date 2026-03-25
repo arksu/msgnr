@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "msgnr-desktop"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "keyring",
  "serde",

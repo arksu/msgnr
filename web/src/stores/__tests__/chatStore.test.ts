@@ -406,6 +406,84 @@ describe('chatStore phase 6 flows', () => {
     expect(ws.setLiveSynced).not.toHaveBeenCalled()
   })
 
+  it('uses bootstrap instead of syncSince when reconnecting with a cached snapshot and cursor', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendBootstrap = vi.fn()
+    ws.sendSyncSince = vi.fn()
+
+    chat.bootstrapped = true
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 9,
+      hasUnreadThreadReplies: true,
+      lastMessageSeq: 30n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.lastAppliedEventSeq = 30n
+    ws.authResult = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      persistedEventSeq: 30n,
+      userRole: 'member',
+    }
+
+    chat.startRealtimeFlow()
+
+    expect(ws.sendBootstrap).toHaveBeenCalledTimes(1)
+    expect(ws.sendSyncSince).not.toHaveBeenCalled()
+  })
+
+  it('marks reconnect bootstrap as stale when the server cursor is ahead of the local snapshot', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendBootstrap = vi.fn()
+    ws.sendSyncSince = vi.fn()
+    ws.setStaleRebootstrap = vi.fn()
+
+    chat.bootstrapped = true
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 2,
+      hasUnreadThreadReplies: false,
+      lastMessageSeq: 10n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.lastAppliedEventSeq = 10n
+    ws.authResult = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      persistedEventSeq: 12n,
+      userRole: 'member',
+    }
+
+    chat.startRealtimeFlow()
+
+    expect(ws.setStaleRebootstrap).toHaveBeenCalledTimes(1)
+    expect(ws.sendBootstrap).toHaveBeenCalledTimes(1)
+    expect(ws.sendSyncSince).not.toHaveBeenCalled()
+  })
+
   it('sends UpdateReadCursor when selecting a conversation with unread messages', () => {
     const chat = useChatStore()
     const ws = useWsStore()
@@ -474,6 +552,165 @@ describe('chatStore phase 6 flows', () => {
 
     expect(chat.presenceByUserId['user-2']?.effectivePresence).toBe(PresenceStatus.ONLINE)
     expect(chat.directMessages[0].presence).toBe('online')
+  })
+
+  it('replaces stale unread counters and presence only after reconnect bootstrap completes', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.setLiveSynced = vi.fn()
+    ws.sendAck = vi.fn()
+    ws.sendBootstrap = vi.fn()
+
+    saveLastOpenedConversation('workspace-1', 'user-1', 'dm-1')
+    chat.activeChannelId = 'dm-1'
+    chat.bootstrapped = true
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 9,
+      hasUnreadThreadReplies: true,
+      lastMessageSeq: 30n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      avatarUrl: '',
+      presence: 'offline',
+      unread: 5,
+      hasUnreadThreadReplies: false,
+      lastMessageSeq: 20n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.messages = {
+      'dm-1': [
+        buildMessage({
+          id: 'cached-message-1',
+          channelId: 'dm-1',
+          body: 'cached shell',
+          channelSeq: 20n,
+        }),
+      ],
+    }
+    chatApiMocks.listConversationMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'message-21',
+          conversation_id: 'dm-1',
+          sender_id: 'user-2',
+          sender_name: 'Bob',
+          body: 'authoritative history',
+          channel_seq: '21',
+          thread_seq: '0',
+          thread_root_message_id: '',
+          mention_everyone: false,
+          created_at: '2026-03-06T00:00:00Z',
+        },
+      ],
+      has_more: false,
+      page_size: 50,
+      next_before_channel_seq: '',
+    })
+
+    chat.handleBootstrapResponse(create(BootstrapResponseSchema, {
+      snapshotSeq: 40n,
+      userRole: 2,
+      workspace: {
+        workspaceId: 'workspace-1',
+        workspaceName: 'Acme',
+        selfUser: create(UserSummarySchema, { userId: 'user-1', displayName: 'Ada', avatarUrl: '' }),
+        selfRole: 3,
+      },
+      conversations: [create(ConversationSummarySchema, {
+        conversationId: 'channel-1',
+        conversationType: 2,
+        title: 'general',
+        topic: '',
+        isArchived: false,
+        notificationLevel: NotificationLevel.ALL,
+        lastMessageSeq: 30n,
+        lastMessagePreview: 'channel preview',
+        memberCount: 2,
+        presence: PresenceStatus.OFFLINE,
+      })],
+      unread: [create(UnreadCounterSchema, {
+        conversationId: 'channel-1',
+        unreadMessages: 1,
+        unreadMentions: 0,
+        hasUnreadThreadReplies: false,
+        lastReadSeq: 29n,
+      })],
+      activeCalls: [],
+      pendingInvites: [],
+      notifications: [],
+      hasMore: true,
+      nextPageToken: 'page-2',
+      bootstrapSessionId: 'session-reconnect',
+      pageIndex: 0,
+      pageSizeEffective: 1,
+      estimatedTotalConversations: 2,
+      presence: [create(PresenceEventSchema, {
+        userId: 'user-2',
+        effectivePresence: PresenceStatus.ONLINE,
+      })],
+    }))
+
+    expect(chat.channels[0].unread).toBe(9)
+    expect(chat.directMessages[0].presence).toBe('offline')
+    expect(chat.messages['dm-1'][0].body).toBe('cached shell')
+    expect(chat.activeChannelId).toBe('dm-1')
+
+    chat.handleBootstrapResponse(create(BootstrapResponseSchema, {
+      snapshotSeq: 40n,
+      conversations: [create(ConversationSummarySchema, {
+        conversationId: 'dm-1',
+        conversationType: 1,
+        title: 'Bob',
+        topic: 'user-2',
+        isArchived: false,
+        notificationLevel: NotificationLevel.ALL,
+        lastMessageSeq: 21n,
+        lastMessagePreview: 'authoritative history',
+        memberCount: 2,
+        presence: PresenceStatus.OFFLINE,
+      })],
+      unread: [create(UnreadCounterSchema, {
+        conversationId: 'dm-1',
+        unreadMessages: 0,
+        unreadMentions: 0,
+        hasUnreadThreadReplies: false,
+        lastReadSeq: 21n,
+      })],
+      activeCalls: [],
+      pendingInvites: [],
+      notifications: [],
+      hasMore: false,
+      nextPageToken: '',
+      bootstrapSessionId: 'session-reconnect',
+      pageIndex: 1,
+      pageSizeEffective: 1,
+      estimatedTotalConversations: 2,
+      presence: [],
+    }))
+    await Promise.resolve()
+
+    expect(chat.channels[0].unread).toBe(1)
+    expect(chat.channels[0].hasUnreadThreadReplies).toBe(false)
+    expect(chat.directMessages[0].unread).toBe(0)
+    expect(chat.directMessages[0].presence).toBe('online')
+    expect(chat.activeChannelId).toBe('dm-1')
+    expect(chatApiMocks.listConversationMessages).toHaveBeenCalledWith('dm-1', undefined)
+    expect(chat.messages['dm-1'].some(message => message.body === 'authoritative history')).toBe(true)
   })
 
   it('hydrates DM peer user id from bootstrap and applies later presence updates', () => {

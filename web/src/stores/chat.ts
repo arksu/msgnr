@@ -1043,15 +1043,12 @@ export const useChatStore = defineStore('chat', () => {
 
     if (auth.persistedEventSeq > lastAppliedEventSeq.value) {
       ws.setStaleRebootstrap()
-      startBootstrap()
-      return
     }
 
-    // A local watermark ahead of the server's persisted cursor is expected
-    // when the client has applied events that have not been acked yet. SyncSince
-    // from the local watermark is still safe: the server returns either an empty
-    // tail or the small contiguous suffix the client has not seen.
-    ws.sendSyncSince(lastAppliedEventSeq.value, DEFAULT_SYNC_BATCH)
+    // Reconnect resumes from cached/local state. Bootstrap is the authoritative
+    // refresh for unread counters, presence, notifications, and other direct-only
+    // state that cannot be reconstructed from SyncSince replay alone.
+    startBootstrap()
   }
 
   function startBootstrap() {
@@ -1262,17 +1259,14 @@ export const useChatStore = defineStore('chat', () => {
       const unread = unreadByConversation.get(summary.conversationId)?.unreadMessages ?? 0
       const hasUnreadThreadReplies = unreadByConversation.get(summary.conversationId)?.hasUnreadThreadReplies ?? false
       if (summary.conversationType === ConversationType.DM) {
-        registerUserName(summary.topic || summary.conversationId, summary.title)
+        const dmUserId = summary.topic || summary.conversationId
+        registerUserName(dmUserId, summary.title)
         nextDms.push({
           id: summary.conversationId,
-          userId: summary.topic || summary.conversationId,
+          userId: dmUserId,
           displayName: summary.title,
-          avatarUrl: resolveAvatarUrl(summary.topic || summary.conversationId),
-          presence: summary.presence === PresenceStatus.ONLINE
-            ? 'online'
-            : summary.presence === PresenceStatus.AWAY
-              ? 'away'
-              : 'offline',
+          avatarUrl: resolveAvatarUrl(dmUserId),
+          presence: resolveConversationPresence(summary.presence, dmUserId),
           unread,
           hasUnreadThreadReplies,
           lastMessageSeq: summary.lastMessageSeq,
@@ -1858,17 +1852,14 @@ export const useChatStore = defineStore('chat', () => {
     const currentLevel = currentNotificationLevel(summary.conversationId)
     const notificationLevel = summary.notificationLevel || currentLevel
     if (summary.conversationType === ConversationType.DM) {
-      registerUserName(summary.topic || summary.conversationId, summary.title)
+      const dmUserId = summary.topic || summary.conversationId
+      registerUserName(dmUserId, summary.title)
       const next: DirectMessage = {
         id: summary.conversationId,
-        userId: summary.topic || summary.conversationId,
+        userId: dmUserId,
         displayName: summary.title,
-        avatarUrl: resolveAvatarUrl(summary.topic || summary.conversationId),
-        presence: summary.presence === PresenceStatus.ONLINE
-          ? 'online'
-          : summary.presence === PresenceStatus.AWAY
-              ? 'away'
-              : 'offline',
+        avatarUrl: resolveAvatarUrl(dmUserId),
+        presence: resolveConversationPresence(summary.presence, dmUserId),
         unread,
         hasUnreadThreadReplies,
         lastMessageSeq: summary.lastMessageSeq,
@@ -2172,6 +2163,18 @@ export const useChatStore = defineStore('chat', () => {
 
   function conversationExists(conversationId: string): boolean {
     return channels.value.some(channel => channel.id === conversationId) || directMessages.value.some(dm => dm.id === conversationId)
+  }
+
+  function resolveConversationPresence(
+    summaryPresence: PresenceStatus,
+    userId: string,
+  ): 'online' | 'away' | 'offline' {
+    const effectivePresence = presenceByUserId.value[userId]?.effectivePresence ?? summaryPresence
+    return effectivePresence === PresenceStatus.ONLINE
+      ? 'online'
+      : effectivePresence === PresenceStatus.AWAY
+        ? 'away'
+        : 'offline'
   }
 
   function _onMessageCreated(evt: ProtoMessageEvent) {

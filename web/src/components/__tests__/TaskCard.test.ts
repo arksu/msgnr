@@ -16,7 +16,7 @@ const selectedTask = {
   parent_task_id: null,
   parent_public_id: null,
   created_by: 'u-1',
-  updated_by: 'u-1',
+  updated_by: 'u-2',
   created_at: '2026-03-10T12:00:00Z',
   updated_at: '2026-03-10T12:00:00Z',
   field_values: [],
@@ -27,7 +27,20 @@ const tasksStoreMock = reactive({
   selectedTask,
   taskLoading: false,
   taskError: null as string | null,
-  users: [],
+  users: [
+    {
+      id: 'u-1',
+      display_name: 'Creator User',
+      email: 'creator@example.com',
+      avatar_url: '/api/public/avatars/avatars/u-1/creator.png',
+    },
+    {
+      id: 'u-2',
+      display_name: 'Updater User',
+      email: 'updater@example.com',
+      avatar_url: '/api/public/avatars/avatars/u-2/updater.png',
+    },
+  ],
   activeTemplates: [
     {
       id: 'tpl-1',
@@ -242,6 +255,34 @@ describe('TaskCard', () => {
       status_id: 'st-1',
       description: '- one\\n- two',
     }))
+  })
+
+  it('renders creator and updater metadata in the footer', async () => {
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: true,
+          UserAvatar: {
+            props: ['userId', 'displayName', 'avatarUrl', 'size'],
+            template: '<div class="user-avatar-stub" :data-user-id="userId" :data-display-name="displayName" :data-avatar-url="avatarUrl" :data-size="size" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    const footer = wrapper.findAll('.user-avatar-stub')
+    expect(footer).toHaveLength(2)
+    expect(footer[0].attributes('data-user-id')).toBe('u-1')
+    expect(footer[0].attributes('data-display-name')).toBe('Creator User')
+    expect(footer[0].attributes('data-avatar-url')).toBe('/api/public/avatars/avatars/u-1/creator.png')
+    expect(wrapper.text()).toContain('Creator User')
+    expect(wrapper.text()).toContain('Updater User')
+    expect(wrapper.text()).toMatch(/3\/10\/2026|2026-03-10/)
   })
 
   it('opens history modal, updates preview on item click, and applies with force snapshot', async () => {

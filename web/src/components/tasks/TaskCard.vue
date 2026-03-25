@@ -338,14 +338,40 @@
       </div>
 
       <!-- Meta -->
-      <div class="border-t border-chat-border pt-4 flex gap-6 flex-wrap text-xs text-gray-500">
-        <div>
-          <span class="uppercase tracking-wide">Created</span>
-          <div class="mt-0.5 text-gray-400">{{ formatDatetime(task.created_at) }}</div>
-        </div>
-        <div>
-          <span class="uppercase tracking-wide">Updated</span>
-          <div class="mt-0.5 text-gray-400">{{ formatDatetime(task.updated_at) }}</div>
+      <div class="border-t border-chat-border pt-4">
+        <div class="flex flex-wrap items-center gap-6 text-xs text-gray-500">
+          <div class="flex min-w-0 items-center gap-2">
+            <UserAvatar
+              :user-id="creatorUser.id"
+              :display-name="creatorUser.displayName"
+              :avatar-url="creatorUser.avatarUrl"
+              size="xs"
+            />
+            <div class="min-w-0">
+              <div class="flex min-w-0 items-center gap-1 text-gray-300">
+                <span class="truncate">{{ creatorUser.displayName }}</span>
+                <span class="shrink-0 text-gray-500">,</span>
+                <span class="whitespace-nowrap">{{ formatDatetime(task.created_at) }}</span>
+              </div>
+              <div class="uppercase tracking-wide text-[10px] text-gray-500">Created</div>
+            </div>
+          </div>
+          <div class="flex min-w-0 items-center gap-2">
+            <UserAvatar
+              :user-id="updaterUser.id"
+              :display-name="updaterUser.displayName"
+              :avatar-url="updaterUser.avatarUrl"
+              size="xs"
+            />
+            <div class="min-w-0">
+              <div class="flex min-w-0 items-center gap-1 text-gray-300">
+                <span class="truncate">{{ updaterUser.displayName }}</span>
+                <span class="shrink-0 text-gray-500">,</span>
+                <span class="whitespace-nowrap">{{ formatDatetime(task.updated_at) }}</span>
+              </div>
+              <div class="uppercase tracking-wide text-[10px] text-gray-500">Updated</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -556,6 +582,9 @@ const taskDescriptionDoc = computed(() => descriptionCollab.doc.value)
 const taskDescriptionProvider = computed(() => descriptionCollab.provider.value)
 const taskDescriptionCollabError = computed(() => descriptionCollab.subscribeError.value)
 const taskDescriptionAllowLocalDraftSeed = computed(() => descriptionCollab.allowLocalDraftSeed.value)
+
+const creatorUser = computed(() => userSummaryFor(task.value?.created_by ?? ''))
+const updaterUser = computed(() => userSummaryFor(task.value?.updated_by ?? ''))
 
 function markdownSignature(input: string): string {
   let hash = 0
@@ -1081,6 +1110,15 @@ function descriptionHistoryEditorName(item: TaskDescriptionHistoryItem): string 
   return item.editor.display_name?.trim() || 'Unknown user'
 }
 
+function userSummaryFor(userId: string): { id: string; displayName: string; avatarUrl: string } {
+  const user = tasksStore.users.find(candidate => candidate.id === userId)
+  return {
+    id: userId,
+    displayName: user?.display_name?.trim() || userId || 'Unknown user',
+    avatarUrl: user?.avatar_url ?? '',
+  }
+}
+
 async function loadDescriptionHistory(taskID: string) {
   descriptionHistoryLoading.value = true
   descriptionHistoryError.value = ''
@@ -1180,9 +1218,7 @@ watch(() => task.value?.id, (_nextTaskID, prevTaskID) => {
   Object.keys(fieldSaving).forEach(k => delete fieldSaving[k])
   Object.keys(fieldRequiredErrors).forEach(k => delete fieldRequiredErrors[k])
   initInlineValues()
-  if (customFields.value.some(f => f.type === 'user' || f.type === 'users')) {
-    tasksStore.loadUsers()
-  }
+  tasksStore.loadUsers()
   customFields.value
     .filter(f => (f.type === 'enum' || f.type === 'multi_enum') && f.enum_dictionary_id)
     .forEach(f => tasksStore.loadEnumItemsFor(f.enum_dictionary_id!, selectedCodesForValue(f, inlineValues[f.id])))
@@ -1243,6 +1279,7 @@ watch(descriptionDraft, () => {
 
 watch(customFields, () => {
   initInlineValues()
+  tasksStore.loadUsers()
   if (customFields.value.some(f => f.type === 'user' || f.type === 'users')) {
     tasksStore.loadUsers()
   }

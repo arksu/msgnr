@@ -1,4 +1,4 @@
-import { marked } from 'marked'
+import { Marked } from 'marked'
 
 export function escapeHtml(input: string): string {
   return input
@@ -9,18 +9,31 @@ export function escapeHtml(input: string): string {
     .replace(/'/g, '&#39;')
 }
 
+function renderHtmlToken(token: { text: string }): string {
+  if (/^<br\s*\/?>$/i.test(token.text)) {
+    return '<br>'
+  }
+
+  return escapeHtml(token.text)
+}
+
+const markdown = new Marked({
+  gfm: true,
+  breaks: true,
+  renderer: {
+    html: renderHtmlToken,
+  },
+})
+
 export function renderMarkdownToHtml(input: string): string {
-  const safe = escapeHtml(input)
-  const rendered = String(marked.parse(safe, { breaks: true }))
-  return rendered.replace(/&lt;br\s*\/?&gt;/gi, '<br>')
+  return String(markdown.parse(input ?? ''))
 }
 
 export function renderMarkdownInlineToHtml(input: string): string {
   if (!input) return ''
-  const safe = escapeHtml(input).replace(/\r\n/g, '\n')
+  const safe = input.replace(/\r\n/g, '\n')
   return safe
     .split('\n')
-    .map(part => String(marked.parseInline(part)))
+    .map(part => String(markdown.parseInline(part)))
     .join('<br>')
-    .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
 }

@@ -48,15 +48,15 @@ func TestIntegration_ExpireTyping_RechecksCurrentMembership(t *testing.T) {
 		db:             &database.DB{Pool: pool},
 		config:         &config.Config{WsOutboundQueueMax: 8},
 		log:            zap.NewNop(),
-		sessionsByUser: make(map[string]map[chan outboundMsg]struct{}),
+		sessionsByUser: make(map[string]map[chan outboundMsg]*sessionState),
 		typingExpiry:   make(map[string]time.Time),
 	}
 
 	remainingCh := make(chan outboundMsg, 1)
 	removedCh := make(chan outboundMsg, 1)
-	unregisterRemaining := srv.registerUserSession(remainingID.String(), remainingCh)
+	unregisterRemaining := srv.registerUserSession(remainingID.String(), remainingCh, newSessionState(nil, false, nil))
 	defer unregisterRemaining()
-	unregisterRemoved := srv.registerUserSession(removedID.String(), removedCh)
+	unregisterRemoved := srv.registerUserSession(removedID.String(), removedCh, newSessionState(nil, false, nil))
 	defer unregisterRemoved()
 
 	key := channelID.String() + "||" + senderID.String()

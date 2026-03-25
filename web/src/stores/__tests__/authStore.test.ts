@@ -304,6 +304,7 @@ describe('authStore.logout', () => {
       autoGainControl: false,
       microphoneGain: 140,
       rnnoiseEnabled: false,
+      muteMicOnJoinCall: true,
     })
     tokenStorage.setRefreshToken('some-token')
     tokenStorage.setAccessToken('some-access')
@@ -323,6 +324,7 @@ describe('authStore.logout', () => {
       autoGainControl: true,
       microphoneGain: 100,
       rnnoiseEnabled: true,
+      muteMicOnJoinCall: false,
     })
   })
 

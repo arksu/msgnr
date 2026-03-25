@@ -130,6 +130,30 @@ func TestBus_OverflowDropsEventAndIncrementsMetric(t *testing.T) {
 	}
 }
 
+func TestBus_SubscribeWithOverflowInvokesCallback(t *testing.T) {
+	b := newTestBus()
+	overflowed := make(chan *packetspb.ServerEvent, 1)
+
+	_, _, cancel := b.SubscribeWithOverflow(nil, 1, func(evt *packetspb.ServerEvent) {
+		select {
+		case overflowed <- evt:
+		default:
+		}
+	})
+	defer cancel()
+
+	b.Publish(makeEvent(1, packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED))
+	b.Publish(makeEvent(2, packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED))
+
+	select {
+	case evt := <-overflowed:
+		require.NotNil(t, evt)
+		assert.Equal(t, int64(2), evt.GetEventSeq())
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for overflow callback")
+	}
+}
+
 func TestBus_SubscriberCount(t *testing.T) {
 	b := newTestBus()
 	assert.Equal(t, 0, b.SubscriberCount())

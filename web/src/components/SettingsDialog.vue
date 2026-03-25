@@ -334,6 +334,28 @@
                     </button>
                   </div>
 
+                  <!-- Mute Microphone On Join -->
+                  <div class="flex items-center justify-between gap-4 px-1 py-2.5 rounded-lg hover:bg-white/4 transition-colors">
+                    <div class="min-w-0">
+                      <p class="text-sm text-white leading-tight">Mute microphone on join call</p>
+                      <p class="text-[11px] text-gray-500 mt-0.5 leading-snug">Join calls with your microphone muted until you unmute it manually.</p>
+                    </div>
+                    <button
+                      role="switch"
+                      :aria-checked="muteMicOnJoinCall"
+                      :aria-label="`Mute microphone on join call ${muteMicOnJoinCall ? 'on' : 'off'}`"
+                      class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-[#1a1d21]"
+                      :class="muteMicOnJoinCall ? 'bg-accent' : 'bg-white/20'"
+                      @click="muteMicOnJoinCall = !muteMicOnJoinCall"
+                    >
+                      <span
+                        class="pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200"
+                        :class="muteMicOnJoinCall ? 'translate-x-4' : 'translate-x-0'"
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </div>
+
                   <!-- Microphone Level (only when AGC is off) -->
                   <Transition
                     enter-active-class="transition-all duration-200 ease-out"
@@ -543,6 +565,7 @@ const {
   autoGainControl,
   microphoneGain,
   rnnoiseEnabled,
+  muteMicOnJoinCall,
   loadDevices,
   requestPermission,
   testMicrophone,
@@ -600,6 +623,7 @@ const isDirty = computed(() =>
   || (autoGainControl.value ?? false) !== savedPrefs.value.autoGainControl
   || (microphoneGain.value ?? 100) !== savedPrefs.value.microphoneGain
   || (rnnoiseEnabled.value ?? true) !== savedPrefs.value.rnnoiseEnabled
+  || (muteMicOnJoinCall.value ?? false) !== savedPrefs.value.muteMicOnJoinCall
 )
 
 // ── Panel ref (focus trap) ────────────────────────────────────────────────
@@ -679,16 +703,9 @@ function handleSave() {
   const agc: boolean = autoGainControl.value ?? false
   const gain: number = microphoneGain.value ?? 100
   const rnnoise: boolean = rnnoiseEnabled.value ?? true
-  savePrefs(inputId, outputId, ns, ec, agc, gain, rnnoise)
-  savedPrefs.value = {
-    inputDeviceId: inputId,
-    outputDeviceId: outputId,
-    noiseSuppression: ns,
-    echoCancellation: ec,
-    autoGainControl: agc,
-    microphoneGain: gain,
-    rnnoiseEnabled: rnnoise,
-  }
+  const muteOnJoin: boolean = muteMicOnJoinCall.value ?? false
+  savePrefs(inputId, outputId, ns, ec, agc, gain, rnnoise, muteOnJoin)
+  savedPrefs.value = loadAudioPrefs()
   emit('close')
 }
 

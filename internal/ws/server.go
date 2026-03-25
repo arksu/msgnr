@@ -78,12 +78,113 @@ type outboundMsg struct {
 }
 
 type sessionState struct {
-	windowActive bool
+	mu                      sync.RWMutex
+	windowActive            bool
+	conversationCacheReady  bool
+	authorizedConversations map[string]struct{}
+	disconnectOnce          sync.Once
+	disconnect              func(reason string)
 }
 
 type taskCollabRoom struct {
 	subscribers map[chan outboundMsg]struct{}
 	snapshot    []byte
+}
+
+func newSessionState(authorizedConversationIDs []uuid.UUID, cacheReady bool, disconnect func(reason string)) *sessionState {
+	authorized := make(map[string]struct{}, len(authorizedConversationIDs))
+	for _, conversationID := range authorizedConversationIDs {
+		authorized[conversationID.String()] = struct{}{}
+	}
+	return &sessionState{
+		windowActive:            true,
+		conversationCacheReady:  cacheReady,
+		authorizedConversations: authorized,
+		disconnect:              disconnect,
+	}
+}
+
+func (s *sessionState) setWindowActive(active bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.windowActive = active
+}
+
+func (s *sessionState) hasActiveWindow() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.windowActive
+}
+
+func (s *sessionState) cacheReady() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.conversationCacheReady
+}
+
+func (s *sessionState) hasConversation(conversationID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.authorizedConversations[conversationID]
+	return ok
+}
+
+func (s *sessionState) allowConversation(conversationID string) {
+	if conversationID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.authorizedConversations == nil {
+		s.authorizedConversations = make(map[string]struct{})
+	}
+	s.authorizedConversations[conversationID] = struct{}{}
+}
+
+func (s *sessionState) revokeConversation(conversationID string) {
+	if conversationID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.authorizedConversations, conversationID)
+}
+
+func (s *sessionState) applyAuthorizationEvent(userID string, evt *packetspb.ServerEvent) {
+	if evt == nil {
+		return
+	}
+	conversationID := evt.GetConversationId()
+	switch payload := evt.Payload.(type) {
+	case *packetspb.ServerEvent_ConversationUpserted:
+		if payload.ConversationUpserted != nil {
+			s.allowConversation(conversationID)
+		}
+	case *packetspb.ServerEvent_ConversationRemoved:
+		if payload.ConversationRemoved != nil {
+			s.revokeConversation(conversationID)
+		}
+	case *packetspb.ServerEvent_MembershipChanged:
+		if payload.MembershipChanged == nil || payload.MembershipChanged.GetUserId() != userID {
+			return
+		}
+		switch payload.MembershipChanged.GetAction() {
+		case packetspb.MembershipAction_MEMBERSHIP_ACTION_ADDED,
+			packetspb.MembershipAction_MEMBERSHIP_ACTION_JOINED:
+			s.allowConversation(conversationID)
+		case packetspb.MembershipAction_MEMBERSHIP_ACTION_LEFT,
+			packetspb.MembershipAction_MEMBERSHIP_ACTION_REMOVED:
+			s.revokeConversation(conversationID)
+		}
+	}
+}
+
+func (s *sessionState) disconnectWithReason(reason string) {
+	s.disconnectOnce.Do(func() {
+		if s.disconnect != nil {
+			s.disconnect(reason)
+		}
+	})
 }
 
 // PushNotifier is called for DirectDeliveries targeting users with no active
@@ -376,11 +477,23 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 
+			sessionCacheCtx, sessionCacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			authorizedConversationIDs, cacheReady := s.loadSessionConversationAccess(sessionCacheCtx, principal.UserID)
+			sessionCacheCancel()
+			state := newSessionState(authorizedConversationIDs, cacheReady, func(reason string) {
+				s.log.Warn("ws session: forcing reconnect after fanout desync",
+					zap.String("user_id", principal.UserID.String()),
+					zap.String("session_id", principal.SessionID.String()),
+					zap.String("reason", reason),
+				)
+				_ = conn.Close()
+			})
+
+			unregisterSession = s.registerUserSession(principal.UserID.String(), outboundCh, state)
 			// Register as an event bus subscriber after successful auth.
 			if s.bus != nil {
-				unsubscribe, fanoutDone = s.startEventFanout(conn, principal, outboundCh, outboundQueueMax)
+				unsubscribe, fanoutDone = s.startEventFanout(conn, principal, outboundCh, outboundQueueMax, state)
 			}
-			unregisterSession = s.registerUserSession(principal.UserID.String(), outboundCh)
 			presenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if err := s.setPresenceState(presenceCtx, principal.UserID, packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE); err != nil {
 				s.log.Error("ws auth: failed to update presence", zap.Error(err))
@@ -404,16 +517,110 @@ func (s *Server) startEventFanout(
 	principal auth.Principal,
 	outboundCh chan outboundMsg,
 	queueMax int,
+	state *sessionState,
 ) (func(), <-chan struct{}) {
+	var desyncOnce sync.Once
+	handleSessionDesync := func(reason string, evt *packetspb.ServerEvent) {
+		desyncOnce.Do(func() {
+			metrics.WsSessionDesyncTotal.WithLabelValues(reason).Inc()
+			fields := []zap.Field{
+				zap.String("session_id", principal.SessionID.String()),
+				zap.String("user_id", principal.UserID.String()),
+				zap.String("reason", reason),
+			}
+			if evt != nil {
+				fields = append(fields,
+					zap.Int64("event_seq", evt.GetEventSeq()),
+					zap.String("event_type", evt.GetEventType().String()),
+				)
+			}
+			s.log.Warn("ws fanout: session desynced, forcing reconnect", fields...)
+			if state != nil {
+				state.disconnectWithReason(reason)
+				return
+			}
+			_ = conn.Close()
+		})
+	}
+
 	filter := func(evt *packetspb.ServerEvent) bool {
+		if state != nil && s.authSvc != nil {
+			allowed, result := s.authSvc.CanReceiveEventWithConversationAccess(
+				principal,
+				evt,
+				state.hasConversation,
+				state.allowConversation,
+			)
+			if allowed {
+				metrics.WsLiveEventAuthTotal.WithLabelValues(result).Inc()
+				return true
+			}
+
+			cacheReady := state.cacheReady()
+			shouldFallback := !cacheReady || evt.GetConversationUpserted() != nil
+			if result == "conversation_cache_miss" && shouldFallback && s.authorizeEvent != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				allowed = s.authorizeEvent(ctx, principal, evt)
+				timeoutErr := ctx.Err()
+				cancel()
+				if allowed {
+					if conversationID := evt.GetConversationId(); conversationID != "" {
+						state.allowConversation(conversationID)
+					}
+					label := "allowed_fallback_cache_miss"
+					if !cacheReady {
+						label = "allowed_fallback_cache_unavailable"
+					}
+					metrics.WsLiveEventAuthTotal.WithLabelValues(label).Inc()
+					return true
+				}
+				if timeoutErr == context.DeadlineExceeded {
+					metrics.WsLiveEventAuthTotal.WithLabelValues("fallback_timeout").Inc()
+					s.log.Warn("ws fanout: event auth fallback timed out",
+						zap.String("session_id", principal.SessionID.String()),
+						zap.String("user_id", principal.UserID.String()),
+						zap.Int64("event_seq", evt.GetEventSeq()),
+						zap.String("event_type", evt.GetEventType().String()),
+					)
+					return false
+				}
+				metrics.WsLiveEventAuthTotal.WithLabelValues("fallback_denied").Inc()
+				return false
+			}
+
+			metrics.WsLiveEventAuthTotal.WithLabelValues(result).Inc()
+			return false
+		}
+
 		if s.authorizeEvent == nil {
+			metrics.WsLiveEventAuthTotal.WithLabelValues("denied_no_authorizer").Inc()
 			return false
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		defer cancel()
-		return s.authorizeEvent(ctx, principal, evt)
+		allowed := s.authorizeEvent(ctx, principal, evt)
+		timeoutErr := ctx.Err()
+		cancel()
+		if allowed {
+			metrics.WsLiveEventAuthTotal.WithLabelValues("allowed_fallback_only").Inc()
+			return true
+		}
+		if timeoutErr == context.DeadlineExceeded {
+			metrics.WsLiveEventAuthTotal.WithLabelValues("fallback_timeout").Inc()
+			s.log.Warn("ws fanout: event auth fallback timed out",
+				zap.String("session_id", principal.SessionID.String()),
+				zap.String("user_id", principal.UserID.String()),
+				zap.Int64("event_seq", evt.GetEventSeq()),
+				zap.String("event_type", evt.GetEventType().String()),
+			)
+			return false
+		}
+		metrics.WsLiveEventAuthTotal.WithLabelValues("fallback_denied").Inc()
+		return false
 	}
-	_, eventCh, unsubscribe := s.bus.Subscribe(filter, s.config.EventBusSubscriberBuffer)
+	_, eventCh, unsubscribe := s.bus.SubscribeWithOverflow(filter, s.config.EventBusSubscriberBuffer, func(evt *packetspb.ServerEvent) {
+		metrics.WsFanoutDroppedTotal.WithLabelValues("event_bus_overflow").Inc()
+		handleSessionDesync("event_bus_overflow", evt)
+	})
 	done := make(chan struct{})
 
 	go func() {
@@ -422,6 +629,9 @@ func (s *Server) startEventFanout(
 		userID := principal.UserID.String()
 
 		for evt := range eventCh {
+			if state != nil {
+				state.applyAuthorizationEvent(userID, evt)
+			}
 			env := &packetspb.Envelope{
 				ProtocolVersion: protocolVersion,
 				Payload: &packetspb.Envelope_ServerEvent{
@@ -441,6 +651,7 @@ func (s *Server) startEventFanout(
 			default:
 				// outboundCh is full — send overflow error then close.
 				metrics.WsOutboundOverflowTotal.Inc()
+				metrics.WsFanoutDroppedTotal.WithLabelValues("outbound_overflow").Inc()
 				s.log.Warn("ws fanout: outbound queue overflow, closing session",
 					zap.String("session_id", sessionID),
 					zap.String("user_id", userID),
@@ -451,8 +662,7 @@ func (s *Server) startEventFanout(
 				case outboundCh <- outboundMsg{env: s.buildErrorEnvelope("", "", packetspb.ErrorCode_ERROR_CODE_BACKPRESSURE_OVERFLOW, "outbound queue overflow", 0)}:
 				default:
 				}
-				// Close the underlying connection so the reader loop breaks.
-				_ = conn.Close()
+				handleSessionDesync("outbound_overflow", evt)
 				return
 			}
 		}
@@ -495,13 +705,31 @@ func (s *Server) writeEnvelope(conn net.Conn, env *packetspb.Envelope) error {
 	return nil
 }
 
-func (s *Server) registerUserSession(userID string, outboundCh chan outboundMsg) func() {
+func (s *Server) loadSessionConversationAccess(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, bool) {
+	if s.authSvc == nil {
+		return nil, false
+	}
+	conversationIDs, err := s.authSvc.ListAuthorizedConversationIDs(ctx, userID)
+	if err != nil {
+		s.log.Warn("ws auth: failed to initialize session conversation cache",
+			zap.String("user_id", userID.String()),
+			zap.Error(err),
+		)
+		return nil, false
+	}
+	return conversationIDs, true
+}
+
+func (s *Server) registerUserSession(userID string, outboundCh chan outboundMsg, state *sessionState) func() {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
 	if s.sessionsByUser[userID] == nil {
 		s.sessionsByUser[userID] = make(map[chan outboundMsg]*sessionState)
 	}
-	s.sessionsByUser[userID][outboundCh] = &sessionState{windowActive: true}
+	if state == nil {
+		state = newSessionState(nil, false, nil)
+	}
+	s.sessionsByUser[userID][outboundCh] = state
 	return func() {
 		s.sessionMu.Lock()
 		defer s.sessionMu.Unlock()
@@ -524,7 +752,7 @@ func (s *Server) setSessionWindowActive(userID string, outboundCh chan outboundM
 	if !ok || state == nil {
 		return
 	}
-	state.windowActive = active
+	state.setWindowActive(active)
 }
 
 // SetPushNotifier configures the optional push notifier. Must be called
@@ -552,7 +780,7 @@ func (s *Server) HasActiveWindowSessions(userID string) bool {
 	s.sessionMu.RLock()
 	defer s.sessionMu.RUnlock()
 	for _, state := range s.sessionsByUser[userID] {
-		if state != nil && state.windowActive {
+		if state != nil && state.hasActiveWindow() {
 			return true
 		}
 	}
@@ -561,18 +789,38 @@ func (s *Server) HasActiveWindowSessions(userID string) bool {
 
 func (s *Server) sendDirectEnvelope(userIDs []string, env *packetspb.Envelope) {
 	s.sessionMu.RLock()
-	targets := make([]chan outboundMsg, 0)
+	type directTarget struct {
+		userID string
+		ch     chan outboundMsg
+		state  *sessionState
+	}
+	targets := make([]directTarget, 0)
 	for _, userID := range userIDs {
-		for ch := range s.sessionsByUser[userID] {
-			targets = append(targets, ch)
+		for ch, state := range s.sessionsByUser[userID] {
+			targets = append(targets, directTarget{userID: userID, ch: ch, state: state})
 		}
 	}
 	s.sessionMu.RUnlock()
 
-	for _, ch := range targets {
+	evt := env.GetServerEvent()
+	for _, target := range targets {
+		if evt != nil && target.state != nil {
+			target.state.applyAuthorizationEvent(target.userID, evt)
+		}
 		select {
-		case ch <- outboundMsg{env: env}:
+		case target.ch <- outboundMsg{env: env}:
 		default:
+			metrics.WsFanoutDroppedTotal.WithLabelValues("direct_overflow").Inc()
+			if evt != nil {
+				s.log.Warn("ws direct fanout: outbound queue overflow, forcing reconnect",
+					zap.String("user_id", target.userID),
+					zap.String("event_type", evt.GetEventType().String()),
+				)
+			}
+			metrics.WsSessionDesyncTotal.WithLabelValues("direct_overflow").Inc()
+			if target.state != nil {
+				target.state.disconnectWithReason("direct_overflow")
+			}
 		}
 	}
 }

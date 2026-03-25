@@ -114,6 +114,15 @@ var (
 		[]string{"status"},
 	)
 
+	WsLiveEventAuthTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "ws_live_event_auth_total",
+			Help:      "Total live WS event authorization decisions by result.",
+		},
+		[]string{"result"},
+	)
+
 	// Event outbox / store metrics
 	EventOutboxAppendedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -192,5 +201,23 @@ var (
 			Name:      "ws_server_events_sent_total",
 			Help:      "Total ServerEvent frames sent to WS clients.",
 		},
+	)
+
+	WsFanoutDroppedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "ws_fanout_dropped_total",
+			Help:      "Total WS fanout deliveries dropped by reason.",
+		},
+		[]string{"reason"},
+	)
+
+	WsSessionDesyncTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "ws_session_desync_total",
+			Help:      "Total WS sessions forced to reconnect because realtime fanout became unreliable.",
+		},
+		[]string{"reason"},
 	)
 )

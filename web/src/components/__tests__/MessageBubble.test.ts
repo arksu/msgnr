@@ -177,12 +177,69 @@ describe('MessageBubble reactions', () => {
     })
     expect(replyWrapper.find('[data-testid="thread-action-button"]').exists()).toBe(false)
     expect(replyWrapper.find('[data-testid="new-thread-button"]').exists()).toBe(false)
+    expect(replyWrapper.find('[data-testid="first-reaction-button"]').exists()).toBe(false)
 
     const selfRoot = buildMessage({ id: 'root-2', threadRootMessageId: 'root-2', reactions: [], myReactions: [] })
     const selfRootWrapper = mount(MessageBubble, {
       props: { message: selfRoot, showHeader: true },
     })
     expect(selfRootWrapper.find('[data-testid="new-thread-button"]').exists()).toBe(true)
+  })
+
+  it('shows first-reaction hover button for thread replies when explicitly enabled', () => {
+    const reply = buildMessage({ id: 'reply-1', threadRootMessageId: 'root-1', reactions: [], myReactions: [] })
+    const wrapper = mount(MessageBubble, {
+      props: {
+        message: reply,
+        showHeader: true,
+        showThreadAction: false,
+        showFirstReactionAction: true,
+      },
+    })
+
+    expect(wrapper.find('[data-testid="first-reaction-button"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="thread-action-button"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="new-thread-button"]').exists()).toBe(false)
+  })
+
+  it('keeps first-reaction hover button hidden when explicitly disabled', () => {
+    const msg = buildMessage({ reactions: [], myReactions: [] })
+    const wrapper = mount(MessageBubble, {
+      props: {
+        message: msg,
+        showHeader: true,
+        showFirstReactionAction: false,
+      },
+    })
+
+    expect(wrapper.find('[data-testid="first-reaction-button"]').exists()).toBe(false)
+  })
+
+  it('keeps first-reaction hover button visible for main chat messages by default', () => {
+    const msg = buildMessage({ reactions: [], myReactions: [] })
+    const wrapper = mount(MessageBubble, {
+      props: {
+        message: msg,
+        showHeader: true,
+      },
+    })
+
+    expect(wrapper.find('[data-testid="first-reaction-button"]').exists()).toBe(true)
+  })
+
+  it('keeps existing reactions add button when reactions already exist', () => {
+    const msg = buildMessage()
+    const wrapper = mount(MessageBubble, {
+      props: {
+        message: msg,
+        showHeader: true,
+        showFirstReactionAction: false,
+      },
+    })
+
+    const addReactionButtons = wrapper.findAll('button[title="Add reaction"]')
+    expect(addReactionButtons).toHaveLength(1)
+    expect(addReactionButtons[0].text()).toContain('+')
   })
 
   it('shows message header timestamp with date and time', () => {
@@ -246,6 +303,7 @@ describe('MessageBubble reactions', () => {
 
   it('edits inline and renders edited marker', async () => {
     const auth = useAuthStore()
+    const chat = useChatStore()
     auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
 
     const msg = buildMessage({
@@ -254,6 +312,7 @@ describe('MessageBubble reactions', () => {
       myReactions: [],
       body: 'before edit',
     })
+    chat.messages = { 'channel-1': [msg] }
     const wrapper = mount(MessageBubble, {
       props: { message: msg, showHeader: true },
       attachTo: document.body,
@@ -273,9 +332,9 @@ describe('MessageBubble reactions', () => {
     await textarea.trigger('keydown', { key: 'Enter' })
     await flushAll()
 
-    expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'edited body')
-    expect(msg.body).toBe('edited body')
-    expect(msg.editedAt).toBe('2026-03-06T00:10:00Z')
+    expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'edited body', [])
+    expect(chat.messages['channel-1'][0].body).toBe('edited body')
+    expect(chat.messages['channel-1'][0].editedAt).toBe('2026-03-06T00:10:00.000Z')
     expect(wrapper.find('[data-testid="message-edited-marker"]').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -311,7 +370,7 @@ describe('MessageBubble reactions', () => {
     await textarea.trigger('keydown', { key: 'Enter' })
     await flushAll()
 
-    expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'line 1\nline 2')
+    expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'line 1\nline 2', [])
     wrapper.unmount()
   })
 

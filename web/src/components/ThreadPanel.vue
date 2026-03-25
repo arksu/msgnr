@@ -32,6 +32,7 @@
             :message="rootMessage"
             :show-header="true"
             :show-thread-action="false"
+            :show-first-reaction-action="false"
           />
         </div>
 
@@ -52,6 +53,7 @@
             :message="reply"
             :show-header="shouldShowHeader(idx)"
             :show-thread-action="false"
+            :show-first-reaction-action="true"
           />
         </div>
 

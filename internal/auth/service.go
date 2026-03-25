@@ -636,6 +636,69 @@ func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID, role, us
 	}, session.ID, nil
 }
 
+// ListAuthorizedConversationIDs returns the active conversation ids visible to
+// the user at the time the session cache is initialized.
+func (s *Service) ListAuthorizedConversationIDs(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
+	if s.queries == nil {
+		return nil, fmt.Errorf("auth: queries not configured")
+	}
+	return s.queries.ListBootstrapConversationIDs(ctx, queries.ListBootstrapConversationIDsParams{
+		UserID:          userID,
+		IncludeArchived: false,
+	})
+}
+
+// CanReceiveEventWithConversationAccess checks event visibility using a
+// session-local conversation access cache. Channel-scoped self-membership
+// updates are always delivered so the cache can converge without a DB lookup.
+func (s *Service) CanReceiveEventWithConversationAccess(
+	principal Principal,
+	evt *packetspb.ServerEvent,
+	hasConversation func(conversationID string) bool,
+	grantConversation func(conversationID string),
+) (bool, string) {
+	if payload := evt.GetReadCounterUpdated(); payload != nil {
+		if payload.GetUserId() == principal.UserID.String() {
+			return true, "allowed_self_scoped"
+		}
+		return false, "denied_self_scoped"
+	}
+	if payload := evt.GetNotificationAdded(); payload != nil {
+		if payload.GetUserId() == principal.UserID.String() {
+			return true, "allowed_self_scoped"
+		}
+		return false, "denied_self_scoped"
+	}
+	if payload := evt.GetNotificationResolved(); payload != nil {
+		if payload.GetUserId() == principal.UserID.String() {
+			return true, "allowed_self_scoped"
+		}
+		return false, "denied_self_scoped"
+	}
+
+	conversationID := evt.GetConversationId()
+	if conversationID == "" {
+		return true, "allowed_workspace"
+	}
+
+	if payload := evt.GetMembershipChanged(); payload != nil && payload.GetUserId() == principal.UserID.String() {
+		switch payload.GetAction() {
+		case packetspb.MembershipAction_MEMBERSHIP_ACTION_ADDED,
+			packetspb.MembershipAction_MEMBERSHIP_ACTION_JOINED:
+			if grantConversation != nil {
+				grantConversation(conversationID)
+			}
+		}
+		return true, "allowed_membership_self"
+	}
+
+	if hasConversation != nil && hasConversation(conversationID) {
+		return true, "allowed_conversation_cache"
+	}
+
+	return false, "conversation_cache_miss"
+}
+
 // CanReceiveEvent checks if a principal is authorized to receive a given ServerEvent.
 // For channel-scoped events (conversation_id set), it verifies channel membership.
 // For workspace-wide events (conversation_id empty), all authenticated users can receive.
@@ -665,10 +728,6 @@ func (s *Service) CanReceiveEvent(ctx context.Context, principal Principal, evt 
 	if err != nil {
 		return false
 	}
-
-	// Use a timeout to avoid blocking the event pipeline
-	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
 
 	_, err = s.queries.GetChannelMember(ctx, queries.GetChannelMemberParams{
 		ChannelID: channelID,

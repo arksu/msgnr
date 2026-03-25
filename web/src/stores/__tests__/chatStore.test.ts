@@ -16,6 +16,7 @@ import {
   CallStateChangedEventSchema,
   CallStatus,
   MessageEventSchema,
+  SendMessageAckSchema,
   SubscribeThreadResponseSchema,
   NotificationAddedEventSchema,
   NotificationSummarySchema,
@@ -1557,6 +1558,7 @@ describe('chatStore phase 6 flows', () => {
 
     expect(chat.threadSummaries['root-1'].replyCount).toBe(10)
     expect(chat.threadSummaries['root-1'].lastThreadSeq).toBe(10n)
+    expect(chat.threadMessages['root-1'].every(message => message.serverConfirmed === true)).toBe(true)
   })
 
   it('subscribes from zero when only summary exists but thread replay cache is empty', () => {
@@ -1587,6 +1589,245 @@ describe('chatStore phase 6 flows', () => {
     })
 
     expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
+  it('keeps acked optimistic thread replies visible without advancing reopen replay cursor', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSubscribeThread = vi.fn()
+
+    chat.threadMessages = {
+      'root-1': [
+        buildMessage({
+          id: 'client-1',
+          channelId: 'channel-1',
+          threadSeq: 4n,
+          threadRootMessageId: 'root-1',
+          clientMsgId: 'client-1',
+          sendStatus: 'sending',
+          serverConfirmed: false,
+        }),
+      ],
+    }
+
+    chat.handleSendMessageAck(create(SendMessageAckSchema, {
+      conversationId: 'channel-1',
+      messageId: 'reply-4-server',
+      channelSeq: 40n,
+      clientMsgId: 'client-1',
+    }))
+
+    chat.openThread(buildMessage({
+      id: 'root-1',
+      channelId: 'channel-1',
+      threadSeq: 0n,
+    }))
+
+    expect(chat.threadMessages['root-1'][0].id).toBe('reply-4-server')
+    expect(chat.threadMessages['root-1'][0].serverConfirmed).toBe(false)
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
+  it('re-subscribes the active thread when summary advances beyond confirmed replies', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.sendSubscribeThread = vi.fn()
+      chat.bootstrapped = true
+      chat.messages = {
+        'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+      }
+      chat.threadMessages = {
+        'root-1': [
+          buildMessage({
+            id: 'reply-1',
+            channelId: 'channel-1',
+            threadSeq: 1n,
+            threadRootMessageId: 'root-1',
+            serverConfirmed: true,
+          }),
+        ],
+      }
+      chat.threadSummaries = {
+        'root-1': {
+          replyCount: 1,
+          lastThreadSeq: 1n,
+        },
+      }
+
+      chat.openThread(chat.messages['channel-1'][0])
+      vi.mocked(ws.sendSubscribeThread).mockClear()
+
+      chat.handleServerEvent(create(ServerEventSchema, {
+        eventSeq: 1n,
+        eventId: 'evt-thread-summary-gap',
+        eventType: EventType.THREAD_SUMMARY_UPDATED,
+        conversationId: 'channel-1',
+        payload: {
+          case: 'threadSummaryUpdated',
+          value: create(ThreadSummaryUpdatedEventSchema, {
+            conversationId: 'channel-1',
+            threadRootMessageId: 'root-1',
+            replyCount: 2,
+            lastThreadSeq: 2n,
+          }),
+        },
+      }))
+
+      vi.advanceTimersByTime(200)
+
+      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 1n)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('re-subscribes the active thread when direct unread-thread state says replies are missing', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.sendSubscribeThread = vi.fn()
+      chat.bootstrapped = true
+      chat.messages = {
+        'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+      }
+      chat.threadMessages = {
+        'root-1': [
+          buildMessage({
+            id: 'reply-1',
+            channelId: 'channel-1',
+            threadSeq: 1n,
+            threadRootMessageId: 'root-1',
+            serverConfirmed: true,
+          }),
+        ],
+      }
+      chat.threadSummaries = {
+        'root-1': {
+          replyCount: 2,
+          lastThreadSeq: 2n,
+        },
+      }
+
+      chat.openThread(chat.messages['channel-1'][0])
+      vi.mocked(ws.sendSubscribeThread).mockClear()
+
+      chat.handleServerEvent(create(ServerEventSchema, {
+        eventSeq: 0n,
+        eventType: EventType.READ_COUNTER_UPDATED,
+        conversationId: 'channel-1',
+        payload: {
+          case: 'readCounterUpdated',
+          value: create(ReadCounterUpdatedEventSchema, {
+            userId: 'user-1',
+            counter: create(UnreadCounterSchema, {
+              conversationId: 'channel-1',
+              unreadMessages: 0,
+              unreadMentions: 0,
+              hasUnreadThreadReplies: true,
+              lastReadSeq: 0n,
+            }),
+          }),
+        },
+      }))
+
+      vi.advanceTimersByTime(200)
+
+      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 1n)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not re-subscribe the active thread on unread-thread updates when the confirmed cursor is current', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.sendSubscribeThread = vi.fn()
+      chat.bootstrapped = true
+      chat.messages = {
+        'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+      }
+      chat.threadMessages = {
+        'root-1': [
+          buildMessage({
+            id: 'reply-1',
+            channelId: 'channel-1',
+            threadSeq: 1n,
+            threadRootMessageId: 'root-1',
+            serverConfirmed: true,
+          }),
+        ],
+      }
+      chat.threadSummaries = {
+        'root-1': {
+          replyCount: 1,
+          lastThreadSeq: 1n,
+        },
+      }
+
+      chat.openThread(chat.messages['channel-1'][0])
+      vi.mocked(ws.sendSubscribeThread).mockClear()
+
+      chat.handleServerEvent(create(ServerEventSchema, {
+        eventSeq: 0n,
+        eventType: EventType.READ_COUNTER_UPDATED,
+        conversationId: 'channel-1',
+        payload: {
+          case: 'readCounterUpdated',
+          value: create(ReadCounterUpdatedEventSchema, {
+            userId: 'user-1',
+            counter: create(UnreadCounterSchema, {
+              conversationId: 'channel-1',
+              unreadMessages: 0,
+              unreadMentions: 0,
+              hasUnreadThreadReplies: true,
+              lastReadSeq: 0n,
+            }),
+          }),
+        },
+      }))
+
+      vi.advanceTimersByTime(200)
+
+      expect(ws.sendSubscribeThread).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps thread summary lastThreadSeq monotonic when older summary events arrive late', () => {
+    const chat = useChatStore()
+    chat.threadSummaries = {
+      'root-1': {
+        replyCount: 4,
+        lastThreadSeq: 4n,
+      },
+    }
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-thread-summary-old',
+      eventType: EventType.THREAD_SUMMARY_UPDATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'threadSummaryUpdated',
+        value: create(ThreadSummaryUpdatedEventSchema, {
+          conversationId: 'channel-1',
+          threadRootMessageId: 'root-1',
+          replyCount: 2,
+          lastThreadSeq: 2n,
+        }),
+      },
+    }))
+
+    expect(chat.threadSummaries['root-1'].lastThreadSeq).toBe(4n)
   })
 
   it('restores persisted thread summaries after bootstrap refresh', () => {
@@ -1921,6 +2162,46 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.resolveDisplayName('user-2')).toBe('Bob')
     expect(chat.threadSummaries['message-1'].replyCount).toBe(2)
     expect(chat.threadSummaries['message-1'].lastThreadSeq).toBe(2n)
+  })
+
+  it('preserves existing reactions when authoritative history omits them for the same message id', async () => {
+    const chat = useChatStore()
+
+    chat.messages = {
+      'channel-1': [
+        buildMessage({
+          id: 'message-1',
+          channelId: 'channel-1',
+          channelSeq: 12n,
+          reactions: [{ emoji: ':+1:', count: 2 }],
+          myReactions: [':+1:'],
+        }),
+      ],
+    }
+    chatApiMocks.listConversationMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'message-1',
+          conversation_id: 'channel-1',
+          sender_id: 'user-2',
+          sender_name: 'Bob',
+          body: 'history',
+          channel_seq: '12',
+          thread_seq: '0',
+          thread_root_message_id: '',
+          mention_everyone: false,
+          created_at: '2026-03-06T00:00:00Z',
+        },
+      ],
+      has_more: false,
+      page_size: 50,
+      next_before_channel_seq: '',
+    })
+
+    await chat.ensureConversationHistory('channel-1')
+
+    expect(chat.messages['channel-1'][0].reactions).toEqual([{ emoji: ':+1:', count: 2 }])
+    expect(chat.messages['channel-1'][0].myReactions).toEqual([':+1:'])
   })
 
   it('clears initial conversation loading flag after history request resolves', async () => {

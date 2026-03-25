@@ -13,11 +13,16 @@ import (
 // Return true to deliver the event to the subscriber.
 type FilterFn func(evt *packetspb.ServerEvent) bool
 
+// OverflowFn is invoked when a subscriber channel is full and an event cannot
+// be delivered.
+type OverflowFn func(evt *packetspb.ServerEvent)
+
 // subscription holds the state for a single subscriber.
 type subscription struct {
-	id     uint64
-	ch     chan *packetspb.ServerEvent
-	filter FilterFn
+	id         uint64
+	ch         chan *packetspb.ServerEvent
+	filter     FilterFn
+	onOverflow OverflowFn
 }
 
 // Bus is an in-process pub/sub hub for ServerEvents.
@@ -45,10 +50,16 @@ func NewBus(log *zap.Logger) *Bus {
 //
 // filter may be nil to receive every event.
 func (b *Bus) Subscribe(filter FilterFn, bufferSize int) (uint64, <-chan *packetspb.ServerEvent, func()) {
+	return b.SubscribeWithOverflow(filter, bufferSize, nil)
+}
+
+// SubscribeWithOverflow registers a new subscriber and invokes onOverflow when
+// the subscriber buffer is full during Publish.
+func (b *Bus) SubscribeWithOverflow(filter FilterFn, bufferSize int, onOverflow OverflowFn) (uint64, <-chan *packetspb.ServerEvent, func()) {
 	id := b.next.Add(1)
 	ch := make(chan *packetspb.ServerEvent, bufferSize)
 
-	sub := &subscription{id: id, ch: ch, filter: filter}
+	sub := &subscription{id: id, ch: ch, filter: filter, onOverflow: onOverflow}
 
 	b.mu.Lock()
 	b.subs[id] = sub
@@ -104,6 +115,9 @@ func (b *Bus) Publish(evt *packetspb.ServerEvent) {
 				zap.Int64("event_seq", evt.GetEventSeq()),
 				zap.String("event_type", evt.GetEventType().String()),
 			)
+			if sub.onOverflow != nil {
+				sub.onOverflow(evt)
+			}
 		}
 	}
 }

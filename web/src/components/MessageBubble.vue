@@ -67,7 +67,8 @@
         <div class="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <!-- 🙂 Add reaction: hide when reactions already exist -->
           <button
-            v-if="!hasReactions && showThreadAction && !isThreadReply"
+            v-if="!hasReactions && showFirstReactionAction"
+            data-testid="first-reaction-button"
             ref="pickerToggleButton"
             class="h-7 w-7 rounded flex items-center justify-center text-gray-400 hover:text-gray-200 hover:bg-white/10 transition-colors"
             title="Add reaction"
@@ -106,7 +107,8 @@
       <!-- Hover actions for grouped messages (no header row) -->
       <div v-if="!showHeader" class="absolute right-2 top-0.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
-          v-if="!hasReactions && showThreadAction && !isThreadReply"
+          v-if="!hasReactions && showFirstReactionAction"
+          data-testid="first-reaction-button"
           ref="pickerToggleButton"
           class="h-7 w-7 rounded flex items-center justify-center text-gray-400 hover:text-gray-200 hover:bg-white/10 transition-colors"
           title="Add reaction"
@@ -538,7 +540,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onBeforeUnmount, shallowRef, nextTick } from 'vue'
+import { computed, ref, watch, onBeforeUnmount, shallowRef, nextTick, type PropType } from 'vue'
 import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
@@ -566,16 +568,31 @@ import {
   replaceTextRangeWithEntity,
 } from '@/utils/messageEntities'
 
-const props = withDefaults(defineProps<{
-  message: Message
-  showHeader: boolean
-  threadReplyCount?: number
-  showThreadAction?: boolean
-  isActiveThread?: boolean
-}>(), {
-  threadReplyCount: 0,
-  showThreadAction: true,
-  isActiveThread: false,
+const props = defineProps({
+  message: {
+    type: Object as PropType<Message>,
+    required: true,
+  },
+  showHeader: {
+    type: Boolean,
+    required: true,
+  },
+  threadReplyCount: {
+    type: Number,
+    default: 0,
+  },
+  showThreadAction: {
+    type: Boolean,
+    default: true,
+  },
+  showFirstReactionAction: {
+    type: Boolean as PropType<boolean | undefined>,
+    default: undefined,
+  },
+  isActiveThread: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 defineEmits<{
@@ -691,7 +708,16 @@ const isThreadReply = computed(() => {
   return Boolean(rootId && rootId !== props.message.id)
 })
 
-const showThreadAction = computed(() => props.showThreadAction && !isThreadReply.value)
+const showThreadAction = computed(() => {
+  if (props.showThreadAction === false) return false
+  return !isThreadReply.value
+})
+const showFirstReactionAction = computed(() => {
+  if (typeof props.showFirstReactionAction === 'boolean') {
+    return props.showFirstReactionAction
+  }
+  return showThreadAction.value
+})
 const messageAttachments = computed(() => props.message.attachments ?? [])
 const selfUserId = computed(() => auth.user?.id || chat.workspace?.selfUserId || '')
 const isOwnMessage = computed(() => Boolean(selfUserId.value) && props.message.senderId === selfUserId.value)

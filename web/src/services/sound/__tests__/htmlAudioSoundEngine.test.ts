@@ -11,6 +11,7 @@ const DEFAULT_AUDIO_PREFS: AudioPrefs = {
   autoGainControl: true,
   microphoneGain: 100,
   rnnoiseEnabled: true,
+  muteMicOnJoinCall: false,
 }
 
 describe('HtmlAudioSoundEngine', () => {

@@ -21,6 +21,7 @@ export function useAudioDevices() {
   const autoGainControl = ref<boolean>(true)
   const microphoneGain = ref<number>(100) // 0–200, 100 = unity
   const rnnoiseEnabled = ref<boolean>(true) // software noise suppression via RNNoise WASM
+  const muteMicOnJoinCall = ref<boolean>(false)
 
   // Internal refs for active streams / audio context
   let micStream: MediaStream | null = null
@@ -138,6 +139,7 @@ export function useAudioDevices() {
     autoGainControl.value = prefs.autoGainControl
     microphoneGain.value = prefs.microphoneGain
     rnnoiseEnabled.value = prefs.rnnoiseEnabled
+    muteMicOnJoinCall.value = prefs.muteMicOnJoinCall
     refreshStatuses()
 
     // Listen for device hotplug events
@@ -401,7 +403,16 @@ export function useAudioDevices() {
 
   // ── Persist ──────────────────────────────────────────────────────────────
 
-  function savePrefs(inputId: string, outputId: string, ns: boolean, ec: boolean, agc: boolean, gain: number, rnnoise: boolean): void {
+  function savePrefs(
+    inputId: string,
+    outputId: string,
+    ns: boolean,
+    ec: boolean,
+    agc: boolean,
+    gain: number,
+    rnnoise: boolean,
+    muteOnJoin: boolean,
+  ): void {
     saveAudioPrefs({
       inputDeviceId: inputId,
       outputDeviceId: outputId,
@@ -410,6 +421,7 @@ export function useAudioDevices() {
       autoGainControl: agc,
       microphoneGain: gain,
       rnnoiseEnabled: rnnoise,
+      muteMicOnJoinCall: muteOnJoin,
     })
     selectedInputId.value = inputId
     selectedOutputId.value = outputId
@@ -418,6 +430,7 @@ export function useAudioDevices() {
     autoGainControl.value = agc
     microphoneGain.value = gain
     rnnoiseEnabled.value = rnnoise
+    muteMicOnJoinCall.value = muteOnJoin
     refreshStatuses()
   }
 
@@ -460,6 +473,7 @@ export function useAudioDevices() {
     autoGainControl,
     microphoneGain,
     rnnoiseEnabled,
+    muteMicOnJoinCall,
     loadDevices,
     requestPermission,
     testMicrophone,

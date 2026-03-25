@@ -146,6 +146,8 @@ export interface Message {
   sendStatus?: SendStatus
   /** Human-readable reason when sendStatus is 'failed'. */
   failReason?: string
+  /** Internal: true once a server event or replay confirmed this thread reply. */
+  serverConfirmed?: boolean
 }
 
 interface PendingReactionOp {
@@ -389,6 +391,7 @@ export const useChatStore = defineStore('chat', () => {
   const pendingReactionOps = ref<Record<string, PendingReactionOp>>({})
   /** Tracks active send timeouts by clientMsgId. Cleared on ACK or discard. */
   const sendTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+  const threadReplayResyncTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const toast = ref<ToastState | null>(null)
   const lastAppliedEventSeq = ref<bigint>(loadLastAppliedEventSeq())
   const lastAckedEventSeq = ref<bigint>(0n)
@@ -465,6 +468,54 @@ export const useChatStore = defineStore('chat', () => {
   function upsertThreadSummary(rootId: string, summary: ThreadSummary) {
     threadSummaries.value[rootId] = summary
     persistThreadSummaries()
+  }
+
+  function clearThreadReplayResyncTimer(rootId: string) {
+    const timer = threadReplayResyncTimers.get(rootId)
+    if (!timer) return
+    clearTimeout(timer)
+    threadReplayResyncTimers.delete(rootId)
+  }
+
+  function clearAllThreadReplayResyncTimers() {
+    for (const timer of threadReplayResyncTimers.values()) {
+      clearTimeout(timer)
+    }
+    threadReplayResyncTimers.clear()
+  }
+
+  function highestConfirmedThreadSeq(rootId: string): bigint {
+    const list = threadMessages.value[rootId] ?? []
+    return list.reduce((max, message) => {
+      if (!message.serverConfirmed || message.sendStatus || message.pending) return max
+      return message.threadSeq > max ? message.threadSeq : max
+    }, 0n)
+  }
+
+  function requestThreadReplayRecovery(rootId: string, conversationId: string) {
+    if (!rootId || !conversationId) return
+    clearThreadReplayResyncTimer(rootId)
+    threadReplayResyncTimers.set(rootId, setTimeout(() => {
+      threadReplayResyncTimers.delete(rootId)
+      if (!isThreadPanelOpen.value) return
+      if (activeThreadRootId.value !== rootId || activeThreadConversationId.value !== conversationId) return
+      const ws = useWsStore()
+      if (ws.state !== 'LIVE_SYNCED') return
+      ws.sendSubscribeThread(conversationId, rootId, highestConfirmedThreadSeq(rootId))
+    }, 150))
+  }
+
+  function maybeRecoverActiveThread(rootId: string, conversationId: string, force = false) {
+    if (!isThreadPanelOpen.value) return
+    if (activeThreadRootId.value !== rootId || activeThreadConversationId.value !== conversationId) return
+    if (force) {
+      requestThreadReplayRecovery(rootId, conversationId)
+      return
+    }
+    const summary = threadSummaries.value[rootId]
+    if (!summary) return
+    if (summary.lastThreadSeq <= highestConfirmedThreadSeq(rootId)) return
+    requestThreadReplayRecovery(rootId, conversationId)
   }
 
   function logConversationPerf(label: string, payload?: unknown) {
@@ -743,6 +794,7 @@ export const useChatStore = defineStore('chat', () => {
   function resetRuntimeState() {
     clearPendingNotificationLevelChange()
     clearAllSendTimeouts()
+    clearAllThreadReplayResyncTimers()
 
     if (ackTimer) {
       clearTimeout(ackTimer)
@@ -942,18 +994,15 @@ export const useChatStore = defineStore('chat', () => {
     if (rootMessage.threadRootMessageId) return
     activeThreadConversationId.value = rootMessage.channelId
     activeThreadRootId.value = rootMessage.id
-    const cachedReplies = threadMessages.value[rootMessage.id] ?? []
     if (!threadMessages.value[rootMessage.id]) threadMessages.value[rootMessage.id] = []
-    // Subscribe from cached replay progress only. Summary-only state can exist
-    // after refresh and must not suppress replay delivery.
-    const lastKnownSeq = cachedReplies.reduce((max, message) => {
-      if (message.sendStatus || message.pending) return max
-      return message.threadSeq > max ? message.threadSeq : max
-    }, 0n)
+    // Only server-confirmed replies advance the replay cursor. ACK-only
+    // optimistic replies stay visible but must not suppress a later backfill.
+    const lastKnownSeq = highestConfirmedThreadSeq(rootMessage.id)
     useWsStore().sendSubscribeThread(rootMessage.channelId, rootMessage.id, lastKnownSeq)
   }
 
   function closeThread() {
+    clearThreadReplayResyncTimer(activeThreadRootId.value)
     activeThreadRootId.value = ''
     activeThreadConversationId.value = ''
   }
@@ -1002,6 +1051,7 @@ export const useChatStore = defineStore('chat', () => {
       attachments,
       clientMsgId,
       sendStatus: isOffline ? 'queued' : 'sending',
+      serverConfirmed: false,
     })
 
     const known = threadSummaries.value[rootId]
@@ -1587,9 +1637,13 @@ export const useChatStore = defineStore('chat', () => {
 
   function handleSubscribeThreadResponse(resp: SubscribeThreadResponse) {
     const root = resp.threadRootMessageId
+    clearThreadReplayResyncTimer(root)
     if (!threadMessages.value[root]) threadMessages.value[root] = []
     for (const evt of resp.replay) {
-      _upsertThreadMessage(root, _messageEventToMessage(evt, evt.conversationId))
+      _upsertThreadMessage(root, {
+        ..._messageEventToMessage(evt, evt.conversationId),
+        serverConfirmed: true,
+      })
     }
     const currentThreadSeq = resp.currentThreadSeq
     upsertThreadSummary(root, {
@@ -1898,6 +1952,9 @@ export const useChatStore = defineStore('chat', () => {
       targetDm.unread = counter.unreadMessages
       targetDm.hasUnreadThreadReplies = counter.hasUnreadThreadReplies
     }
+    if (counter.hasUnreadThreadReplies && activeThreadConversationId.value === counter.conversationId && activeThreadRootId.value) {
+      maybeRecoverActiveThread(activeThreadRootId.value, counter.conversationId)
+    }
   }
 
   function applyNotificationAdded(evt: NotificationAddedEvent) {
@@ -2199,6 +2256,11 @@ export const useChatStore = defineStore('chat', () => {
         lastReplyAt: msg.createdAt,
         lastReplyUserId: evt.senderId,
       })
+      if (nextLastThreadSeq <= highestConfirmedThreadSeq(rootId)) {
+        clearThreadReplayResyncTimer(rootId)
+      } else {
+        maybeRecoverActiveThread(rootId, channelId)
+      }
       return
     }
 
@@ -2284,14 +2346,16 @@ export const useChatStore = defineStore('chat', () => {
   function _onThreadSummaryUpdated(evt: ThreadSummaryUpdatedEvent) {
     const root = evt.threadRootMessageId
     const eventLastSeq = evt.lastThreadSeq >= 0n ? evt.lastThreadSeq : 0n
+    const knownLastSeq = threadSummaries.value[root]?.lastThreadSeq ?? 0n
     upsertThreadSummary(root, {
       replyCount: Math.max(0, Math.floor(Number(evt.replyCount))),
-      lastThreadSeq: eventLastSeq,
+      lastThreadSeq: knownLastSeq > eventLastSeq ? knownLastSeq : eventLastSeq,
       lastReplyAt: evt.lastThreadReplyAt
         ? new Date(Number(evt.lastThreadReplyAt.seconds) * 1000).toISOString()
         : undefined,
       lastReplyUserId: evt.lastThreadReplyUserId,
     })
+    maybeRecoverActiveThread(root, evt.conversationId)
   }
 
   function _onReactionUpdated(evt: ReactionUpdatedEvent) {
@@ -2374,6 +2438,7 @@ export const useChatStore = defineStore('chat', () => {
 
     const shouldClearRootThread = removedRoot || activeThreadRootId.value === evt.messageId
     if (shouldClearRootThread) {
+      clearThreadReplayResyncTimer(evt.messageId)
       const nextThreadMessages = { ...threadMessages.value }
       delete nextThreadMessages[evt.messageId]
       threadMessages.value = nextThreadMessages
@@ -2467,6 +2532,7 @@ export const useChatStore = defineStore('chat', () => {
         fileSize: Number(item.fileSize),
         mimeType: item.mimeType,
       })),
+      serverConfirmed: Boolean(evt.threadRootMessageId) || undefined,
     }
   }
 
@@ -2480,6 +2546,7 @@ export const useChatStore = defineStore('chat', () => {
       if (!userNames.value[item.sender_id]) {
         void ensureUserDirectory().then(() => refreshSenderLabels(item.sender_id))
       }
+      const prev = byId.get(item.id)
       byId.set(item.id, {
         id: item.id,
         channelId: item.conversation_id,
@@ -2495,8 +2562,8 @@ export const useChatStore = defineStore('chat', () => {
         mentionEveryone: item.mention_everyone,
         createdAt: item.created_at,
         editedAt: item.edited_at || undefined,
-        reactions: item.reactions ?? byId.get(item.id)?.reactions ?? [],
-        myReactions: item.my_reactions ?? byId.get(item.id)?.myReactions ?? [],
+        reactions: item.reactions ?? prev?.reactions ?? [],
+        myReactions: item.my_reactions ?? prev?.myReactions ?? [],
         attachments: (item.attachments ?? []).map(attachment => ({
           id: attachment.id,
           fileName: attachment.file_name,

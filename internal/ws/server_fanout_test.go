@@ -75,7 +75,7 @@ func TestFanout_AuthenticatedSessionReceivesServerEvent(t *testing.T) {
 
 	outboundCh := make(chan outboundMsg, srv.config.WsOutboundQueueMax+4)
 
-	unsubscribe, done := srv.startEventFanout(serverConn, testPrincipal(), outboundCh, srv.config.WsOutboundQueueMax)
+	unsubscribe, done := srv.startEventFanout(serverConn, testPrincipal(), outboundCh, srv.config.WsOutboundQueueMax, nil)
 	defer func() {
 		unsubscribe()
 		<-done
@@ -110,7 +110,7 @@ func TestFanout_OverflowClosesConn(t *testing.T) {
 	const headroom = 4
 	outboundCh := make(chan outboundMsg, headroom)
 
-	unsubscribe, done := srv.startEventFanout(serverConn, testPrincipal(), outboundCh, 0)
+	unsubscribe, done := srv.startEventFanout(serverConn, testPrincipal(), outboundCh, 0, nil)
 	defer func() {
 		unsubscribe()
 		<-done
@@ -137,7 +137,7 @@ func TestFanout_StopCompletesBeforeQueueClose(t *testing.T) {
 	_, serverConn := pipeConn(t)
 
 	outboundCh := make(chan outboundMsg, 8)
-	unsubscribe, done := srv.startEventFanout(serverConn, testPrincipal(), outboundCh, srv.config.WsOutboundQueueMax)
+	unsubscribe, done := srv.startEventFanout(serverConn, testPrincipal(), outboundCh, srv.config.WsOutboundQueueMax, nil)
 
 	unsubscribe()
 	select {
@@ -174,6 +174,7 @@ func TestFanout_CallStateChangedDeliveredOnlyToAuthorizedMembers(t *testing.T) {
 		testPrincipalWithUser(memberID.String(), "00000000-0000-0000-0000-00000000000a"),
 		memberOutbound,
 		srv.config.WsOutboundQueueMax,
+		nil,
 	)
 	defer func() {
 		memberUnsubscribe()
@@ -184,6 +185,7 @@ func TestFanout_CallStateChangedDeliveredOnlyToAuthorizedMembers(t *testing.T) {
 		testPrincipalWithUser(nonMemberID.String(), "00000000-0000-0000-0000-00000000000b"),
 		nonMemberOutbound,
 		srv.config.WsOutboundQueueMax,
+		nil,
 	)
 	defer func() {
 		nonMemberUnsubscribe()
@@ -217,6 +219,191 @@ func TestFanout_CallStateChangedDeliveredOnlyToAuthorizedMembers(t *testing.T) {
 	select {
 	case <-nonMemberOutbound:
 		t.Fatal("non-member unexpectedly received call_state_changed event")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestFanout_ConversationCacheAllowsOrdinaryMessageWithoutFallback(t *testing.T) {
+	bus := events.NewBus(zap.NewNop())
+	srv := newTestServer(bus)
+	srv.authSvc = &auth.Service{}
+
+	targetConversation := uuid.NewString()
+	conversationUUID := uuid.MustParse(targetConversation)
+	principal := testPrincipal()
+	_, serverConn := pipeConn(t)
+	outboundCh := make(chan outboundMsg, srv.config.WsOutboundQueueMax+4)
+	state := newSessionState([]uuid.UUID{conversationUUID}, true, nil)
+
+	srv.authorizeEvent = func(_ context.Context, _ auth.Principal, _ *packetspb.ServerEvent) bool {
+		t.Fatal("fallback authorizer should not be called for cached conversations")
+		return false
+	}
+
+	unsubscribe, done := srv.startEventFanout(serverConn, principal, outboundCh, srv.config.WsOutboundQueueMax, state)
+	defer func() {
+		unsubscribe()
+		<-done
+	}()
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:       11,
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+		ConversationId: targetConversation,
+		Payload: &packetspb.ServerEvent_MessageCreated{
+			MessageCreated: &packetspb.MessageEvent{
+				ConversationId: targetConversation,
+				MessageId:      "message-11",
+			},
+		},
+	})
+
+	select {
+	case msg := <-outboundCh:
+		require.NotNil(t, msg.env)
+		require.NotNil(t, msg.env.GetServerEvent())
+		assert.Equal(t, int64(11), msg.env.GetServerEvent().GetEventSeq())
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cached message_created event")
+	}
+}
+
+func TestFanout_ConversationUpsertFallbackPopulatesConversationCache(t *testing.T) {
+	bus := events.NewBus(zap.NewNop())
+	srv := newTestServer(bus)
+	srv.authSvc = &auth.Service{}
+
+	targetConversation := uuid.NewString()
+	principal := testPrincipal()
+	_, serverConn := pipeConn(t)
+	outboundCh := make(chan outboundMsg, srv.config.WsOutboundQueueMax+4)
+	state := newSessionState(nil, true, nil)
+	fallbackCalls := 0
+
+	srv.authorizeEvent = func(_ context.Context, _ auth.Principal, evt *packetspb.ServerEvent) bool {
+		fallbackCalls++
+		return evt.GetConversationId() == targetConversation
+	}
+
+	unsubscribe, done := srv.startEventFanout(serverConn, principal, outboundCh, srv.config.WsOutboundQueueMax, state)
+	defer func() {
+		unsubscribe()
+		<-done
+	}()
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:       21,
+		EventType:      packetspb.EventType_EVENT_TYPE_CONVERSATION_UPSERTED,
+		ConversationId: targetConversation,
+		Payload: &packetspb.ServerEvent_ConversationUpserted{
+			ConversationUpserted: &packetspb.ConversationUpsertedEvent{
+				Conversation: &packetspb.ConversationSummary{
+					ConversationId:   targetConversation,
+					ConversationType: packetspb.ConversationType_CONVERSATION_TYPE_CHANNEL_PUBLIC,
+					Title:            "general",
+				},
+			},
+		},
+	})
+
+	select {
+	case msg := <-outboundCh:
+		require.NotNil(t, msg.env)
+		require.NotNil(t, msg.env.GetServerEvent())
+		assert.Equal(t, packetspb.EventType_EVENT_TYPE_CONVERSATION_UPSERTED, msg.env.GetServerEvent().GetEventType())
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for conversation_upserted event")
+	}
+
+	srv.authorizeEvent = func(_ context.Context, _ auth.Principal, _ *packetspb.ServerEvent) bool {
+		t.Fatal("fallback authorizer should not be called after conversation cache is updated")
+		return false
+	}
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:       22,
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+		ConversationId: targetConversation,
+		Payload: &packetspb.ServerEvent_MessageCreated{
+			MessageCreated: &packetspb.MessageEvent{
+				ConversationId: targetConversation,
+				MessageId:      "message-22",
+			},
+		},
+	})
+
+	select {
+	case msg := <-outboundCh:
+		require.NotNil(t, msg.env)
+		require.NotNil(t, msg.env.GetServerEvent())
+		assert.Equal(t, int64(22), msg.env.GetServerEvent().GetEventSeq())
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for message_created after conversation cache update")
+	}
+
+	assert.Equal(t, 1, fallbackCalls)
+}
+
+func TestDirectEnvelope_ConversationRemovedRevokesConversationCache(t *testing.T) {
+	bus := events.NewBus(zap.NewNop())
+	srv := newTestServer(bus)
+	srv.authSvc = &auth.Service{}
+
+	targetConversation := uuid.NewString()
+	principal := testPrincipal()
+	_, serverConn := pipeConn(t)
+	outboundCh := make(chan outboundMsg, srv.config.WsOutboundQueueMax+4)
+	state := newSessionState([]uuid.UUID{uuid.MustParse(targetConversation)}, true, nil)
+	unregister := srv.registerUserSession(principal.UserID.String(), outboundCh, state)
+	defer unregister()
+
+	unsubscribe, done := srv.startEventFanout(serverConn, principal, outboundCh, srv.config.WsOutboundQueueMax, state)
+	defer func() {
+		unsubscribe()
+		<-done
+	}()
+
+	srv.sendDirectEnvelope([]string{principal.UserID.String()}, &packetspb.Envelope{
+		ProtocolVersion: protocolVersion,
+		Payload: &packetspb.Envelope_ServerEvent{
+			ServerEvent: &packetspb.ServerEvent{
+				EventType:      packetspb.EventType_EVENT_TYPE_CONVERSATION_REMOVED,
+				ConversationId: targetConversation,
+				Payload: &packetspb.ServerEvent_ConversationRemoved{
+					ConversationRemoved: &packetspb.ConversationRemovedEvent{
+						ConversationId: targetConversation,
+					},
+				},
+			},
+		},
+	})
+
+	select {
+	case <-outboundCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for direct conversation_removed event")
+	}
+
+	srv.authorizeEvent = func(_ context.Context, _ auth.Principal, _ *packetspb.ServerEvent) bool {
+		t.Fatal("fallback authorizer should not be called after conversation removal")
+		return false
+	}
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:       31,
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+		ConversationId: targetConversation,
+		Payload: &packetspb.ServerEvent_MessageCreated{
+			MessageCreated: &packetspb.MessageEvent{
+				ConversationId: targetConversation,
+				MessageId:      "message-31",
+			},
+		},
+	})
+
+	select {
+	case msg := <-outboundCh:
+		t.Fatalf("unexpected event after conversation cache revoke: %#v", msg.env)
 	case <-time.After(200 * time.Millisecond):
 	}
 }
@@ -296,8 +483,8 @@ func TestSendTaskStatusChangedBroadcastsToActiveSessions(t *testing.T) {
 	srv := newTestServer(nil)
 	sessionA := make(chan outboundMsg, 1)
 	sessionB := make(chan outboundMsg, 1)
-	unregisterA := srv.registerUserSession("user-a", sessionA)
-	unregisterB := srv.registerUserSession("user-b", sessionB)
+	unregisterA := srv.registerUserSession("user-a", sessionA, newSessionState(nil, false, nil))
+	unregisterB := srv.registerUserSession("user-b", sessionB, newSessionState(nil, false, nil))
 	defer unregisterA()
 	defer unregisterB()
 

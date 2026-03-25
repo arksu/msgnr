@@ -10,6 +10,7 @@ export interface AudioPrefs {
   autoGainControl: boolean
   microphoneGain: number   // 0–400, 100 = unity (only active when autoGainControl is off)
   rnnoiseEnabled: boolean  // software noise suppression via RNNoise WASM AudioWorklet
+  muteMicOnJoinCall: boolean
 }
 
 const DEFAULT_PREFS: AudioPrefs = {
@@ -20,6 +21,7 @@ const DEFAULT_PREFS: AudioPrefs = {
   autoGainControl: true,
   microphoneGain: 100,
   rnnoiseEnabled: true,
+  muteMicOnJoinCall: false,
 }
 
 function parseBool(value: unknown, fallback: boolean): boolean {
@@ -42,6 +44,7 @@ export function loadAudioPrefs(): AudioPrefs {
         ? parsed.microphoneGain
         : DEFAULT_PREFS.microphoneGain,
       rnnoiseEnabled: parseBool(parsed.rnnoiseEnabled, DEFAULT_PREFS.rnnoiseEnabled),
+      muteMicOnJoinCall: parseBool(parsed.muteMicOnJoinCall, DEFAULT_PREFS.muteMicOnJoinCall),
     }
   } catch {
     return { ...DEFAULT_PREFS }

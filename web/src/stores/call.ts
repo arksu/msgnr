@@ -1806,6 +1806,7 @@ export const useCallStore = defineStore('call', () => {
     const { conversationId, kind, visibility } = args
     const inviteeUserIds = args.inviteeUserIds ?? []
     const joinExistingOnly = args.joinExistingOnly ?? false
+    const audioPrefs = loadAudioPrefs()
     const currentActive = chatStore.activeCalls.find(call => call.conversationId === conversationId)
     callDebug('startOrJoinCall invoked', {
       conversationId,
@@ -1890,7 +1891,7 @@ export const useCallStore = defineStore('call', () => {
       mediaVersion.value += 1
       startRemoteAudioStatsLoop(nextRoom)
       micEnabled.value = false
-      if (canUseMediaDevices) {
+      if (canUseMediaDevices && !audioPrefs.muteMicOnJoinCall) {
         try {
           await enableMicrophoneWithProcessing(nextRoom)
         } catch (err) {

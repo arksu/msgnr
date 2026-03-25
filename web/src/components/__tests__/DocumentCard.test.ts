@@ -3,6 +3,13 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import DocumentCard from '@/components/documents/DocumentCard.vue'
 
+const platformMocks = vi.hoisted(() => ({
+  getPlatformOrNull: vi.fn(),
+  initPlatform: vi.fn(),
+  exportDocumentToPdfBlob: vi.fn(),
+  buildDocumentPdfFileName: vi.fn(),
+}))
+
 const documentsStoreMock = reactive({
   selectedDocument: null as null | {
     id: string
@@ -50,9 +57,28 @@ vi.mock('@/stores/documents', () => ({
   useDocumentsStore: () => documentsStoreMock,
 }))
 
+vi.mock('@/platform', () => ({
+  getPlatformOrNull: platformMocks.getPlatformOrNull,
+  initPlatform: platformMocks.initPlatform,
+}))
+
+vi.mock('@/services/taskPdfExport', () => ({
+  exportDocumentToPdfBlob: platformMocks.exportDocumentToPdfBlob,
+  buildDocumentPdfFileName: platformMocks.buildDocumentPdfFileName,
+}))
+
 describe('DocumentCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    const platform = {
+      files: {
+        saveBlob: vi.fn(async () => ({ saved: true })),
+      },
+    }
+    platformMocks.getPlatformOrNull.mockReturnValue(platform)
+    platformMocks.initPlatform.mockResolvedValue(platform)
+    platformMocks.exportDocumentToPdfBlob.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }))
+    platformMocks.buildDocumentPdfFileName.mockReturnValue('Design doc.pdf')
     documentsStoreMock.selectedDocument = {
       id: 'doc-3',
       teamspace_id: 'teamspace-1',
@@ -116,5 +142,36 @@ describe('DocumentCard', () => {
     expect(breadcrumb.text()).toContain('Projects')
     expect(breadcrumb.text()).toContain('Section')
     expect(breadcrumb.text()).toContain('Design doc')
+  })
+
+  it('exports the current document to PDF through the platform adapter', async () => {
+    const wrapper = mount(DocumentCard, {
+      global: {
+        stubs: {
+          UserAvatar: true,
+          Teleport: true,
+          TaskDescriptionEditor: {
+            props: ['modelValue'],
+            emits: ['update:modelValue'],
+            template: '<textarea data-testid="document-content-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="document-content-stub"]').setValue('## Updated content')
+    await wrapper.get('[data-testid="document-export-pdf"]').trigger('click')
+    await flushPromises()
+
+    expect(platformMocks.exportDocumentToPdfBlob).toHaveBeenCalledWith({
+      title: 'Design doc',
+      content_markdown: '## Updated content',
+    })
+    const platform = platformMocks.getPlatformOrNull.mock.results[0]?.value
+    expect(platform.files.saveBlob).toHaveBeenCalledWith(expect.objectContaining({
+      suggestedName: 'Design doc.pdf',
+      mimeType: 'application/pdf',
+    }))
   })
 })

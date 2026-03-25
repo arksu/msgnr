@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
+import type { DocumentItem } from '@/services/http/documentsApi'
 import type { Task } from '@/services/http/tasksApi'
 import { fetchOwnedAttachmentBlob } from '@/services/http/attachmentOwnersApi'
 import { splitMarkdownWithAttachmentBlocks, type AttachmentToken } from '@/utils/attachmentMarkdown'
@@ -37,13 +38,37 @@ export interface TaskPdfExportDocument {
   blocks: TaskPdfExportBlock[]
 }
 
+export interface MarkdownPdfExportSource {
+  header: string
+  markdown: string | null
+  fileName: string
+}
+
 export function buildTaskPdfFileName(task: Pick<Task, 'public_id'>): string {
   const publicId = task.public_id?.trim() || 'task'
   return `${publicId}.pdf`
 }
 
+export function buildDocumentPdfFileName(document: Pick<DocumentItem, 'title'>): string {
+  const sanitized = sanitizePdfFileNameStem(document.title)
+  return `${sanitized}.pdf`
+}
+
 function buildTaskPdfHeader(task: Pick<Task, 'public_id' | 'title'>): string {
   return `${task.public_id} ${task.title}`.trim()
+}
+
+function buildDocumentPdfHeader(document: Pick<DocumentItem, 'title'>): string {
+  return document.title.trim() || 'Document'
+}
+
+function sanitizePdfFileNameStem(value: string | null | undefined): string {
+  const sanitized = (value ?? '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+|\.+$/g, '')
+  return sanitized || 'document'
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -84,12 +109,12 @@ async function buildAttachmentBlock(token: AttachmentToken): Promise<TaskPdfExpo
   }
 }
 
-export async function buildTaskPdfExportDocument(
-  task: Pick<Task, 'public_id' | 'title' | 'description'>,
+export async function buildMarkdownPdfExportDocument(
+  source: MarkdownPdfExportSource,
 ): Promise<TaskPdfExportDocument> {
   const blocks: TaskPdfExportBlock[] = []
 
-  for (const block of splitMarkdownWithAttachmentBlocks(task.description ?? '')) {
+  for (const block of splitMarkdownWithAttachmentBlocks(source.markdown ?? '')) {
     if (block.type === 'markdown') {
       if (block.content.trim() === '') continue
       blocks.push({
@@ -102,10 +127,30 @@ export async function buildTaskPdfExportDocument(
   }
 
   return {
-    fileName: buildTaskPdfFileName(task),
-    header: buildTaskPdfHeader(task),
+    fileName: source.fileName,
+    header: source.header,
     blocks,
   }
+}
+
+export async function buildTaskPdfExportDocument(
+  task: Pick<Task, 'public_id' | 'title' | 'description'>,
+): Promise<TaskPdfExportDocument> {
+  return buildMarkdownPdfExportDocument({
+    fileName: buildTaskPdfFileName(task),
+    header: buildTaskPdfHeader(task),
+    markdown: task.description,
+  })
+}
+
+export async function buildDocumentPdfExportDocument(
+  document: Pick<DocumentItem, 'title' | 'content_markdown'>,
+): Promise<TaskPdfExportDocument> {
+  return buildMarkdownPdfExportDocument({
+    fileName: buildDocumentPdfFileName(document),
+    header: buildDocumentPdfHeader(document),
+    markdown: document.content_markdown,
+  })
 }
 
 function buildStyles(): string {
@@ -470,8 +515,23 @@ export async function exportTaskToPdfBlob(
   }
 
   const documentModel = await buildTaskPdfExportDocument(task)
+  return exportPdfDocumentModelToBlob(documentModel)
+}
+
+export async function exportDocumentToPdfBlob(
+  documentItem: Pick<DocumentItem, 'title' | 'content_markdown'>,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('PDF export is only available in the browser.')
+  }
+
+  const documentModel = await buildDocumentPdfExportDocument(documentItem)
+  return exportPdfDocumentModelToBlob(documentModel)
+}
+
+async function exportPdfDocumentModelToBlob(documentModel: TaskPdfExportDocument): Promise<Blob> {
   const { host, captureTarget } = renderTaskPdfExportRoot(documentModel)
-  document.body.appendChild(host)
+  window.document.body.appendChild(host)
 
   try {
     await waitForImages(captureTarget)

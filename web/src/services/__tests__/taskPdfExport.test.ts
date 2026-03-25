@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fetchOwnedAttachmentBlob } from '@/services/http/attachmentOwnersApi'
 import {
+  buildDocumentPdfExportDocument,
+  buildDocumentPdfFileName,
+  buildMarkdownPdfExportDocument,
   buildTaskPdfExportDocument,
   buildTaskPdfFileName,
 } from '@/services/taskPdfExport'
@@ -16,6 +19,10 @@ describe('taskPdfExport', () => {
 
   it('builds the expected PDF filename', () => {
     expect(buildTaskPdfFileName({ public_id: 'TASK-1' })).toBe('TASK-1.pdf')
+  })
+
+  it('builds the expected document PDF filename', () => {
+    expect(buildDocumentPdfFileName({ title: 'Design / spec: v1?' })).toBe('Design spec v1.pdf')
   })
 
   it('renders markdown blocks into export html', async () => {
@@ -66,6 +73,39 @@ describe('taskPdfExport', () => {
         kind: 'file',
         fileName: 'Spec.pdf',
       },
+    ])
+  })
+
+  it('builds a generic markdown PDF document', async () => {
+    const documentModel = await buildMarkdownPdfExportDocument({
+      fileName: 'doc.pdf',
+      header: 'Document title',
+      markdown: 'Paragraph',
+    })
+
+    expect(documentModel.fileName).toBe('doc.pdf')
+    expect(documentModel.header).toBe('Document title')
+    expect(documentModel.blocks).toEqual([
+      expect.objectContaining({
+        kind: 'markdown',
+        html: expect.stringContaining('<p>Paragraph</p>'),
+      }),
+    ])
+  })
+
+  it('renders document markdown into the shared export model', async () => {
+    const documentModel = await buildDocumentPdfExportDocument({
+      title: 'Design doc',
+      content_markdown: '## Heading\n\nBody paragraph',
+    })
+
+    expect(documentModel.fileName).toBe('Design doc.pdf')
+    expect(documentModel.header).toBe('Design doc')
+    expect(documentModel.blocks).toEqual([
+      expect.objectContaining({
+        kind: 'markdown',
+        html: expect.stringContaining('<h2>Heading</h2>'),
+      }),
     ])
   })
 })

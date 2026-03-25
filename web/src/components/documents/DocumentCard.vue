@@ -61,14 +61,25 @@
           </div>
         </div>
       </div>
-      <button
-        type="button"
-        data-testid="documents-history-button"
-        class="rounded border border-chat-border px-2 py-1 text-xs text-gray-300 transition-colors hover:border-accent/50 hover:text-white"
-        @click="openHistoryModal"
-      >
-        History
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          data-testid="document-export-pdf"
+          class="rounded border border-chat-border px-2 py-1 text-xs text-gray-300 transition-colors hover:border-accent/50 hover:text-white disabled:opacity-50"
+          :disabled="exportingPdf"
+          @click="exportDocumentPdf"
+        >
+          {{ exportingPdf ? 'Exporting...' : 'Export to PDF' }}
+        </button>
+        <button
+          type="button"
+          data-testid="documents-history-button"
+          class="rounded border border-chat-border px-2 py-1 text-xs text-gray-300 transition-colors hover:border-accent/50 hover:text-white"
+          @click="openHistoryModal"
+        >
+          History
+        </button>
+      </div>
     </div>
 
     <div class="flex-1 overflow-y-auto px-6 py-4">
@@ -183,6 +194,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { DocumentHistoryItem, SidebarDocumentNode } from '@/services/http/documentsApi'
 import { useDocumentsStore } from '@/stores/documents'
+import { getPlatformOrNull, initPlatform } from '@/platform'
+import { exportDocumentToPdfBlob, buildDocumentPdfFileName } from '@/services/taskPdfExport'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 
@@ -196,6 +209,7 @@ const titleEditing = ref(false)
 const titleDraft = ref('')
 const contentDraft = ref('')
 const saveError = ref('')
+const exportingPdf = ref(false)
 const titleInputRef = ref<HTMLInputElement | null>(null)
 const autosaveDelayMs = 20_000
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -372,6 +386,39 @@ async function saveTitle() {
 async function saveContent() {
   clearAutosaveTimer()
   await persistDraft()
+}
+
+function exportTitleValue(): string {
+  const draft = titleDraft.value.trim()
+  if (titleEditing.value && draft !== '') {
+    return draft
+  }
+  return documentItem.value?.title ?? ''
+}
+
+async function exportDocumentPdf() {
+  const current = documentItem.value
+  if (!current || exportingPdf.value) return
+
+  exportingPdf.value = true
+  saveError.value = ''
+  try {
+    const exportPayload = {
+      title: exportTitleValue(),
+      content_markdown: contentDraft.value,
+    }
+    const blob = await exportDocumentToPdfBlob(exportPayload)
+    const platform = getPlatformOrNull() ?? await initPlatform()
+    await platform.files.saveBlob({
+      blob,
+      suggestedName: buildDocumentPdfFileName(exportPayload),
+      mimeType: 'application/pdf',
+    })
+  } catch (e) {
+    saveError.value = e instanceof Error ? e.message : 'Failed to export PDF'
+  } finally {
+    exportingPdf.value = false
+  }
 }
 
 async function openHistoryModal() {

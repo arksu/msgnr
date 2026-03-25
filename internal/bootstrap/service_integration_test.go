@@ -15,6 +15,7 @@ import (
 
 	"msgnr/internal/auth"
 	"msgnr/internal/bootstrap"
+	"msgnr/internal/chat"
 	"msgnr/internal/config"
 	"msgnr/internal/events"
 	packetspb "msgnr/internal/gen/proto"
@@ -150,6 +151,43 @@ func TestIntegration_Bootstrap_FirstPageAndContinuation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, persisted)
 	assert.NotEqual(t, first.GetConversations()[0].GetConversationId(), second.GetConversations()[0].GetConversationId())
+}
+
+func TestIntegration_Bootstrap_SelfDmConversationSummary(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	cfg := &config.Config{
+		BootstrapDefaultPageSize: 5,
+		BootstrapMaxPageSize:     5,
+		BootstrapSessionTTL:      5 * time.Minute,
+	}
+	bootstrapSvc := bootstrap.NewService(pool, cfg)
+	chatSvc := chat.NewService(pool, store)
+
+	seedBootstrapWorkspace(t, ctx, pool)
+	userID := seedBootstrapUserWithIdentity(t, ctx, pool, "Ada", "ada_"+uuid.NewString()+"@example.com")
+	_, err := pool.Exec(ctx, `INSERT INTO user_presence (user_id, status) VALUES ($1, 'online')`, userID)
+	require.NoError(t, err)
+
+	_, err = chatSvc.CreateOrOpenDirectMessage(ctx, userID, userID)
+	require.NoError(t, err)
+
+	principal := auth.Principal{UserID: userID, SessionID: uuid.New(), Role: "member"}
+	resp, err := bootstrapSvc.Bootstrap(ctx, principal, &packetspb.BootstrapRequest{
+		ClientInstanceId: "client-self-dm",
+		PageSizeHint:     5,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetConversations(), 1)
+
+	dm := resp.GetConversations()[0]
+	assert.Equal(t, packetspb.ConversationType_CONVERSATION_TYPE_DM, dm.GetConversationType())
+	assert.Equal(t, "Ada", dm.GetTitle())
+	assert.Equal(t, userID.String(), dm.GetTopic())
+	assert.Equal(t, int32(1), dm.GetMemberCount())
+	assert.Equal(t, packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE, dm.GetPresence())
 }
 
 func TestIntegration_Bootstrap_ClientMismatchRejected(t *testing.T) {

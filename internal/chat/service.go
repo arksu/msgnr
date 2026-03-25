@@ -37,6 +37,7 @@ var (
 	ErrInvalidThread              = errors.New("thread root does not belong to channel")
 	ErrInvalidDMTarget            = errors.New("invalid dm target")
 	ErrBlockedDMTarget            = errors.New("blocked dm target")
+	ErrSelfDMProtected            = errors.New("self dm cannot be archived")
 	ErrAttachmentNotFound         = errors.New("attachment not found")
 	ErrAttachmentNotStaged        = errors.New("attachment is already linked to a message")
 	ErrAttachmentOwnership        = errors.New("attachment does not belong to sender")
@@ -677,6 +678,31 @@ func (s *Service) JoinPublicChannels(ctx context.Context, requesterID uuid.UUID,
 // LeaveConversation archives requester membership from an existing
 // conversation. The conversation and messages are preserved.
 func (s *Service) LeaveConversation(ctx context.Context, requesterID, conversationID uuid.UUID) (LeaveConversationResult, error) {
+	var isSelfDM bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			  FROM channels c
+			  JOIN channel_members cm
+			    ON cm.channel_id = c.id
+			   AND cm.user_id = $2
+			 WHERE c.id = $1
+			   AND c.kind = 'dm'
+			   AND c.visibility = 'dm'
+			   AND (
+				SELECT COUNT(*)
+				  FROM channel_members cm2
+				 WHERE cm2.channel_id = c.id
+			   ) = 1
+		)`,
+		conversationID, requesterID,
+	).Scan(&isSelfDM); err != nil {
+		return LeaveConversationResult{}, fmt.Errorf("chat.LeaveConversation self dm check: %w", err)
+	}
+	if isSelfDM {
+		return LeaveConversationResult{}, ErrSelfDMProtected
+	}
+
 	result, err := s.pool.Exec(ctx, `
 		UPDATE channel_members
 		   SET is_archived = true
@@ -1158,7 +1184,7 @@ func (s *Service) ListReactionUsers(
 
 // CreateOrOpenDirectMessage returns the existing 1:1 DM for the pair or creates it.
 func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, targetUserID uuid.UUID) (CreateDMResult, error) {
-	if requesterID == targetUserID || targetUserID == uuid.Nil {
+	if targetUserID == uuid.Nil {
 		return CreateDMResult{}, ErrInvalidDMTarget
 	}
 
@@ -1168,6 +1194,75 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 			return CreateDMResult{}, ErrBlockedDMTarget
 		}
 		return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage lookup target: %w", err)
+	}
+
+	if requesterID == targetUserID {
+		existing, restoredRows, foundExisting, err := s.findAndRestoreExistingDirectMessage(ctx, requesterID, targetUserID)
+		if err != nil {
+			return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage restore existing self dm: %w", err)
+		}
+		if foundExisting {
+			existing.UserID = requesterID
+			existing.DisplayName = target.DisplayName
+			existing.Email = target.Email
+			existing.AvatarURL = target.AvatarURL
+
+			result := CreateDMResult{DM: existing}
+			if restoredRows > 0 {
+				self, err := s.lookupActiveDMUser(ctx, requesterID)
+				if err != nil {
+					return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage lookup self requester: %w", err)
+				}
+				result.DirectDeliveries = s.buildDMConversationUpsertedDeliveries(existing.ConversationID, self, self)
+			}
+			return result, nil
+		}
+
+		self, err := s.lookupActiveDMUser(ctx, requesterID)
+		if err != nil {
+			return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage lookup self requester: %w", err)
+		}
+
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage begin self tx: %w", err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck
+
+		var conversationID uuid.UUID
+		err = tx.QueryRow(ctx, `
+			INSERT INTO channels (kind, visibility, name, created_by)
+			VALUES ('dm', 'dm', '', $1)
+			RETURNING id`,
+			requesterID,
+		).Scan(&conversationID)
+		if err != nil {
+			return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage insert self channel: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO channel_members (channel_id, user_id)
+			VALUES ($1, $2)`,
+			conversationID, requesterID,
+		); err != nil {
+			return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage insert self members: %w", err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage commit self tx: %w", err)
+		}
+
+		dm := DirectMessage{
+			ConversationID: conversationID,
+			UserID:         self.UserID,
+			DisplayName:    self.DisplayName,
+			Email:          self.Email,
+			AvatarURL:      self.AvatarURL,
+			Kind:           "dm",
+			Visibility:     "dm",
+		}
+		deliveries := s.buildDMConversationUpsertedDeliveries(conversationID, self, self)
+		return CreateDMResult{DM: dm, DirectDeliveries: deliveries}, nil
 	}
 
 	existing, restoredRows, foundExisting, err := s.findAndRestoreExistingDirectMessage(ctx, requesterID, targetUserID)
@@ -3586,25 +3681,44 @@ func (s *Service) findAndRestoreExistingDirectMessage(
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var dm DirectMessage
-	err = tx.QueryRow(ctx, `
-		SELECT c.id, c.kind, c.visibility
-		  FROM channels c
-		  JOIN channel_members cm1
-		    ON cm1.channel_id = c.id
-		   AND cm1.user_id = $1
-		  JOIN channel_members cm2
-		    ON cm2.channel_id = c.id
-		   AND cm2.user_id = $2
-		 WHERE c.kind = 'dm'
-		   AND c.visibility = 'dm'
-		   AND (
-		   	SELECT COUNT(*)
-		   	  FROM channel_members cm
-		   	 WHERE cm.channel_id = c.id
-		   ) = 2
-		 LIMIT 1`,
-		requesterID, targetUserID,
-	).Scan(&dm.ConversationID, &dm.Kind, &dm.Visibility)
+	if requesterID == targetUserID {
+		err = tx.QueryRow(ctx, `
+			SELECT c.id, c.kind, c.visibility
+			  FROM channels c
+			  JOIN channel_members cm
+			    ON cm.channel_id = c.id
+			   AND cm.user_id = $1
+			 WHERE c.kind = 'dm'
+			   AND c.visibility = 'dm'
+			   AND (
+				SELECT COUNT(*)
+				  FROM channel_members cm2
+				 WHERE cm2.channel_id = c.id
+			   ) = 1
+			 LIMIT 1`,
+			requesterID,
+		).Scan(&dm.ConversationID, &dm.Kind, &dm.Visibility)
+	} else {
+		err = tx.QueryRow(ctx, `
+			SELECT c.id, c.kind, c.visibility
+			  FROM channels c
+			  JOIN channel_members cm1
+			    ON cm1.channel_id = c.id
+			   AND cm1.user_id = $1
+			  JOIN channel_members cm2
+			    ON cm2.channel_id = c.id
+			   AND cm2.user_id = $2
+			 WHERE c.kind = 'dm'
+			   AND c.visibility = 'dm'
+			   AND (
+			   	SELECT COUNT(*)
+			   	  FROM channel_members cm
+			   	 WHERE cm.channel_id = c.id
+			   ) = 2
+			 LIMIT 1`,
+			requesterID, targetUserID,
+		).Scan(&dm.ConversationID, &dm.Kind, &dm.Visibility)
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return DirectMessage{}, 0, false, nil
@@ -3634,14 +3748,19 @@ func (s *Service) findAndRestoreExistingDirectMessage(
 
 // buildDMConversationUpsertedDeliveries builds two direct-delivery
 // conversation_upserted events for a freshly created DM — one per participant.
-// Each event is viewer-relative: the Title and Topic reflect the *other* user
-// so the frontend sidebar shows the correct display name and can look up the
-// peer by user_id (stored in Topic, matching the bootstrap SQL convention).
+// For a self-DM, it returns a single viewer-relative event for the owner.
+// Each event is viewer-relative: the Title and Topic reflect the other user,
+// or the viewer for self-DM, so the frontend sidebar shows the correct display
+// name and can look up the peer by user_id (stored in Topic).
 func (s *Service) buildDMConversationUpsertedDeliveries(
 	conversationID uuid.UUID,
 	requester, target DMCandidate,
 ) []DirectDelivery {
 	now := timestamppb.Now()
+	memberCount := int32(2)
+	if requester.UserID == target.UserID {
+		memberCount = 1
+	}
 	build := func(recipientID, peerID uuid.UUID, peerName, peerEmail, peerPresence string) DirectDelivery {
 		title := peerName
 		if title == "" {
@@ -3653,7 +3772,7 @@ func (s *Service) buildDMConversationUpsertedDeliveries(
 			Title:            title,
 			Topic:            peerID.String(), // frontend uses Topic to identify the DM peer
 			LastActivityAt:   now,
-			MemberCount:      2,
+			MemberCount:      memberCount,
 			Presence:         mapPresenceStatus(peerPresence),
 		}
 		evt := &packetspb.ServerEvent{
@@ -3667,6 +3786,12 @@ func (s *Service) buildDMConversationUpsertedDeliveries(
 			},
 		}
 		return DirectDelivery{UserID: recipientID.String(), Event: evt}
+	}
+
+	if requester.UserID == target.UserID {
+		return []DirectDelivery{
+			build(requester.UserID, requester.UserID, requester.DisplayName, requester.Email, requester.Presence),
+		}
 	}
 
 	return []DirectDelivery{

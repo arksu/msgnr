@@ -202,6 +202,7 @@
                   />
                   <div class="border-t border-white/10 p-1">
                     <button
+                      v-if="!isSelfDirectMessage(dm.id)"
                       :data-testid="`conversation-leave-dm-${dm.id}`"
                       class="w-full text-left px-2 py-1 rounded text-xs text-red-300 hover:bg-sidebar-hover disabled:opacity-50"
                       :disabled="isLeavingConversation('dm', dm.id)"
@@ -555,6 +556,9 @@ function closeConversationMenus() {
 }
 
 async function leaveConversationFromSidebar(kind: 'channel' | 'dm', conversationId: string) {
+  if (kind === 'dm' && isSelfDirectMessage(conversationId)) {
+    return
+  }
   const key = conversationMenuKey(kind, conversationId)
   leavingConversationKey.value = key
   conversationActionError.value = ''
@@ -585,17 +589,26 @@ async function openDmPicker() {
   dmPickerError.value = ''
   try {
     const candidates = await listDmCandidates()
+    const selfCandidate = sidebarIdentity.value.userId
+      ? [{
+          userId: sidebarIdentity.value.userId,
+          displayName: sidebarIdentity.value.displayName || authStore.user?.email || sidebarIdentity.value.fallback,
+          email: authStore.user?.email ?? '',
+          avatarUrl: sidebarIdentity.value.avatarUrl,
+        }]
+      : []
     const existingDmUserIds = new Set(
       chatStore.directMessages
         .map(dm => dm.userId)
         .filter(userId => userId.trim().length > 0),
     )
-    dmCandidates.value = candidates.map(candidate => ({
+    dmCandidates.value = [...selfCandidate, ...candidates.map(candidate => ({
       userId: candidate.user_id,
       displayName: candidate.display_name || candidate.email,
       email: candidate.email,
       avatarUrl: candidate.avatar_url,
-    })).filter(candidate => !existingDmUserIds.has(candidate.userId))
+    }))]
+      .filter(candidate => !existingDmUserIds.has(candidate.userId))
   } catch (err) {
     dmPickerError.value = err instanceof Error ? err.message : 'Failed to load users'
   } finally {
@@ -701,5 +714,10 @@ async function selectDmCandidate(userId: string) {
   } catch (err) {
     dmPickerError.value = err instanceof Error ? err.message : 'Failed to open direct message'
   }
+}
+
+function isSelfDirectMessage(conversationId: string) {
+  const dm = chatStore.directMessages.find(item => item.id === conversationId)
+  return dm?.userId === (authStore.user?.id ?? chatStore.workspace?.selfUserId ?? '')
 }
 </script>

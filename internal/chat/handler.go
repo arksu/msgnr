@@ -438,6 +438,8 @@ func (h *Handler) leaveConversation(w http.ResponseWriter, r *http.Request, prin
 		switch {
 		case errors.Is(err, ErrNotMember):
 			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
+		case errors.Is(err, ErrSelfDMProtected):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("self dm cannot be archived"))
 		default:
 			h.log.Error("leaveConversation error", zap.Error(err))
 			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))

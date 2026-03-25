@@ -95,13 +95,19 @@ SELECT
   END AS conversation_type,
   (
   CASE
-    WHEN c.kind = 'dm' THEN COALESCE(NULLIF(dm_peer.display_name, ''), NULLIF(dm_peer.email, ''), 'dm')
+    WHEN c.kind = 'dm' THEN COALESCE(
+      NULLIF(dm_peer.display_name, ''),
+      NULLIF(dm_peer.email, ''),
+      NULLIF(self_user.display_name, ''),
+      NULLIF(self_user.email, ''),
+      'dm'
+    )
     ELSE COALESCE(NULLIF(c.name, ''), c.kind)
   END
   )::text AS title,
   (
   CASE
-    WHEN c.kind = 'dm' THEN COALESCE(dm_peer.user_id::text, '')
+    WHEN c.kind = 'dm' THEN COALESCE(dm_peer.user_id::text, bs.user_id::text, '')
     ELSE c.topic
   END
   )::text AS topic,
@@ -111,12 +117,14 @@ SELECT
   COALESCE(last_message.body, '') AS last_message_preview,
   c.last_activity_at,
   member_stats.member_count,
-  COALESCE(dm_peer.status, 'offline') AS presence
+  COALESCE(dm_peer.status, self_presence.status, 'offline') AS presence
 FROM bootstrap_session_items bsi
 JOIN bootstrap_sessions bs ON bs.id = bsi.session_id
 JOIN channels c ON c.id = bsi.conversation_id
 JOIN channel_members cm_self ON cm_self.channel_id = c.id
   AND cm_self.user_id = bs.user_id
+LEFT JOIN users self_user ON self_user.id = bs.user_id
+LEFT JOIN user_presence self_presence ON self_presence.user_id = bs.user_id
 LEFT JOIN LATERAL (
   SELECT m.body
   FROM messages m

@@ -191,6 +191,134 @@ describe('AppSidebar', () => {
     expect(chatStore.activeChannelId).toBe('dm-1')
   })
 
+  it('includes self in the dm picker and opens a self dm', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    authStore.user = {
+      id: 'user-1',
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      role: 'member',
+    }
+    authStore.sessionRole = 'member'
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfAvatarUrl: '/api/public/avatars/avatars/user-1/avatar.png',
+      selfRole: 'member',
+    }
+    chatApiMocks.createOrOpenDm.mockResolvedValue({
+      conversation_id: 'dm-self',
+      user_id: 'user-1',
+      display_name: 'Ada',
+      email: 'ada@example.com',
+      avatar_url: '/api/public/avatars/avatars/user-1/avatar.png',
+      kind: 'dm',
+      visibility: 'dm',
+    })
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            template: '<button class="sidebar-item" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="new-message-button"]').trigger('click')
+    await flushAll()
+
+    expect(wrapper.find('[data-testid="dm-candidate-user-1"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="dm-candidate-user-1"]').trigger('click')
+    await flushAll()
+
+    expect(chatApiMocks.createOrOpenDm).toHaveBeenCalledWith('user-1')
+    expect(chatStore.directMessages).toEqual([
+      {
+        id: 'dm-self',
+        userId: 'user-1',
+        displayName: 'Ada',
+        avatarUrl: '/api/public/avatars/avatars/user-1/avatar.png',
+        presence: 'offline',
+        unread: 0,
+        notificationLevel: NotificationLevel.ALL,
+      },
+    ])
+  })
+
+  it('hides the leave action for a self dm', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    authStore.user = {
+      id: 'user-1',
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      role: 'member',
+    }
+    authStore.sessionRole = 'member'
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chatStore.directMessages = [
+      {
+        id: 'dm-self',
+        userId: 'user-1',
+        displayName: 'Ada',
+        avatarUrl: '/api/public/avatars/avatars/user-1/avatar.png',
+        presence: 'offline',
+        unread: 0,
+        notificationLevel: NotificationLevel.ALL,
+      },
+    ]
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            template: '<button class="sidebar-item" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="conversation-menu-button-dm-dm-self"]').trigger('click')
+    await flushAll()
+
+    expect(wrapper.find('[data-testid="conversation-leave-dm-dm-self"]').exists()).toBe(false)
+  })
+
   it('hides users that already have an opened dm from the dm picker', async () => {
     chatApiMocks.listDmCandidates.mockResolvedValue([
       { user_id: 'user-2', display_name: 'Bob', email: 'bob@example.com', avatar_url: '' },

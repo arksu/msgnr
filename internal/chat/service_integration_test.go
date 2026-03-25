@@ -479,6 +479,46 @@ func TestIntegration_CreateOrOpenDirectMessage_ReusesExistingPair(t *testing.T) 
 	assert.Equal(t, 2, memberCount)
 }
 
+func TestIntegration_CreateOrOpenDirectMessage_SelfUsesSingleMemberConversation(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	var selfID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'Ada', 'member')
+		 RETURNING id`,
+		"ada_"+uuid.New().String()+"@example.com",
+	).Scan(&selfID)
+	require.NoError(t, err)
+
+	created, err := svc.CreateOrOpenDirectMessage(ctx, selfID, selfID)
+	require.NoError(t, err)
+	assert.Equal(t, selfID, created.DM.UserID)
+	assert.Equal(t, "Ada", created.DM.DisplayName)
+	assert.Equal(t, "dm", created.DM.Visibility)
+	require.Len(t, created.DirectDeliveries, 1)
+	assert.Equal(t, selfID.String(), created.DirectDeliveries[0].UserID)
+	require.NotNil(t, created.DirectDeliveries[0].Event.GetConversationUpserted())
+	assert.Equal(t, selfID.String(), created.DirectDeliveries[0].Event.GetConversationUpserted().GetConversation().GetTopic())
+
+	second, err := svc.CreateOrOpenDirectMessage(ctx, selfID, selfID)
+	require.NoError(t, err)
+	assert.Equal(t, created.DM.ConversationID, second.DM.ConversationID)
+	assert.Empty(t, second.DirectDeliveries)
+
+	var memberCount int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM channel_members WHERE channel_id = $1`,
+		created.DM.ConversationID,
+	).Scan(&memberCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, memberCount)
+}
+
 func TestIntegration_CreateOrOpenDirectMessage_ReopensArchivedPair(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -575,6 +615,40 @@ func TestIntegration_CreateOrOpenDirectMessage_ReusesArchivedDMChannel(t *testin
 	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM channels WHERE kind = 'dm'`).Scan(&dmChannelCount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, dmChannelCount)
+}
+
+func TestIntegration_LeaveConversation_RejectsSelfDm(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	var selfID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'Ada', 'member')
+		 RETURNING id`,
+		"ada_"+uuid.New().String()+"@example.com",
+	).Scan(&selfID)
+	require.NoError(t, err)
+
+	created, err := svc.CreateOrOpenDirectMessage(ctx, selfID, selfID)
+	require.NoError(t, err)
+
+	_, err = svc.LeaveConversation(ctx, selfID, created.DM.ConversationID)
+	require.ErrorIs(t, err, chat.ErrSelfDMProtected)
+
+	var archivedCount int
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM channel_members
+		 WHERE channel_id = $1
+		   AND is_archived = true`,
+		created.DM.ConversationID,
+	).Scan(&archivedCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, archivedCount)
 }
 
 func TestIntegration_SendMessage_ReopensArchivedDMPeerWithUnread(t *testing.T) {

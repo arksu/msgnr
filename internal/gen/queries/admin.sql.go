@@ -17,6 +17,7 @@ const adminAddAllUsersToChannel = `-- name: AdminAddAllUsersToChannel :exec
 INSERT INTO channel_members (channel_id, user_id)
 SELECT $1, u.id
 FROM users u
+WHERE u.role <> 'bot'
 ON CONFLICT DO NOTHING
 `
 

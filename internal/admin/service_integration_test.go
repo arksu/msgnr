@@ -4,6 +4,8 @@ package admin_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,6 +16,11 @@ import (
 	"msgnr/internal/admin"
 	"msgnr/internal/testdb"
 )
+
+func hashToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
 
 func seedAdminUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, role string) uuid.UUID {
 	t.Helper()
@@ -63,6 +70,33 @@ func TestIntegration_CreateChannel_AddAllUsers(t *testing.T) {
 	).Scan(&eventType)
 	require.NoError(t, err)
 	assert.Equal(t, "conversation_upserted", eventType)
+}
+
+func TestIntegration_CreateChannel_AddAllUsersSkipsBots(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	adminID := seedAdminUser(t, ctx, pool, "admin")
+	memberID := seedAdminUser(t, ctx, pool, "member")
+	botID := seedAdminUser(t, ctx, pool, "bot")
+
+	svc := admin.NewService(pool)
+
+	channel, err := svc.CreateChannel(ctx, admin.CreateChannelParams{
+		Name:        "human-only",
+		Visibility:  "public",
+		CreatedBy:   adminID,
+		AddAllUsers: true,
+	})
+	require.NoError(t, err)
+
+	members, err := svc.ListChannelMembers(ctx, channel.ID)
+	require.NoError(t, err)
+	require.Len(t, members, 2)
+
+	memberIDs := []uuid.UUID{members[0].ID, members[1].ID}
+	assert.ElementsMatch(t, []uuid.UUID{adminID, memberID}, memberIDs)
+	assert.NotContains(t, memberIDs, botID)
 }
 
 func TestIntegration_CreateChannel_AddsCreatorMembership(t *testing.T) {
@@ -137,4 +171,96 @@ func TestIntegration_CreateChannel_CreatesInviteNotificationForAddedMember(t *te
 	).Scan(&notificationCount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, notificationCount)
+}
+
+func TestIntegration_UpdateBotUserStoresAndReplacesIntegrationToken(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	botID := seedAdminUser(t, ctx, pool, "bot")
+	svc := admin.NewService(pool)
+
+	updated, err := svc.UpdateUser(ctx, botID, admin.UpdateUserParams{
+		DisplayName:      "Bot User",
+		Email:            "bot_update_" + uuid.NewString() + "@example.com",
+		Role:             "bot",
+		IntegrationToken: "first-token",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "bot", updated.Role)
+
+	var firstHash string
+	err = pool.QueryRow(ctx,
+		`SELECT token_hash
+		   FROM integration_token
+		  WHERE user_id = $1
+		    AND revoked_at IS NULL`,
+		botID,
+	).Scan(&firstHash)
+	require.NoError(t, err)
+	assert.Equal(t, hashToken("first-token"), firstHash)
+
+	_, err = svc.UpdateUser(ctx, botID, admin.UpdateUserParams{
+		DisplayName:      "Bot User",
+		Email:            updated.Email,
+		Role:             "bot",
+		IntegrationToken: "second-token",
+	})
+	require.NoError(t, err)
+
+	var activeCount int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*)::int
+		   FROM integration_token
+		  WHERE user_id = $1
+		    AND revoked_at IS NULL`,
+		botID,
+	).Scan(&activeCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, activeCount)
+
+	var secondHash string
+	err = pool.QueryRow(ctx,
+		`SELECT token_hash
+		   FROM integration_token
+		  WHERE user_id = $1
+		    AND revoked_at IS NULL`,
+		botID,
+	).Scan(&secondHash)
+	require.NoError(t, err)
+	assert.Equal(t, hashToken("second-token"), secondHash)
+}
+
+func TestIntegration_UpdateUserRevokesIntegrationTokenWhenLeavingBotRole(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	botID := seedAdminUser(t, ctx, pool, "bot")
+	svc := admin.NewService(pool)
+
+	_, err := svc.UpdateUser(ctx, botID, admin.UpdateUserParams{
+		DisplayName:      "Bot User",
+		Email:            "bot_leave_" + uuid.NewString() + "@example.com",
+		Role:             "bot",
+		IntegrationToken: "bot-token",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.UpdateUser(ctx, botID, admin.UpdateUserParams{
+		DisplayName: "Former Bot",
+		Email:       "former_bot_" + uuid.NewString() + "@example.com",
+		Role:        "member",
+	})
+	require.NoError(t, err)
+
+	var activeCount int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*)::int
+		   FROM integration_token
+		  WHERE user_id = $1
+		    AND revoked_at IS NULL`,
+		botID,
+	).Scan(&activeCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, activeCount)
 }

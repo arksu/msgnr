@@ -143,6 +143,15 @@ type EnumDictionaryVersionItem struct {
 	IsActive            bool      `json:"is_active"`
 }
 
+type IntegrationToken struct {
+	ID         uuid.UUID    `json:"id"`
+	UserID     uuid.UUID    `json:"user_id"`
+	TokenHash  string       `json:"token_hash"`
+	CreatedAt  time.Time    `json:"created_at"`
+	RevokedAt  sql.NullTime `json:"revoked_at"`
+	LastUsedAt sql.NullTime `json:"last_used_at"`
+}
+
 type Message struct {
 	ID              uuid.UUID     `json:"id"`
 	ChannelID       uuid.UUID     `json:"channel_id"`

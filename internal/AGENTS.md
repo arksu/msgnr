@@ -9,6 +9,7 @@ This directory contains the server-side runtime for the messenger.
 - `chat`: messaging, reactions, thread replay, channel HTTP list endpoint.
 - `chat` HTTP history (`GET /api/messages`) returns root timeline rows and includes server-derived `thread_reply_count` from `thread_summaries` for each root message.
 - `events`: append-only event log, event bus, LISTEN/NOTIFY listener, codec.
+- `integrations`: static Bearer-token HTTP endpoints for bot users; task/document DTO mapping stays here rather than leaking into `tasks` or `documents`.
 - `push`: VAPID/Web Push subscription management and delivery.
 - `sync`: `SyncSince`, ack cursor persistence, retention pruning policy.
 - `ws`: websocket handshake, auth gate, authenticated payload dispatch.
@@ -20,6 +21,7 @@ This directory contains the server-side runtime for the messenger.
 3. Keep DB writes server-authoritative. Do not move unread, ordering, or recovery decisions into the client when the server already owns them.
 4. Favor integration tests for DB-backed behavior and unit tests for pure mapping/validation logic.
 5. Keep push delivery server-authoritative: recipient selection and runtime gating belong to backend state, not frontend assumptions.
+6. When adding operational/automation surfaces for bots or integrations, keep static-token auth separate from interactive JWT session auth.
 
 ## Cross-Cutting Invariants
 

@@ -13,9 +13,11 @@ This directory owns route-level orchestration (page composition, lifecycle wirin
 1. `MainView` must keep client activity reporting (`setClientActive` + `sendSetClientWindowActivity`) consistent on focus/blur/visibility transitions.
 2. Incoming call invite ring starts when an invite is active and stops when invites clear or view unmounts.
 3. On unmount, unsubscribe listeners and stop active audio playback; do not break singleton sound engine reuse.
+4. Admin user editing must treat bot users as integration-only principals: hide password mutation UI and expose integration-token editing instead.
 
 ## Change Guidance
 
 1. Do not move protocol/event interpretation from stores into views.
 2. When adding route lifecycle effects, ensure cleanup in `onUnmounted`.
 3. Keep settings/profile dialogs accessible and non-blocking for realtime flows.
+4. If the admin user form diverges by role, keep the conditional UX explicit in the view layer rather than burying it inside generic field helpers.

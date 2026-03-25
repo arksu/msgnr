@@ -207,6 +207,18 @@ func TestLogin_BlockedUser(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUserBlocked)
 }
 
+func TestLogin_BotUserDenied(t *testing.T) {
+	users := newFakeUserRepo()
+	sessions := newFakeSessionRepo()
+	u := makeActiveUser("bot@example.com", "pass", "bot")
+	users.add(u)
+
+	svc := newTestService(t, users, sessions)
+	_, _, err := svc.Login(context.Background(), "bot@example.com", "pass", "", "")
+
+	assert.ErrorIs(t, err, auth.ErrBotUserUnsupported)
+}
+
 func TestRefresh_Success_RotatesSession(t *testing.T) {
 	users := newFakeUserRepo()
 	sessions := newFakeSessionRepo()
@@ -231,6 +243,31 @@ func TestRefresh_Success_RotatesSession(t *testing.T) {
 	// Old refresh token must be revoked.
 	_, err = svc.Refresh(context.Background(), pair1.RefreshToken, "", "")
 	assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
+}
+
+func TestRefresh_BotUserDenied(t *testing.T) {
+	users := newFakeUserRepo()
+	sessions := newFakeSessionRepo()
+	u := makeActiveUser("bot-refresh@example.com", "pass", "bot")
+	users.add(u)
+
+	svc := newTestService(t, users, sessions)
+	pair, _, err := svc.Login(context.Background(), "bot-refresh@example.com", "pass", "", "")
+	require.ErrorIs(t, err, auth.ErrBotUserUnsupported)
+	require.Empty(t, pair.RefreshToken)
+
+	sessionID := uuid.New()
+	rawRefresh := "raw-refresh-token"
+	sessions.sessions[auth.HashRefreshToken(rawRefresh)] = queries.RefreshSession{
+		ID:        sessionID,
+		UserID:    u.ID,
+		TokenHash: auth.HashRefreshToken(rawRefresh),
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+	}
+
+	_, err = svc.Refresh(context.Background(), rawRefresh, "", "")
+	assert.ErrorIs(t, err, auth.ErrBotUserUnsupported)
 }
 
 func TestRefresh_InvalidToken(t *testing.T) {

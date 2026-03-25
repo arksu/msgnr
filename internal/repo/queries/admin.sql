@@ -57,6 +57,7 @@ ON CONFLICT DO NOTHING;
 INSERT INTO channel_members (channel_id, user_id)
 SELECT $1, u.id
 FROM users u
+WHERE u.role <> 'bot'
 ON CONFLICT DO NOTHING;
 
 -- name: AdminRemoveChannelMember :exec

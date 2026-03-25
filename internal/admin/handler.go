@@ -107,20 +107,22 @@ func (h *Handler) usersItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req struct {
-			DisplayName string `json:"display_name"`
-			Email       string `json:"email"`
-			Role        string `json:"role"`
-			Password    string `json:"password"`
+			DisplayName      string `json:"display_name"`
+			Email            string `json:"email"`
+			Role             string `json:"role"`
+			Password         string `json:"password"`
+			IntegrationToken string `json:"integration_token"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
 			return
 		}
 		row, err := h.svc.UpdateUser(r.Context(), id, UpdateUserParams{
-			DisplayName: req.DisplayName,
-			Email:       req.Email,
-			Role:        req.Role,
-			Password:    req.Password,
+			DisplayName:      req.DisplayName,
+			Email:            req.Email,
+			Role:             req.Role,
+			Password:         req.Password,
+			IntegrationToken: req.IntegrationToken,
 		})
 		if err != nil {
 			h.serviceError(w, err)

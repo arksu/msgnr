@@ -73,10 +73,11 @@ type CreateUserParams struct {
 // UpdateUserParams holds input for user update.
 // Password is optional: empty string means no change.
 type UpdateUserParams struct {
-	DisplayName string
-	Email       string
-	Role        string
-	Password    string
+	DisplayName      string
+	Email            string
+	Role             string
+	Password         string
+	IntegrationToken string
 }
 
 // CreateChannelParams holds input for channel creation.
@@ -136,8 +137,8 @@ func (s *Service) CreateUser(ctx context.Context, p CreateUserParams) (UserRow, 
 	if p.Role == "" {
 		p.Role = "member"
 	}
-	if p.Role != "member" && p.Role != "admin" {
-		return UserRow{}, fmt.Errorf("%w: role must be member or admin", ErrBadRequest)
+	if p.Role != "member" && p.Role != "admin" && p.Role != "bot" {
+		return UserRow{}, fmt.Errorf("%w: role must be member, admin, or bot", ErrBadRequest)
 	}
 
 	hash, err := auth.HashPassword(p.Password)
@@ -174,8 +175,12 @@ func (s *Service) UpdateUser(ctx context.Context, id uuid.UUID, p UpdateUserPara
 	if p.Email == "" {
 		return UserRow{}, fmt.Errorf("%w: email is required", ErrBadRequest)
 	}
-	if p.Role != "member" && p.Role != "admin" {
-		return UserRow{}, fmt.Errorf("%w: role must be member or admin", ErrBadRequest)
+	if p.Role != "member" && p.Role != "admin" && p.Role != "bot" {
+		return UserRow{}, fmt.Errorf("%w: role must be member, admin, or bot", ErrBadRequest)
+	}
+	integrationToken := strings.TrimSpace(p.IntegrationToken)
+	if integrationToken != "" && p.Role != "bot" {
+		return UserRow{}, fmt.Errorf("%w: integration_token is only allowed for bot users", ErrBadRequest)
 	}
 
 	passwordHash := ""
@@ -187,15 +192,38 @@ func (s *Service) UpdateUser(ctx context.Context, id uuid.UUID, p UpdateUserPara
 		passwordHash = hash
 	}
 
-	row, err := s.q.AdminUpdateUser(ctx, queries.AdminUpdateUserParams{
-		ID:          id,
-		DisplayName: p.DisplayName,
-		Email:       p.Email,
-		Role:        p.Role,
-		Column5:     passwordHash,
-	})
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		return UserRow{}, fmt.Errorf("admin: begin update user tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var row UserRow
+	if err := tx.QueryRow(ctx,
+		`UPDATE users
+		    SET display_name  = $2,
+		        email         = $3,
+		        role          = $4,
+		        password_hash = CASE WHEN $5::text <> '' THEN $5::text ELSE password_hash END,
+		        updated_at    = now()
+		  WHERE id = $1
+		  RETURNING id, email, display_name, avatar_url, role, status, need_change_password, created_at`,
+		id,
+		p.DisplayName,
+		p.Email,
+		p.Role,
+		passwordHash,
+	).Scan(
+		&row.ID,
+		&row.Email,
+		&row.DisplayName,
+		&row.AvatarURL,
+		&row.Role,
+		&row.Status,
+		&row.NeedChangePassword,
+		&row.CreatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return UserRow{}, ErrNotFound
 		}
 		if isUniqueViolation(err) {
@@ -203,16 +231,38 @@ func (s *Service) UpdateUser(ctx context.Context, id uuid.UUID, p UpdateUserPara
 		}
 		return UserRow{}, fmt.Errorf("admin: update user: %w", err)
 	}
-	return mapUserRow(userRowSource{
-		ID:                 row.ID,
-		Email:              row.Email,
-		DisplayName:        row.DisplayName,
-		AvatarURL:          row.AvatarUrl,
-		Role:               row.Role,
-		Status:             row.Status,
-		NeedChangePassword: row.NeedChangePassword,
-		CreatedAt:          row.CreatedAt,
-	}), nil
+
+	if row.Role != "bot" || integrationToken != "" {
+		if _, err := tx.Exec(ctx,
+			`UPDATE integration_token
+			    SET revoked_at = now()
+			  WHERE user_id = $1
+			    AND revoked_at IS NULL`,
+			id,
+		); err != nil {
+			return UserRow{}, fmt.Errorf("admin: revoke integration tokens: %w", err)
+		}
+	}
+
+	if row.Role == "bot" && integrationToken != "" {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO integration_token (user_id, token_hash)
+			 VALUES ($1, $2)`,
+			id,
+			auth.HashRefreshToken(integrationToken),
+		); err != nil {
+			if isUniqueViolation(err) {
+				return UserRow{}, fmt.Errorf("%w: integration token already in use", ErrConflict)
+			}
+			return UserRow{}, fmt.Errorf("admin: insert integration token: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return UserRow{}, fmt.Errorf("admin: commit update user tx: %w", err)
+	}
+
+	return row, nil
 }
 
 func (s *Service) BlockUser(ctx context.Context, id uuid.UUID) (UserRow, error) {
@@ -342,6 +392,7 @@ func (s *Service) CreateChannel(ctx context.Context, p CreateChannelParams) (Cha
 			`INSERT INTO channel_members (channel_id, user_id)
 			 SELECT $1, u.id
 			 FROM users u
+			 WHERE u.role <> 'bot'
 			 ON CONFLICT DO NOTHING`,
 			row.ID,
 		); err != nil {

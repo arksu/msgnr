@@ -34,6 +34,7 @@ const (
 var (
 	ErrInvalidCredentials   = errors.New("invalid credentials")
 	ErrUserBlocked          = errors.New("user blocked")
+	ErrBotUserUnsupported   = errors.New("bot users cannot use interactive auth")
 	ErrProfileBadRequest    = errors.New("invalid profile update request")
 	ErrProfileConflict      = errors.New("email already in use")
 	ErrPasswordChangeFailed = errors.New("password change failed")
@@ -174,6 +175,11 @@ func (s *Service) Login(ctx context.Context, email, password, userAgent, ipAddr 
 		s.log.Info("login: user blocked", zap.String("user_id", user.ID.String()))
 		return TokenPair{}, UserInfo{}, ErrUserBlocked
 	}
+	if user.Role == "bot" {
+		metrics.AuthLoginTotal.WithLabelValues("invalid_credentials").Inc()
+		s.log.Info("login: bot user denied interactive auth", zap.String("user_id", user.ID.String()))
+		return TokenPair{}, UserInfo{}, ErrBotUserUnsupported
+	}
 
 	pair, sessionID, err := s.issueTokenPair(ctx, user.ID, user.Role, userAgent, ipAddr, user.NeedChangePassword)
 	if err != nil {
@@ -218,6 +224,11 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken, userAgent, ipAdd
 		metrics.AuthRefreshTotal.WithLabelValues("blocked").Inc()
 		s.log.Info("refresh: user blocked", zap.String("user_id", user.ID.String()))
 		return TokenPair{}, ErrUserBlocked
+	}
+	if user.Role == "bot" {
+		metrics.AuthRefreshTotal.WithLabelValues("invalid").Inc()
+		s.log.Info("refresh: bot user denied interactive auth", zap.String("user_id", user.ID.String()))
+		return TokenPair{}, ErrBotUserUnsupported
 	}
 
 	rawRefresh, err := GenerateRefreshToken()
@@ -596,6 +607,9 @@ func (s *Service) VerifyAccess(ctx context.Context, accessToken string) (Princip
 	}
 	if user.Status == "blocked" {
 		return Principal{}, ErrUserBlocked
+	}
+	if user.Role == "bot" {
+		return Principal{}, ErrTokenInvalid
 	}
 
 	return Principal{

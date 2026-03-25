@@ -100,6 +100,7 @@
                         'bg-yellow-500/20 text-yellow-300': u.role === 'owner',
                         'bg-blue-500/20 text-blue-300':    u.role === 'admin',
                         'bg-gray-500/20 text-gray-300':    u.role === 'member',
+                        'bg-emerald-500/20 text-emerald-300': u.role === 'bot',
                       }"
                     >{{ u.role }}</span>
                   </td>
@@ -311,6 +312,7 @@
               >
                 <option value="member">Member</option>
                 <option value="admin">Admin</option>
+                <option value="bot">Bot</option>
               </select>
             </div>
             <label class="flex items-start gap-3 rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-gray-200 cursor-pointer">
@@ -369,10 +371,22 @@
               >
                 <option value="member">Member</option>
                 <option value="admin">Admin</option>
+                <option value="bot">Bot</option>
               </select>
               <p v-if="editingUser?.role === 'owner'" class="text-xs text-gray-500 mt-1">Owner role cannot be changed.</p>
             </div>
-            <div>
+            <div v-if="editUserForm.role === 'bot'">
+              <label class="block text-sm text-gray-400 mb-1">Integration Token</label>
+              <input
+                v-model="editUserForm.integration_token"
+                type="text"
+                class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
+                placeholder="Set new static bearer token"
+                autocomplete="off"
+              />
+              <p class="text-xs text-gray-500 mt-1">Leave blank to keep the current token. Saving a new token replaces the active one.</p>
+            </div>
+            <div v-else>
               <label class="block text-sm text-gray-400 mb-1">New Password</label>
               <input
                 v-model="editUserForm.password"
@@ -565,7 +579,7 @@ const actionLoading = ref<string | null>(null)
 const createUserOpen    = ref(false)
 const createUserLoading = ref(false)
 const createUserError   = ref<string | null>(null)
-const newUser = ref({ email: '', password: '', display_name: '', role: 'member' as 'member' | 'admin', need_change_password: true })
+const newUser = ref({ email: '', password: '', display_name: '', role: 'member' as 'member' | 'admin' | 'bot', need_change_password: true })
 
 async function loadUsers() {
   usersLoading.value = true
@@ -615,15 +629,22 @@ const editUserOpen    = ref(false)
 const editUserLoading = ref(false)
 const editUserError   = ref<string | null>(null)
 const editingUser     = ref<AdminUser | null>(null)
-const editUserForm    = ref({ display_name: '', email: '', role: 'member' as 'member' | 'admin', password: '' })
+const editUserForm    = ref({
+  display_name: '',
+  email: '',
+  role: 'member' as 'member' | 'admin' | 'bot',
+  password: '',
+  integration_token: '',
+})
 
 function openEditUser(u: AdminUser) {
   editingUser.value = u
   editUserForm.value = {
     display_name: u.display_name,
     email:        u.email,
-    role:         u.role === 'owner' ? 'member' : u.role as 'member' | 'admin',
+    role:         u.role === 'owner' ? 'member' : u.role as 'member' | 'admin' | 'bot',
     password:     '',
+    integration_token: '',
   }
   editUserError.value = null
   editUserOpen.value = true
@@ -637,8 +658,11 @@ async function submitEditUser() {
     const payload = {
       display_name: editUserForm.value.display_name,
       email:        editUserForm.value.email,
-      role:         editingUser.value.role === 'owner' ? editingUser.value.role as 'admin' | 'member' : editUserForm.value.role,
-      ...(editUserForm.value.password ? { password: editUserForm.value.password } : {}),
+      role:         editingUser.value.role === 'owner' ? editingUser.value.role as 'admin' | 'member' | 'bot' : editUserForm.value.role,
+      ...(editUserForm.value.role !== 'bot' && editUserForm.value.password ? { password: editUserForm.value.password } : {}),
+      ...(editUserForm.value.role === 'bot' && editUserForm.value.integration_token
+        ? { integration_token: editUserForm.value.integration_token }
+        : {}),
     }
     const updated = await adminUpdateUser(editingUser.value.id, payload)
     const idx = users.value.findIndex(u => u.id === updated.id)
@@ -687,7 +711,7 @@ const newChannel = ref({
 })
 const privateMemberCandidates = computed(() => {
   const selfUserID = authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''
-  return users.value.filter(user => user.status === 'active' && user.id !== selfUserID)
+  return users.value.filter(user => user.status === 'active' && user.role !== 'bot' && user.id !== selfUserID)
 })
 const canSubmitCreateChannel = computed(() => {
   const hasName = newChannel.value.name.trim().length > 0

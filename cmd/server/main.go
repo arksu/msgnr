@@ -22,6 +22,7 @@ import (
 	"msgnr/internal/database"
 	"msgnr/internal/documents"
 	"msgnr/internal/events"
+	"msgnr/internal/integrations"
 	"msgnr/internal/logger"
 	"msgnr/internal/push"
 	"msgnr/internal/storage"
@@ -170,6 +171,8 @@ func main() {
 	documentsSvc := documents.NewService(db.Pool, storageClient)
 	documentsSvc.SetHistoryLimit(cfg.DocumentHistoryLimit)
 	documentsHandler := documents.NewHandler(documentsSvc, authSvc, log, cfg.AttachmentMaxSizeMB)
+	integrationsSvc := integrations.NewService(db.Pool, tasksSvc, documentsSvc, log)
+	integrationsHandler := integrations.NewHandler(integrationsSvc, log)
 
 	// --- main HTTP mux ---
 	mux := http.NewServeMux()
@@ -182,6 +185,7 @@ func main() {
 	adminHandler.RegisterRoutes(mux)
 	tasksHandler.RegisterRoutes(mux)
 	documentsHandler.RegisterRoutes(mux)
+	integrationsHandler.RegisterRoutes(mux)
 	pushHandler.RegisterRoutes(mux)
 
 	httpServer := &http.Server{

@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT        NOT NULL,
   display_name  TEXT        NOT NULL DEFAULT '',
   avatar_url    TEXT        NOT NULL DEFAULT '',
-  -- mirrors WorkspaceRole enum: owner | admin | member
-  role                TEXT        NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
+  -- mirrors WorkspaceRole enum: owner | admin | member | bot
+  role                TEXT        NOT NULL CHECK (role IN ('owner', 'admin', 'member', 'bot')),
   status              TEXT        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'blocked')),
   need_change_password BOOLEAN    NOT NULL DEFAULT FALSE,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -50,6 +50,28 @@ CREATE TABLE IF NOT EXISTS refresh_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_refresh_sessions_user_id    ON refresh_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_sessions_expires_at ON refresh_sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS integration_token (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash   TEXT        NOT NULL UNIQUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at   TIMESTAMPTZ,
+  last_used_at TIMESTAMPTZ,
+
+  CONSTRAINT chk_integration_token_hash_nonempty CHECK (btrim(token_hash) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_token_user_id
+  ON integration_token(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_integration_token_active_lookup
+  ON integration_token(token_hash)
+  WHERE revoked_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_token_active_user
+  ON integration_token(user_id)
+  WHERE revoked_at IS NULL;
 
 -- ---------------------------------------------------------------------------
 -- Channels (conversations)

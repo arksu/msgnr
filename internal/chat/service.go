@@ -267,6 +267,7 @@ func (s *Service) ListDMCandidates(ctx context.Context, requesterID uuid.UUID) (
 		  FROM users
 		 WHERE id <> $1
 		   AND status = 'active'
+		   AND role <> 'bot'
 		 ORDER BY lower(COALESCE(NULLIF(display_name, ''), email)), id`,
 		requesterID,
 	)
@@ -3658,7 +3659,8 @@ func (s *Service) lookupActiveDMUser(ctx context.Context, userID uuid.UUID) (DMC
 		  FROM users u
 		  LEFT JOIN user_presence up ON up.user_id = u.id
 		 WHERE id = $1
-		   AND u.status = 'active'`,
+		   AND u.status = 'active'
+		   AND u.role <> 'bot'`,
 		userID,
 	).Scan(&candidate.UserID, &candidate.DisplayName, &candidate.Email, &candidate.AvatarURL, &candidate.Presence)
 	if err != nil {
@@ -3854,7 +3856,8 @@ func (s *Service) InviteToChannel(ctx context.Context, requesterID, channelID, t
 		SELECT COALESCE(NULLIF(display_name, ''), email), email
 		  FROM users
 		 WHERE id = $1
-		   AND status = 'active'`,
+		   AND status = 'active'
+		   AND role <> 'bot'`,
 		targetUserID,
 	).Scan(&targetName, &targetEmail)
 	if err != nil {

@@ -108,6 +108,8 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrInvalidCredentials):
 			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid credentials"))
+		case errors.Is(err, ErrBotUserUnsupported):
+			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid credentials"))
 		case errors.Is(err, ErrUserBlocked):
 			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("account blocked"))
 		default:
@@ -140,7 +142,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	pair, err := h.svc.Refresh(r.Context(), req.RefreshToken, r.UserAgent(), realIP(r))
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrSessionNotFound):
+		case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrBotUserUnsupported):
 			httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid or expired refresh token"))
 		case errors.Is(err, ErrUserBlocked):
 			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("account blocked"))

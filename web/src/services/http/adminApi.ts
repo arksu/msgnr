@@ -25,7 +25,7 @@ export interface AdminUser {
   email: string
   display_name: string
   avatar_url?: string
-  role: 'owner' | 'admin' | 'member'
+  role: 'owner' | 'admin' | 'member' | 'bot'
   status: 'active' | 'blocked'
   need_change_password: boolean
   created_at: string
@@ -51,15 +51,16 @@ export interface CreateUserPayload {
   email: string
   password: string
   display_name?: string
-  role?: 'admin' | 'member'
+  role?: 'admin' | 'member' | 'bot'
   need_change_password?: boolean
 }
 
 export interface UpdateUserPayload {
   display_name: string
   email: string
-  role: 'admin' | 'member'
+  role: 'admin' | 'member' | 'bot'
   password?: string
+  integration_token?: string
 }
 
 export interface CreateChannelPayload {

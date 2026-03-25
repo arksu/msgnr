@@ -10,6 +10,7 @@ WHERE id = $1;
 SELECT id, display_name, email, avatar_url
 FROM users
 WHERE status = 'active'
+  AND role <> 'bot'
 ORDER BY display_name ASC;
 
 -- name: GetUserByEmail :one

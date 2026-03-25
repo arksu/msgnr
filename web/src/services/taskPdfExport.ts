@@ -10,6 +10,8 @@ const A4_WIDTH_PT = 595.28
 const A4_HEIGHT_PT = 841.89
 const EXPORT_WIDTH_PX = 794
 const PDF_PAGE_MARGIN_PT = 32
+const PAGE_BREAK_SEARCH_RADIUS_PX = 48
+const MIN_PAGE_SLICE_RATIO = 0.75
 
 export interface TaskPdfExportMarkdownBlock {
   kind: 'markdown'
@@ -546,6 +548,83 @@ function renderCanvasPage(canvas: HTMLCanvasElement, offsetY: number, sliceHeigh
   return pageCanvas
 }
 
+export function chooseNearestWhitespaceRow(
+  rowInkScores: readonly number[],
+  targetRow: number,
+  minRow: number,
+  maxRow: number,
+): number {
+  const start = Math.max(0, Math.min(minRow, rowInkScores.length - 1))
+  const end = Math.max(start, Math.min(maxRow, rowInkScores.length - 1))
+  const clampedTarget = Math.max(start, Math.min(targetRow, end))
+
+  let bestRow = clampedTarget
+  let bestScore = rowInkScores[clampedTarget] ?? Number.POSITIVE_INFINITY
+  let bestDistance = 0
+
+  for (let row = start; row <= end; row += 1) {
+    const score = rowInkScores[row] ?? Number.POSITIVE_INFINITY
+    const distance = Math.abs(row - clampedTarget)
+    if (score < bestScore || (score === bestScore && distance < bestDistance)) {
+      bestRow = row
+      bestScore = score
+      bestDistance = distance
+    }
+  }
+
+  return bestRow
+}
+
+function buildCanvasRowInkScores(canvas: HTMLCanvasElement): number[] {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) {
+    return []
+  }
+
+  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const rowScores = new Array<number>(height).fill(0)
+
+  for (let row = 0; row < height; row += 1) {
+    let rowInk = 0
+    const rowOffset = row * width * 4
+    for (let col = 0; col < width; col += 1) {
+      const pixelOffset = rowOffset + (col * 4)
+      const alpha = data[pixelOffset + 3] / 255
+      if (alpha === 0) continue
+
+      const r = data[pixelOffset]
+      const g = data[pixelOffset + 1]
+      const b = data[pixelOffset + 2]
+      rowInk += ((255 * 3) - (r + g + b)) * alpha
+    }
+    rowScores[row] = rowInk
+  }
+
+  return rowScores
+}
+
+function computePageSliceHeight(
+  rowInkScores: readonly number[],
+  canvasHeight: number,
+  offsetY: number,
+  targetSliceHeight: number,
+): number {
+  const remainingHeight = canvasHeight - offsetY
+  if (remainingHeight <= targetSliceHeight) {
+    return remainingHeight
+  }
+
+  const minimumBreakRow = offsetY + Math.max(1, Math.floor(targetSliceHeight * MIN_PAGE_SLICE_RATIO))
+  const desiredBreakRow = offsetY + targetSliceHeight
+  const maximumBreakRow = Math.min(
+    canvasHeight - 1,
+    desiredBreakRow + PAGE_BREAK_SEARCH_RADIUS_PX,
+  )
+  const searchStart = Math.max(minimumBreakRow, desiredBreakRow - PAGE_BREAK_SEARCH_RADIUS_PX)
+  const breakRow = chooseNearestWhitespaceRow(rowInkScores, desiredBreakRow, searchStart, maximumBreakRow)
+  return Math.max(1, breakRow - offsetY)
+}
+
 function canvasToPdfBlob(canvas: HTMLCanvasElement): Blob {
   const pdf = new jsPDF({
     orientation: 'portrait',
@@ -557,11 +636,12 @@ function canvasToPdfBlob(canvas: HTMLCanvasElement): Blob {
   const printableHeight = A4_HEIGHT_PT - (PDF_PAGE_MARGIN_PT * 2)
   const pageSliceHeight = Math.max(1, Math.floor(canvas.width * (printableHeight / printableWidth)))
   const renderScale = printableWidth / canvas.width
+  const rowInkScores = buildCanvasRowInkScores(canvas)
   let offsetY = 0
   let pageIndex = 0
 
   while (offsetY < canvas.height) {
-    const sliceHeight = Math.min(pageSliceHeight, canvas.height - offsetY)
+    const sliceHeight = computePageSliceHeight(rowInkScores, canvas.height, offsetY, pageSliceHeight)
     const pageCanvas = renderCanvasPage(canvas, offsetY, sliceHeight)
     const imageData = pageCanvas.toDataURL('image/png')
     const imageHeight = sliceHeight * renderScale

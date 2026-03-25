@@ -6,6 +6,7 @@ import {
   buildMarkdownPdfExportDocument,
   buildTaskPdfExportDocument,
   buildTaskPdfFileName,
+  chooseNearestWhitespaceRow,
 } from '@/services/taskPdfExport'
 
 vi.mock('@/services/http/attachmentOwnersApi', () => ({
@@ -107,5 +108,15 @@ describe('taskPdfExport', () => {
         html: expect.stringContaining('<h2>Heading</h2>'),
       }),
     ])
+  })
+
+  it('chooses a nearby whitespace row for page breaks', () => {
+    const rowInkScores = [80, 80, 80, 8, 0, 7, 90, 90]
+    expect(chooseNearestWhitespaceRow(rowInkScores, 5, 2, 6)).toBe(4)
+  })
+
+  it('falls back to the closest row when no cleaner break exists', () => {
+    const rowInkScores = [100, 100, 100, 100, 100]
+    expect(chooseNearestWhitespaceRow(rowInkScores, 2, 1, 4)).toBe(2)
   })
 })

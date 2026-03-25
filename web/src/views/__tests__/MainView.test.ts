@@ -11,6 +11,7 @@ import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 import { isUuidTaskRouteValue, taskSlugFromPublicId } from '@/services/taskRoute'
+import { toNotificationOpenMessage } from '@/services/notificationOpen'
 import MainView from '@/views/MainView.vue'
 
 const orchestratorMocks = vi.hoisted(() => ({
@@ -204,6 +205,13 @@ async function flushUi() {
   await nextTick()
 }
 
+async function flushAsyncWork(cycles = 4) {
+  for (let i = 0; i < cycles; i += 1) {
+    await flushUi()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
+
 function mountAtRoute(router: ReturnType<typeof createMainRouter>) {
   return mount(
     { template: '<router-view />' },
@@ -211,12 +219,36 @@ function mountAtRoute(router: ReturnType<typeof createMainRouter>) {
   )
 }
 
+function createServiceWorkerContainerMock() {
+  const listeners = new Set<(event: MessageEvent) => void>()
+  return {
+    addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+      if (type !== 'message' || typeof listener !== 'function') return
+      listeners.add(listener as (event: MessageEvent) => void)
+    },
+    removeEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+      if (type !== 'message' || typeof listener !== 'function') return
+      listeners.delete(listener as (event: MessageEvent) => void)
+    },
+    dispatchMessage(data: unknown) {
+      const event = { data } as MessageEvent
+      for (const listener of listeners) listener(event)
+    },
+  }
+}
+
 let pinia: Pinia
+let serviceWorkerContainerMock: ReturnType<typeof createServiceWorkerContainerMock>
 
 describe('MainView server unavailable state', () => {
   beforeEach(() => {
     pinia = createPinia()
     setActivePinia(pinia)
+    serviceWorkerContainerMock = createServiceWorkerContainerMock()
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: serviceWorkerContainerMock,
+    })
     orchestratorMocks.logout.mockReset()
     orchestratorMocks.logout.mockResolvedValue()
     taskRouteStorageMocks.loadLastOpenedTaskPublicId.mockReset()
@@ -311,6 +343,109 @@ describe('MainView server unavailable state', () => {
     expect(router.currentRoute.value.name).toBe('tasks-list')
     expect(wrapper.find('[data-testid=\"task-tracker\"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid=\"task-list-view\"]').exists()).toBe(true)
+  })
+
+  it('opens the notified conversation from a service worker message without reloading the app shell', async () => {
+    const router = createMainRouter()
+    router.push('/tasks')
+    await router.isReady()
+
+    const authStore = useAuthStore()
+    authStore.authState = 'AUTHENTICATED'
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    const chatStore = useChatStore()
+    chatStore.bootstrapped = true
+    chatStore.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+    vi.spyOn(chatStore, 'selectChannel').mockImplementation((conversationId: string) => {
+      chatStore.activeChannelId = conversationId
+    })
+
+    mountAtRoute(router)
+    await flushUi()
+
+    serviceWorkerContainerMock.dispatchMessage(toNotificationOpenMessage({
+      conversationId: 'dm-1',
+      messageId: 'msg-1',
+      url: '/',
+    }))
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('main')
+    expect(chatStore.activeChannelId).toBe('dm-1')
+  })
+
+  it('consumes cold-start notification query params after bootstrap and clears them', async () => {
+    const router = createMainRouter()
+    router.push({ path: '/', query: { notificationOpen: '1', conversationId: 'dm-1', messageId: 'msg-1' } })
+    await router.isReady()
+
+    const authStore = useAuthStore()
+    authStore.authState = 'AUTHENTICATED'
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    const chatStore = useChatStore()
+    chatStore.bootstrapped = true
+    chatStore.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+    vi.spyOn(chatStore, 'selectChannel').mockImplementation((conversationId: string) => {
+      chatStore.activeChannelId = conversationId
+    })
+
+    mountAtRoute(router)
+    await flushAsyncWork()
+
+    expect(chatStore.activeChannelId).toBe('dm-1')
+    expect(router.currentRoute.value.query.notificationOpen).toBeUndefined()
+    expect(router.currentRoute.value.query.conversationId).toBeUndefined()
+    expect(router.currentRoute.value.query.messageId).toBeUndefined()
+  })
+
+  it('defers cold-start notification open until chat bootstrap is live', async () => {
+    const router = createMainRouter()
+    router.push({ path: '/', query: { notificationOpen: '1', conversationId: 'dm-1' } })
+    await router.isReady()
+
+    const authStore = useAuthStore()
+    authStore.authState = 'AUTHENTICATED'
+    const wsStore = useWsStore()
+    wsStore.state = 'BOOTSTRAPPING'
+    const chatStore = useChatStore()
+    chatStore.bootstrapped = false
+    const selectChannelSpy = vi.spyOn(chatStore, 'selectChannel').mockImplementation((conversationId: string) => {
+      chatStore.activeChannelId = conversationId
+    })
+
+    mountAtRoute(router)
+    await flushUi()
+
+    expect(selectChannelSpy).not.toHaveBeenCalled()
+    expect(chatStore.activeChannelId).toBe('')
+
+    chatStore.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+    chatStore.bootstrapped = true
+    wsStore.state = 'LIVE_SYNCED'
+    await flushAsyncWork()
+
+    expect(chatStore.activeChannelId).toBe('dm-1')
+    expect(router.currentRoute.value.query.notificationOpen).toBeUndefined()
   })
 
   it('hides chat mode unread badge while chat mode is active', async () => {

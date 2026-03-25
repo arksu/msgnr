@@ -333,6 +333,12 @@ import {
   taskPublicIdFromSlug,
   taskSlugFromPublicId,
 } from '@/services/taskRoute'
+import {
+  notificationOpenIntentFromMessage,
+  notificationOpenIntentFromQuery,
+  stripNotificationOpenQuery,
+  type NotificationOpenIntent,
+} from '@/services/notificationOpen'
 import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ChatArea from '@/components/ChatArea.vue'
@@ -507,6 +513,7 @@ const documentsViewMode = computed<'teamspaces' | 'teamspace' | 'card'>(() => {
 })
 const showChatModeUnreadBadge = computed(() => appMode.value !== 'chat' && chatStore.totalUnreadCount > 0)
 const chatModeUnreadBadgeLabel = computed(() => (chatStore.totalUnreadCount > 99 ? '99+' : String(chatStore.totalUnreadCount)))
+const pendingNotificationOpenIntent = ref<NotificationOpenIntent | null>(null)
 const routeTaskSlug = computed(() =>
   typeof route.params.taskSlug === 'string' ? route.params.taskSlug : '',
 )
@@ -519,10 +526,70 @@ const routeDocumentsTeamspaceId = computed(() =>
 const documentsSelectedTeamspaceId = computed(() =>
   routeDocumentsTeamspaceId.value || documentsStore.selectedDocument?.teamspace_id || null,
 )
+let serviceWorkerMessageHandler: ((event: MessageEvent) => void) | null = null
 
 async function goToChatMode() {
   if (route.name === 'main') return
   await router.push({ name: 'main' })
+}
+
+function queueNotificationOpenIntent(intent: NotificationOpenIntent | null) {
+  if (!intent?.conversationId) return
+  pendingNotificationOpenIntent.value = intent
+  void tryConsumeNotificationOpenIntent()
+}
+
+function canConsumeNotificationOpenIntent() {
+  return authStore.authState === 'AUTHENTICATED'
+    && chatStore.bootstrapped
+    && wsStore.state === 'LIVE_SYNCED'
+}
+
+function hasConversationInSnapshot(conversationId: string): boolean {
+  return chatStore.channels.some(channel => channel.id === conversationId)
+    || chatStore.directMessages.some(dm => dm.id === conversationId)
+}
+
+async function clearNotificationOpenQueryParams() {
+  const currentRoute = router.currentRoute.value
+  if (!notificationOpenIntentFromQuery(currentRoute.query as Record<string, unknown>)) return
+  const nextQuery = stripNotificationOpenQuery(currentRoute.query as Record<string, unknown>)
+  if (typeof currentRoute.name === 'string') {
+    await router.replace({
+      name: currentRoute.name,
+      params: currentRoute.params,
+      query: nextQuery as Record<string, string | string[]>,
+      hash: currentRoute.hash,
+    })
+    return
+  }
+  await router.replace({
+    path: currentRoute.path,
+    query: nextQuery as Record<string, string | string[]>,
+    hash: currentRoute.hash,
+  })
+}
+
+async function tryConsumeNotificationOpenIntent() {
+  const intent = pendingNotificationOpenIntent.value
+  if (!intent || !canConsumeNotificationOpenIntent()) return
+
+  if (!hasConversationInSnapshot(intent.conversationId)) {
+    pendingNotificationOpenIntent.value = null
+    await clearNotificationOpenQueryParams()
+    return
+  }
+
+  if (router.currentRoute.value.name !== 'main') {
+    await router.replace({ name: 'main' })
+  }
+
+  if (chatStore.activeChannelId !== intent.conversationId) {
+    chatStore.selectChannel(intent.conversationId)
+  }
+
+  pendingNotificationOpenIntent.value = null
+  await clearNotificationOpenQueryParams()
 }
 
 function canonicalTaskSlugFromPublicId(publicId: string): string {
@@ -1076,6 +1143,14 @@ watch(settingsOpen, (isOpen) => {
   }
 }, { immediate: true })
 
+watch(
+  [() => authStore.authState, () => wsStore.state, () => chatStore.bootstrapped],
+  () => {
+    void tryConsumeNotificationOpenIntent()
+  },
+  { immediate: true },
+)
+
 // Load channels once WS auth is complete (real data) and also on mount if
 // already authenticated (page refresh scenario)
 watch(() => wsStore.state, async (state) => {
@@ -1149,6 +1224,15 @@ onMounted(async () => {
     chatStore.onClientFocus()
   }
 
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    serviceWorkerMessageHandler = (event: MessageEvent) => {
+      queueNotificationOpenIntent(notificationOpenIntentFromMessage(event.data))
+    }
+    navigator.serviceWorker.addEventListener('message', serviceWorkerMessageHandler)
+  }
+
+  queueNotificationOpenIntent(notificationOpenIntentFromQuery(route.query as Record<string, unknown>))
+
   // Only kick off the realtime flow if already at AUTH_COMPLETE on mount
   // (e.g. page refresh with fast session restore). The watch() above handles
   // the AUTH_COMPLETE transition for connections that complete after mount.
@@ -1171,5 +1255,9 @@ onUnmounted(() => {
   window.removeEventListener('blur', handleClientBlur)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   document.removeEventListener('keydown', handleGlobalKeydown)
+  if (serviceWorkerMessageHandler && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.removeEventListener('message', serviceWorkerMessageHandler)
+    serviceWorkerMessageHandler = null
+  }
 })
 </script>

@@ -5,6 +5,11 @@ import { registerRoute, NavigationRoute } from 'workbox-routing'
 import { NetworkFirst, StaleWhileRevalidate, CacheFirst } from 'workbox-strategies'
 import { ExpirationPlugin } from 'workbox-expiration'
 import { CacheableResponsePlugin } from 'workbox-cacheable-response'
+import {
+  buildNotificationOpenUrl,
+  toNotificationOpenMessage,
+  type NotificationOpenIntent,
+} from '@/services/notificationOpen'
 
 declare let self: ServiceWorkerGlobalScope
 
@@ -106,34 +111,55 @@ self.addEventListener('push', (event: PushEvent) => {
       data: {
         url: data.url || '/',
         conversationId: data.conversationId,
+        messageId: data.messageId,
+        type: data.type,
       },
     }),
   )
 })
 
 // ---------------------------------------------------------------------------
-// Notification click — focus existing window or open new one
+// Notification click — focus existing window and hand off intent in-app,
+// or open a fresh window with a one-shot notification intent query.
 // ---------------------------------------------------------------------------
 
 self.addEventListener('notificationclick', (event: NotificationEvent) => {
   event.notification.close()
 
   const targetUrl: string = event.notification.data?.url || '/'
+  const conversationId = typeof event.notification.data?.conversationId === 'string'
+    ? event.notification.data.conversationId.trim()
+    : ''
+  const messageId = typeof event.notification.data?.messageId === 'string'
+    ? event.notification.data.messageId.trim()
+    : ''
+  const intent: NotificationOpenIntent | null = conversationId
+    ? {
+        conversationId,
+        ...(messageId ? { messageId } : {}),
+        url: targetUrl,
+      }
+    : null
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      // Prefer an existing window at our origin — focus it and navigate.
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (windowClients) => {
+      // Prefer an existing window at our origin — focus it and let the
+      // running app handle the notification intent without a full reload.
       for (const client of windowClients) {
         if (client.url.startsWith(self.location.origin) && 'focus' in client) {
-          client.focus()
-          if ('navigate' in client) {
-            ;(client as WindowClient).navigate(targetUrl)
+          await client.focus()
+          if (intent) {
+            client.postMessage(toNotificationOpenMessage(intent))
           }
           return
         }
       }
       // No existing window — open a new one.
-      return self.clients.openWindow(targetUrl)
+      return self.clients.openWindow(
+        intent
+          ? buildNotificationOpenUrl(targetUrl, intent, self.location.origin)
+          : targetUrl,
+      )
     }),
   )
 })

@@ -229,6 +229,26 @@ describe('authStore.refresh', () => {
     expect(store.lastAuthError).toBe('Server is unavailable')
   })
 
+  it('retries refresh with the latest stored refresh token before clearing session', async () => {
+    tokenStorage.setRefreshToken('refresh-old')
+    vi.spyOn(authApi, 'apiRefresh').mockImplementation(async (refreshToken: string) => {
+      if (refreshToken === 'refresh-old') {
+        tokenStorage.setRefreshToken('refresh-newer')
+        throw new authApi.AuthApiError('expired', 401)
+      }
+      expect(refreshToken).toBe('refresh-newer')
+      return mockRefreshResponse
+    })
+
+    const store = useAuthStore()
+    const token = await store.refresh()
+
+    expect(token).toBe('access-new')
+    expect(store.authState).toBe('AUTHENTICATED')
+    expect(tokenStorage.getRefreshToken()).toBe('refresh-new')
+    expect(tokenStorage.getAccessToken()).toBe('access-new')
+  })
+
   it('retries refresh every 5 seconds while server is unavailable', async () => {
     vi.useFakeTimers()
     tokenStorage.setRefreshToken('refresh-old')

@@ -78,6 +78,7 @@ type UserRepo interface {
 // SessionRepo is the interface the service needs for refresh session storage.
 type SessionRepo interface {
 	Create(ctx context.Context, p CreateSessionParams) (queries.RefreshSession, error)
+	RotateToken(ctx context.Context, p RotateSessionTokenParams) (queries.RefreshSession, error)
 	GetActiveByTokenHash(ctx context.Context, tokenHash string) (queries.RefreshSession, error)
 	GetActiveByIDAndUser(ctx context.Context, sessionID, userID uuid.UUID) (queries.RefreshSession, error)
 	RevokeByID(ctx context.Context, id uuid.UUID) error
@@ -197,7 +198,7 @@ func (s *Service) Login(ctx context.Context, email, password, userAgent, ipAddr 
 	return pair, info, nil
 }
 
-// Refresh rotates the refresh session: revokes the old one and issues a new pair.
+// Refresh rotates the refresh token in-place on the existing session row.
 func (s *Service) Refresh(ctx context.Context, rawRefreshToken, userAgent, ipAddr string) (TokenPair, error) {
 	tokenHash := HashRefreshToken(rawRefreshToken)
 
@@ -219,25 +220,44 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken, userAgent, ipAdd
 		return TokenPair{}, ErrUserBlocked
 	}
 
-	// Revoke old session first (rotation).
-	if err := s.sessions.RevokeByID(ctx, session.ID); err != nil {
-		metrics.AuthRefreshTotal.WithLabelValues("error").Inc()
-		return TokenPair{}, fmt.Errorf("refresh: revoke old session: %w", err)
-	}
-
-	pair, newSessionID, err := s.issueTokenPair(ctx, user.ID, user.Role, userAgent, ipAddr, user.NeedChangePassword)
+	rawRefresh, err := GenerateRefreshToken()
 	if err != nil {
 		metrics.AuthRefreshTotal.WithLabelValues("error").Inc()
-		return TokenPair{}, err
+		return TokenPair{}, fmt.Errorf("refresh: generate refresh token: %w", err)
+	}
+
+	rotatedSession, err := s.sessions.RotateToken(ctx, RotateSessionTokenParams{
+		ID:           session.ID,
+		OldTokenHash: tokenHash,
+		NewTokenHash: HashRefreshToken(rawRefresh),
+		UserAgent:    userAgent,
+		IPAddr:       ipAddr,
+		ExpiresAt:    time.Now().Add(s.refreshTTL),
+	})
+	if err != nil {
+		metrics.AuthRefreshTotal.WithLabelValues("error").Inc()
+		if errors.Is(err, ErrSessionNotFound) {
+			return TokenPair{}, ErrInvalidCredentials
+		}
+		return TokenPair{}, fmt.Errorf("refresh: rotate session token: %w", err)
+	}
+
+	accessToken, err := s.tokens.IssueAccessToken(user.ID.String(), user.Role, rotatedSession.ID.String(), user.NeedChangePassword)
+	if err != nil {
+		metrics.AuthRefreshTotal.WithLabelValues("error").Inc()
+		return TokenPair{}, fmt.Errorf("refresh: sign access token: %w", err)
 	}
 
 	metrics.AuthRefreshTotal.WithLabelValues("success").Inc()
 	s.log.Info("refresh: success",
 		zap.String("user_id", user.ID.String()),
-		zap.String("old_session_id", session.ID.String()),
-		zap.String("new_session_id", newSessionID.String()),
+		zap.String("session_id", rotatedSession.ID.String()),
 	)
-	return pair, nil
+	return TokenPair{
+		AccessToken:  accessToken,
+		RefreshToken: rawRefresh,
+		ExpiresIn:    s.tokens.accessTTL,
+	}, nil
 }
 
 func (s *Service) GetProfile(ctx context.Context, userID uuid.UUID) (UserInfo, error) {

@@ -13,6 +13,7 @@ import {
   type UserDto,
   type UpdateProfileRequest,
 } from '@/services/http/authApi'
+import { refreshSharedSessionTokens } from '@/services/http/refreshSession'
 import {
   getRefreshToken,
   getAccessToken,
@@ -73,8 +74,32 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   }
 }
 
-function isServerUnavailableError(error: unknown): error is AuthApiError {
-  return error instanceof AuthApiError && (error.status === 0 || error.status >= 500)
+function getErrorStatus(error: unknown): number | null {
+  if (error instanceof AuthApiError) return error.status
+  if (
+    typeof error === 'object'
+    && error !== null
+    && 'response' in error
+    && typeof (error as { response?: unknown }).response === 'object'
+    && (error as { response?: { status?: unknown } }).response !== null
+    && typeof (error as { response?: { status?: unknown } }).response?.status === 'number'
+  ) {
+    return (error as { response: { status: number } }).response.status
+  }
+  if (
+    typeof error === 'object'
+    && error !== null
+    && 'status' in error
+    && typeof (error as { status?: unknown }).status === 'number'
+  ) {
+    return (error as { status: number }).status
+  }
+  return null
+}
+
+function isServerUnavailableError(error: unknown): boolean {
+  const status = getErrorStatus(error)
+  return status === 0 || (status != null && status >= 500)
 }
 
 function toUser(dto: UserDto): AuthUser {
@@ -194,17 +219,25 @@ export const useAuthStore = defineStore('auth', () => {
     authState.value = 'REFRESHING'
     lastAuthError.value = null
     try {
-      const res = await apiRefresh(stored)
-      accessToken.value = res.access_token
-      setRefreshToken(res.refresh_token)
-      setAccessToken(res.access_token)
+      const res = await refreshSharedSessionTokens(async (refreshToken) => {
+        const next = await apiRefresh(refreshToken)
+        return {
+          accessToken: next.access_token,
+          refreshToken: next.refresh_token,
+        }
+      })
+      if (!res) {
+        throw new AuthApiError('Refresh failed', 401)
+      }
+
+      accessToken.value = res.accessToken
       // Restore need_change_password from the new JWT payload so a page refresh
       // doesn't bypass the mandatory password change dialog.
-      const claims = decodeJwtPayload(res.access_token)
+      const claims = decodeJwtPayload(res.accessToken)
       needChangePassword.value = claims.need_change_password === true
       authState.value = 'AUTHENTICATED'
       clearRefreshRetryTimer()
-      return res.access_token
+      return res.accessToken
     } catch (e) {
       if (isServerUnavailableError(e)) {
         const persistedAccessToken = accessToken.value ?? getAccessToken()

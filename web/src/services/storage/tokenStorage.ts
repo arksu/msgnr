@@ -10,6 +10,16 @@ let refreshCache: string | null = storage.getItem(REFRESH_KEY)
 let accessCache: string | null = storage.getItem(ACCESS_KEY)
 let secureHydrated = false
 
+export const TOKEN_STORAGE_KEYS = {
+  refresh: REFRESH_KEY,
+  access: ACCESS_KEY,
+} as const
+
+function syncCachedToken(key: string, cached: string | null): string | null {
+  const stored = storage.getItem(key)
+  return stored !== cached ? stored : cached
+}
+
 async function writeSecureItem(key: string, value: string): Promise<void> {
   const platform = getPlatformOrNull()
   if (!platform?.storage.setSecureItem) return
@@ -57,9 +67,7 @@ export async function hydrateTokenStorageFromSecureStore(): Promise<void> {
 }
 
 export function getRefreshToken(): string | null {
-  if (refreshCache == null) {
-    refreshCache = storage.getItem(REFRESH_KEY)
-  }
+  refreshCache = syncCachedToken(REFRESH_KEY, refreshCache)
   return refreshCache
 }
 
@@ -80,9 +88,7 @@ export async function clearRefreshTokenAsync(): Promise<void> {
 }
 
 export function getAccessToken(): string | null {
-  if (accessCache == null) {
-    accessCache = storage.getItem(ACCESS_KEY)
-  }
+  accessCache = syncCachedToken(ACCESS_KEY, accessCache)
   return accessCache
 }
 

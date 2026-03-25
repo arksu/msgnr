@@ -51,6 +51,24 @@ func (f *fakeSessionRepo) GetActiveByTokenHash(ctx context.Context, tokenHash st
 	return row, nil
 }
 
+func (f *fakeSessionRepo) RotateToken(ctx context.Context, p auth.RotateSessionTokenParams) (queries.RefreshSession, error) {
+	row, ok := f.sessions[p.OldTokenHash]
+	if !ok || row.ID != p.ID || row.RevokedAt.Valid {
+		return queries.RefreshSession{}, auth.ErrSessionNotFound
+	}
+	if row.ExpiresAt.Before(time.Now()) {
+		return queries.RefreshSession{}, auth.ErrSessionNotFound
+	}
+
+	delete(f.sessions, p.OldTokenHash)
+	row.TokenHash = p.NewTokenHash
+	row.UserAgent = sql.NullString{String: p.UserAgent, Valid: p.UserAgent != ""}
+	row.IpAddr = sql.NullString{String: p.IPAddr, Valid: p.IPAddr != ""}
+	row.ExpiresAt = p.ExpiresAt
+	f.sessions[p.NewTokenHash] = row
+	return row, nil
+}
+
 func (f *fakeSessionRepo) RevokeByID(ctx context.Context, id uuid.UUID) error {
 	for k, v := range f.sessions {
 		if v.ID == id {
@@ -203,6 +221,12 @@ func TestRefresh_Success_RotatesSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, pair2.AccessToken)
 	assert.NotEqual(t, pair1.RefreshToken, pair2.RefreshToken)
+
+	principalBeforeRefresh, err := svc.VerifyAccess(context.Background(), pair1.AccessToken)
+	require.NoError(t, err)
+	principalAfterRefresh, err := svc.VerifyAccess(context.Background(), pair2.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, principalBeforeRefresh.SessionID, principalAfterRefresh.SessionID)
 
 	// Old refresh token must be revoked.
 	_, err = svc.Refresh(context.Background(), pair1.RefreshToken, "", "")

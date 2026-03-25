@@ -37,6 +37,15 @@ type CreateSessionParams struct {
 	ExpiresAt time.Time
 }
 
+type RotateSessionTokenParams struct {
+	ID           uuid.UUID
+	OldTokenHash string
+	NewTokenHash string
+	UserAgent    string
+	IPAddr       string
+	ExpiresAt    time.Time
+}
+
 func (r *RefreshSessionRepo) Create(ctx context.Context, p CreateSessionParams) (queries.RefreshSession, error) {
 	row, err := r.q.CreateRefreshSession(ctx, queries.CreateRefreshSessionParams{
 		UserID:    p.UserID,
@@ -47,6 +56,24 @@ func (r *RefreshSessionRepo) Create(ctx context.Context, p CreateSessionParams) 
 	})
 	if err != nil {
 		return queries.RefreshSession{}, fmt.Errorf("create refresh session: %w", err)
+	}
+	return row, nil
+}
+
+func (r *RefreshSessionRepo) RotateToken(ctx context.Context, p RotateSessionTokenParams) (queries.RefreshSession, error) {
+	row, err := r.q.RotateRefreshSessionToken(ctx, queries.RotateRefreshSessionTokenParams{
+		ID:          p.ID,
+		TokenHash:   p.NewTokenHash,
+		UserAgent:   sql.NullString{String: p.UserAgent, Valid: p.UserAgent != ""},
+		IpAddr:      sql.NullString{String: p.IPAddr, Valid: p.IPAddr != ""},
+		ExpiresAt:   p.ExpiresAt,
+		TokenHash_2: p.OldTokenHash,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return queries.RefreshSession{}, ErrSessionNotFound
+		}
+		return queries.RefreshSession{}, fmt.Errorf("rotate refresh session token: %w", err)
 	}
 	return row, nil
 }

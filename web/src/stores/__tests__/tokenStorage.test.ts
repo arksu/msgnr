@@ -51,6 +51,19 @@ describe('tokenStorage', () => {
     expect(tokenStorage.getAccessToken()).toBeNull()
   })
 
+  it('reconciles getters with shared localStorage updates', async () => {
+    const tokenStorage = await loadTokenStorage()
+
+    tokenStorage.setRefreshToken('refresh-token-1')
+    tokenStorage.setAccessToken('access-token-1')
+
+    localStorage.setItem('msgnr.refresh_token', 'refresh-token-2')
+    localStorage.setItem('msgnr.access_token', 'access-token-2')
+
+    expect(tokenStorage.getRefreshToken()).toBe('refresh-token-2')
+    expect(tokenStorage.getAccessToken()).toBe('access-token-2')
+  })
+
   it('hydrates in-memory tokens from secure storage when available', async () => {
     const secureStorage = {
       getSecureItem: vi.fn(async (key: string) => {

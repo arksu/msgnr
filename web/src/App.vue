@@ -79,6 +79,7 @@ import { useAuthStore } from '@/stores/auth'
 import { AuthApiError } from '@/services/http/authApi'
 import { AUTH_EXPIRED_EVENT } from '@/services/http/client'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
+import { getAccessToken, getRefreshToken, TOKEN_STORAGE_KEYS } from '@/services/storage/tokenStorage'
 import PwaUpdateBanner from '@/components/PwaUpdateBanner.vue'
 import { isTauriRuntime } from '@/platform/runtime'
 
@@ -103,12 +104,28 @@ function handleAuthExpired() {
   }
 }
 
+function handleTokenStorageChange(event: StorageEvent) {
+  if (event.storageArea && event.storageArea !== globalThis.localStorage) return
+  if (
+    event.key !== null
+    && event.key !== TOKEN_STORAGE_KEYS.access
+    && event.key !== TOKEN_STORAGE_KEYS.refresh
+  ) {
+    return
+  }
+
+  if (getAccessToken() || getRefreshToken()) return
+  handleAuthExpired()
+}
+
 onMounted(() => {
   window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired as EventListener)
+  window.addEventListener('storage', handleTokenStorageChange)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired as EventListener)
+  window.removeEventListener('storage', handleTokenStorageChange)
 })
 
 watch(

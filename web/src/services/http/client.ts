@@ -3,16 +3,9 @@ import {
   clearAccessToken,
   clearRefreshToken,
   getAccessToken,
-  getRefreshToken,
-  setAccessToken,
-  setRefreshToken,
 } from '@/services/storage/tokenStorage'
 import { resolveApiBaseUrl } from '@/services/runtime/backendEndpoint'
-
-interface RefreshResponse {
-  access_token: string
-  refresh_token: string
-}
+import { refreshSharedSessionTokens } from './refreshSession'
 
 interface RetriableRequestConfig extends InternalAxiosRequestConfig {
   _retryAuth?: boolean
@@ -34,31 +27,6 @@ function shouldSkipAuthRefresh(url: string | undefined) {
     url.includes('/api/auth/refresh') ||
     url.includes('/api/auth/logout')
   )
-}
-
-async function refreshAccessToken(): Promise<string | null> {
-  const refreshToken = getRefreshToken()
-  if (!refreshToken) return null
-  try {
-    const { data } = await axios.post<RefreshResponse>('/api/auth/refresh', {
-      refresh_token: refreshToken,
-    }, {
-      baseURL: resolveApiBaseUrl(),
-    })
-    if (!data?.access_token || !data?.refresh_token) {
-      return null
-    }
-    setAccessToken(data.access_token)
-    setRefreshToken(data.refresh_token)
-    return data.access_token
-  } catch (e) {
-    if (e instanceof AxiosError && (e.response?.status === 401 || e.response?.status === 403)) {
-      clearAccessToken()
-      clearRefreshToken()
-      return null
-    }
-    throw e
-  }
 }
 
 /**
@@ -86,7 +54,9 @@ export function createAuthenticatedClient() {
       config._retryAuth = true
       try {
         if (!refreshInFlight) {
-          refreshInFlight = refreshAccessToken().finally(() => {
+          refreshInFlight = refreshSharedSessionTokens()
+            .then((tokens) => tokens?.accessToken ?? null)
+            .finally(() => {
             refreshInFlight = null
           })
         }

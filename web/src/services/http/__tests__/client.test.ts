@@ -117,4 +117,81 @@ describe('createAuthenticatedClient', () => {
 
     globalThis.removeEventListener(AUTH_EXPIRED_EVENT, authExpiredListener as EventListener)
   })
+
+  it('retries refresh with the newer shared refresh token instead of clearing auth', async () => {
+    const tokenStorage = await import('@/services/storage/tokenStorage')
+    tokenStorage.setAccessToken('expired-token')
+    tokenStorage.setRefreshToken('refresh-token-1')
+
+    const { createAuthenticatedClient } = await import('@/services/http/client')
+    const http = createAuthenticatedClient()
+
+    let attempt = 0
+    http.defaults.adapter = vi.fn(async (config) => {
+      attempt += 1
+      if (attempt === 1) {
+        throw new AxiosError(
+          'Unauthorized',
+          'ERR_BAD_REQUEST',
+          config,
+          undefined,
+          {
+            data: { error: 'unauthorized' },
+            status: 401,
+            statusText: 'Unauthorized',
+            headers: {},
+            config,
+          },
+        )
+      }
+
+      return {
+        data: { ok: true },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      }
+    })
+
+    vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
+      const refreshToken = (body as { refresh_token: string }).refresh_token
+      if (refreshToken === 'refresh-token-1') {
+        tokenStorage.setRefreshToken('refresh-token-2')
+        throw new AxiosError(
+          'Unauthorized',
+          'ERR_BAD_REQUEST',
+          undefined,
+          undefined,
+          {
+            data: { error: 'unauthorized' },
+            status: 401,
+            statusText: 'Unauthorized',
+            headers: {},
+            config: {} as any,
+          },
+        )
+      }
+
+      expect(refreshToken).toBe('refresh-token-2')
+      return {
+        data: {
+          access_token: 'fresh-token-2',
+          refresh_token: 'refresh-token-3',
+          expires_in_sec: 3600,
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as any,
+      }
+    })
+
+    const response = await http.get('/api/messages')
+
+    expect(response.data).toEqual({ ok: true })
+    expect(axios.post).toHaveBeenCalledTimes(2)
+    expect(tokenStorage.getAccessToken()).toBe('fresh-token-2')
+    expect(tokenStorage.getRefreshToken()).toBe('refresh-token-3')
+  })
 })

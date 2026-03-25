@@ -95,3 +95,48 @@ func (q *Queries) RevokeRefreshSessionByTokenHash(ctx context.Context, tokenHash
 	_, err := q.db.ExecContext(ctx, revokeRefreshSessionByTokenHash, tokenHash)
 	return err
 }
+
+const rotateRefreshSessionToken = `-- name: RotateRefreshSessionToken :one
+UPDATE refresh_sessions
+SET token_hash = $2,
+    user_agent = $3,
+    ip_addr = $4,
+    expires_at = $5
+WHERE id = $1
+  AND token_hash = $6
+  AND revoked_at IS NULL
+  AND expires_at > now()
+RETURNING id, user_id, token_hash, user_agent, ip_addr, expires_at, revoked_at, created_at
+`
+
+type RotateRefreshSessionTokenParams struct {
+	ID          uuid.UUID      `json:"id"`
+	TokenHash   string         `json:"token_hash"`
+	UserAgent   sql.NullString `json:"user_agent"`
+	IpAddr      sql.NullString `json:"ip_addr"`
+	ExpiresAt   time.Time      `json:"expires_at"`
+	TokenHash_2 string         `json:"token_hash_2"`
+}
+
+func (q *Queries) RotateRefreshSessionToken(ctx context.Context, arg RotateRefreshSessionTokenParams) (RefreshSession, error) {
+	row := q.db.QueryRowContext(ctx, rotateRefreshSessionToken,
+		arg.ID,
+		arg.TokenHash,
+		arg.UserAgent,
+		arg.IpAddr,
+		arg.ExpiresAt,
+		arg.TokenHash_2,
+	)
+	var i RefreshSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.UserAgent,
+		&i.IpAddr,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}

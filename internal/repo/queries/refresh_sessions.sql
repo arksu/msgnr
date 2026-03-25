@@ -9,6 +9,18 @@ WHERE token_hash = $1
   AND revoked_at IS NULL
   AND expires_at > now();
 
+-- name: RotateRefreshSessionToken :one
+UPDATE refresh_sessions
+SET token_hash = $2,
+    user_agent = $3,
+    ip_addr = $4,
+    expires_at = $5
+WHERE id = $1
+  AND token_hash = $6
+  AND revoked_at IS NULL
+  AND expires_at > now()
+RETURNING *;
+
 -- name: RevokeRefreshSessionByID :exec
 UPDATE refresh_sessions
 SET revoked_at = now()

@@ -232,7 +232,23 @@ function buildStyles(): string {
     .task-pdf-export .markdown-body h6 { font-size: 16px; }
     .task-pdf-export .markdown-body ul,
     .task-pdf-export .markdown-body ol {
-      padding-left: 24px;
+      margin-left: 0;
+      padding-left: 28px;
+      list-style-position: outside;
+    }
+    .task-pdf-export .markdown-body ul > li:not([data-type='taskItem']),
+    .task-pdf-export .markdown-body ol > li:not([data-type='taskItem']) {
+      margin-bottom: 6px;
+      padding-left: 2px;
+      line-height: 1.6;
+    }
+    .task-pdf-export .markdown-body ul > li:not([data-type='taskItem'])::marker,
+    .task-pdf-export .markdown-body ol > li:not([data-type='taskItem'])::marker {
+      color: #000000 !important;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      font-variant-numeric: tabular-nums;
     }
     .task-pdf-export .markdown-body li[data-type='taskItem'] {
       display: flex;

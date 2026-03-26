@@ -136,16 +136,145 @@
           <div class="mb-1 flex items-baseline gap-2">
             <span class="text-sm font-medium text-gray-200">{{ authorName(comment.author_id) }}</span>
             <span class="text-xs text-gray-500">{{ formatDatetime(comment.created_at) }}</span>
+            <span
+              v-if="isEditedComment(comment)"
+              data-testid="task-comment-edited-marker"
+              class="text-[11px] text-gray-500"
+            >(edited)</span>
+            <button
+              v-if="canEditComment(comment) && editingCommentId !== comment.id"
+              data-testid="task-comment-edit-button"
+              class="rounded px-1.5 py-0.5 text-[11px] text-cyan-300 transition-colors hover:bg-white/10 hover:text-cyan-200"
+              @click="startEditingComment(comment)"
+            >
+              Edit
+            </button>
           </div>
 
-          <div
-            v-if="comment.body"
-            class="markdown-body break-words text-sm text-gray-300"
-            v-html="renderCommentBody(comment.body)"
-            @click="onMarkdownClick"
-          />
+          <template v-if="editingCommentId === comment.id">
+            <div
+              class="flex flex-col gap-2 rounded-lg border px-3 py-2 transition-colors"
+              :class="editDragOver ? 'border-accent bg-chat-input/90' : 'border-chat-border bg-chat-input'"
+            >
+              <input
+                :ref="setEditFileInputRef"
+                type="file"
+                class="hidden"
+                multiple
+                @change="onEditFileInputChange"
+              >
 
-          <div v-if="comment.attachments?.length" class="mt-2 space-y-2">
+              <div v-if="editAttachments.length > 0" class="rounded-lg border border-chat-border bg-chat-input/70 p-2">
+                <p class="mb-1 text-[11px] text-gray-500">Attachments ({{ editAttachments.length }}/{{ MAX_ATTACHMENTS }})</p>
+                <ul class="space-y-1">
+                  <li
+                    v-for="attachment in editAttachments"
+                    :key="attachment.id"
+                    class="flex items-center justify-between gap-2 rounded border border-chat-border bg-chat-input px-2 py-1"
+                  >
+                    <div class="min-w-0">
+                      <p class="truncate text-xs text-gray-200">{{ attachment.file_name }}</p>
+                      <p class="text-[11px] text-gray-500">{{ formatFileSize(attachment.file_size) }}</p>
+                    </div>
+                    <button
+                      class="rounded p-1 text-gray-400 hover:bg-white/10 hover:text-white"
+                      title="Remove attachment"
+                      :disabled="editRemovingAttachmentIds.has(attachment.id)"
+                      @click="removeEditAttachment(attachment)"
+                    >
+                      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path d="M18 6 6 18M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </li>
+                </ul>
+              </div>
+
+              <textarea
+                :ref="setEditTextareaRef"
+                v-model="editBody"
+                data-testid="task-comment-edit-textarea"
+                class="min-h-[24px] resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
+                placeholder="Edit comment…"
+                :disabled="editSaving"
+                rows="1"
+                @keydown.enter.exact.prevent="saveEditingComment"
+                @keydown.shift.enter.exact.prevent.stop="onEditShiftEnter"
+                @input="autoResizeEditTextarea"
+                @paste="onEditPaste"
+                @dragenter.prevent="onEditDragEnter"
+                @dragover.prevent="onEditDragOver"
+                @dragleave.prevent="onEditDragLeave"
+                @drop.prevent="onEditDrop"
+              />
+
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <button
+                    data-testid="task-comment-edit-attach-button"
+                    class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="editSaving || editUploading || editAttachments.length >= MAX_ATTACHMENTS"
+                    :title="editAttachButtonTitle"
+                    @click="openEditFilePicker"
+                  >
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path d="M12 5v14M5 12h14"/>
+                    </svg>
+                  </button>
+
+                  <button
+                    :ref="setEditPickerToggleButtonRef"
+                    data-testid="task-comment-edit-emoji-button"
+                    class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="editSaving"
+                    title="Add emoji"
+                    @click.stop="toggleEditEmojiPicker"
+                  >
+                    <span class="text-lg leading-none">🙂</span>
+                  </button>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <button
+                    data-testid="task-comment-edit-cancel"
+                    class="rounded px-2.5 py-1 text-xs text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+                    :disabled="editSaving"
+                    @click="cancelEditingComment"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    data-testid="task-comment-edit-save"
+                    class="rounded px-2.5 py-1 text-xs transition-colors"
+                    :class="canSaveEditedComment
+                      ? 'bg-accent text-white hover:bg-accent-hover'
+                      : 'cursor-not-allowed text-gray-600'"
+                    :disabled="!canSaveEditedComment"
+                    @click="saveEditingComment"
+                  >
+                    {{ editSaving ? 'Saving…' : 'Save' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-1 flex items-center justify-between gap-2">
+              <span v-if="editUploading" class="text-[11px] text-gray-500">Uploading attachments...</span>
+              <span v-else-if="editAttachmentError" class="text-[11px] text-red-400">{{ editAttachmentError }}</span>
+              <span v-else class="text-xs text-gray-500">Enter to save · Shift+Enter for new line</span>
+              <span class="text-xs text-red-400">{{ editError }}</span>
+            </div>
+          </template>
+
+          <template v-else>
+            <div
+              v-if="comment.body"
+              class="markdown-body break-words text-sm text-gray-300"
+              v-html="renderCommentBody(comment.body)"
+              @click="onMarkdownClick"
+            />
+
+            <div v-if="comment.attachments?.length" class="mt-2 space-y-2">
             <div
               v-for="attachment in comment.attachments"
               :key="attachment.id"
@@ -229,6 +358,7 @@
               </template>
             </div>
           </div>
+          </template>
         </div>
       </li>
     </ul>
@@ -257,6 +387,40 @@
           color="#ae65c5"
           @select="onSelectEmoji"
           @selected="onSelectEmoji"
+        />
+        <div
+          v-else
+          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+        >
+          Loading emoji...
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="showEditEmojiPicker"
+        ref="editPickerRoot"
+        class="z-20 emoji-picker-dark"
+        :style="editEmojiPickerStyle"
+        @click.stop
+      >
+        <component
+          :is="editPickerComponent"
+          v-if="editPickerComponent && editEmojiIndex"
+          :data="editEmojiIndex"
+          :native="true"
+          set="apple"
+          title="Add emoji"
+          emoji="slightly_smiling_face"
+          :show-preview="true"
+          :show-skin-tones="false"
+          :infinite-scroll="true"
+          :emoji-size="26"
+          :per-line="9"
+          color="#ae65c5"
+          @select="onSelectEditEmoji"
+          @selected="onSelectEditEmoji"
         />
         <div
           v-else
@@ -297,9 +461,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick, reactive } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick, reactive, type ComponentPublicInstance } from 'vue'
 import router from '@/router'
 import { useTasksStore } from '@/stores/tasks'
+import { useAuthStore } from '@/stores/auth'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 import { useTextareaAutosize } from '@/composables/useTextareaAutosize'
@@ -308,6 +473,7 @@ import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
   tasksListComments,
   tasksCreateComment,
+  tasksUpdateComment,
   tasksUploadCommentAttachment,
   tasksDeleteCommentAttachment,
   tasksFetchCommentAttachmentBlob,
@@ -321,6 +487,7 @@ const MAX_TEXTAREA_LINES = 8
 const props = defineProps<{ taskId: string }>()
 
 const tasksStore = useTasksStore()
+const authStore = useAuthStore()
 const comments = ref<TaskComment[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -334,8 +501,21 @@ const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
+const editFileInputEl = ref<HTMLInputElement | null>(null)
+const editTextareaEl = ref<HTMLTextAreaElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 let dragDepth = 0
+let editDragDepth = 0
+
+const editingCommentId = ref<string | null>(null)
+const editBody = ref('')
+const editAttachments = ref<TaskCommentAttachment[]>([])
+const editSaving = ref(false)
+const editUploading = ref(false)
+const editError = ref('')
+const editAttachmentError = ref('')
+const editRemovingAttachmentIds = ref(new Set<string>())
+const editDragOver = ref(false)
 
 const attachmentUrls = ref<Record<string, string>>({})
 const loadingAttachmentIds = ref(new Set<string>())
@@ -345,6 +525,22 @@ const imagePreview = reactive({
   src: '',
   fileName: '',
 })
+
+function asElement<T extends HTMLElement>(value: Element | ComponentPublicInstance | null): T | null {
+  return value instanceof HTMLElement ? value as T : null
+}
+
+function setEditFileInputRef(value: Element | ComponentPublicInstance | null) {
+  editFileInputEl.value = asElement<HTMLInputElement>(value)
+}
+
+function setEditTextareaRef(value: Element | ComponentPublicInstance | null) {
+  editTextareaEl.value = asElement<HTMLTextAreaElement>(value)
+}
+
+function setEditPickerToggleButtonRef(value: Element | ComponentPublicInstance | null) {
+  editPickerToggleButton.value = asElement<HTMLElement>(value)
+}
 
 const {
   showEmojiPicker,
@@ -360,17 +556,41 @@ const {
   onSelect: insertEmojiAtCursor,
 })
 const {
+  showEmojiPicker: showEditEmojiPicker,
+  pickerRoot: editPickerRoot,
+  pickerToggleButton: editPickerToggleButton,
+  pickerComponent: editPickerComponent,
+  emojiIndex: editEmojiIndex,
+  emojiPickerStyle: editEmojiPickerStyle,
+  toggleEmojiPicker: toggleEditEmojiPicker,
+  closeEmojiPicker: closeEditEmojiPicker,
+  onSelectEmoji: onSelectEditEmoji,
+} = useComposerEmojiPicker({
+  onSelect: insertEditEmojiAtCursor,
+})
+const {
   resize: autosizeCommentTextarea,
   reset: resetCommentTextarea,
 } = useTextareaAutosize(inputEl, {
   maxLines: MAX_TEXTAREA_LINES,
   onHeightDelta: preserveScrollOnComposerResize,
 })
+const {
+  resize: autosizeEditTextarea,
+  reset: resetEditTextarea,
+} = useTextareaAutosize(editTextareaEl, {
+  maxLines: MAX_TEXTAREA_LINES,
+})
 
 const canSubmit = computed(() => {
   if (submitting.value || uploading.value) return false
   if (newBody.value.trim().length > 0) return true
   return stagedAttachments.value.length > 0
+})
+const canSaveEditedComment = computed(() => {
+  if (!editingCommentId.value || editSaving.value || editUploading.value) return false
+  if (editBody.value.trim().length > 0) return true
+  return editAttachments.value.length > 0
 })
 
 function renderCommentBody(body: string): string {
@@ -383,6 +603,10 @@ function onMarkdownClick(event: MouseEvent) {
 
 const attachButtonTitle = computed(() => {
   if (stagedAttachments.value.length >= MAX_ATTACHMENTS) return `Max ${MAX_ATTACHMENTS} attachments per comment`
+  return 'Attach file'
+})
+const editAttachButtonTitle = computed(() => {
+  if (editAttachments.value.length >= MAX_ATTACHMENTS) return `Max ${MAX_ATTACHMENTS} attachments per comment`
   return 'Attach file'
 })
 
@@ -403,12 +627,24 @@ function openFilePicker() {
   fileInputEl.value?.click()
 }
 
+function openEditFilePicker() {
+  editFileInputEl.value?.click()
+}
+
 async function onFileInputChange(event: Event) {
   const input = event.target as HTMLInputElement
   const files = Array.from(input.files ?? [])
   input.value = ''
   if (files.length === 0) return
   await uploadFiles(files)
+}
+
+async function onEditFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  if (files.length === 0) return
+  await uploadEditFiles(files)
 }
 
 async function uploadFiles(files: File[]) {
@@ -437,6 +673,32 @@ async function uploadFiles(files: File[]) {
   }
 }
 
+async function uploadEditFiles(files: File[]) {
+  if (!editingCommentId.value || editSaving.value || editUploading.value) return
+  editAttachmentError.value = ''
+  const remainingSlots = MAX_ATTACHMENTS - editAttachments.value.length
+  if (remainingSlots <= 0) {
+    editAttachmentError.value = `Max ${MAX_ATTACHMENTS} attachments per comment`
+    return
+  }
+  const selected = files.slice(0, remainingSlots)
+  if (selected.length < files.length) {
+    editAttachmentError.value = `Only ${MAX_ATTACHMENTS} attachments are allowed per comment`
+  }
+
+  editUploading.value = true
+  try {
+    for (const file of selected) {
+      const uploaded = await tasksUploadCommentAttachment(props.taskId, file)
+      editAttachments.value.push(uploaded)
+    }
+  } catch (e) {
+    editAttachmentError.value = e instanceof Error ? e.message : 'Failed to upload attachment'
+  } finally {
+    editUploading.value = false
+  }
+}
+
 async function removeStagedAttachment(attachmentId: string) {
   removingAttachmentIds.value.add(attachmentId)
   attachmentError.value = ''
@@ -450,9 +712,37 @@ async function removeStagedAttachment(attachmentId: string) {
   }
 }
 
+async function removeEditAttachment(attachment: TaskCommentAttachment) {
+  editRemovingAttachmentIds.value.add(attachment.id)
+  editAttachmentError.value = ''
+  try {
+    if (!attachment.comment_id) {
+      await tasksDeleteCommentAttachment(props.taskId, attachment.id)
+    }
+    editAttachments.value = editAttachments.value.filter(item => item.id !== attachment.id)
+  } catch (e) {
+    editAttachmentError.value = e instanceof Error ? e.message : 'Failed to remove attachment'
+  } finally {
+    editRemovingAttachmentIds.value.delete(attachment.id)
+  }
+}
+
 async function cleanupStagedAttachments(taskId: string = props.taskId) {
   const ids = stagedAttachments.value.map(item => item.id)
   stagedAttachments.value = []
+  await Promise.allSettled(ids.map(async id => {
+    try {
+      await tasksDeleteCommentAttachment(taskId, id)
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }))
+}
+
+async function cleanupEditStagedAttachments(taskId: string = props.taskId) {
+  const ids = editAttachments.value
+    .filter(item => !item.comment_id)
+    .map(item => item.id)
   await Promise.allSettled(ids.map(async id => {
     try {
       await tasksDeleteCommentAttachment(taskId, id)
@@ -472,6 +762,12 @@ function onDragEnter(event: DragEvent) {
   isDragOver.value = true
 }
 
+function onEditDragEnter(event: DragEvent) {
+  if (!isFileDragEvent(event) || editSaving.value || editUploading.value) return
+  editDragDepth += 1
+  editDragOver.value = true
+}
+
 function onDragOver(event: DragEvent) {
   if (!isFileDragEvent(event) || submitting.value || uploading.value) return
   if (event.dataTransfer) {
@@ -480,10 +776,25 @@ function onDragOver(event: DragEvent) {
   isDragOver.value = true
 }
 
+function onEditDragOver(event: DragEvent) {
+  if (!isFileDragEvent(event) || editSaving.value || editUploading.value) return
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  editDragOver.value = true
+}
+
 function onDragLeave(_event: DragEvent) {
   dragDepth = Math.max(0, dragDepth - 1)
   if (dragDepth === 0) {
     isDragOver.value = false
+  }
+}
+
+function onEditDragLeave(_event: DragEvent) {
+  editDragDepth = Math.max(0, editDragDepth - 1)
+  if (editDragDepth === 0) {
+    editDragOver.value = false
   }
 }
 
@@ -494,6 +805,15 @@ async function onDrop(event: DragEvent) {
   const files = Array.from(event.dataTransfer?.files ?? [])
   if (files.length === 0) return
   await uploadFiles(files)
+}
+
+async function onEditDrop(event: DragEvent) {
+  if (!isFileDragEvent(event)) return
+  editDragDepth = 0
+  editDragOver.value = false
+  const files = Array.from(event.dataTransfer?.files ?? [])
+  if (files.length === 0) return
+  await uploadEditFiles(files)
 }
 
 function clipboardFileKey(file: File): string {
@@ -534,6 +854,15 @@ function onPaste(event: ClipboardEvent) {
   void uploadFiles(files)
 }
 
+function onEditPaste(event: ClipboardEvent) {
+  const files = extractClipboardFiles(event)
+  if (files.length === 0) return
+  if (editSaving.value || editUploading.value) return
+
+  event.preventDefault()
+  void uploadEditFiles(files)
+}
+
 function onShiftEnter(event: KeyboardEvent) {
   const el = event.target as HTMLTextAreaElement
   const start = el.selectionStart
@@ -542,6 +871,17 @@ function onShiftEnter(event: KeyboardEvent) {
   nextTick(() => {
     el.selectionStart = el.selectionEnd = start + 1
     autoResize()
+  })
+}
+
+function onEditShiftEnter(event: KeyboardEvent) {
+  const el = event.target as HTMLTextAreaElement
+  const start = el.selectionStart
+  const end = el.selectionEnd
+  editBody.value = editBody.value.slice(0, start) + '\n' + editBody.value.slice(end)
+  nextTick(() => {
+    el.selectionStart = el.selectionEnd = start + 1
+    autoResizeEditTextarea()
   })
 }
 
@@ -565,8 +905,32 @@ function insertEmojiAtCursor(emoji: string) {
   })
 }
 
+function insertEditEmojiAtCursor(emoji: string) {
+  const el = editTextareaEl.value
+  if (!el) {
+    editBody.value += emoji
+    return
+  }
+
+  const start = el.selectionStart ?? editBody.value.length
+  const end = el.selectionEnd ?? start
+  editBody.value = `${editBody.value.slice(0, start)}${emoji}${editBody.value.slice(end)}`
+
+  nextTick(() => {
+    const cursor = start + emoji.length
+    el.focus()
+    el.selectionStart = cursor
+    el.selectionEnd = cursor
+    autoResizeEditTextarea()
+  })
+}
+
 function autoResize() {
   autosizeCommentTextarea()
+}
+
+function autoResizeEditTextarea() {
+  autosizeEditTextarea()
 }
 
 function findNearestScrollContainer(start: HTMLElement | null): HTMLElement | null {
@@ -614,6 +978,77 @@ async function submit() {
     error.value = e instanceof Error ? e.message : 'Failed to post comment'
   } finally {
     submitting.value = false
+  }
+}
+
+function canEditComment(comment: TaskComment): boolean {
+  return authStore.user?.id === comment.author_id
+}
+
+function isEditedComment(comment: TaskComment): boolean {
+  return new Date(comment.updated_at).getTime() > new Date(comment.created_at).getTime()
+}
+
+async function startEditingComment(comment: TaskComment) {
+  if (!canEditComment(comment)) return
+  if (editingCommentId.value && editingCommentId.value !== comment.id) {
+    await cleanupEditStagedAttachments()
+  }
+  closeEditEmojiPicker()
+  editingCommentId.value = comment.id
+  editBody.value = comment.body
+  editAttachments.value = (comment.attachments ?? []).map(item => ({ ...item }))
+  editError.value = ''
+  editAttachmentError.value = ''
+  editDragOver.value = false
+  editDragDepth = 0
+  nextTick(() => {
+    const el = editTextareaEl.value
+    if (!el) return
+    el.focus()
+    const cursor = el.value.length
+    el.setSelectionRange(cursor, cursor)
+    autoResizeEditTextarea()
+  })
+}
+
+async function cancelEditingComment() {
+  if (editSaving.value) return
+  await cleanupEditStagedAttachments()
+  closeEditEmojiPicker()
+  editingCommentId.value = null
+  editBody.value = ''
+  editAttachments.value = []
+  editError.value = ''
+  editAttachmentError.value = ''
+  editDragOver.value = false
+  editDragDepth = 0
+  nextTick(() => resetEditTextarea())
+}
+
+async function saveEditingComment() {
+  const commentId = editingCommentId.value
+  if (!commentId || !canSaveEditedComment.value) return
+  editSaving.value = true
+  editError.value = ''
+  editAttachmentError.value = ''
+  try {
+    const updated = await tasksUpdateComment(props.taskId, commentId, {
+      body: editBody.value.trim(),
+      attachment_ids: editAttachments.value.map(item => item.id),
+    })
+    comments.value = comments.value.map(comment => (comment.id === commentId ? updated : comment))
+    closeEditEmojiPicker()
+    editingCommentId.value = null
+    editBody.value = ''
+    editAttachments.value = []
+    nextTick(() => resetEditTextarea())
+    preloadAttachmentUrls()
+    void tasksStore.loadUsers()
+  } catch (e) {
+    editError.value = e instanceof Error ? e.message : 'Failed to update comment'
+  } finally {
+    editSaving.value = false
   }
 }
 
@@ -747,13 +1182,27 @@ watch(newBody, () => {
   nextTick(() => autoResize())
 })
 
+watch(editBody, () => {
+  nextTick(() => autoResizeEditTextarea())
+})
+
 watch(() => props.taskId, (next, prev) => {
   closeEmojiPicker()
+  closeEditEmojiPicker()
   if (prev && prev !== next) {
     void cleanupStagedAttachments(prev)
+    void cleanupEditStagedAttachments(prev)
     revokeAllAttachmentUrls()
     newBody.value = ''
+    editingCommentId.value = null
+    editBody.value = ''
+    editAttachments.value = []
+    editError.value = ''
+    editAttachmentError.value = ''
+    editDragOver.value = false
+    editDragDepth = 0
     nextTick(() => autoResize())
+    nextTick(() => resetEditTextarea())
     closeImagePreview()
     void load()
   }
@@ -776,8 +1225,12 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleEscape)
   closeEmojiPicker()
+  closeEditEmojiPicker()
   if (stagedAttachments.value.length > 0) {
     void cleanupStagedAttachments()
+  }
+  if (editAttachments.value.some(item => !item.comment_id)) {
+    void cleanupEditStagedAttachments()
   }
   closeImagePreview()
   revokeAllAttachmentUrls()

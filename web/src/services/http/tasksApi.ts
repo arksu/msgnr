@@ -830,6 +830,17 @@ export async function tasksCreateComment(
   } catch (e) { handleError(e) }
 }
 
+export async function tasksUpdateComment(
+  taskId: string,
+  commentId: string,
+  payload: { body: string; attachment_ids?: string[] },
+): Promise<TaskComment> {
+  try {
+    const { data } = await http.put<TaskComment>(`/api/tasks/${taskId}/comments/${commentId}`, payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
 export async function tasksUploadCommentAttachment(taskId: string, file: File): Promise<TaskCommentAttachment> {
   try {
     const form = new FormData()

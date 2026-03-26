@@ -2938,22 +2938,29 @@ func TestIntegration_Comment_UnknownTaskReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, tasks.ErrNotFound)
 }
 
-func TestIntegration_Comment_DBTriggerPreventsBodyEdit(t *testing.T) {
+func TestIntegration_Comment_UpdateBodyOnly(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 	svc := tasks.NewService(pool, nil)
 	actor := seedUser(t, ctx, pool)
 	tpl := seedTemplate(t, ctx, svc, "CMB", actor)
 	status := seedStatus(t, ctx, svc, actor)
-	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "DB trigger test")
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Update body test")
 
 	c, err := svc.CreateComment(ctx, task.ID, actor, "Original body")
 	require.NoError(t, err)
 
-	// Attempt a direct UPDATE on the body — must be rejected by the trigger.
-	_, err = pool.Exec(ctx, `UPDATE task_comment SET body = 'Hacked' WHERE id = $1`, c.ID)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "editing is not allowed")
+	updated, err := svc.UpdateComment(ctx, task.ID, c.ID, actor, "Updated body")
+	require.NoError(t, err)
+	assert.Equal(t, c.ID, updated.ID)
+	assert.Equal(t, "Updated body", updated.Body)
+	assert.Equal(t, c.CreatedAt, updated.CreatedAt)
+	assert.True(t, updated.UpdatedAt.Equal(c.UpdatedAt) || updated.UpdatedAt.After(c.UpdatedAt))
+
+	list, err := svc.ListComments(ctx, task.ID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, "Updated body", list[0].Body)
 }
 
 func TestIntegration_Comment_ListOnUnknownTaskReturnsNotFound(t *testing.T) {
@@ -3008,6 +3015,123 @@ func TestIntegration_CommentAttachment_UploadCreateListDownload(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, content, raw)
 	assert.Equal(t, "photo.jpg", fileName)
+}
+
+func TestIntegration_Comment_UpdateRejectsNonAuthor(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	other := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "CMU", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Update permissions")
+
+	comment, err := svc.CreateComment(ctx, task.ID, actor, "Original")
+	require.NoError(t, err)
+
+	_, err = svc.UpdateComment(ctx, task.ID, comment.ID, other, "Hacked")
+	require.ErrorIs(t, err, tasks.ErrForbidden)
+}
+
+func TestIntegration_Comment_UpdateRejectsEmptyFinalState(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "CMV", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Update empty state")
+
+	comment, err := svc.CreateComment(ctx, task.ID, actor, "Original")
+	require.NoError(t, err)
+
+	_, err = svc.UpdateComment(ctx, task.ID, comment.ID, actor, "   ")
+	require.ErrorIs(t, err, tasks.ErrBadRequest)
+}
+
+func TestIntegration_Comment_UpdateBodyAndReplaceAttachments(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := tasks.NewService(pool, minioClient)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "CMW", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Update attachments")
+
+	initialContent := []byte("initial-file")
+	initial, err := svc.UploadCommentAttachment(ctx, tasks.UploadCommentAttachmentParams{
+		TaskID:   task.ID,
+		ActorID:  actor,
+		FileName: "initial.txt",
+		MimeType: "text/plain",
+		Size:     int64(len(initialContent)),
+		Body:     bytes.NewReader(initialContent),
+	}, 50)
+	require.NoError(t, err)
+
+	comment, err := svc.CreateComment(ctx, task.ID, actor, "Original", initial.ID)
+	require.NoError(t, err)
+	require.Len(t, comment.Attachments, 1)
+
+	replacementContent := []byte("replacement-file")
+	replacement, err := svc.UploadCommentAttachment(ctx, tasks.UploadCommentAttachmentParams{
+		TaskID:   task.ID,
+		ActorID:  actor,
+		FileName: "replacement.txt",
+		MimeType: "text/plain",
+		Size:     int64(len(replacementContent)),
+		Body:     bytes.NewReader(replacementContent),
+	}, 50)
+	require.NoError(t, err)
+
+	updated, err := svc.UpdateComment(ctx, task.ID, comment.ID, actor, "Updated", replacement.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated", updated.Body)
+	require.Len(t, updated.Attachments, 1)
+	assert.Equal(t, replacement.ID, updated.Attachments[0].ID)
+
+	_, _, _, _, err = svc.DownloadCommentAttachment(ctx, task.ID, comment.ID, initial.ID)
+	require.ErrorIs(t, err, tasks.ErrNotFound)
+
+	body, _, _, fileName, err := svc.DownloadCommentAttachment(ctx, task.ID, comment.ID, replacement.ID)
+	require.NoError(t, err)
+	defer body.Close()
+	raw, err := io.ReadAll(body)
+	require.NoError(t, err)
+	assert.Equal(t, replacementContent, raw)
+	assert.Equal(t, "replacement.txt", fileName)
+}
+
+func TestIntegration_Comment_UpdateRejectsAttachmentFromDifferentComment(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := tasks.NewService(pool, minioClient)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "CMX", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Attachment ownership")
+
+	attachmentA, err := svc.UploadCommentAttachment(ctx, tasks.UploadCommentAttachmentParams{
+		TaskID:   task.ID,
+		ActorID:  actor,
+		FileName: "a.txt",
+		MimeType: "text/plain",
+		Size:     1,
+		Body:     bytes.NewReader([]byte("a")),
+	}, 50)
+	require.NoError(t, err)
+	commentA, err := svc.CreateComment(ctx, task.ID, actor, "A", attachmentA.ID)
+	require.NoError(t, err)
+
+	commentB, err := svc.CreateComment(ctx, task.ID, actor, "B")
+	require.NoError(t, err)
+
+	_, err = svc.UpdateComment(ctx, task.ID, commentB.ID, actor, "B2", attachmentA.ID)
+	require.ErrorIs(t, err, tasks.ErrBadRequest)
+	require.NotNil(t, commentA)
 }
 
 func TestIntegration_CommentAttachment_CreateRejectsWrongUploader(t *testing.T) {

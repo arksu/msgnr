@@ -1354,6 +1354,7 @@ func sanitiseHeaderValue(s string) string {
 //	suffix == ""                                   → GET (list) or POST (create comment)
 //	suffix == "/attachments"                       → POST (upload staged attachment)
 //	suffix == "/attachments/:aid"                  → DELETE (remove staged attachment)
+//	suffix == "/:comment_id"                       → PUT (update comment)
 //	suffix == "/:comment_id/attachments/:aid/download" → GET (download linked attachment)
 func (h *Handler) taskCommentsRouter(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID uuid.UUID, suffix string) {
 	suffix = strings.TrimPrefix(suffix, "/")
@@ -1410,6 +1411,20 @@ func (h *Handler) taskCommentsRouter(w http.ResponseWriter, r *http.Request, p a
 			return
 		}
 		h.taskCommentAttachmentDownload(w, r, taskID, commentID, attachmentID)
+		return
+	}
+
+	if len(parts) == 1 {
+		commentID, err := uuid.Parse(parts[0])
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid comment id"))
+			return
+		}
+		if r.Method != http.MethodPut {
+			methodNotAllowed(w)
+			return
+		}
+		h.taskCommentUpdate(w, r, p, taskID, commentID)
 		return
 	}
 
@@ -1488,28 +1503,10 @@ func (h *Handler) taskComments(w http.ResponseWriter, r *http.Request, p auth.Pr
 		writeJSON(w, http.StatusOK, rows)
 
 	case http.MethodPost:
-		var req struct {
-			Body          *string  `json:"body"`
-			AttachmentIDs []string `json:"attachment_ids"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+		body, attachmentIDs, ok := decodeTaskCommentMutationRequest(w, r)
+		if !ok {
 			return
 		}
-		body := ""
-		if req.Body != nil {
-			body = *req.Body
-		}
-		attachmentIDs := make([]uuid.UUID, 0, len(req.AttachmentIDs))
-		for _, rawID := range req.AttachmentIDs {
-			attachmentID, err := uuid.Parse(rawID)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, errBody("invalid attachment_ids"))
-				return
-			}
-			attachmentIDs = append(attachmentIDs, attachmentID)
-		}
-
 		row, err := h.svc.CreateComment(r.Context(), taskID, p.UserID, body, attachmentIDs...)
 		if err != nil {
 			h.serviceError(w, err)
@@ -1520,6 +1517,44 @@ func (h *Handler) taskComments(w http.ResponseWriter, r *http.Request, p auth.Pr
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func (h *Handler) taskCommentUpdate(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID, commentID uuid.UUID) {
+	body, attachmentIDs, ok := decodeTaskCommentMutationRequest(w, r)
+	if !ok {
+		return
+	}
+	row, err := h.svc.UpdateComment(r.Context(), taskID, commentID, p.UserID, body, attachmentIDs...)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func decodeTaskCommentMutationRequest(w http.ResponseWriter, r *http.Request) (string, []uuid.UUID, bool) {
+	var req struct {
+		Body          *string  `json:"body"`
+		AttachmentIDs []string `json:"attachment_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+		return "", nil, false
+	}
+	body := ""
+	if req.Body != nil {
+		body = *req.Body
+	}
+	attachmentIDs := make([]uuid.UUID, 0, len(req.AttachmentIDs))
+	for _, rawID := range req.AttachmentIDs {
+		attachmentID, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid attachment_ids"))
+			return "", nil, false
+		}
+		attachmentIDs = append(attachmentIDs, attachmentID)
+	}
+	return body, attachmentIDs, true
 }
 
 // =========================================================

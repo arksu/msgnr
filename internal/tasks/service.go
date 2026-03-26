@@ -3670,8 +3670,7 @@ func (s *Service) DownloadCommentAttachment(
 	return body, size, mimeType, row.FileName, nil
 }
 
-// CreateComment adds a new comment to a task. Comment bodies cannot be edited
-// after creation (enforced by a DB trigger).
+// CreateComment adds a new comment to a task.
 func (s *Service) CreateComment(ctx context.Context, taskID, authorID uuid.UUID, body string, attachmentIDs ...uuid.UUID) (*CommentRow, error) {
 	body = strings.TrimSpace(body)
 	attachmentIDs = uniqueUUIDs(attachmentIDs)
@@ -3791,6 +3790,217 @@ func (s *Service) CreateComment(ctx context.Context, taskID, authorID uuid.UUID,
 		return nil, fmt.Errorf("tasks: commit create comment tx: %w", err)
 	}
 	return &out, nil
+}
+
+// UpdateComment updates an existing task comment and replaces its attachment set.
+func (s *Service) UpdateComment(ctx context.Context, taskID, commentID, actorID uuid.UUID, body string, attachmentIDs ...uuid.UUID) (*CommentRow, error) {
+	body = strings.TrimSpace(body)
+	attachmentIDs = uniqueUUIDs(attachmentIDs)
+	if body == "" && len(attachmentIDs) == 0 {
+		return nil, fmt.Errorf("%w: comment body or attachments are required", ErrBadRequest)
+	}
+	if len(attachmentIDs) > maxCommentAttachments {
+		return nil, fmt.Errorf("%w: max %d attachments allowed", ErrBadRequest, maxCommentAttachments)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: begin update comment tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var taskMarker int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM task WHERE id = $1 FOR KEY SHARE`, taskID).Scan(&taskMarker); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: task", ErrNotFound)
+		}
+		return nil, fmt.Errorf("tasks: verify task in update comment tx: %w", err)
+	}
+
+	var authorID uuid.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT author_id
+		  FROM task_comment
+		 WHERE id = $1
+		   AND task_id = $2
+		 FOR UPDATE`,
+		commentID,
+		taskID,
+	).Scan(&authorID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: comment", ErrNotFound)
+		}
+		return nil, fmt.Errorf("tasks: lock comment for update: %w", err)
+	}
+	if authorID != actorID {
+		return nil, fmt.Errorf("%w: comment does not belong to user", ErrForbidden)
+	}
+
+	currentRows, err := tx.Query(ctx, `
+		SELECT id, task_id, comment_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+		  FROM task_comment_attachment
+		 WHERE comment_id = $1
+		 FOR UPDATE`,
+		commentID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: lock existing comment attachments: %w", err)
+	}
+	currentAttachments := make(map[uuid.UUID]CommentAttachmentRow)
+	for currentRows.Next() {
+		item, scanErr := scanTaskCommentAttachment(currentRows)
+		if scanErr != nil {
+			currentRows.Close()
+			return nil, fmt.Errorf("tasks: scan existing comment attachment: %w", scanErr)
+		}
+		currentAttachments[item.ID] = item
+	}
+	currentRows.Close()
+	if err := currentRows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate existing comment attachments: %w", err)
+	}
+
+	requestedByID := make(map[uuid.UUID]CommentAttachmentRow, len(attachmentIDs))
+	if len(attachmentIDs) > 0 {
+		rows, err := tx.Query(ctx, `
+			SELECT id, task_id, comment_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+			  FROM task_comment_attachment
+			 WHERE id = ANY($1::uuid[])
+			 FOR UPDATE`,
+			attachmentIDs,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("tasks: lock requested comment attachments: %w", err)
+		}
+		for rows.Next() {
+			item, scanErr := scanTaskCommentAttachment(rows)
+			if scanErr != nil {
+				rows.Close()
+				return nil, fmt.Errorf("tasks: scan requested comment attachment: %w", scanErr)
+			}
+			requestedByID[item.ID] = item
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("tasks: iterate requested comment attachment rows: %w", err)
+		}
+		if len(requestedByID) != len(attachmentIDs) {
+			return nil, fmt.Errorf("%w: invalid attachment_ids", ErrBadRequest)
+		}
+	}
+
+	toLink := make([]uuid.UUID, 0, len(attachmentIDs))
+	for _, attachmentID := range attachmentIDs {
+		item := requestedByID[attachmentID]
+		if item.TaskID != taskID {
+			return nil, fmt.Errorf("%w: attachment does not belong to task", ErrBadRequest)
+		}
+		if item.UploadedBy != actorID {
+			return nil, fmt.Errorf("%w: attachment does not belong to user", ErrForbidden)
+		}
+		if item.CommentID != nil && *item.CommentID != commentID {
+			return nil, fmt.Errorf("%w: attachment already linked to a different comment", ErrBadRequest)
+		}
+		if item.CommentID == nil {
+			toLink = append(toLink, attachmentID)
+		}
+	}
+
+	removed := make([]CommentAttachmentRow, 0)
+	for existingID, existing := range currentAttachments {
+		if _, keep := requestedByID[existingID]; keep {
+			continue
+		}
+		removed = append(removed, existing)
+	}
+	if len(removed) > 0 {
+		if _, err := s.requireStore(); err != nil {
+			return nil, err
+		}
+	}
+
+	var updated CommentRow
+	if err := tx.QueryRow(ctx, `
+		UPDATE task_comment
+		   SET body = $3
+		 WHERE id = $1
+		   AND task_id = $2
+		RETURNING id, task_id, author_id, body, created_at, updated_at`,
+		commentID,
+		taskID,
+		body,
+	).Scan(
+		&updated.ID,
+		&updated.TaskID,
+		&updated.AuthorID,
+		&updated.Body,
+		&updated.CreatedAt,
+		&updated.UpdatedAt,
+	); err != nil {
+		return nil, fmt.Errorf("tasks: update comment in tx: %w", err)
+	}
+
+	if len(toLink) > 0 {
+		tag, err := tx.Exec(ctx, `
+			UPDATE task_comment_attachment
+			   SET comment_id = $1
+			 WHERE id = ANY($2::uuid[])
+			   AND comment_id IS NULL`,
+			commentID,
+			toLink,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("tasks: link updated comment attachments: %w", err)
+		}
+		if tag.RowsAffected() != int64(len(toLink)) {
+			return nil, fmt.Errorf("%w: failed to link all attachments", ErrBadRequest)
+		}
+	}
+
+	if len(removed) > 0 {
+		deleteIDs := make([]uuid.UUID, 0, len(removed))
+		for _, attachment := range removed {
+			deleteIDs = append(deleteIDs, attachment.ID)
+		}
+		tag, err := tx.Exec(ctx, `
+			DELETE FROM task_comment_attachment
+			 WHERE id = ANY($1::uuid[])
+			   AND comment_id = $2`,
+			deleteIDs,
+			commentID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("tasks: delete removed comment attachments: %w", err)
+		}
+		if tag.RowsAffected() != int64(len(deleteIDs)) {
+			return nil, fmt.Errorf("%w: failed to delete all removed attachments", ErrBadRequest)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("tasks: commit update comment tx: %w", err)
+	}
+
+	if len(removed) > 0 {
+		store, err := s.requireStore()
+		if err != nil {
+			return nil, err
+		}
+		for _, attachment := range removed {
+			s.deleteObjectBestEffort(ctx, store, attachment.StorageKey)
+		}
+	}
+
+	list, err := s.ListComments(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range list {
+		if item.ID == commentID {
+			return &item, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: comment", ErrNotFound)
 }
 
 func (s *Service) requireStore() (Storage, error) {

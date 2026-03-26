@@ -993,23 +993,8 @@ CREATE TRIGGER trg_task_comment_attachment_task_match
     WHEN (NEW.comment_id IS NOT NULL)
     EXECUTE FUNCTION check_task_comment_attachment_task_match();
 
--- Prevent editing comment body after creation.
-CREATE OR REPLACE FUNCTION prevent_task_comment_body_update()
-RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF NEW.body IS DISTINCT FROM OLD.body THEN
-        RAISE EXCEPTION 'task comment editing is not allowed' USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-DO $$ BEGIN
-    CREATE TRIGGER trg_task_comment_prevent_body_update
-    BEFORE UPDATE OF body ON task_comment
-    FOR EACH ROW EXECUTE FUNCTION prevent_task_comment_body_update();
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+DROP TRIGGER IF EXISTS trg_task_comment_prevent_body_update ON task_comment;
+DROP FUNCTION IF EXISTS prevent_task_comment_body_update();
 
 DO $$ BEGIN
     CREATE TRIGGER trg_task_comment_set_updated_at

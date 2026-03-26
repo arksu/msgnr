@@ -3,10 +3,12 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import TaskComments from '@/components/tasks/TaskComments.vue'
+import { useAuthStore } from '@/stores/auth'
 import {
   tasksCreateComment,
   tasksFetchCommentAttachmentBlob,
   tasksListComments,
+  tasksUpdateComment,
   tasksUploadCommentAttachment,
 } from '@/services/http/tasksApi'
 
@@ -37,6 +39,7 @@ vi.mock('@/composables/useComposerEmojiPicker', () => ({
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListComments: vi.fn(),
   tasksCreateComment: vi.fn(),
+  tasksUpdateComment: vi.fn(),
   tasksUploadCommentAttachment: vi.fn(),
   tasksDeleteCommentAttachment: vi.fn(),
   tasksFetchCommentAttachmentBlob: vi.fn(),
@@ -58,6 +61,15 @@ describe('TaskComments', () => {
       updated_at: '2026-03-10T12:00:00Z',
       attachments: [],
     })
+    vi.mocked(tasksUpdateComment).mockResolvedValue({
+      id: 'comment-1',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'updated',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:10:00Z',
+      attachments: [],
+    })
 
     ;(globalThis.URL as any).createObjectURL = vi.fn(() => 'blob:mock')
     ;(globalThis.URL as any).revokeObjectURL = vi.fn()
@@ -65,6 +77,9 @@ describe('TaskComments', () => {
       opener: null,
       focus: vi.fn(),
     } as unknown as Window))
+
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'user@example.com', displayName: 'User 1', role: 'member' }
   })
 
   it('uploads dropped files onto the comment textarea', async () => {
@@ -183,6 +198,215 @@ describe('TaskComments', () => {
 
     expect((textarea.element as HTMLTextAreaElement).value).toBe('🙂world')
     expect(document.body.querySelector('[data-testid="emoji-picker-option"]')).toBeNull()
+  })
+
+  it('shows edit action only for author-owned comments', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([
+      {
+        id: 'comment-own',
+        task_id: 'task-1',
+        author_id: 'user-1',
+        body: 'mine',
+        created_at: '2026-03-10T12:00:00Z',
+        updated_at: '2026-03-10T12:00:00Z',
+        attachments: [],
+      },
+      {
+        id: 'comment-other',
+        task_id: 'task-1',
+        author_id: 'user-2',
+        body: 'theirs',
+        created_at: '2026-03-10T12:01:00Z',
+        updated_at: '2026-03-10T12:01:00Z',
+        attachments: [],
+      },
+    ])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="task-comment-edit-button"]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('mine')
+    expect(wrapper.text()).toContain('theirs')
+  })
+
+  it('enters inline edit mode with the current body and attachments', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-edit',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'edit me',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [{
+        id: 'att-existing',
+        task_id: 'task-1',
+        comment_id: 'comment-edit',
+        file_name: 'existing.txt',
+        file_size: 11,
+        mime_type: 'text/plain',
+        uploaded_by: 'user-1',
+        created_at: '2026-03-10T12:00:00Z',
+      }],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-comment-edit-button"]').trigger('click')
+    await flushPromises()
+
+    const textarea = wrapper.get('[data-testid="task-comment-edit-textarea"]')
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('edit me')
+    expect(wrapper.text()).toContain('existing.txt')
+  })
+
+  it('saves an edited comment in place and shows edited marker', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-edit',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'before',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [],
+    }])
+    vi.mocked(tasksUpdateComment).mockResolvedValue({
+      id: 'comment-edit',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'after',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:10:00Z',
+      attachments: [],
+    })
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-comment-edit-button"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="task-comment-edit-textarea"]').setValue('after')
+    await wrapper.get('[data-testid="task-comment-edit-save"]').trigger('click')
+    await flushPromises()
+
+    expect(tasksUpdateComment).toHaveBeenCalledWith('task-1', 'comment-edit', {
+      body: 'after',
+      attachment_ids: [],
+    })
+    expect(wrapper.text()).toContain('after')
+    expect(wrapper.find('[data-testid="task-comment-edited-marker"]').exists()).toBe(true)
+  })
+
+  it('cancels inline edit without mutating the rendered comment', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-edit',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'before',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-comment-edit-button"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="task-comment-edit-textarea"]').setValue('after')
+    await wrapper.get('[data-testid="task-comment-edit-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(tasksUpdateComment).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="task-comment-edit-textarea"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('before')
+  })
+
+  it('replaces attachments while editing and submits the full attachment set', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-edit',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'before',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [{
+        id: 'att-existing',
+        task_id: 'task-1',
+        comment_id: 'comment-edit',
+        file_name: 'existing.txt',
+        file_size: 11,
+        mime_type: 'text/plain',
+        uploaded_by: 'user-1',
+        created_at: '2026-03-10T12:00:00Z',
+      }],
+    }])
+    vi.mocked(tasksUploadCommentAttachment).mockResolvedValue({
+      id: 'att-new',
+      task_id: 'task-1',
+      file_name: 'new.txt',
+      file_size: 9,
+      mime_type: 'text/plain',
+      uploaded_by: 'user-1',
+      created_at: '2026-03-10T12:05:00Z',
+    })
+    vi.mocked(tasksUpdateComment).mockResolvedValue({
+      id: 'comment-edit',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'after',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:10:00Z',
+      attachments: [{
+        id: 'att-new',
+        task_id: 'task-1',
+        comment_id: 'comment-edit',
+        file_name: 'new.txt',
+        file_size: 9,
+        mime_type: 'text/plain',
+        uploaded_by: 'user-1',
+        created_at: '2026-03-10T12:05:00Z',
+      }],
+    })
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-comment-edit-button"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[title="Remove attachment"]').trigger('click')
+    await flushPromises()
+
+    const file = new File(['new'], 'new.txt', { type: 'text/plain' })
+    await wrapper.get('[data-testid="task-comment-edit-textarea"]').trigger('drop', {
+      dataTransfer: {
+        files: [file],
+        types: ['Files'],
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-comment-edit-textarea"]').setValue('after')
+    await wrapper.get('[data-testid="task-comment-edit-save"]').trigger('click')
+    await flushPromises()
+
+    expect(tasksUpdateComment).toHaveBeenCalledWith('task-1', 'comment-edit', {
+      body: 'after',
+      attachment_ids: ['att-new'],
+    })
+    expect(wrapper.text()).toContain('new.txt')
+    expect(wrapper.text()).not.toContain('existing.txt')
   })
 
   it('submits attachment-only comment with attachment_ids payload', async () => {

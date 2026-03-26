@@ -1209,6 +1209,58 @@ func TestIntegration_Task_UpdateDescriptionOnly(t *testing.T) {
 	assert.Nil(t, cleared.Description)
 }
 
+func TestIntegration_Task_UpdateDescriptionOnly_NoopKeepsAuditAndHistoryStable(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "UDN", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "desc noop",
+		StatusID:   status.ID,
+		ActorID:    actor,
+	})
+	require.NoError(t, err)
+
+	unchanged, err := svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: nil,
+		ActorID:     actor,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, created.UpdatedBy, unchanged.UpdatedBy)
+	assert.Equal(t, created.UpdatedAt, unchanged.UpdatedAt)
+
+	rows, err := svc.ListTaskDescriptionHistory(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 0)
+
+	body := "Body"
+	updated, err := svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &body,
+		ActorID:     actor,
+	})
+	require.NoError(t, err)
+
+	trimmedDuplicate := "  Body  "
+	noopForce, err := svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description:   &trimmedDuplicate,
+		ActorID:       actor,
+		ForceSnapshot: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, updated.UpdatedBy, noopForce.UpdatedBy)
+	assert.Equal(t, updated.UpdatedAt, noopForce.UpdatedAt)
+
+	rows, err = svc.ListTaskDescriptionHistory(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].Description)
+	assert.Equal(t, "Body", *rows[0].Description)
+}
+
 func TestIntegration_Task_UpdateDescriptionHistoryThrottleAndForce(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -1412,6 +1464,151 @@ func TestIntegration_Task_UpdateTitle_OptimisticConflict(t *testing.T) {
 	require.WithinDuration(t, updated.UpdatedAt, conflictErr.LatestUpdatedAt, 2*time.Second)
 }
 
+func TestIntegration_Task_UpdateTitle_NoopKeepsAuditStable(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "NTL", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "same title",
+		StatusID:   status.ID,
+		ActorID:    actor,
+	})
+	require.NoError(t, err)
+
+	updated, err := svc.UpdateTaskTitle(ctx, created.ID, tasks.UpdateTaskTitleParams{
+		Title:             "  same title  ",
+		IfUnmodifiedSince: created.UpdatedAt,
+		ActorID:           actor,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, created.Title, updated.Title)
+	assert.Equal(t, created.UpdatedBy, updated.UpdatedBy)
+	assert.Equal(t, created.UpdatedAt, updated.UpdatedAt)
+}
+
+func TestIntegration_Task_UpdateStatus_NoopKeepsAuditStable(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "NST", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "same status",
+		StatusID:   status.ID,
+		ActorID:    actor,
+	})
+	require.NoError(t, err)
+
+	updated, previousStatusID, err := svc.UpdateTaskStatus(ctx, created.ID, tasks.UpdateTaskStatusParams{
+		StatusID: status.ID,
+		ActorID:  actor,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, status.ID, previousStatusID)
+	assert.Equal(t, created.StatusID, updated.StatusID)
+	assert.Equal(t, created.UpdatedBy, updated.UpdatedBy)
+	assert.Equal(t, created.UpdatedAt, updated.UpdatedAt)
+}
+
+func TestIntegration_Task_UpdateFieldValue_NoopKeepsAuditStable(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "NFV", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	field, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tpl.ID,
+		Code:       "points",
+		Name:       "Points",
+		Type:       "number",
+		SortOrder:  1,
+	})
+	require.NoError(t, err)
+
+	start := "42.5"
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "field noop",
+		StatusID:   status.ID,
+		ActorID:    actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: field.ID, ValueNumber: &start},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, created.FieldValues, 1)
+	originalField := created.FieldValues[0]
+
+	updatedField, err := svc.UpdateTaskFieldValue(ctx, created.ID, field.ID, tasks.UpdateTaskFieldValueParams{
+		ValueNumber: strPtr("42.500000"),
+		ActorID:     actor,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, originalField.ID, updatedField.ID)
+	assert.Equal(t, originalField.UpdatedAt, updatedField.UpdatedAt)
+
+	taskAfter, err := svc.GetTask(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.UpdatedBy, taskAfter.UpdatedBy)
+	assert.Equal(t, created.UpdatedAt, taskAfter.UpdatedAt)
+}
+
+func TestIntegration_Task_UpdateFieldValue_JSONNoopKeepsAuditStable(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	other := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "NJS", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	field, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tpl.ID,
+		Code:       "watchers",
+		Name:       "Watchers",
+		Type:       "users",
+		SortOrder:  1,
+	})
+	require.NoError(t, err)
+
+	rawUsers := json.RawMessage(fmt.Sprintf("[\n  %q,\n  %q\n]", actor.String(), other.String()))
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "json noop",
+		StatusID:   status.ID,
+		ActorID:    actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: field.ID, ValueJSON: rawUsers},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, created.FieldValues, 1)
+	originalField := created.FieldValues[0]
+
+	updatedField, err := svc.UpdateTaskFieldValue(ctx, created.ID, field.ID, tasks.UpdateTaskFieldValueParams{
+		ValueJSON: json.RawMessage(fmt.Sprintf("[ %q , %q ]", actor.String(), other.String())),
+		ActorID:   actor,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, originalField.ID, updatedField.ID)
+	assert.Equal(t, originalField.UpdatedAt, updatedField.UpdatedAt)
+
+	taskAfter, err := svc.GetTask(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.UpdatedBy, taskAfter.UpdatedBy)
+	assert.Equal(t, created.UpdatedAt, taskAfter.UpdatedAt)
+}
+
 func TestIntegration_Task_UpdateFieldValues_ReplaceAll(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -1447,6 +1644,94 @@ func TestIntegration_Task_UpdateFieldValues_ReplaceAll(t *testing.T) {
 	assert.Equal(t, f1.ID, updated.FieldValues[0].FieldDefinitionID)
 	require.NotNil(t, updated.FieldValues[0].ValueText)
 	assert.Equal(t, "new_value1", *updated.FieldValues[0].ValueText)
+}
+
+func TestIntegration_Task_UpdateSystemFields_NoopKeepsAuditStableAndIgnoresFieldOrder(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "NUP", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	textField, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tpl.ID,
+		Code:       "summary",
+		Name:       "Summary",
+		Type:       "text",
+		SortOrder:  1,
+	})
+	require.NoError(t, err)
+	numberField, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tpl.ID,
+		Code:       "points",
+		Name:       "Points",
+		Type:       "number",
+		SortOrder:  2,
+	})
+	require.NoError(t, err)
+
+	desc := "Desc"
+	textValue := "hello"
+	numberValue := "42.5"
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:  tpl.ID,
+		Title:       "Task",
+		Description: &desc,
+		StatusID:    status.ID,
+		ActorID:     actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: textField.ID, ValueText: &textValue},
+			{FieldDefinitionID: numberField.ID, ValueNumber: &numberValue},
+		},
+	})
+	require.NoError(t, err)
+
+	noop, err := svc.UpdateTask(ctx, created.ID, tasks.UpdateTaskParams{
+		Title:       "  Task  ",
+		Description: strPtr("  Desc  "),
+		StatusID:    status.ID,
+		ActorID:     actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: numberField.ID, ValueNumber: strPtr("42.500000")},
+			{FieldDefinitionID: textField.ID, ValueText: strPtr("hello")},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, created.UpdatedBy, noop.UpdatedBy)
+	assert.Equal(t, created.UpdatedAt, noop.UpdatedAt)
+	require.Len(t, noop.FieldValues, 2)
+
+	rows, err := svc.ListTaskDescriptionHistory(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 0)
+}
+
+func TestIntegration_Task_UpdateSystemFields_RejectsUnknownField(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "UFD", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "unknown field",
+		StatusID:   status.ID,
+		ActorID:    actor,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.UpdateTask(ctx, created.ID, tasks.UpdateTaskParams{
+		Title:    "unknown field",
+		StatusID: status.ID,
+		ActorID:  actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: uuid.New(), ValueText: strPtr("x")},
+		},
+	})
+	require.ErrorIs(t, err, tasks.ErrBadRequest)
 }
 
 func TestIntegration_Task_GetNotFound(t *testing.T) {

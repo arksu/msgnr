@@ -242,6 +242,87 @@ describe('TaskCard', () => {
     vi.useRealTimers()
   })
 
+  it('does not save unchanged description on blur', async () => {
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          UserAvatar: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: {
+            props: ['modelValue'],
+            emits: ['update:modelValue', 'blur'],
+            template: '<textarea data-testid="description-stub" :value="modelValue" @blur="$emit(\'blur\')" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="description-stub"]').trigger('blur')
+    await flushPromises()
+
+    expect(tasksStoreMock.updateTaskDescription).not.toHaveBeenCalled()
+  })
+
+  it('does not save unchanged description when switching tasks', async () => {
+    mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          UserAvatar: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: {
+            props: ['modelValue'],
+            emits: ['update:modelValue'],
+            template: '<textarea data-testid="description-stub" :value="modelValue" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    tasksStoreMock.selectedTask = {
+      ...selectedTask,
+      id: 'task-2',
+      public_id: 'TASK-2',
+      description: 'second task',
+      subtasks: [],
+    }
+    await flushPromises()
+
+    expect(tasksStoreMock.updateTaskDescription).not.toHaveBeenCalled()
+  })
+
+  it('does not save unchanged description on unmount', async () => {
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          UserAvatar: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: {
+            props: ['modelValue'],
+            emits: ['update:modelValue'],
+            template: '<textarea data-testid="description-stub" :value="modelValue" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    wrapper.unmount()
+    await flushPromises()
+
+    expect(tasksStoreMock.updateTaskDescription).not.toHaveBeenCalled()
+  })
+
   it('creates subtask with trimmed markdown description', async () => {
     const wrapper = mount(TaskCard, {
       props: { templateFilter: null },

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"regexp"
 	"strings"
 	"time"
@@ -1424,6 +1425,167 @@ func nullString(s *string) sql.NullString {
 	return sql.NullString{String: *s, Valid: true}
 }
 
+func normalizeTaskTitle(title string) string {
+	return strings.TrimSpace(title)
+}
+
+func normalizeTaskDescription(description *string) *string {
+	if description == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*description)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func normalizeTaskDescriptionNullString(description *string) sql.NullString {
+	return nullString(normalizeTaskDescription(description))
+}
+
+type comparableFieldValue struct {
+	ValueText        sql.NullString
+	ValueNumber      sql.NullString
+	ValueUserID      uuid.NullUUID
+	ValueDate        sql.NullString
+	ValueDatetime    sql.NullTime
+	ValueJSON        json.RawMessage
+	ValueJSONValid   bool
+	JSONComparable   bool
+	EnumDictionaryID uuid.NullUUID
+	EnumVersion      sql.NullInt32
+}
+
+func normalizeFieldValueInputForType(fieldType string, fv FieldValueInput) FieldValueInput {
+	switch fieldType {
+	case "users", "multi_enum":
+		trimmed := bytes.TrimSpace(fv.ValueJSON)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			fv.ValueJSON = json.RawMessage("[]")
+		}
+	}
+	return fv
+}
+
+func comparableFieldValueFromInput(fv FieldValueInput) comparableFieldValue {
+	valueJSON, jsonComparable := canonicalJSONForCompare(fv.ValueJSON)
+	return comparableFieldValue{
+		ValueText:        nullString(fv.ValueText),
+		ValueNumber:      nullString(fv.ValueNumber),
+		ValueUserID:      nullUUID(fv.ValueUserID),
+		ValueDate:        nullString(fv.ValueDate),
+		ValueDatetime:    nullTimePtr(fv.ValueDatetime),
+		ValueJSON:        valueJSON,
+		ValueJSONValid:   len(valueJSON) > 0,
+		JSONComparable:   jsonComparable,
+		EnumDictionaryID: nullUUID(fv.EnumDictionaryID),
+		EnumVersion:      nullInt32Ptr(fv.EnumVersion),
+	}
+}
+
+func comparableFieldValueFromStored(row queries.TaskFieldValue) comparableFieldValue {
+	date := sql.NullString{}
+	if row.ValueDate.Valid {
+		date = sql.NullString{String: row.ValueDate.Time.Format("2006-01-02"), Valid: true}
+	}
+	valueJSON, jsonComparable := canonicalJSONForCompare(row.ValueJson.RawMessage)
+	return comparableFieldValue{
+		ValueText:        row.ValueText,
+		ValueNumber:      row.ValueNumber,
+		ValueUserID:      row.ValueUserID,
+		ValueDate:        date,
+		ValueDatetime:    row.ValueDatetime,
+		ValueJSON:        valueJSON,
+		ValueJSONValid:   row.ValueJson.Valid,
+		JSONComparable:   jsonComparable,
+		EnumDictionaryID: row.EnumDictionaryID,
+		EnumVersion:      row.EnumVersion,
+	}
+}
+
+func comparableFieldValuesEqual(a, b comparableFieldValue) bool {
+	return nullStringsEqual(a.ValueText, b.ValueText) &&
+		nullNumericStringsEqual(a.ValueNumber, b.ValueNumber) &&
+		nullUUIDsEqual(a.ValueUserID, b.ValueUserID) &&
+		nullStringsEqual(a.ValueDate, b.ValueDate) &&
+		nullTimesEqual(a.ValueDatetime, b.ValueDatetime) &&
+		rawJSONEqual(a.ValueJSON, a.ValueJSONValid, a.JSONComparable, b.ValueJSON, b.ValueJSONValid, b.JSONComparable) &&
+		nullUUIDsEqual(a.EnumDictionaryID, b.EnumDictionaryID) &&
+		nullInt32Equal(a.EnumVersion, b.EnumVersion)
+}
+
+func taskFieldInputsEqual(existing []queries.TaskFieldValue, requested []FieldValueInput, fieldTypes map[uuid.UUID]string) bool {
+	if len(existing) != len(requested) {
+		return false
+	}
+
+	existingByField := make(map[uuid.UUID]queries.TaskFieldValue, len(existing))
+	for _, row := range existing {
+		existingByField[row.FieldDefinitionID] = row
+	}
+
+	requestedByField := make(map[uuid.UUID]FieldValueInput, len(requested))
+	for _, fv := range requested {
+		fieldType, ok := fieldTypes[fv.FieldDefinitionID]
+		if !ok {
+			return false
+		}
+		if _, seen := requestedByField[fv.FieldDefinitionID]; seen {
+			return false
+		}
+		requestedByField[fv.FieldDefinitionID] = normalizeFieldValueInputForType(fieldType, fv)
+	}
+
+	if len(existingByField) != len(requestedByField) {
+		return false
+	}
+
+	for fieldID, existingRow := range existingByField {
+		requestedValue, ok := requestedByField[fieldID]
+		if !ok {
+			return false
+		}
+		if !comparableFieldValuesEqual(comparableFieldValueFromStored(existingRow), comparableFieldValueFromInput(requestedValue)) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func validateFieldValueDefinitions(defs []queries.TaskFieldDefinition, inputs []FieldValueInput) error {
+	known := make(map[uuid.UUID]struct{}, len(defs))
+	for _, def := range defs {
+		known[def.ID] = struct{}{}
+	}
+	seen := make(map[uuid.UUID]struct{}, len(inputs))
+	for _, fv := range inputs {
+		if _, ok := known[fv.FieldDefinitionID]; !ok {
+			return fmt.Errorf("%w: unknown field %s", ErrBadRequest, fv.FieldDefinitionID)
+		}
+		if _, ok := seen[fv.FieldDefinitionID]; ok {
+			return fmt.Errorf("%w: duplicate field %s", ErrBadRequest, fv.FieldDefinitionID)
+		}
+		seen[fv.FieldDefinitionID] = struct{}{}
+	}
+	return nil
+}
+
+func singleFieldUpdateInput(fieldDefinitionID uuid.UUID, p UpdateTaskFieldValueParams) FieldValueInput {
+	return FieldValueInput{
+		FieldDefinitionID: fieldDefinitionID,
+		ValueText:         p.ValueText,
+		ValueNumber:       p.ValueNumber,
+		ValueUserID:       p.ValueUserID,
+		ValueDate:         p.ValueDate,
+		ValueDatetime:     p.ValueDatetime,
+		ValueJSON:         p.ValueJSON,
+		EnumDictionaryID:  p.EnumDictionaryID,
+		EnumVersion:       p.EnumVersion,
+	}
+}
+
 // ---- Mappers: queries → domain types ----
 
 func mapTemplate(r queries.TaskTemplate) TemplateRow {
@@ -1724,7 +1886,10 @@ func (s *Service) GetSubtasks(ctx context.Context, parentID uuid.UUID) ([]TaskRo
 // UpdateTask updates a task's system fields and replaces all field values
 // (replace-all: values not in p.FieldValues are deleted).
 func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskParams) (TaskResponse, error) {
-	if strings.TrimSpace(p.Title) == "" {
+	p.Title = normalizeTaskTitle(p.Title)
+	p.Description = normalizeTaskDescription(p.Description)
+
+	if p.Title == "" {
 		return TaskResponse{}, fmt.Errorf("%w: title is required", ErrBadRequest)
 	}
 
@@ -1741,6 +1906,27 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 	}
 	if err := validateRequiredFields(defs, p.FieldValues); err != nil {
 		return TaskResponse{}, err
+	}
+	if err := validateFieldValueDefinitions(defs, p.FieldValues); err != nil {
+		return TaskResponse{}, err
+	}
+	fieldTypes := make(map[uuid.UUID]string, len(defs))
+	for _, def := range defs {
+		fieldTypes[def.ID] = def.Type
+	}
+	for i, fv := range p.FieldValues {
+		p.FieldValues[i] = normalizeFieldValueInputForType(fieldTypes[fv.FieldDefinitionID], fv)
+	}
+
+	existingFieldValues, err := s.q.TaskFieldValueList(ctx, id)
+	if err != nil {
+		return TaskResponse{}, fmt.Errorf("tasks: list field values: %w", err)
+	}
+	if existing.Title == p.Title &&
+		nullStringsEqual(existing.Description, normalizeTaskDescriptionNullString(p.Description)) &&
+		existing.StatusID == p.StatusID &&
+		taskFieldInputsEqual(existingFieldValues, p.FieldValues, fieldTypes) {
+		return s.GetTask(ctx, id)
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -1788,12 +1974,19 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 // UpdateTaskTitle updates a task title with optimistic-lock validation based
 // on the last seen updated_at token.
 func (s *Service) UpdateTaskTitle(ctx context.Context, id uuid.UUID, p UpdateTaskTitleParams) (TaskResponse, error) {
-	title := strings.TrimSpace(p.Title)
+	title := normalizeTaskTitle(p.Title)
 	if title == "" {
 		return TaskResponse{}, fmt.Errorf("%w: title is required", ErrBadRequest)
 	}
 	if p.IfUnmodifiedSince.IsZero() {
 		return TaskResponse{}, fmt.Errorf("%w: if_unmodified_since is required", ErrBadRequest)
+	}
+	current, err := s.q.TaskGet(ctx, id)
+	if err != nil {
+		return TaskResponse{}, mapNotFound(err, "task")
+	}
+	if current.Title == title {
+		return s.GetTask(ctx, id)
 	}
 
 	taskRow, err := scanTask(s.pool.QueryRow(ctx,
@@ -1821,6 +2014,16 @@ func (s *Service) UpdateTaskTitle(ctx context.Context, id uuid.UUID, p UpdateTas
 
 // UpdateTaskDescription updates only task description and touch columns.
 func (s *Service) UpdateTaskDescription(ctx context.Context, id uuid.UUID, p UpdateTaskDescriptionParams) (TaskResponse, error) {
+	p.Description = normalizeTaskDescription(p.Description)
+
+	current, err := s.q.TaskGet(ctx, id)
+	if err != nil {
+		return TaskResponse{}, mapNotFound(err, "task")
+	}
+	if nullStringsEqual(current.Description, normalizeTaskDescriptionNullString(p.Description)) {
+		return s.GetTask(ctx, id)
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return TaskResponse{}, fmt.Errorf("tasks: begin update task description tx: %w", err)
@@ -1998,6 +2201,10 @@ func (s *Service) UpdateTaskStatus(ctx context.Context, id uuid.UUID, p UpdateTa
 		return TaskResponse{}, uuid.UUID{}, mapNotFound(err, "task")
 	}
 	previousStatusID := before.StatusID
+	if before.StatusID == p.StatusID {
+		resp, err := s.GetTask(ctx, id)
+		return resp, previousStatusID, err
+	}
 
 	taskRow, err := scanTask(s.pool.QueryRow(ctx,
 		`UPDATE task
@@ -2050,6 +2257,14 @@ func (s *Service) UpdateTaskFieldValue(
 		return FieldValueRow{}, err
 	}
 	p = normalizeSingleFieldValueInput(def.Type, p)
+	existingFieldValue, found, err := s.getTaskFieldValue(ctx, taskID, fieldDefinitionID)
+	if err != nil {
+		return FieldValueRow{}, err
+	}
+	incoming := comparableFieldValueFromInput(singleFieldUpdateInput(fieldDefinitionID, p))
+	if found && comparableFieldValuesEqual(comparableFieldValueFromStored(existingFieldValue), incoming) {
+		return mapFieldValue(existingFieldValue), nil
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -2273,6 +2488,33 @@ func upsertOneFieldValue(ctx context.Context, tx pgx.Tx, taskID uuid.UUID, fv Fi
 		return FieldValueRow{}, mapTaskWriteError(err)
 	}
 	return row, nil
+}
+
+func (s *Service) getTaskFieldValue(ctx context.Context, taskID, fieldDefinitionID uuid.UUID) (queries.TaskFieldValue, bool, error) {
+	var row queries.TaskFieldValue
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, task_id, field_definition_id,
+		        value_text, value_number, value_user_id,
+		        value_date, value_datetime, value_json,
+		        enum_dictionary_id, enum_version,
+		        created_at, updated_at
+		   FROM task_field_value
+		  WHERE task_id = $1 AND field_definition_id = $2`,
+		taskID, fieldDefinitionID,
+	).Scan(
+		&row.ID, &row.TaskID, &row.FieldDefinitionID,
+		&row.ValueText, &row.ValueNumber, &row.ValueUserID,
+		&row.ValueDate, &row.ValueDatetime, &row.ValueJson,
+		&row.EnumDictionaryID, &row.EnumVersion,
+		&row.CreatedAt, &row.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return queries.TaskFieldValue{}, false, nil
+		}
+		return queries.TaskFieldValue{}, false, fmt.Errorf("tasks: get task field value: %w", err)
+	}
+	return row, true, nil
 }
 
 // scanner is the minimal interface shared by pgx.Row and pgx.Rows.
@@ -3751,4 +3993,90 @@ func nullInt32Ptr(v *int32) sql.NullInt32 {
 		return sql.NullInt32{}
 	}
 	return sql.NullInt32{Int32: *v, Valid: true}
+}
+
+func nullTimePtr(v *time.Time) sql.NullTime {
+	if v == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: *v, Valid: true}
+}
+
+func nullUUIDsEqual(a, b uuid.NullUUID) bool {
+	if a.Valid != b.Valid {
+		return false
+	}
+	if !a.Valid {
+		return true
+	}
+	return a.UUID == b.UUID
+}
+
+func nullInt32Equal(a, b sql.NullInt32) bool {
+	if a.Valid != b.Valid {
+		return false
+	}
+	if !a.Valid {
+		return true
+	}
+	return a.Int32 == b.Int32
+}
+
+func nullTimesEqual(a, b sql.NullTime) bool {
+	if a.Valid != b.Valid {
+		return false
+	}
+	if !a.Valid {
+		return true
+	}
+	return a.Time.Equal(b.Time)
+}
+
+func nullNumericStringsEqual(a, b sql.NullString) bool {
+	if a.Valid != b.Valid {
+		return false
+	}
+	if !a.Valid {
+		return true
+	}
+	var left, right big.Rat
+	if _, ok := left.SetString(a.String); !ok {
+		return false
+	}
+	if _, ok := right.SetString(b.String); !ok {
+		return false
+	}
+	return left.Cmp(&right) == 0
+}
+
+func canonicalJSONForCompare(raw json.RawMessage) (json.RawMessage, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, true
+	}
+	var decoded any
+	if err := json.Unmarshal(trimmed, &decoded); err != nil {
+		return trimmed, false
+	}
+	canonical, err := json.Marshal(decoded)
+	if err != nil {
+		return trimmed, false
+	}
+	return canonical, true
+}
+
+func rawJSONEqual(a json.RawMessage, aValid, aComparable bool, b json.RawMessage, bValid, bComparable bool) bool {
+	if aValid != bValid {
+		return false
+	}
+	if !aValid {
+		return true
+	}
+	if aComparable != bComparable {
+		return false
+	}
+	if !aComparable {
+		return bytes.Equal(a, b)
+	}
+	return bytes.Equal(a, b)
 }

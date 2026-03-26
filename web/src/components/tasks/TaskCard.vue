@@ -562,7 +562,7 @@ let descriptionDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionMaxFlushTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionRetryTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionRetryDelayMs = 1000
-const DEBUG_TASK_CARD_DESC = true
+const DEBUG_TASK_CARD_DESC = import.meta.env.DEV
 
 const task = computed(() => tasksStore.selectedTask)
 
@@ -958,7 +958,7 @@ async function persistDescription(taskID: string, source: string, force = false)
     lastSaved: lastSavedDescription.value === null ? 'null' : markdownSignature(lastSavedDescription.value),
     isSaving: descriptionSaving.value,
   })
-  if (!force && task.value?.id === taskID && normalized === lastSavedDescription.value) {
+  if (normalized === lastSavedDescription.value) {
     descLog('persist:skip-unchanged', { taskID })
     return
   }
@@ -1325,7 +1325,6 @@ watch(descriptionDraft, () => {
 
 watch(customFields, () => {
   initInlineValues()
-  tasksStore.loadUsers()
   if (customFields.value.some(f => f.type === 'user' || f.type === 'users')) {
     tasksStore.loadUsers()
   }

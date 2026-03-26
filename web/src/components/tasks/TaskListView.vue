@@ -172,7 +172,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useTasksStore } from '@/stores/tasks'
-import type { SortBy, SortOrder, TaskGroupedItem, TaskListParams } from '@/services/http/tasksApi'
+import type { SortBy, SortOrder, TaskFilterPayload, TaskGroupedItem, TaskListParams } from '@/services/http/tasksApi'
 import TaskRow from './TaskRow.vue'
 import SortIcon from './SortIcon.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
@@ -191,7 +191,7 @@ const props = defineProps<{ templateFilter: string | null }>()
 const emit = defineEmits<{ openTask: [publicId: string] }>()
 
 const tasksStore = useTasksStore()
-const baseFilters = ref<Pick<TaskListParams, 'search' | 'status_ids' | 'prefixes' | 'field_filters'>>({})
+const baseFilters = ref<TaskFilterPayload>({})
 
 const sortBy = ref<SortBy>('updated_at')
 const sortOrder = ref<SortOrder>('desc')
@@ -248,7 +248,7 @@ function setViewMode(mode: TaskListViewMode) {
   applyParams()
 }
 
-function onFiltersChange(payload: Pick<TaskListParams, 'search' | 'status_ids' | 'prefixes' | 'field_filters'>) {
+function onFiltersChange(payload: TaskFilterPayload) {
   baseFilters.value = payload
   applyParams()
 }

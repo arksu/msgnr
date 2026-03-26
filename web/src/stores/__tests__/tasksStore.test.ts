@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useTasksStore } from '@/stores/tasks'
-import { tasksUpdateTaskDescription, tasksUpdateTaskStatus } from '@/services/http/tasksApi'
+import {
+  tasksListStatuses,
+  tasksListTemplates,
+  tasksUpdateTaskDescription,
+  tasksUpdateTaskStatus,
+} from '@/services/http/tasksApi'
 
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListTemplates: vi.fn(async () => []),
@@ -147,5 +152,37 @@ describe('tasksStore.updateTaskStatus', () => {
 
     expect(store.selectedTask?.id).toBe('task-selected')
     expect(store.selectedTask?.description).toBe('selected')
+  })
+})
+
+describe('tasksStore.loadConfig', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('awaits the same in-flight request for concurrent callers', async () => {
+    const store = useTasksStore()
+    const templatesPending = deferred<any[]>()
+    const statusesPending = deferred<any[]>()
+
+    vi.mocked(tasksListTemplates).mockReturnValueOnce(templatesPending.promise as Promise<any>)
+    vi.mocked(tasksListStatuses).mockReturnValueOnce(statusesPending.promise as Promise<any>)
+
+    const first = store.loadConfig()
+    const second = store.loadConfig()
+
+    expect(tasksListTemplates).toHaveBeenCalledTimes(1)
+    expect(tasksListStatuses).toHaveBeenCalledTimes(1)
+    expect(store.configLoading).toBe(true)
+
+    templatesPending.resolve([{ id: 'tpl-1', prefix: 'BUG', sort_order: 1, deleted_at: null }])
+    statusesPending.resolve([{ id: 'st-1', name: 'Todo', sort_order: 1, deleted_at: null }])
+
+    await Promise.all([first, second])
+
+    expect(store.configLoaded).toBe(true)
+    expect(store.activeTemplates.map(template => template.id)).toEqual(['tpl-1'])
+    expect(store.activeStatuses.map(status => status.id)).toEqual(['st-1'])
   })
 })

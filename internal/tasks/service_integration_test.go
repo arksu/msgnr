@@ -2244,6 +2244,108 @@ func TestIntegration_ListTasksGrouped_FilterParity(t *testing.T) {
 	assert.Len(t, portion.Items, 1)
 }
 
+func TestIntegration_ListTasks_HidesSubtasksByDefault(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "SUBL", actor)
+	st := seedStatus(t, ctx, svc, actor)
+
+	parent := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "Parent task")
+	_, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:   tpl.ID,
+		ParentTaskID: uuidPtr(parent.ID),
+		Title:        "Child task",
+		StatusID:     st.ID,
+		ActorID:      actor,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.ListTasks(ctx, tasks.ListTasksParams{})
+	require.NoError(t, err)
+	group := findGroup(t, resp.Groups, st.ID)
+	assert.Equal(t, 1, resp.GrandTotal)
+	assert.Equal(t, 1, group.Total)
+	require.Len(t, group.Tasks, 1)
+	assert.Equal(t, parent.ID, group.Tasks[0].ID)
+	assert.Nil(t, group.Tasks[0].ParentTaskID)
+
+	respWithSubtasks, err := svc.ListTasks(ctx, tasks.ListTasksParams{IncludeSubtasks: true})
+	require.NoError(t, err)
+	groupWithSubtasks := findGroup(t, respWithSubtasks.Groups, st.ID)
+	assert.Equal(t, 2, respWithSubtasks.GrandTotal)
+	assert.Equal(t, 2, groupWithSubtasks.Total)
+	require.Len(t, groupWithSubtasks.Tasks, 2)
+	assert.ElementsMatch(t, []string{"Parent task", "Child task"}, []string{
+		groupWithSubtasks.Tasks[0].Title,
+		groupWithSubtasks.Tasks[1].Title,
+	})
+	childRows := 0
+	for _, task := range groupWithSubtasks.Tasks {
+		if task.Title != "Child task" {
+			continue
+		}
+		childRows++
+		require.NotNil(t, task.ParentTaskID)
+		assert.Equal(t, parent.ID, *task.ParentTaskID)
+	}
+	assert.Equal(t, 1, childRows)
+}
+
+func TestIntegration_ListTasksGrouped_HonorsIncludeSubtasks(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "SUBG", actor)
+	st := seedStatus(t, ctx, svc, actor)
+
+	parent := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "Parent grouped")
+	_, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:   tpl.ID,
+		ParentTaskID: uuidPtr(parent.ID),
+		Title:        "Child grouped",
+		StatusID:     st.ID,
+		ActorID:      actor,
+	})
+	require.NoError(t, err)
+
+	groupedDefault, err := svc.ListTasksGrouped(ctx, tasks.ListTasksParams{}, 50)
+	require.NoError(t, err)
+	defaultBucket := groupedDefault.GroupsByStatus[st.ID.String()]
+	assert.Equal(t, 1, groupedDefault.GrandTotal)
+	assert.Equal(t, 1, defaultBucket.Total)
+	require.Len(t, defaultBucket.Items, 1)
+	assert.Equal(t, "Parent grouped", defaultBucket.Items[0].Title)
+
+	groupedWithSubtasks, err := svc.ListTasksGrouped(ctx, tasks.ListTasksParams{IncludeSubtasks: true}, 50)
+	require.NoError(t, err)
+	withSubtasksBucket := groupedWithSubtasks.GroupsByStatus[st.ID.String()]
+	assert.Equal(t, 2, groupedWithSubtasks.GrandTotal)
+	assert.Equal(t, 2, withSubtasksBucket.Total)
+	require.Len(t, withSubtasksBucket.Items, 2)
+	assert.ElementsMatch(t, []string{"Parent grouped", "Child grouped"}, []string{
+		withSubtasksBucket.Items[0].Title,
+		withSubtasksBucket.Items[1].Title,
+	})
+
+	portionDefault, err := svc.ListTasksStatusPortion(ctx, tasks.ListTasksParams{}, st.ID, 0, 50)
+	require.NoError(t, err)
+	assert.Equal(t, 1, portionDefault.Total)
+	require.Len(t, portionDefault.Items, 1)
+	assert.Equal(t, "Parent grouped", portionDefault.Items[0].Title)
+
+	portionWithSubtasks, err := svc.ListTasksStatusPortion(ctx, tasks.ListTasksParams{IncludeSubtasks: true}, st.ID, 0, 50)
+	require.NoError(t, err)
+	assert.Equal(t, 2, portionWithSubtasks.Total)
+	require.Len(t, portionWithSubtasks.Items, 2)
+	assert.ElementsMatch(t, []string{"Parent grouped", "Child grouped"}, []string{
+		portionWithSubtasks.Items[0].Title,
+		portionWithSubtasks.Items[1].Title,
+	})
+}
+
 // ---- test helpers ----
 
 // strPtr is a convenience helper used in Phase 4 tests.

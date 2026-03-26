@@ -77,12 +77,10 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import type { TaskListParams } from '@/services/http/tasksApi'
+import type { TaskFilterPayload } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
 import { useChatStore } from '@/stores/chat'
 import TaskTrackerFilters from './TaskTrackerFilters.vue'
-
-type TaskFiltersPayload = Pick<TaskListParams, 'search' | 'status_ids' | 'prefixes' | 'field_filters'>
 
 defineProps<{ templateFilter: string | null }>()
 const emit = defineEmits<{ openTask: [publicId: string] }>()
@@ -90,7 +88,7 @@ const emit = defineEmits<{ openTask: [publicId: string] }>()
 const tasksStore = useTasksStore()
 const chatStore = useChatStore()
 
-const baseFilters = ref<TaskFiltersPayload>({})
+const baseFilters = ref<TaskFilterPayload>({})
 const draggingTaskId = ref('')
 const draggingFromStatusId = ref('')
 const dropTargetStatusId = ref('')
@@ -113,7 +111,7 @@ const orderedColumns = computed(() => {
     .filter((value): value is { statusId: string; group: NonNullable<(typeof tasksStore.groupedTaskGroupsByStatus)[string]> } => value !== null)
 })
 
-function onFiltersChange(payload: TaskFiltersPayload) {
+function onFiltersChange(payload: TaskFilterPayload) {
   baseFilters.value = payload
   tasksStore.setListParams({ ...payload, page: 1 }, 'grouped')
 }
@@ -176,6 +174,8 @@ function scheduleGroupedReload() {
   if (groupedReloadTimer) clearTimeout(groupedReloadTimer)
   groupedReloadTimer = setTimeout(() => {
     groupedReloadTimer = null
+    // Intentionally reuse the store's remembered grouped params so realtime
+    // refresh keeps the current filters, including the show-subtasks toggle.
     void tasksStore.loadGroupedTaskList(undefined, tasksStore.groupedTaskPortionLimit)
   }, 350)
 }

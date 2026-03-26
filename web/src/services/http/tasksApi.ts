@@ -586,6 +586,8 @@ export interface TaskListParams {
   status_ids?: string[]
   // Repeatable: maps to multiple prefix= query params
   prefixes?: string[]
+  // Include subtasks alongside top-level tasks when true; default hides them.
+  include_subtasks?: boolean
   // Per-field custom filters (field_<uuid>_user, field_<uuid>_enum, etc.)
   field_filters?: FieldFilter[]
   sort_by?: SortBy
@@ -593,6 +595,11 @@ export interface TaskListParams {
   page?: number
   page_size?: number
 }
+
+export type TaskFilterPayload = Pick<
+  TaskListParams,
+  'search' | 'status_ids' | 'prefixes' | 'include_subtasks' | 'field_filters'
+>
 
 // Mirrors backend StatusRow (subset used in list)
 export interface TaskListStatus {
@@ -663,6 +670,9 @@ function buildTaskFilterQuery(params: TaskListParams): URLSearchParams {
 
   params.status_ids?.forEach(id => q.append('status_id', id))
   params.prefixes?.forEach(p => q.append('prefix', p))
+  // Serialize the boolean explicitly when provided so the client does not
+  // depend on the backend default for subtask visibility.
+  if (params.include_subtasks != null) q.set('include_subtasks', String(params.include_subtasks))
 
   params.field_filters?.forEach(ff => {
     ff.user_ids?.forEach(uid => q.append(`field_${ff.field_definition_id}_user`, uid))

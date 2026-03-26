@@ -1812,6 +1812,7 @@ func methodNotAllowed(w http.ResponseWriter) {
 //	search                              full-text ILIKE across public_id/title/description
 //	status_id   (repeatable)            filter by status UUID(s)
 //	prefix      (repeatable)            filter by template_snapshot_prefix
+//	include_subtasks                    include subtasks when true; default false
 //	sort_by                             id|title|status|created_at|updated_at|<field-def-uuid>
 //	sort_order                          desc (default) | asc
 //	page                                1-based page number (default 1)
@@ -1867,10 +1868,11 @@ func parseTaskFilterParams(r *http.Request) (ListTasksParams, error) {
 	}
 
 	return ListTasksParams{
-		Search:       strings.TrimSpace(q.Get("search")),
-		StatusIDs:    statusIDs,
-		Prefixes:     q["prefix"],
-		FieldFilters: fieldFilters,
+		Search:          strings.TrimSpace(q.Get("search")),
+		StatusIDs:       statusIDs,
+		Prefixes:        q["prefix"],
+		IncludeSubtasks: queryBool(q.Get("include_subtasks"), false),
+		FieldFilters:    fieldFilters,
 	}, nil
 }
 
@@ -1983,6 +1985,17 @@ func queryIntNonNegative(s string, fallback int) int {
 	}
 	v, err := strconv.Atoi(s)
 	if err != nil || v < 0 {
+		return fallback
+	}
+	return v
+}
+
+func queryBool(s string, fallback bool) bool {
+	if s == "" {
+		return fallback
+	}
+	v, err := strconv.ParseBool(s)
+	if err != nil {
 		return fallback
 	}
 	return v

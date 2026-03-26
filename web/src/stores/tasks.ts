@@ -76,6 +76,7 @@ export const useTasksStore = defineStore('tasks', () => {
   const configLoaded = ref(false)
   const configLoading = ref(false)
   const configError = ref<string | null>(null)
+  let configLoadPromise: Promise<void> | null = null
 
   // ---- Shared lookup data ----
   // Loaded once; injected into field inputs via props so there are no per-instance fetches.
@@ -179,6 +180,7 @@ export const useTasksStore = defineStore('tasks', () => {
       search: listParams.value.search,
       status_ids: listParams.value.status_ids,
       prefixes: listParams.value.prefixes,
+      include_subtasks: listParams.value.include_subtasks,
       field_filters: listParams.value.field_filters,
     }
   }
@@ -193,22 +195,29 @@ export const useTasksStore = defineStore('tasks', () => {
   // ---- Actions ----
 
   async function loadConfig() {
-    if (configLoaded.value || configLoading.value) return
+    if (configLoaded.value) return
+    if (configLoadPromise) return configLoadPromise
+
     configLoading.value = true
     configError.value = null
-    try {
-      const [tpls, sts] = await Promise.all([
-        tasksListTemplates(false),
-        tasksListStatuses(false),
-      ])
-      templates.value = tpls
-      statuses.value = sts
-      configLoaded.value = true
-    } catch (e) {
-      configError.value = e instanceof Error ? e.message : 'Failed to load configuration'
-    } finally {
-      configLoading.value = false
-    }
+    configLoadPromise = (async () => {
+      try {
+        const [tpls, sts] = await Promise.all([
+          tasksListTemplates(false),
+          tasksListStatuses(false),
+        ])
+        templates.value = tpls
+        statuses.value = sts
+        configLoaded.value = true
+      } catch (e) {
+        configError.value = e instanceof Error ? e.message : 'Failed to load configuration'
+      } finally {
+        configLoading.value = false
+        configLoadPromise = null
+      }
+    })()
+
+    return configLoadPromise
   }
 
   async function loadFieldsFor(templateId: string) {
@@ -754,6 +763,7 @@ export const useTasksStore = defineStore('tasks', () => {
     configLoaded.value = false
     configLoading.value = false
     configError.value = null
+    configLoadPromise = null
 
     users.value = []
     usersLoaded.value = false

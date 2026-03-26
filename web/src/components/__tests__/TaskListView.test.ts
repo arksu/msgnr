@@ -146,7 +146,7 @@ describe('TaskListView', () => {
         stubs: {
           TaskTrackerFilters: {
             emits: ['filtersChange'],
-            template: '<div><slot name="after-controls" /><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', status_ids: [\'st-1\'], prefixes: [\'BUG\'], field_filters: [{ field_definition_id: \'fld-1\', user_ids: [\'u-1\'] }] })">emit</button></div>',
+            template: '<div><slot name="after-controls" /><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', status_ids: [\'st-1\'], prefixes: [\'BUG\'], include_subtasks: true, field_filters: [{ field_definition_id: \'fld-1\', user_ids: [\'u-1\'] }] })">emit</button></div>',
           },
           UserAvatar: { template: '<div class="user-avatar-stub" />' },
           TaskRow: { template: '<tr />' },
@@ -161,6 +161,7 @@ describe('TaskListView', () => {
       search: 'bug',
       status_ids: ['st-1'],
       prefixes: ['BUG'],
+      include_subtasks: true,
       field_filters: [{ field_definition_id: 'fld-1', user_ids: ['u-1'] }],
       page: 1,
     }, 'grouped')

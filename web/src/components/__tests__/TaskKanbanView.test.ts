@@ -70,7 +70,7 @@ function mountKanban() {
       stubs: {
         TaskTrackerFilters: {
           emits: ['filtersChange'],
-          template: '<div><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', status_ids: [\'st-1\'], prefixes: [\'BUG\'], field_filters: [{ field_definition_id: \'fld-1\', user_ids: [\'u-1\'] }] })">emit</button></div>',
+          template: '<div><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', status_ids: [\'st-1\'], prefixes: [\'BUG\'], include_subtasks: true, field_filters: [{ field_definition_id: \'fld-1\', user_ids: [\'u-1\'] }] })">emit</button></div>',
         },
       },
     },
@@ -117,6 +117,7 @@ describe('TaskKanbanView', () => {
       search: 'bug',
       status_ids: ['st-1'],
       prefixes: ['BUG'],
+      include_subtasks: true,
       field_filters: [{ field_definition_id: 'fld-1', user_ids: ['u-1'] }],
       page: 1,
     }, 'grouped')

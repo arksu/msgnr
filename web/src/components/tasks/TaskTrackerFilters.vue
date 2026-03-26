@@ -51,7 +51,7 @@
           <span v-if="selectedStatusIds.length" class="filter-chip-count">{{ selectedStatusIds.length }}</span>
           <svg class="w-3 h-3 ml-1" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
         </button>
-        <div v-if="statusDropdownOpen" class="dropdown-menu">
+        <div v-if="statusDropdownOpen" class="dropdown-menu dropdown-menu--tall">
           <label v-for="s in tasksStore.activeStatuses" :key="s.id" class="dropdown-item">
             <input type="checkbox" :value="s.id" v-model="selectedStatusIds" class="mr-2 accent-accent" />
             {{ s.name }}
@@ -70,7 +70,7 @@
           <span v-if="selectedTemplateId" class="filter-chip-count font-mono">{{ selectedTemplatePrefix }}</span>
           <svg class="w-3 h-3 ml-1" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
         </button>
-        <div v-if="templateDropdownOpen" class="dropdown-menu">
+        <div v-if="templateDropdownOpen" class="dropdown-menu dropdown-menu--tall">
           <button class="dropdown-item w-full text-left" @click="selectTemplate(null)">
             <span :class="!selectedTemplateId ? 'text-accent' : ''">All templates</span>
           </button>
@@ -95,7 +95,7 @@
           <span v-if="selectedAssigneeIds.length" class="filter-chip-count">{{ selectedAssigneeIds.length }}</span>
           <svg class="w-3 h-3 ml-1" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
         </button>
-        <div v-if="assigneeDropdownOpen" class="dropdown-menu w-56">
+        <div v-if="assigneeDropdownOpen" class="dropdown-menu dropdown-menu--tall dropdown-menu--assignee w-56">
           <div
             v-if="selectedAssigneeIds.length && !resolveAssigneeFieldId()"
             class="px-3 py-2 text-xs text-amber-400 border-b border-chat-border"
@@ -110,7 +110,7 @@
               class="w-full bg-chat-bg border border-chat-border rounded px-2 py-1 text-white text-sm outline-none focus:border-accent"
             />
           </div>
-          <div class="max-h-52 overflow-y-auto py-1">
+          <div class="assignee-dropdown-list py-1">
             <div v-if="filteredUserOptions.length === 0" class="px-3 py-2 text-xs text-gray-500">No users found</div>
             <label
               v-for="u in filteredUserOptions"
@@ -130,6 +130,18 @@
         </div>
       </div>
 
+      <label
+        class="inline-flex items-center gap-2 rounded border border-chat-border px-2.5 py-1 text-xs text-gray-300 transition-colors hover:border-accent/40 hover:text-white"
+        :class="showSubtasks ? 'border-accent/60 text-accent' : ''"
+      >
+        <input
+          v-model="showSubtasks"
+          type="checkbox"
+          class="h-3.5 w-3.5 rounded border-chat-border bg-chat-input accent-accent"
+        />
+        Show subtasks
+      </label>
+
       <button v-if="activeFilterCount > 0" class="text-xs text-gray-500 hover:text-gray-300 transition-colors" @click="clearFilters">
         Clear all
       </button>
@@ -139,11 +151,9 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { FieldFilter, TaskListParams } from '@/services/http/tasksApi'
+import type { FieldFilter, TaskFilterPayload } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
 import UserAvatar from '@/components/UserAvatar.vue'
-
-type TaskFiltersPayload = Pick<TaskListParams, 'search' | 'status_ids' | 'prefixes' | 'field_filters'>
 
 const props = defineProps<{
   templateFilter: string | null
@@ -151,7 +161,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  filtersChange: [payload: TaskFiltersPayload]
+  filtersChange: [payload: TaskFilterPayload]
 }>()
 
 const tasksStore = useTasksStore()
@@ -170,6 +180,7 @@ const assigneeDropdownEl = ref<HTMLElement | null>(null)
 const selectedAssigneeIds = ref<string[]>([])
 const assigneeDropdownOpen = ref(false)
 const assigneeSearch = ref('')
+const showSubtasks = ref(false)
 
 const selectedTemplatePrefix = computed(() =>
   tasksStore.activeTemplates.find(t => t.id === selectedTemplateId.value)?.prefix ?? '',
@@ -189,7 +200,8 @@ const filteredUserOptions = computed(() => {
 const activeFilterCount = computed(() =>
   (selectedStatusIds.value.length > 0 ? 1 : 0) +
   (selectedTemplateId.value ? 1 : 0) +
-  (selectedAssigneeIds.value.length > 0 ? 1 : 0),
+  (selectedAssigneeIds.value.length > 0 ? 1 : 0) +
+  (showSubtasks.value ? 1 : 0),
 )
 
 function resolveAssigneeFieldId(): string | null {
@@ -203,7 +215,7 @@ function resolveAssigneeFieldId(): string | null {
   return ids.length === 1 ? ids[0] : null
 }
 
-function buildFilterPayload(): TaskFiltersPayload {
+function buildFilterPayload(): TaskFilterPayload {
   const prefix = selectedTemplateId.value
     ? tasksStore.activeTemplates.find(t => t.id === selectedTemplateId.value)?.prefix
     : undefined
@@ -218,6 +230,7 @@ function buildFilterPayload(): TaskFiltersPayload {
     search: searchInput.value.trim() || undefined,
     status_ids: selectedStatusIds.value.length ? selectedStatusIds.value : undefined,
     prefixes: prefix ? [prefix] : undefined,
+    include_subtasks: showSubtasks.value ? true : false,
     field_filters: fieldFilters,
   }
 }
@@ -242,6 +255,7 @@ function clearFilters() {
   selectedStatusIds.value = []
   selectedTemplateId.value = null
   selectedAssigneeIds.value = []
+  showSubtasks.value = false
   emitFilters()
 }
 
@@ -259,6 +273,7 @@ function onDocClick(e: MouseEvent) {
 
 watch(selectedStatusIds, () => emitFilters(), { deep: true })
 watch(selectedAssigneeIds, () => emitFilters(), { deep: true })
+watch(showSubtasks, () => emitFilters())
 
 watch(() => props.templateFilter, (val) => {
   selectedTemplateId.value = val
@@ -302,7 +317,16 @@ onBeforeUnmount(() => {
 }
 .dropdown-menu {
   @apply absolute top-full left-0 mt-1 min-w-[160px] bg-chat-input border border-chat-border
-         rounded shadow-xl z-30 py-1 max-h-60 overflow-y-auto;
+         rounded shadow-xl z-30 py-1 overflow-y-auto;
+}
+.dropdown-menu--tall {
+  @apply max-h-72;
+}
+.dropdown-menu--assignee {
+  @apply py-0 overflow-hidden flex flex-col;
+}
+.assignee-dropdown-list {
+  @apply flex-1 min-h-0 overflow-y-auto;
 }
 .dropdown-item {
   @apply flex items-center px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10 cursor-pointer;

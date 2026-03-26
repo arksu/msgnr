@@ -2501,9 +2501,10 @@ type ListTasksParams struct {
 	Page     int // 1-based; default 1
 	PageSize int // default 20; max 100
 
-	Search    string      // ILIKE across public_id, title, description
-	StatusIDs []uuid.UUID // filter by one or more status IDs
-	Prefixes  []string    // filter by template_snapshot_prefix
+	Search          string      // ILIKE across public_id, title, description
+	StatusIDs       []uuid.UUID // filter by one or more status IDs
+	Prefixes        []string    // filter by template_snapshot_prefix
+	IncludeSubtasks bool        // include tasks with parent_task_id when true
 
 	FieldFilters []FieldFilter
 
@@ -2991,6 +2992,10 @@ func buildWhereClause(p ListTasksParams, args *argList) string {
 	if len(p.Prefixes) > 0 {
 		ph := args.add(p.Prefixes)
 		clauses = append(clauses, fmt.Sprintf(`t.template_snapshot_prefix = ANY(%s::text[])`, ph))
+	}
+
+	if !p.IncludeSubtasks {
+		clauses = append(clauses, `t.parent_task_id IS NULL`)
 	}
 
 	for _, ff := range p.FieldFilters {

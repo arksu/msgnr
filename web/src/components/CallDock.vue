@@ -2045,7 +2045,7 @@ watch(minimizedDockEl, () => {
 
 watch([maximized, expandedDockEl], () => {
   syncExpandedDockRegistration()
-}, { immediate: true })
+}, { immediate: true, flush: 'post' })
 
 watch(isVisible, (visible) => {
   if (visible) {

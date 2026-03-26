@@ -14,15 +14,6 @@ type ActiveDockDrag = {
   offsetY: number
 }
 
-const MOBILE_RIGHT_OFFSET_PX = 16
-const DESKTOP_RIGHT_OFFSET_PX = 24
-const DESKTOP_BREAKPOINT_PX = 768
-
-function defaultRightOffsetPx(): number {
-  if (typeof window === 'undefined') return DESKTOP_RIGHT_OFFSET_PX
-  return window.innerWidth >= DESKTOP_BREAKPOINT_PX ? DESKTOP_RIGHT_OFFSET_PX : MOBILE_RIGHT_OFFSET_PX
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
 }
@@ -66,7 +57,7 @@ export function useFloatingDockPosition() {
     if (!el) return null
     const { width, height } = readSize(el)
     return clampPosition(mode, {
-      x: window.innerWidth - width - defaultRightOffsetPx(),
+      x: window.innerWidth - width,
       y: window.innerHeight - height,
     })
   }
@@ -154,7 +145,7 @@ export function useFloatingDockPosition() {
       }
     }
     return {
-      right: `${defaultRightOffsetPx()}px`,
+      right: '0px',
       bottom: '0px',
     }
   }

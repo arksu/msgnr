@@ -367,8 +367,33 @@ describe('CallDock drag behavior', () => {
     dispatchPointerEvent(window, 'pointerup', 220, 180, 1)
     await flushAll()
 
-    expect(dock.style.left).toBe('176px')
+    expect(dock.style.left).toBe('200px')
     expect(dock.style.top).toBe('160px')
+
+    wrapper.unmount()
+  })
+
+  it('defaults the expanded dock to the bottom-right corner', async () => {
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.minimized = false
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    const dock = wrapper.get('[data-testid="calldock-expanded-root"]').element as HTMLElement
+
+    expect(dock.style.right).toBe('0px')
+    expect(dock.style.bottom).toBe('0px')
+    expect(dock.style.left).toBe('')
+    expect(dock.style.top).toBe('')
 
     wrapper.unmount()
   })
@@ -395,7 +420,7 @@ describe('CallDock drag behavior', () => {
     dispatchPointerEvent(window, 'pointerup', 260, 220, 1)
     await flushAll()
 
-    expect(expandedDock.style.left).toBe('216px')
+    expect(expandedDock.style.left).toBe('240px')
     expect(expandedDock.style.top).toBe('200px')
 
     await wrapper.get('button[title="Minimize"]').trigger('click')
@@ -408,14 +433,14 @@ describe('CallDock drag behavior', () => {
     dispatchPointerEvent(window, 'pointerup', 120, 140, 2)
     await flushAll()
 
-    expect(minimizedDock.style.left).toBe('76px')
+    expect(minimizedDock.style.left).toBe('100px')
     expect(minimizedDock.style.top).toBe('126px')
 
     await wrapper.get('[data-testid="calldock-minimized-expand"]').trigger('click')
     await flushAll()
 
     const restoredExpandedDock = wrapper.get('[data-testid="calldock-expanded-root"]').element as HTMLElement
-    expect(restoredExpandedDock.style.left).toBe('216px')
+    expect(restoredExpandedDock.style.left).toBe('240px')
     expect(restoredExpandedDock.style.top).toBe('200px')
 
     wrapper.unmount()
@@ -462,6 +487,63 @@ describe('CallDock drag behavior', () => {
 
     expect(dock.style.left).toBe('260px')
     expect(dock.style.top).toBe('140px')
+
+    wrapper.unmount()
+  })
+
+  it('preserves the expanded dock position after maximize and restore', async () => {
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.minimized = false
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    const dock = wrapper.get('[data-testid="calldock-expanded-root"]').element as HTMLElement
+    const normalRect = { width: 240, height: 220 }
+    const maximizedRect = { width: 900, height: 700 }
+    let currentRect = normalRect
+    Object.defineProperty(dock, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: currentRect.width,
+        bottom: currentRect.height,
+        width: currentRect.width,
+        height: currentRect.height,
+        toJSON: () => ({}),
+      }),
+    })
+
+    dispatchPointerEvent(wrapper.get('[data-testid="calldock-expanded-drag-handle"]').element, 'pointerdown', 680, 500, 1)
+    dispatchPointerEvent(window, 'pointermove', 260, 220, 1)
+    dispatchPointerEvent(window, 'pointerup', 260, 220, 1)
+    await flushAll()
+
+    expect(dock.style.left).toBe('240px')
+    expect(dock.style.top).toBe('200px')
+
+    currentRect = maximizedRect
+    await wrapper.get('button[title="Maximize"]').trigger('click')
+    await flushAll()
+
+    const restorePromise = wrapper.get('button[title="Restore"]').trigger('click')
+    currentRect = normalRect
+    await restorePromise
+    await flushAll()
+
+    expect(dock.style.left).toBe('240px')
+    expect(dock.style.top).toBe('200px')
 
     wrapper.unmount()
   })

@@ -3,10 +3,18 @@
     <!-- ── Minimized pill ─────────────────────────────────────────────────── -->
     <div
       v-if="callStore.minimized"
-      class="flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-slate-900/95 px-3 py-1.5 text-white shadow-xl backdrop-blur"
+      ref="minimizedDockEl"
+      class="flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-slate-900/95 px-3 py-1.5 text-white shadow-xl backdrop-blur touch-none cursor-move"
+      :style="minimizedDockStyle"
+      data-testid="calldock-minimized-root"
+      @pointerdown="handleMinimizedDockPointerDown"
     >
       <!-- Expand back to panel -->
-      <button class="flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-white/10 text-xs font-medium" @click="callStore.toggleMinimized()">
+      <button
+        class="flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-white/10 text-xs font-medium"
+        data-testid="calldock-minimized-expand"
+        @click="callStore.toggleMinimized()"
+      >
         <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
         <span class="max-w-[120px] truncate">{{ callStore.activeConversationTitle || 'Huddle' }}</span>
       </button>
@@ -41,10 +49,21 @@
     </div>
 
     <!-- ── Expanded panel ─────────────────────────────────────────────────── -->
-    <section v-else :class="panelClass">
+    <section
+      v-else
+      ref="expandedDockEl"
+      :class="panelClass"
+      :style="expandedDockStyle"
+      data-testid="calldock-expanded-root"
+    >
 
       <!-- Header — single compact line -->
-      <header class="flex items-center gap-2 border-b border-slate-700/80 px-3 py-2 shrink-0 min-w-0">
+      <header
+        class="flex items-center gap-2 border-b border-slate-700/80 px-3 py-2 shrink-0 min-w-0 touch-none"
+        :class="maximized ? '' : 'cursor-move'"
+        data-testid="calldock-expanded-drag-handle"
+        @pointerdown="handleExpandedDockPointerDown"
+      >
         <span class="h-2 w-2 shrink-0 rounded-full bg-emerald-400 animate-pulse" />
         <span class="truncate text-sm font-semibold text-white min-w-0">{{ callStore.activeConversationTitle || 'Huddle' }}</span>
         <span class="shrink-0 text-slate-600">·</span>
@@ -550,13 +569,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, toRaw, watch, watchEffect } from 'vue'
+import { computed, onBeforeUnmount, ref, toRaw, watch, watchEffect, type CSSProperties } from 'vue'
 import { Track } from 'livekit-client'
 import { useCallStore, type ScreenAnnotationEvent, type ScreenAnnotationSegmentV1 } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { listDmCandidates, type DmCandidateItem } from '@/services/http/chatApi'
 import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
+import { useFloatingDockPosition } from '@/composables/useFloatingDockPosition'
 import UserAvatar from './UserAvatar.vue'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -650,6 +670,8 @@ const stageEl = ref<HTMLDivElement | null>(null)
 const annotationCanvasEl = ref<HTMLCanvasElement | null>(null)
 const remoteAudioHostEl = ref<HTMLDivElement | null>(null)
 const inputSelectorWrapEl = ref<HTMLDivElement | null>(null)
+const minimizedDockEl = ref<HTMLElement | null>(null)
+const expandedDockEl = ref<HTMLElement | null>(null)
 const maximized = ref(false)
 const pinnedSid = ref<string | null>(null)
 const inviteDialogOpen = ref(false)
@@ -689,6 +711,8 @@ let annotationStrokeCounter = 0
 let activeAnnotationStroke: ActiveAnnotationStroke | null = null
 let canvas2dSupported: boolean | null = null
 let inputDeviceChangeListener: (() => void) | null = null
+
+const floatingDockPosition = useFloatingDockPosition()
 
 // ── Debug ─────────────────────────────────────────────────────────────────────
 
@@ -892,7 +916,7 @@ function handleDocumentPointerDown(event: PointerEvent) {
 const isVisible = computed(() => callStore.connected || callStore.connecting || Boolean(callStore.errorMessage))
 
 const containerClass = computed(() =>
-  maximized.value ? 'fixed inset-0 z-50' : 'fixed right-4 bottom-0 z-50 md:right-6 md:bottom-0'
+  maximized.value ? 'fixed inset-0 z-50' : 'fixed inset-0 z-50 pointer-events-none'
 )
 
 const panelClass = computed(() =>
@@ -900,6 +924,22 @@ const panelClass = computed(() =>
     ? 'h-full w-full overflow-hidden rounded-none border-0 bg-slate-900/95 flex flex-col'
     : 'w-[min(96vw,640px)] overflow-hidden rounded-2xl border border-slate-600/70 bg-slate-900/95 shadow-2xl backdrop-blur'
 )
+
+const minimizedDockStyle = computed<CSSProperties>(() => ({
+  position: 'absolute',
+  pointerEvents: 'auto',
+  ...floatingDockPosition.positionStyle('minimized'),
+}))
+
+const expandedDockStyle = computed<CSSProperties>(() => (
+  maximized.value
+    ? {}
+    : {
+        position: 'absolute',
+        pointerEvents: 'auto',
+        ...floatingDockPosition.positionStyle('expanded'),
+      }
+))
 
 const contentClass = computed(() =>
   maximized.value
@@ -932,6 +972,34 @@ const tileGridClass = computed(() => {
   if (n <= 4) return `${base} grid-cols-2 grid-rows-2`
   return `${base} grid-cols-3`
 })
+
+const DOCK_DRAG_IGNORE_SELECTOR = 'button, a, input, textarea, select, label, [role="button"], [contenteditable="true"]'
+
+function shouldIgnoreDockDragTarget(event: PointerEvent): boolean {
+  const target = event.target instanceof Element ? event.target : null
+  return Boolean(target?.closest(DOCK_DRAG_IGNORE_SELECTOR))
+}
+
+function syncMinimizedDockRegistration() {
+  const dockEl = unwrapEl(minimizedDockEl.value)
+  floatingDockPosition.registerElement('minimized', dockEl)
+}
+
+function syncExpandedDockRegistration() {
+  const dockEl = maximized.value ? null : unwrapEl(expandedDockEl.value)
+  floatingDockPosition.registerElement('expanded', dockEl)
+}
+
+function handleMinimizedDockPointerDown(event: PointerEvent) {
+  if (shouldIgnoreDockDragTarget(event)) return
+  floatingDockPosition.startDrag('minimized', event)
+}
+
+function handleExpandedDockPointerDown(event: PointerEvent) {
+  if (maximized.value) return
+  if (shouldIgnoreDockDragTarget(event)) return
+  floatingDockPosition.startDrag('expanded', event)
+}
 
 // ── Participant tiles ─────────────────────────────────────────────────────────
 
@@ -1308,9 +1376,6 @@ function renderAnnotationOverlay() {
     const fadeAlpha = msLeft < ANNOTATION_SEGMENT_FADE_MS
       ? clamp01(msLeft / ANNOTATION_SEGMENT_FADE_MS)
       : 1
-    if (fadeAlpha < 1) {
-      annotationFadingSegmentCount.value += 1
-    }
     ctx.globalAlpha = fadeAlpha
     ctx.beginPath()
     ctx.moveTo(
@@ -1890,6 +1955,14 @@ watch(inputDeviceMenuOpen, (open) => {
     document.addEventListener('pointerdown', handleDocumentPointerDown)
   }
 })
+
+watch(minimizedDockEl, () => {
+  syncMinimizedDockRegistration()
+}, { immediate: true })
+
+watch([maximized, expandedDockEl], () => {
+  syncExpandedDockRegistration()
+}, { immediate: true })
 
 watch(isVisible, (visible) => {
   if (visible) {

@@ -24,6 +24,57 @@ async function flushAll() {
   await nextTick()
 }
 
+function dispatchPointerEvent(
+  target: EventTarget,
+  type: string,
+  clientX: number,
+  clientY: number,
+  pointerId = 1,
+) {
+  const PointerEventCtor = window.PointerEvent ?? MouseEvent
+  const event = new PointerEventCtor(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX,
+    clientY,
+    isPrimary: true,
+    button: 0,
+  })
+  if (!(event instanceof PointerEventCtor) || window.PointerEvent == null) {
+    Object.defineProperty(event, 'pointerId', { value: pointerId })
+    Object.defineProperty(event, 'isPrimary', { value: true })
+  }
+  target.dispatchEvent(event)
+}
+
+function setViewportSize(width: number, height: number) {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    value: width,
+  })
+  Object.defineProperty(window, 'innerHeight', {
+    configurable: true,
+    value: height,
+  })
+}
+
+function mockElementRect(element: HTMLElement, rect: { width: number; height: number }) {
+  Object.defineProperty(element, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: rect.width,
+      bottom: rect.height,
+      width: rect.width,
+      height: rect.height,
+      toJSON: () => ({}),
+    }),
+  })
+}
+
 function createVideoTrack(sid: string) {
   return {
     sid,
@@ -249,6 +300,171 @@ describe('CallDock invite modal', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await flushAll()
     expect(wrapper.find('button[title="Maximize"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+})
+
+describe('CallDock drag behavior', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    setViewportSize(900, 700)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  })
+
+  it('drags the expanded dock by its header', async () => {
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.minimized = false
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    const dock = wrapper.get('[data-testid="calldock-expanded-root"]').element as HTMLElement
+    mockElementRect(dock, { width: 240, height: 220 })
+
+    const handle = wrapper.get('[data-testid="calldock-expanded-drag-handle"]').element
+    dispatchPointerEvent(handle, 'pointerdown', 680, 500, 1)
+    dispatchPointerEvent(window, 'pointermove', 220, 180, 1)
+    dispatchPointerEvent(window, 'pointerup', 220, 180, 1)
+    await flushAll()
+
+    expect(dock.style.left).toBe('176px')
+    expect(dock.style.top).toBe('160px')
+
+    wrapper.unmount()
+  })
+
+  it('keeps separate runtime positions for expanded and compacted view', async () => {
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.minimized = false
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    const expandedDock = wrapper.get('[data-testid="calldock-expanded-root"]').element as HTMLElement
+    mockElementRect(expandedDock, { width: 240, height: 220 })
+    dispatchPointerEvent(wrapper.get('[data-testid="calldock-expanded-drag-handle"]').element, 'pointerdown', 680, 500, 1)
+    dispatchPointerEvent(window, 'pointermove', 260, 220, 1)
+    dispatchPointerEvent(window, 'pointerup', 260, 220, 1)
+    await flushAll()
+
+    expect(expandedDock.style.left).toBe('216px')
+    expect(expandedDock.style.top).toBe('200px')
+
+    await wrapper.get('button[title="Minimize"]').trigger('click')
+    await flushAll()
+
+    const minimizedDock = wrapper.get('[data-testid="calldock-minimized-root"]').element as HTMLElement
+    mockElementRect(minimizedDock, { width: 160, height: 44 })
+    dispatchPointerEvent(minimizedDock, 'pointerdown', 760, 670, 2)
+    dispatchPointerEvent(window, 'pointermove', 120, 140, 2)
+    dispatchPointerEvent(window, 'pointerup', 120, 140, 2)
+    await flushAll()
+
+    expect(minimizedDock.style.left).toBe('76px')
+    expect(minimizedDock.style.top).toBe('126px')
+
+    await wrapper.get('[data-testid="calldock-minimized-expand"]').trigger('click')
+    await flushAll()
+
+    const restoredExpandedDock = wrapper.get('[data-testid="calldock-expanded-root"]').element as HTMLElement
+    expect(restoredExpandedDock.style.left).toBe('216px')
+    expect(restoredExpandedDock.style.top).toBe('200px')
+
+    wrapper.unmount()
+  })
+
+  it('clamps the dock inside the viewport while dragging and on resize', async () => {
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.minimized = false
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    const dock = wrapper.get('[data-testid="calldock-expanded-root"]').element as HTMLElement
+    mockElementRect(dock, { width: 240, height: 220 })
+
+    const handle = wrapper.get('[data-testid="calldock-expanded-drag-handle"]').element
+    dispatchPointerEvent(handle, 'pointerdown', 680, 500, 1)
+    dispatchPointerEvent(window, 'pointermove', -200, -120, 1)
+    dispatchPointerEvent(window, 'pointerup', -200, -120, 1)
+    await flushAll()
+
+    expect(dock.style.left).toBe('0px')
+    expect(dock.style.top).toBe('0px')
+
+    dispatchPointerEvent(handle, 'pointerdown', 10, 10, 2)
+    dispatchPointerEvent(window, 'pointermove', 1200, 1200, 2)
+    dispatchPointerEvent(window, 'pointerup', 1200, 1200, 2)
+    await flushAll()
+
+    expect(dock.style.left).toBe('660px')
+    expect(dock.style.top).toBe('480px')
+
+    setViewportSize(500, 360)
+    window.dispatchEvent(new Event('resize'))
+    await flushAll()
+
+    expect(dock.style.left).toBe('260px')
+    expect(dock.style.top).toBe('140px')
+
+    wrapper.unmount()
+  })
+
+  it('does not start a drag when compacted controls are clicked', async () => {
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.minimized = true
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    const minimizedDock = wrapper.get('[data-testid="calldock-minimized-root"]').element as HTMLElement
+    mockElementRect(minimizedDock, { width: 160, height: 44 })
+    expect(minimizedDock.style.left).toBe('')
+
+    const expandButton = wrapper.get('[data-testid="calldock-minimized-expand"]').element
+    dispatchPointerEvent(expandButton, 'pointerdown', 760, 670, 1)
+    dispatchPointerEvent(window, 'pointerup', 760, 670, 1)
+    await flushAll()
+
+    expect(minimizedDock.style.left).toBe('')
+    await wrapper.get('[data-testid="calldock-minimized-expand"]').trigger('click')
+    await flushAll()
+    expect(callStore.minimized).toBe(false)
 
     wrapper.unmount()
   })
@@ -585,7 +801,7 @@ describe('CallDock screen annotation overlay', () => {
 
     await vi.advanceTimersByTimeAsync(19_850)
     await flushAll()
-    expect(Number(overlay.attributes('data-fading-segments'))).toBeGreaterThan(0)
+    expect(overlay.attributes('data-fading-segments')).toBe('1')
     expect(overlay.attributes('data-active-segments')).toBe('1')
 
     await vi.advanceTimersByTimeAsync(400)

@@ -134,7 +134,7 @@ describe('TaskTrackerFilters', () => {
 
     const assigneeDropdown = wrapper.get('.dropdown-menu--assignee')
     expect(assigneeDropdown.classes()).toContain('dropdown-menu--tall')
-    expect(wrapper.get('.assignee-dropdown-list').exists()).toBe(true)
+    expect(wrapper.find('.assignee-dropdown-list').exists()).toBe(true)
   })
 
   it('counts and clears the show subtasks toggle as an active filter', async () => {

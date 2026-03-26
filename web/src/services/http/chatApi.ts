@@ -122,6 +122,27 @@ export interface ConversationHistoryPage {
   next_before_channel_seq?: string
 }
 
+export interface UnreadFeedItem {
+  id: string
+  kind: 'message' | 'mention' | 'thread'
+  notification_id?: string
+  conversation_id: string
+  conversation_kind: 'channel' | 'dm'
+  conversation_visibility: 'public' | 'private' | 'dm'
+  conversation_title: string
+  message_id?: string
+  thread_root_message_id?: string
+  sender_id?: string
+  sender_name: string
+  body: string
+  created_at: string
+}
+
+export interface UnreadFeedResponse {
+  total_count: number
+  items: UnreadFeedItem[]
+}
+
 export interface ReactionUserItem {
   user_id: string
   display_name: string
@@ -239,6 +260,36 @@ export async function listConversationMessages(
     })
     handleError(e)
   }
+}
+
+export async function getMessageContext(
+  conversationId: string,
+  messageId: string,
+): Promise<ConversationHistoryPage> {
+  try {
+    const { data } = await http.get<ConversationHistoryPage>('/api/messages/context', {
+      params: {
+        conversation_id: conversationId,
+        message_id: messageId,
+      },
+    })
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function listUnreadFeed(): Promise<UnreadFeedResponse> {
+  try {
+    const { data } = await http.get<UnreadFeedResponse>('/api/chat/unread-feed')
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function resolveUnreadFeedNotification(notificationId: string): Promise<void> {
+  try {
+    await http.post('/api/chat/unread-feed/resolve', {
+      notification_id: notificationId,
+    })
+  } catch (e) { handleError(e) }
 }
 
 export async function listMessageReactionUsers(

@@ -5,6 +5,7 @@ export const NOTIFICATION_OPEN_QUERY_VALUE = '1'
 export interface NotificationOpenIntent {
   conversationId: string
   messageId?: string
+  threadRootMessageId?: string
   url?: string
 }
 
@@ -22,6 +23,7 @@ export function toNotificationOpenMessage(intent: NotificationOpenIntent) {
     type: NOTIFICATION_OPEN_MESSAGE_TYPE,
     conversationId: intent.conversationId,
     ...(intent.messageId ? { messageId: intent.messageId } : {}),
+    ...(intent.threadRootMessageId ? { threadRootMessageId: intent.threadRootMessageId } : {}),
     ...(intent.url ? { url: intent.url } : {}),
   }
 }
@@ -35,10 +37,12 @@ export function notificationOpenIntentFromMessage(data: unknown): NotificationOp
   if (!conversationId) return null
 
   const messageId = firstString(record.messageId).trim()
+  const threadRootMessageId = firstString(record.threadRootMessageId).trim()
   const url = firstString(record.url).trim()
   return {
     conversationId,
     ...(messageId ? { messageId } : {}),
+    ...(threadRootMessageId ? { threadRootMessageId } : {}),
     ...(url ? { url } : {}),
   }
 }
@@ -52,9 +56,11 @@ export function notificationOpenIntentFromQuery(query: Record<string, unknown>):
   if (!conversationId) return null
 
   const messageId = firstString(query.messageId).trim()
+  const threadRootMessageId = firstString(query.threadRootMessageId).trim()
   return {
     conversationId,
     ...(messageId ? { messageId } : {}),
+    ...(threadRootMessageId ? { threadRootMessageId } : {}),
   }
 }
 
@@ -63,6 +69,7 @@ export function stripNotificationOpenQuery<T extends Record<string, unknown>>(qu
   delete next[NOTIFICATION_OPEN_QUERY_FLAG]
   delete next.conversationId
   delete next.messageId
+  delete next.threadRootMessageId
   return next
 }
 
@@ -78,6 +85,11 @@ export function buildNotificationOpenUrl(
     url.searchParams.set('messageId', intent.messageId)
   } else {
     url.searchParams.delete('messageId')
+  }
+  if (intent.threadRootMessageId) {
+    url.searchParams.set('threadRootMessageId', intent.threadRootMessageId)
+  } else {
+    url.searchParams.delete('threadRootMessageId')
   }
   return url.toString()
 }

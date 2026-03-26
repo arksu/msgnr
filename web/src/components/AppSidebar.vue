@@ -21,6 +21,38 @@
         <span class="ml-auto text-xs text-sidebar-heading bg-white/10 px-1.5 py-0.5 rounded">⌘K</span>
       </button>
 
+      <div class="mt-3">
+        <div class="relative mx-1">
+          <button
+            data-testid="sidebar-unread-button"
+            class="flex min-h-9 w-full items-center gap-2 rounded px-3 py-1 text-left text-[15px] transition-colors"
+            :class="chatStore.chatViewMode === 'unread'
+              ? 'bg-sidebar-active text-white'
+              : (chatStore.totalUnreadCount > 0 ? 'text-sidebar-text hover:bg-sidebar-hover' : 'text-sidebar-textMuted hover:bg-sidebar-hover')"
+            @click="openUnreadView"
+          >
+            <span class="flex w-8 shrink-0 items-center justify-center text-sidebar-textMuted">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+              </svg>
+            </span>
+            <span
+              class="flex-1 truncate"
+              :class="chatStore.totalUnreadCount > 0 ? 'font-semibold text-white' : 'font-normal text-sidebar-text'"
+            >
+              Unread
+            </span>
+            <span
+              v-if="chatStore.totalUnreadCount > 0"
+              data-testid="sidebar-unread-badge"
+              class="inline-flex min-w-[18px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold text-sidebar-unreadBadge"
+            >
+              {{ unreadBadgeLabel }}
+            </span>
+          </button>
+        </div>
+      </div>
+
       <!-- Channels section -->
       <div class="mt-3">
         <div class="flex items-center pr-1">
@@ -478,6 +510,9 @@ const isAdmin = computed(() => {
   const role = authStore.effectiveRole ?? chatStore.workspace?.selfRole
   return role === 'admin' || role === 'owner'
 })
+const unreadBadgeLabel = computed(() => (
+  chatStore.totalUnreadCount > 99 ? '99+' : String(chatStore.totalUnreadCount)
+))
 const sortedChannels = computed(() =>
   [...chatStore.channels].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
 )
@@ -511,6 +546,14 @@ async function handleLogout() {
 
 async function openConversation(conversationId: string) {
   chatStore.selectChannel(conversationId)
+  if (router.currentRoute.value.name !== 'main') {
+    await router.push({ name: 'main' })
+  }
+}
+
+async function openUnreadView() {
+  chatStore.showUnreadView()
+  void chatStore.refreshUnreadFeed()
   if (router.currentRoute.value.name !== 'main') {
     await router.push({ name: 'main' })
   }

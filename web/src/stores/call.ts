@@ -466,7 +466,9 @@ export const useCallStore = defineStore('call', () => {
     if (!current) return false
     if (!current.remoteParticipants || typeof current.remoteParticipants.values !== 'function') return false
     for (const participant of current.remoteParticipants.values()) {
-      for (const pub of participant.videoTrackPublications.values()) {
+      const publications = participant?.videoTrackPublications
+      if (!publications || typeof publications.values !== 'function') continue
+      for (const pub of publications.values()) {
         if (isScreenSource(pub.source) && !pub.isMuted) return true
       }
     }

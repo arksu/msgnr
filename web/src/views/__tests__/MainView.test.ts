@@ -62,6 +62,14 @@ vi.mock('@/components/ChatArea.vue', () => ({
   },
 }))
 
+vi.mock('@/components/UnreadFeedPane.vue', () => ({
+  default: {
+    props: [],
+    emits: ['open-item'],
+    template: '<section data-testid="unread-feed"><button data-testid="unread-feed-open" @click="$emit(\'open-item\', { id: \'thread:notif-1\', notificationId: \'notif-1\', conversationId: \'dm-1\', kind: \'thread\', messageId: \'msg-1\', threadRootMessageId: \'root-1\' })">open</button></section>',
+  },
+}))
+
 vi.mock('@/components/tasks/TaskTrackerShell.vue', () => ({
   __isTeleport: false,
   default: {
@@ -475,14 +483,7 @@ describe('MainView server unavailable state', () => {
     await router.isReady()
 
     const chatStore = useChatStore()
-    chatStore.channels = [{
-      id: 'channel-1',
-      name: 'General',
-      kind: 'channel',
-      visibility: 'public',
-      unread: 7,
-      notificationLevel: NotificationLevel.ALL,
-    }] as any
+    chatStore.unreadFeedTotalCount = 7 as any
 
     const wrapper = mountAtRoute(router)
     await flushUi()
@@ -498,14 +499,7 @@ describe('MainView server unavailable state', () => {
     await router.isReady()
 
     const chatStore = useChatStore()
-    chatStore.channels = [{
-      id: 'channel-1',
-      name: 'General',
-      kind: 'channel',
-      visibility: 'public',
-      unread: 120,
-      notificationLevel: NotificationLevel.ALL,
-    }] as any
+    chatStore.unreadFeedTotalCount = 120 as any
 
     const wrapper = mountAtRoute(router)
     await flushUi()
@@ -726,5 +720,65 @@ describe('MainView server unavailable state', () => {
     await flushUi()
 
     expect(router.currentRoute.value.name).toBe('tasks-kanban')
+  })
+
+  it('renders unread feed in chat mode and opens exact targets from unread items', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const authStore = useAuthStore()
+    authStore.authState = 'AUTHENTICATED'
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    const chatStore = useChatStore()
+    chatStore.bootstrapped = true
+    chatStore.chatViewMode = 'unread' as any
+    chatStore.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+    chatStore.messages = {
+      'dm-1': [{
+        id: 'root-1',
+        channelId: 'dm-1',
+        senderId: 'user-2',
+        senderName: 'Bob',
+        body: 'root',
+        channelSeq: 1n,
+        threadSeq: 0n,
+        mentionedUserIds: [],
+        mentionEveryone: false,
+        createdAt: new Date().toISOString(),
+        reactions: [],
+        myReactions: [],
+      }],
+    } as any
+    vi.spyOn(chatStore, 'ensureConversationHistory').mockResolvedValue()
+    vi.spyOn(chatStore, 'loadMessageContext').mockResolvedValue()
+    const markUnreadFeedItemReadSpy = vi.spyOn(chatStore, 'markUnreadFeedItemRead').mockResolvedValue()
+    const openThreadSpy = vi.spyOn(chatStore, 'openThread')
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="unread-feed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-area"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="unread-feed-open"]').trigger('click')
+    await flushAsyncWork()
+
+    expect(chatStore.activeChannelId).toBe('dm-1')
+    expect(chatStore.chatViewMode).toBe('conversation')
+    expect(chatStore.focusedMessageId).toBe('root-1')
+    expect(chatStore.focusedThreadMessageId).toBe('msg-1')
+    expect(openThreadSpy).toHaveBeenCalled()
+    expect(markUnreadFeedItemReadSpy).toHaveBeenCalledWith(expect.objectContaining({
+      notificationId: 'notif-1',
+      conversationId: 'dm-1',
+    }))
   })
 })

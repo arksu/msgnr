@@ -53,7 +53,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/conversations/members", h.requireAuth(h.listConversationMembers))
 	mux.HandleFunc("/api/conversations/active-call-members", h.requireAuth(h.listActiveCallMembers))
 	mux.HandleFunc("/api/conversations/invite", h.requireAuth(h.inviteToConversation))
+	mux.HandleFunc("/api/chat/unread-feed", h.requireAuth(h.listUnreadFeed))
+	mux.HandleFunc("/api/chat/unread-feed/resolve", h.requireAuth(h.resolveUnreadFeedItem))
 	mux.HandleFunc("/api/messages", h.requireAuth(h.listConversationMessages))
+	mux.HandleFunc("/api/messages/context", h.requireAuth(h.getMessageContext))
 	mux.HandleFunc("/api/messages/reaction-users", h.requireAuth(h.listMessageReactionUsers))
 	mux.HandleFunc("/api/messages/", h.requireAuth(h.messageItem))
 	mux.HandleFunc("/api/chat/tag-search", h.requireAuth(h.searchTagEntities))
@@ -176,6 +179,31 @@ type conversationMessagesPageResponse struct {
 	HasMore              bool                          `json:"has_more"`
 	PageSize             int                           `json:"page_size"`
 	NextBeforeChannelSeq string                        `json:"next_before_channel_seq,omitempty"`
+}
+
+type unreadFeedItemResponse struct {
+	ID                     string `json:"id"`
+	Kind                   string `json:"kind"`
+	NotificationID         string `json:"notification_id,omitempty"`
+	ConversationID         string `json:"conversation_id"`
+	ConversationKind       string `json:"conversation_kind"`
+	ConversationVisibility string `json:"conversation_visibility"`
+	ConversationTitle      string `json:"conversation_title"`
+	MessageID              string `json:"message_id,omitempty"`
+	ThreadRootMessageID    string `json:"thread_root_message_id,omitempty"`
+	SenderID               string `json:"sender_id,omitempty"`
+	SenderName             string `json:"sender_name"`
+	Body                   string `json:"body"`
+	CreatedAt              string `json:"created_at"`
+}
+
+type unreadFeedResponse struct {
+	TotalCount int                      `json:"total_count"`
+	Items      []unreadFeedItemResponse `json:"items"`
+}
+
+type resolveUnreadFeedItemRequest struct {
+	NotificationID string `json:"notification_id"`
 }
 
 type editMessageRequest struct {
@@ -630,6 +658,172 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, page)
+}
+
+func (h *Handler) getMessageContext(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodGet {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	conversationID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("conversation_id")))
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
+		return
+	}
+	messageID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("message_id")))
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid message_id"))
+		return
+	}
+
+	// Match the default 50-message conversation page closely enough that an
+	// anchored open can merge surrounding context without overfetching.
+	messages, err := h.svc.ListMessageContext(r.Context(), principal.UserID, conversationID, messageID, 20, 20)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this channel"))
+		case errors.Is(err, ErrMessageNotFound):
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("message not found"))
+		default:
+			h.log.Error("getMessageContext error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+
+	resp := make([]conversationMessageResponse, 0, len(messages))
+	for _, msg := range messages {
+		threadRootID := ""
+		if msg.ThreadRootMessageID != uuid.Nil {
+			threadRootID = msg.ThreadRootMessageID.String()
+		}
+		reactions := make([]reactionAggregateResponse, 0, len(msg.Reactions))
+		for _, reaction := range msg.Reactions {
+			reactions = append(reactions, reactionAggregateResponse{
+				Emoji: reaction.Emoji,
+				Count: reaction.Count,
+			})
+		}
+		attachments := make([]messageAttachmentResponse, 0, len(msg.Attachments))
+		for _, attachment := range msg.Attachments {
+			attachments = append(attachments, messageAttachmentResponse{
+				ID:       attachment.ID.String(),
+				FileName: attachment.FileName,
+				FileSize: attachment.FileSize,
+				MimeType: attachment.MimeType,
+			})
+		}
+		editedAt := ""
+		if msg.EditedAt != nil && !msg.EditedAt.IsZero() {
+			editedAt = msg.EditedAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		resp = append(resp, conversationMessageResponse{
+			ID:                  msg.ID.String(),
+			ConversationID:      msg.ConversationID.String(),
+			SenderID:            msg.SenderID.String(),
+			SenderName:          msg.SenderName,
+			Body:                msg.Body,
+			Entities:            encodeMessageEntities(msg.Entities),
+			ChannelSeq:          msg.ChannelSeq,
+			ThreadSeq:           msg.ThreadSeq,
+			ThreadRootMessageID: threadRootID,
+			ThreadReplyCount:    msg.ThreadReplyCount,
+			EditedAt:            editedAt,
+			MentionEveryone:     msg.MentionEveryone,
+			CreatedAt:           msg.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			Reactions:           reactions,
+			MyReactions:         msg.MyReactions,
+			Attachments:         attachments,
+		})
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, conversationMessagesPageResponse{
+		Messages: resp,
+		HasMore:  false,
+		PageSize: len(resp),
+	})
+}
+
+func (h *Handler) listUnreadFeed(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodGet {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	items, err := h.svc.ListUnreadFeed(r.Context(), principal.UserID)
+	if err != nil {
+		h.log.Error("listUnreadFeed error", zap.Error(err))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		return
+	}
+
+	resp := unreadFeedResponse{
+		TotalCount: len(items),
+		Items:      make([]unreadFeedItemResponse, 0, len(items)),
+	}
+	for _, item := range items {
+		payload := unreadFeedItemResponse{
+			ID:                     item.ID,
+			Kind:                   item.Kind,
+			ConversationID:         item.ConversationID.String(),
+			ConversationKind:       item.ConversationKind,
+			ConversationVisibility: item.ConversationVisibility,
+			ConversationTitle:      item.ConversationTitle,
+			SenderName:             item.SenderName,
+			Body:                   item.Body,
+			CreatedAt:              item.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		}
+		if item.NotificationID != uuid.Nil {
+			payload.NotificationID = item.NotificationID.String()
+		}
+		if item.MessageID != uuid.Nil {
+			payload.MessageID = item.MessageID.String()
+		}
+		if item.ThreadRootMessageID != uuid.Nil {
+			payload.ThreadRootMessageID = item.ThreadRootMessageID.String()
+		}
+		if item.SenderID != uuid.Nil {
+			payload.SenderID = item.SenderID.String()
+		}
+		resp.Items = append(resp.Items, payload)
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) resolveUnreadFeedItem(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodPost {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	var req resolveUnreadFeedItemRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
+		return
+	}
+
+	notificationID, err := uuid.Parse(strings.TrimSpace(req.NotificationID))
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid notification_id"))
+		return
+	}
+
+	result, err := h.svc.ResolveNotification(r.Context(), ResolveNotificationParams{
+		NotificationID: notificationID,
+		UserID:         principal.UserID,
+	})
+	if err != nil {
+		h.log.Error("resolveUnreadFeedItem error", zap.Error(err))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		return
+	}
+	if len(result.DirectDeliveries) > 0 && h.notifier != nil {
+		h.notifier.SendChatDirectServerEvents(result.DirectDeliveries)
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h *Handler) listMessageReactionUsers(w http.ResponseWriter, r *http.Request, principal auth.Principal) {

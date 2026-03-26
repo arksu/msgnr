@@ -152,6 +152,22 @@ type ConversationMessage struct {
 	Attachments         []MessageAttachment
 }
 
+type UnreadFeedItem struct {
+	ID                     string
+	Kind                   string
+	NotificationID         uuid.UUID
+	ConversationID         uuid.UUID
+	ConversationKind       string
+	ConversationVisibility string
+	ConversationTitle      string
+	MessageID              uuid.UUID
+	ThreadRootMessageID    uuid.UUID
+	SenderID               uuid.UUID
+	SenderName             string
+	Body                   string
+	CreatedAt              time.Time
+}
+
 type ReactionAggregate struct {
 	Emoji string `json:"emoji"`
 	Count int32  `json:"count"`
@@ -1822,6 +1838,8 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			Title:          "Mention",
 			Body:           p.Body,
 			ConversationID: p.ChannelID.String(),
+			MessageID:      msgID,
+			ThreadRootID:   p.ThreadRootMessageID,
 		})
 		if err != nil {
 			return SendMessageResult{}, fmt.Errorf("chat.SendMessage create mention notification: %w", err)
@@ -1942,6 +1960,8 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 				Title:          "Thread reply",
 				Body:           p.Body,
 				ConversationID: p.ChannelID.String(),
+				MessageID:      msgID,
+				ThreadRootID:   p.ThreadRootMessageID,
 			})
 			if err != nil {
 				return SendMessageResult{}, fmt.Errorf("chat.SendMessage create thread notification: %w", err)
@@ -2181,6 +2201,8 @@ func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMes
 			Title:          "Mention",
 			Body:           p.Body,
 			ConversationID: target.ChannelID.String(),
+			MessageID:      p.MessageID,
+			ThreadRootID:   target.ThreadRootID,
 		})
 		if err != nil {
 			return EditMessageResult{}, fmt.Errorf("chat.EditMessage create mention notification: %w", err)
@@ -2916,6 +2938,8 @@ type createNotificationParams struct {
 	Title          string
 	Body           string
 	ConversationID string
+	MessageID      uuid.UUID
+	ThreadRootID   uuid.UUID
 }
 
 func (s *Service) findMessageByClientMsgID(ctx context.Context, channelID, senderID uuid.UUID, clientMsgID string) (existingMessageRow, error) {
@@ -3304,10 +3328,10 @@ func (s *Service) createNotificationTx(ctx context.Context, tx pgx.Tx, p createN
 	var notificationID uuid.UUID
 	var createdAt time.Time
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO notifications (user_id, type, title, body, channel_id, is_read, created_at)
-		VALUES ($1, $2, $3, $4, $5, false, now())
+		INSERT INTO notifications (user_id, type, title, body, channel_id, message_id, thread_root_message_id, is_read, created_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6::uuid, $7::uuid), NULLIF($8::uuid, $7::uuid), false, now())
 		RETURNING id, created_at`,
-		p.UserID, p.Type, p.Title, p.Body, p.ChannelID,
+		p.UserID, p.Type, p.Title, p.Body, p.ChannelID, p.MessageID, uuid.Nil, p.ThreadRootID,
 	).Scan(&notificationID, &createdAt); err != nil {
 		return DirectDelivery{}, err
 	}
@@ -3332,6 +3356,469 @@ func (s *Service) createNotificationTx(ctx context.Context, tx pgx.Tx, p createN
 		},
 	}
 	return DirectDelivery{UserID: p.UserID.String(), Event: serverEvt}, nil
+}
+
+func parseUUIDOrNil(raw string) uuid.UUID {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return uuid.Nil
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil
+	}
+	return parsed
+}
+
+func buildUnreadFeedItemID(kind string, id uuid.UUID, fallback string) string {
+	if id != uuid.Nil {
+		return kind + ":" + id.String()
+	}
+	fallback = strings.TrimSpace(fallback)
+	if fallback != "" {
+		return kind + ":" + fallback
+	}
+	return kind + ":missing"
+}
+
+func unreadFeedNotificationKind(notificationType string) string {
+	if notificationType == "thread_reply" {
+		return "thread"
+	}
+	return "mention"
+}
+
+func (s *Service) listUnreadNotificationFeedItems(ctx context.Context, userID uuid.UUID) ([]UnreadFeedItem, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT n.id::text AS notification_id,
+		       n.type,
+		       n.channel_id::text AS conversation_id,
+		       c.kind,
+		       c.visibility,
+		       CASE
+		         WHEN c.kind = 'dm' THEN COALESCE(dm_peer.display_name, dm_peer.email, c.name)
+		         ELSE c.name
+		       END AS conversation_title,
+		       COALESCE(n.message_id::text, '') AS message_id,
+		       COALESCE(n.thread_root_message_id::text, '') AS thread_root_message_id,
+		       COALESCE(msg.sender_id::text, '') AS sender_id,
+		       COALESCE(NULLIF(sender.display_name, ''), sender.email, n.title) AS sender_name,
+		       n.body,
+		       n.created_at
+		  FROM notifications n
+		  JOIN channels c
+		    ON c.id = n.channel_id
+		  JOIN channel_members cm_self
+		    ON cm_self.channel_id = c.id
+		   AND cm_self.user_id = $1
+		   AND cm_self.is_archived = false
+		  LEFT JOIN messages msg
+		    ON msg.id = n.message_id
+		  LEFT JOIN users sender
+		    ON sender.id = msg.sender_id
+		  LEFT JOIN LATERAL (
+		    SELECT COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
+		           u.email
+		      FROM channel_members cm_other
+		      JOIN users u
+		        ON u.id = cm_other.user_id
+		     WHERE c.kind = 'dm'
+		       AND cm_other.channel_id = c.id
+		       AND cm_other.user_id <> $1
+		       AND cm_other.is_archived = false
+		     ORDER BY cm_other.created_at ASC
+		     LIMIT 1
+		  ) dm_peer ON true
+		 WHERE n.user_id = $1
+		   AND n.resolved_at IS NULL
+		   AND n.type = ANY($2::text[])
+		   AND c.is_archived = false
+		   AND cm_self.notification_level <> $3
+		 ORDER BY n.created_at DESC`,
+		userID, []string{"mention", "thread_reply"}, notificationLevelNothing,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]UnreadFeedItem, 0)
+	for rows.Next() {
+		var (
+			notificationID         string
+			notificationType       string
+			conversationID         string
+			conversationKind       string
+			conversationVisibility string
+			conversationTitle      string
+			messageID              string
+			threadRootMessageID    string
+			senderID               string
+			senderName             string
+			body                   string
+			createdAt              time.Time
+		)
+		if err := rows.Scan(
+			&notificationID,
+			&notificationType,
+			&conversationID,
+			&conversationKind,
+			&conversationVisibility,
+			&conversationTitle,
+			&messageID,
+			&threadRootMessageID,
+			&senderID,
+			&senderName,
+			&body,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		parsedNotificationID := parseUUIDOrNil(notificationID)
+		kind := unreadFeedNotificationKind(notificationType)
+		items = append(items, UnreadFeedItem{
+			ID:                     buildUnreadFeedItemID(kind, parsedNotificationID, "notif:"+notificationID),
+			Kind:                   kind,
+			NotificationID:         parsedNotificationID,
+			ConversationID:         parseUUIDOrNil(conversationID),
+			ConversationKind:       conversationKind,
+			ConversationVisibility: conversationVisibility,
+			ConversationTitle:      conversationTitle,
+			MessageID:              parseUUIDOrNil(messageID),
+			ThreadRootMessageID:    parseUUIDOrNil(threadRootMessageID),
+			SenderID:               parseUUIDOrNil(senderID),
+			SenderName:             senderName,
+			Body:                   body,
+			CreatedAt:              createdAt,
+		})
+	}
+	return items, rows.Err()
+}
+
+func (s *Service) listUnreadRootMessageFeedItems(ctx context.Context, userID uuid.UUID) ([]UnreadFeedItem, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT m.id::text AS message_id,
+		       m.channel_id::text AS conversation_id,
+		       c.kind,
+		       c.visibility,
+		       CASE
+		         WHEN c.kind = 'dm' THEN COALESCE(dm_peer.display_name, dm_peer.email, c.name)
+		         ELSE c.name
+		       END AS conversation_title,
+		       m.sender_id::text AS sender_id,
+		       COALESCE(NULLIF(sender.display_name, ''), sender.email) AS sender_name,
+		       m.body,
+		       m.created_at
+		  FROM channel_members cm_self
+		  JOIN channels c
+		    ON c.id = cm_self.channel_id
+		  LEFT JOIN message_reads mr
+		    ON mr.channel_id = c.id
+		   AND mr.user_id = $1
+		  JOIN messages m
+		    ON m.channel_id = c.id
+		   AND m.channel_seq > COALESCE(mr.last_read_seq, 0)
+		   AND m.thread_root_id IS NULL
+		   AND m.sender_id <> $1
+		  JOIN users sender
+		    ON sender.id = m.sender_id
+		  LEFT JOIN LATERAL (
+		    SELECT COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
+		           u.email
+		      FROM channel_members cm_other
+		      JOIN users u
+		        ON u.id = cm_other.user_id
+		     WHERE c.kind = 'dm'
+		       AND cm_other.channel_id = c.id
+		       AND cm_other.user_id <> $1
+		       AND cm_other.is_archived = false
+		     ORDER BY cm_other.created_at ASC
+		     LIMIT 1
+		  ) dm_peer ON true
+		 WHERE cm_self.user_id = $1
+		   AND cm_self.is_archived = false
+		   AND c.is_archived = false
+		   AND cm_self.notification_level = $2
+		 ORDER BY m.created_at DESC`,
+		userID, notificationLevelAll,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]UnreadFeedItem, 0)
+	for rows.Next() {
+		var (
+			messageID              string
+			conversationID         string
+			conversationKind       string
+			conversationVisibility string
+			conversationTitle      string
+			senderID               string
+			senderName             string
+			body                   string
+			createdAt              time.Time
+		)
+		if err := rows.Scan(
+			&messageID,
+			&conversationID,
+			&conversationKind,
+			&conversationVisibility,
+			&conversationTitle,
+			&senderID,
+			&senderName,
+			&body,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		parsedMessageID := parseUUIDOrNil(messageID)
+		items = append(items, UnreadFeedItem{
+			ID:                     buildUnreadFeedItemID("message", parsedMessageID, ""),
+			Kind:                   "message",
+			ConversationID:         parseUUIDOrNil(conversationID),
+			ConversationKind:       conversationKind,
+			ConversationVisibility: conversationVisibility,
+			ConversationTitle:      conversationTitle,
+			MessageID:              parsedMessageID,
+			SenderID:               parseUUIDOrNil(senderID),
+			SenderName:             senderName,
+			Body:                   body,
+			CreatedAt:              createdAt,
+		})
+	}
+	return items, rows.Err()
+}
+
+func (s *Service) ListUnreadFeed(ctx context.Context, userID uuid.UUID) ([]UnreadFeedItem, error) {
+	notificationItems, err := s.listUnreadNotificationFeedItems(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListUnreadFeed notifications: %w", err)
+	}
+	rootMessages, err := s.listUnreadRootMessageFeedItems(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListUnreadFeed messages: %w", err)
+	}
+
+	mentionedRootIDs := make(map[uuid.UUID]struct{}, len(notificationItems))
+	for _, item := range notificationItems {
+		if item.MessageID != uuid.Nil && item.ThreadRootMessageID == uuid.Nil {
+			mentionedRootIDs[item.MessageID] = struct{}{}
+		}
+	}
+
+	items := make([]UnreadFeedItem, 0, len(notificationItems)+len(rootMessages))
+	items = append(items, notificationItems...)
+	for _, item := range rootMessages {
+		if _, skip := mentionedRootIDs[item.MessageID]; skip {
+			continue
+		}
+		items = append(items, item)
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+
+	return items, nil
+}
+
+func (s *Service) ListMessageContext(
+	ctx context.Context,
+	requesterID, conversationID, targetMessageID uuid.UUID,
+	beforeLimit int,
+	afterLimit int,
+) ([]ConversationMessage, error) {
+	isMember, err := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
+		ChannelID: conversationID,
+		UserID:    requesterID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListMessageContext membership check: %w", err)
+	}
+	if !isMember {
+		return nil, ErrNotMember
+	}
+
+	if beforeLimit <= 0 {
+		beforeLimit = 20
+	}
+	if afterLimit <= 0 {
+		afterLimit = 20
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		WITH target AS (
+		  SELECT id, channel_seq
+		    FROM messages
+		   WHERE id = $2
+		     AND channel_id = $1
+		     AND thread_root_id IS NULL
+		),
+		context_messages AS (
+		  SELECT m.id, m.channel_id, m.sender_id, u.display_name, m.body, m.channel_seq,
+		         COALESCE(m.thread_seq, 0) AS thread_seq,
+		         m.thread_root_id,
+		         COALESCE(ts.reply_count, 0) AS thread_reply_count,
+		         m.edited_at,
+		         m.created_at,
+		         m.mention_everyone,
+		         COALESCE((
+		           SELECT json_agg(json_build_object('emoji', rc.emoji, 'count', rc.count) ORDER BY rc.emoji)
+		             FROM reaction_counts rc
+		            WHERE rc.message_id = m.id
+		         ), '[]'::json) AS reactions,
+		         COALESCE((
+		           SELECT json_agg(r.emoji ORDER BY r.emoji)
+		             FROM reactions r
+		            WHERE r.message_id = m.id
+		              AND r.user_id = $3
+		         ), '[]'::json) AS my_reactions,
+		         COALESCE((
+		           SELECT json_agg(json_build_object(
+		             'id', ma.id,
+		             'conversation_id', ma.conversation_id,
+		             'message_id', ma.message_id,
+		             'file_name', ma.file_name,
+		             'file_size', ma.file_size,
+		             'mime_type', ma.mime_type,
+		             'uploaded_by', ma.uploaded_by,
+		             'created_at', ma.created_at
+		           ) ORDER BY ma.created_at, ma.id)
+		             FROM message_attachment ma
+		            WHERE ma.message_id = m.id
+		         ), '[]'::json) AS attachments
+		    FROM messages m
+		    JOIN users u
+		      ON u.id = m.sender_id
+		    LEFT JOIN thread_summaries ts
+		      ON ts.root_message_id = m.id
+		   WHERE m.id IN (
+		     SELECT id FROM (
+		       SELECT m_before.id, m_before.channel_seq
+		         FROM messages m_before
+		         JOIN target t ON true
+		        WHERE m_before.channel_id = $1
+		          AND m_before.thread_root_id IS NULL
+		          AND m_before.channel_seq < t.channel_seq
+		        ORDER BY m_before.channel_seq DESC
+		        LIMIT $4
+		     ) before_rows
+		     UNION
+		     SELECT id FROM target
+		     UNION
+		     SELECT id FROM (
+		       SELECT m_after.id, m_after.channel_seq
+		         FROM messages m_after
+		         JOIN target t ON true
+		        WHERE m_after.channel_id = $1
+		          AND m_after.thread_root_id IS NULL
+		          AND m_after.channel_seq > t.channel_seq
+		        ORDER BY m_after.channel_seq ASC
+		        LIMIT $5
+		     ) after_rows
+		   )
+		)
+		SELECT id, channel_id, sender_id, display_name, body, channel_seq, thread_seq, COALESCE(thread_root_id::text, '') AS thread_root_id,
+		       thread_reply_count, edited_at, created_at, mention_everyone, reactions, my_reactions, attachments
+		  FROM context_messages
+		 ORDER BY channel_seq ASC`,
+		conversationID, targetMessageID, requesterID, beforeLimit, afterLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListMessageContext query: %w", err)
+	}
+	defer rows.Close()
+
+	messages := make([]ConversationMessage, 0)
+	for rows.Next() {
+		var (
+			item        ConversationMessage
+			displayName string
+			threadRoot  string
+			editedAt    sql.NullTime
+			reactions   any
+			myReactions any
+			attachments any
+		)
+		if err := rows.Scan(
+			&item.ID,
+			&item.ConversationID,
+			&item.SenderID,
+			&displayName,
+			&item.Body,
+			&item.ChannelSeq,
+			&item.ThreadSeq,
+			&threadRoot,
+			&item.ThreadReplyCount,
+			&editedAt,
+			&item.CreatedAt,
+			&item.MentionEveryone,
+			&reactions,
+			&myReactions,
+			&attachments,
+		); err != nil {
+			return nil, fmt.Errorf("chat.ListMessageContext scan: %w", err)
+		}
+		item.SenderName = displayName
+		item.ThreadRootMessageID = parseUUIDOrNil(threadRoot)
+		if editedAt.Valid {
+			edited := editedAt.Time
+			item.EditedAt = &edited
+		}
+		reactionsJSON, err := normalizeJSONValue(reactions)
+		if err != nil {
+			return nil, fmt.Errorf("chat.ListMessageContext normalize reactions: %w", err)
+		}
+		if len(reactionsJSON) > 0 {
+			if err := json.Unmarshal(reactionsJSON, &item.Reactions); err != nil {
+				return nil, fmt.Errorf("chat.ListMessageContext decode reactions: %w", err)
+			}
+		}
+		myReactionsJSON, err := normalizeJSONValue(myReactions)
+		if err != nil {
+			return nil, fmt.Errorf("chat.ListMessageContext normalize my reactions: %w", err)
+		}
+		if len(myReactionsJSON) > 0 {
+			if err := json.Unmarshal(myReactionsJSON, &item.MyReactions); err != nil {
+				return nil, fmt.Errorf("chat.ListMessageContext decode my reactions: %w", err)
+			}
+		}
+		attachmentsJSON, err := normalizeJSONValue(attachments)
+		if err != nil {
+			return nil, fmt.Errorf("chat.ListMessageContext normalize attachments: %w", err)
+		}
+		if len(attachmentsJSON) > 0 {
+			if err := json.Unmarshal(attachmentsJSON, &item.Attachments); err != nil {
+				return nil, fmt.Errorf("chat.ListMessageContext decode attachments: %w", err)
+			}
+		}
+		messages = append(messages, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chat.ListMessageContext rows: %w", err)
+	}
+	if len(messages) == 0 {
+		return nil, ErrMessageNotFound
+	}
+
+	messageIDs := make([]uuid.UUID, 0, len(messages))
+	for _, message := range messages {
+		messageIDs = append(messageIDs, message.ID)
+	}
+	entitiesByMessageID, err := s.loadMessageEntitiesByMessageIDs(ctx, s.pool, messageIDs)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListMessageContext load entities: %w", err)
+	}
+	for i := range messages {
+		messages[i].Entities = entitiesByMessageID[messages[i].ID.String()]
+	}
+
+	return messages, nil
 }
 
 func (s *Service) restoreArchivedDMPeerTx(
@@ -3932,6 +4419,57 @@ type SetNotificationLevelParams struct {
 type SetNotificationLevelResult struct {
 	Level            packetspb.NotificationLevel
 	DirectDeliveries []DirectDelivery
+}
+
+type ResolveNotificationParams struct {
+	NotificationID uuid.UUID
+	UserID         uuid.UUID
+}
+
+type ResolveNotificationResult struct {
+	Resolved         bool
+	DirectDeliveries []DirectDelivery
+}
+
+func (s *Service) ResolveNotification(ctx context.Context, p ResolveNotificationParams) (ResolveNotificationResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ResolveNotificationResult{}, fmt.Errorf("chat.ResolveNotification begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var channelID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		UPDATE notifications
+		   SET resolved_at = now(),
+		       is_read = true
+		 WHERE id = $1
+		   AND user_id = $2
+		   AND resolved_at IS NULL
+		   AND type IN ('mention', 'thread_reply')
+		RETURNING channel_id`,
+		p.NotificationID, p.UserID,
+	).Scan(&channelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			if err := tx.Commit(ctx); err != nil {
+				return ResolveNotificationResult{}, fmt.Errorf("chat.ResolveNotification commit noop: %w", err)
+			}
+			return ResolveNotificationResult{Resolved: false}, nil
+		}
+		return ResolveNotificationResult{}, fmt.Errorf("chat.ResolveNotification update: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return ResolveNotificationResult{}, fmt.Errorf("chat.ResolveNotification commit: %w", err)
+	}
+
+	return ResolveNotificationResult{
+		Resolved: true,
+		DirectDeliveries: []DirectDelivery{
+			s.buildNotificationResolvedDelivery(channelID, p.UserID, p.NotificationID),
+		},
+	}, nil
 }
 
 // SetNotificationLevel updates the per-member notification level for a

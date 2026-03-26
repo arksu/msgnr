@@ -17,7 +17,7 @@ export default {
           hover: '#27242C',
           active: '#1164A3',
           text: '#a59ca5',
-          unreadBage: '#ffbebe',
+          unreadBadge: '#ffbebe',
           textMuted: '#9B8D9B',
           heading: '#7B6C7B',
         },

@@ -27,7 +27,11 @@
 
       <template v-else>
         <!-- Root message -->
-        <div class="px-2 py-2 border-b border-chat-border/50">
+        <div
+          class="border-b border-chat-border/50 px-2 py-2"
+          :data-thread-message-id="rootMessage.id"
+          :class="chat.focusedThreadMessageId === rootMessage.id ? 'bg-amber-500/10 ring-1 ring-inset ring-amber-300/40' : ''"
+        >
           <MessageBubble
             :message="rootMessage"
             :show-header="true"
@@ -47,14 +51,19 @@
 
         <!-- Thread replies -->
         <div v-if="replies.length > 0" class="pb-2">
-          <MessageBubble
+          <div
             v-for="(reply, idx) in replies"
             :key="reply.id"
-            :message="reply"
-            :show-header="shouldShowHeader(idx)"
-            :show-thread-action="false"
-            :show-first-reaction-action="true"
-          />
+            :data-thread-message-id="reply.id"
+            :class="chat.focusedThreadMessageId === reply.id ? 'rounded-md bg-amber-500/10 ring-1 ring-amber-300/40' : ''"
+          >
+            <MessageBubble
+              :message="reply"
+              :show-header="shouldShowHeader(idx)"
+              :show-thread-action="false"
+              :show-first-reaction-action="true"
+            />
+          </div>
         </div>
 
         <div v-else class="px-4 pb-4 text-xs text-gray-500 text-center">
@@ -100,6 +109,15 @@ function scrollToBottom() {
   const el = scrollEl.value
   if (!el) return
   el.scrollTop = el.scrollHeight
+}
+
+function scrollMessageIntoView(messageId: string) {
+  if (!messageId) return
+  const el = scrollEl.value
+  if (!el) return
+  const target = el.querySelector<HTMLElement>(`[data-thread-message-id="${messageId}"]`)
+  if (!target) return
+  target.scrollIntoView({ block: 'center' })
 }
 
 function scheduleGuaranteedBottomScroll() {
@@ -169,6 +187,12 @@ watch(() => {
   if (!forceScrollToBottomOnNextRender.value) return
   await nextTick()
   scrollToBottom()
+})
+
+watch(() => chat.focusedThreadMessageId, async (messageId) => {
+  if (!messageId) return
+  await nextTick()
+  scrollMessageIntoView(messageId)
 })
 
 onBeforeUnmount(() => {

@@ -139,6 +139,7 @@
             v-for="(msg, idx) in messages"
             :key="msg.id"
             :data-message-id="msg.id"
+            :class="msg.id === chatStore.focusedMessageId ? 'rounded-md bg-amber-500/10 ring-1 ring-amber-300/40' : ''"
           >
             <MessageBubble
               :message="msg"
@@ -667,7 +668,9 @@ function handleSend(
     // Queue for delivery after reconnect
     offlineQueue.enqueue({ conversationId: channelId, body: messageBody, entities: payload.entities, clientMsgId })
   } else {
-    const sent = wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds, payload.entities)
+    const sent = payload.entities.length > 0
+      ? wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds, payload.entities)
+      : wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds)
     if (!sent) {
       chatStore.updateSendStatus(channelId, clientMsgId, 'failed', 'Connection lost')
     } else {
@@ -1033,6 +1036,15 @@ function restoreAnchorPosition(container: HTMLElement, anchor: ScrollAnchor | nu
   return true
 }
 
+function scrollMessageIntoView(messageId: string) {
+  if (!messageId) return
+  const container = scrollEl.value
+  if (!container) return
+  const target = container.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`)
+  if (!target) return
+  target.scrollIntoView({ block: 'center' })
+}
+
 watch(() => {
   const list = messages.value
   const last = list[list.length - 1]
@@ -1088,6 +1100,12 @@ watch(() => showConversationLoadingOverlay.value, (loading) => {
   if (!loading) {
     void flushPendingSwitchAutoScroll('loading-overlay-watch')
   }
+})
+
+watch(() => [chatStore.focusedMessageId, chatStore.activeChannelId], async ([messageId]) => {
+  if (!messageId) return
+  await nextTick()
+  scrollMessageIntoView(messageId)
 })
 
 watch(() => [

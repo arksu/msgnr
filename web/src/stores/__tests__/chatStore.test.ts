@@ -37,12 +37,18 @@ const chatApiMocks = vi.hoisted(() => ({
   listConversationMessages: vi.fn(),
   listDmCandidates: vi.fn(),
   listMessageReactionUsers: vi.fn(),
+  listUnreadFeed: vi.fn(),
+  getMessageContext: vi.fn(),
+  resolveUnreadFeedNotification: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
   listConversationMessages: chatApiMocks.listConversationMessages,
   listDmCandidates: chatApiMocks.listDmCandidates,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
+  listUnreadFeed: chatApiMocks.listUnreadFeed,
+  getMessageContext: chatApiMocks.getMessageContext,
+  resolveUnreadFeedNotification: chatApiMocks.resolveUnreadFeedNotification,
 }))
 
 function buildMessage(overrides: Partial<Message> = {}): Message {
@@ -69,7 +75,13 @@ describe('chatStore phase 6 flows', () => {
     localStorage.clear()
     chatApiMocks.listConversationMessages.mockReset()
     chatApiMocks.listDmCandidates.mockReset()
+    chatApiMocks.listUnreadFeed.mockReset()
+    chatApiMocks.getMessageContext.mockReset()
+    chatApiMocks.resolveUnreadFeedNotification.mockReset()
     chatApiMocks.listDmCandidates.mockResolvedValue([])
+    chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.getMessageContext.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
+    chatApiMocks.resolveUnreadFeedNotification.mockResolvedValue(undefined)
   })
 
   it('applies a bootstrap response into sidebar state and watermark', () => {
@@ -1059,7 +1071,6 @@ describe('chatStore phase 6 flows', () => {
     expect(onIncoming).toHaveBeenCalledWith(expect.objectContaining({
       reason: 'notification',
       senderName: 'Mention',
-      messageId: 'notification-sender-fallback-1',
     }))
 
     off()
@@ -1367,7 +1378,6 @@ describe('chatStore phase 6 flows', () => {
     expect(onIncoming).toHaveBeenCalledWith({
       reason: 'mention',
       conversationId: 'channel-1',
-      messageId: 'mention-active-1',
       senderId: '',
       senderName: 'Mention',
       body: 'You were mentioned',

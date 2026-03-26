@@ -16,6 +16,9 @@ const chatApiMocks = vi.hoisted(() => ({
   joinChannels: vi.fn(),
   leaveConversation: vi.fn(),
   listMessageReactionUsers: vi.fn(),
+  listUnreadFeed: vi.fn(),
+  getMessageContext: vi.fn(),
+  resolveUnreadFeedNotification: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
@@ -25,6 +28,9 @@ vi.mock('@/services/http/chatApi', () => ({
   joinChannels: chatApiMocks.joinChannels,
   leaveConversation: chatApiMocks.leaveConversation,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
+  listUnreadFeed: chatApiMocks.listUnreadFeed,
+  getMessageContext: chatApiMocks.getMessageContext,
+  resolveUnreadFeedNotification: chatApiMocks.resolveUnreadFeedNotification,
 }))
 
 vi.mock('@/composables/useSessionOrchestrator', () => ({
@@ -63,6 +69,9 @@ describe('AppSidebar', () => {
       { id: 'channel-2', name: 'Random', kind: 'channel', visibility: 'public', last_activity_at: '2026-03-06T00:00:00Z' },
     ])
     chatApiMocks.leaveConversation.mockResolvedValue(undefined)
+    chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.getMessageContext.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
+    chatApiMocks.resolveUnreadFeedNotification.mockResolvedValue(undefined)
   })
 
   it('shows email fallback in DM picker and opened DM when display name is empty', async () => {
@@ -260,6 +269,41 @@ describe('AppSidebar', () => {
         notificationLevel: NotificationLevel.ALL,
       },
     ])
+  })
+
+  it('shows the unread badge capped at 99+ and switches to unread view on click', async () => {
+    const chatStore = useChatStore()
+    chatStore.unreadFeedLoaded = true as any
+    chatStore.unreadFeedTotalCount = 120 as any
+    const refreshUnreadFeed = vi.spyOn(chatStore, 'refreshUnreadFeed').mockResolvedValue()
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', name: 'main', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            template: '<button class="sidebar-item" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.get('[data-testid="sidebar-unread-badge"]').text()).toBe('99+')
+
+    await wrapper.get('[data-testid="sidebar-unread-button"]').trigger('click')
+    expect(chatStore.chatViewMode).toBe('unread')
+    expect(refreshUnreadFeed).toHaveBeenCalledTimes(1)
   })
 
   it('hides the leave action for a self dm', async () => {

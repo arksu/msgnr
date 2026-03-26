@@ -368,6 +368,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   title       TEXT        NOT NULL DEFAULT '',
   body        TEXT        NOT NULL DEFAULT '',
   channel_id  UUID        REFERENCES channels(id) ON DELETE SET NULL,
+  message_id  UUID        REFERENCES messages(id) ON DELETE SET NULL,
+  thread_root_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
   is_read     BOOLEAN     NOT NULL DEFAULT false,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   resolved_at TIMESTAMPTZ
@@ -376,6 +378,14 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unresolved
   ON notifications(user_id, created_at DESC)
   WHERE resolved_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_notifications_message_id
+  ON notifications(message_id)
+  WHERE message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_notifications_thread_root_message_id
+  ON notifications(thread_root_message_id)
+  WHERE thread_root_message_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Calls

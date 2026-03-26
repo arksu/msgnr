@@ -49,6 +49,7 @@ declare module 'vue' {
     TeamspacesView: typeof import('./src/components/documents/TeamspacesView.vue')['default']
     TemplatesTab: typeof import('./src/components/admin/TemplatesTab.vue')['default']
     ThreadPanel: typeof import('./src/components/ThreadPanel.vue')['default']
+    UnreadFeedPane: typeof import('./src/components/UnreadFeedPane.vue')['default']
     UserAvatar: typeof import('./src/components/UserAvatar.vue')['default']
   }
 }

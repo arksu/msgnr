@@ -204,15 +204,17 @@ type MessageRead struct {
 }
 
 type Notification struct {
-	ID         uuid.UUID     `json:"id"`
-	UserID     uuid.UUID     `json:"user_id"`
-	Type       string        `json:"type"`
-	Title      string        `json:"title"`
-	Body       string        `json:"body"`
-	ChannelID  uuid.NullUUID `json:"channel_id"`
-	IsRead     bool          `json:"is_read"`
-	CreatedAt  time.Time     `json:"created_at"`
-	ResolvedAt sql.NullTime  `json:"resolved_at"`
+	ID                  uuid.UUID     `json:"id"`
+	UserID              uuid.UUID     `json:"user_id"`
+	Type                string        `json:"type"`
+	Title               string        `json:"title"`
+	Body                string        `json:"body"`
+	ChannelID           uuid.NullUUID `json:"channel_id"`
+	MessageID           uuid.NullUUID `json:"message_id"`
+	ThreadRootMessageID uuid.NullUUID `json:"thread_root_message_id"`
+	IsRead              bool          `json:"is_read"`
+	CreatedAt           time.Time     `json:"created_at"`
+	ResolvedAt          sql.NullTime  `json:"resolved_at"`
 }
 
 type PushSubscription struct {

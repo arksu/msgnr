@@ -46,8 +46,12 @@ import {
   saveLastOpenedConversation,
   clearLastOpenedConversation,
 } from '@/services/storage/lastConversationStorage'
-import { listConversationMessages, listDmCandidates } from '@/services/http/chatApi'
-import type { ConversationMessageItem, MessageEntityItem } from '@/services/http/chatApi'
+import { ChatApiError, getMessageContext, listConversationMessages, listDmCandidates, listUnreadFeed, resolveUnreadFeedNotification } from '@/services/http/chatApi'
+import type {
+  ConversationMessageItem,
+  MessageEntityItem,
+  UnreadFeedItem as HttpUnreadFeedItem,
+} from '@/services/http/chatApi'
 import type { MessageEntity as ProtoMessageEntity } from '@/shared/proto/packets_pb'
 import { getOrCreateClientInstanceId } from '@/services/storage/clientInstanceStorage'
 import { generateId } from '@/services/id'
@@ -189,6 +193,24 @@ export interface NotificationItem {
   createdAt: string
 }
 
+export type ChatViewMode = 'conversation' | 'unread'
+
+export interface UnreadFeedItem {
+  id: string
+  kind: 'message' | 'mention' | 'thread'
+  notificationId?: string
+  conversationId: string
+  conversationKind: 'channel' | 'dm'
+  conversationVisibility: 'public' | 'private' | 'dm'
+  conversationTitle: string
+  messageId?: string
+  threadRootMessageId?: string
+  senderId?: string
+  senderName: string
+  body: string
+  createdAt: string
+}
+
 export interface ActiveCallItem {
   id: string
   conversationId: string
@@ -209,7 +231,7 @@ export interface PendingInviteItem {
 export interface IncomingMessageNotification {
   reason: 'message_alert' | 'mention' | 'notification'
   conversationId: string
-  messageId: string
+  messageId?: string
   threadRootMessageId?: string
   senderId: string
   senderName: string
@@ -285,6 +307,24 @@ function mentionedUserIdsFromPayload(
     return mentionedUserIdsFromEntities(entities)
   }
   return [...(fallbackMentionedUserIds ?? [])]
+}
+
+function unreadFeedItemFromHttp(item: HttpUnreadFeedItem): UnreadFeedItem {
+  return {
+    id: item.id,
+    kind: item.kind,
+    notificationId: item.notification_id || undefined,
+    conversationId: item.conversation_id,
+    conversationKind: item.conversation_kind,
+    conversationVisibility: item.conversation_visibility,
+    conversationTitle: item.conversation_title,
+    messageId: item.message_id || undefined,
+    threadRootMessageId: item.thread_root_message_id || undefined,
+    senderId: item.sender_id || undefined,
+    senderName: item.sender_name,
+    body: item.body,
+    createdAt: item.created_at,
+  }
 }
 
 const ACK_BATCH_SIZE = 20
@@ -368,6 +408,7 @@ export const useChatStore = defineStore('chat', () => {
   const channels = ref<Channel[]>([])
   const directMessages = ref<DirectMessage[]>([])
   const activeChannelId = ref<string>('')
+  const chatViewMode = ref<ChatViewMode>('conversation')
   const workspace = ref<WorkspaceShell | null>(null)
   const notifications = ref<NotificationItem[]>([])
   const activeCalls = ref<ActiveCallItem[]>([])
@@ -385,6 +426,14 @@ export const useChatStore = defineStore('chat', () => {
   const threadSummaries = ref<Record<string, ThreadSummary>>({})
   const activeThreadRootId = ref('')
   const activeThreadConversationId = ref('')
+  const focusedMessageId = ref('')
+  const focusedThreadMessageId = ref('')
+  const unreadFeedItems = ref<UnreadFeedItem[]>([])
+  const unreadFeedTotalCount = ref(0)
+  const unreadFeedLoading = ref(false)
+  const unreadFeedError = ref('')
+  const unreadFeedLoaded = ref(false)
+  const unreadFeedRefreshQueued = ref(false)
   const userNames = ref<Record<string, string>>({})
   const userEmails = ref<Record<string, string>>({})
   const userAvatars = ref<Record<string, string>>({})
@@ -455,6 +504,7 @@ export const useChatStore = defineStore('chat', () => {
   let userDirectoryHydrated = false
   let userDirectoryPromise: Promise<void> | null = null
   let toastTimer: ReturnType<typeof setTimeout> | null = null
+  let unreadFeedRefreshTimer: ReturnType<typeof setTimeout> | null = null
   const incomingMessageNotificationHandlers = new Set<IncomingMessageNotificationHandler>()
   const taskStatusChangedNotificationHandlers = new Set<TaskStatusChangedNotificationHandler>()
   const DEBUG_CONVERSATION_OPEN_PERF = import.meta.env.DEV
@@ -596,6 +646,40 @@ export const useChatStore = defineStore('chat', () => {
     return firstPublicChannelId(nextChannels)
   }
 
+  function showConversationView() {
+    chatViewMode.value = 'conversation'
+  }
+
+  function showUnreadView() {
+    chatViewMode.value = 'unread'
+  }
+
+  function focusConversationMessage(messageId: string) {
+    focusedMessageId.value = messageId
+  }
+
+  function focusThreadMessage(messageId: string) {
+    focusedThreadMessageId.value = messageId
+  }
+
+  function clearFocusedMessages() {
+    focusedMessageId.value = ''
+    focusedThreadMessageId.value = ''
+  }
+
+  function removeUnreadFeedItemLocally(itemId: string, notificationId?: string) {
+    const previousLength = unreadFeedItems.value.length
+    unreadFeedItems.value = unreadFeedItems.value.filter(item =>
+      item.id !== itemId && (!notificationId || item.notificationId !== notificationId),
+    )
+    if (unreadFeedItems.value.length < previousLength) {
+      unreadFeedTotalCount.value = Math.max(0, unreadFeedTotalCount.value - (previousLength - unreadFeedItems.value.length))
+    }
+    if (notificationId) {
+      notifications.value = notifications.value.filter(item => item.id !== notificationId)
+    }
+  }
+
   function selectChannel(id: string) {
     const selectStartedAt = performance.now()
     logConversationPerf('select', {
@@ -604,11 +688,13 @@ export const useChatStore = defineStore('chat', () => {
       at: new Date().toISOString(),
     })
     activeChannelId.value = id
+    showConversationView()
+    clearFocusedMessages()
     saveActiveConversationSelection(id)
     if (activeThreadConversationId.value !== id) {
       closeThread()
     }
-    void ensureConversationHistory(id, selectStartedAt)
+    const historyPromise = ensureConversationHistory(id, selectStartedAt)
     const ch = channels.value.find(c => c.id === id)
     if (ch) {
       if (ch.unread > 0 && typeof ch.lastMessageSeq === 'bigint' && ch.lastMessageSeq > 0n) {
@@ -621,6 +707,7 @@ export const useChatStore = defineStore('chat', () => {
         requestReadMark(dm.id, dm.lastMessageSeq)
       }
     }
+    return historyPromise
   }
 
   function registerUserName(userId: string, displayName: string) {
@@ -804,10 +891,15 @@ export const useChatStore = defineStore('chat', () => {
       clearTimeout(toastTimer)
       toastTimer = null
     }
+    if (unreadFeedRefreshTimer) {
+      clearTimeout(unreadFeedRefreshTimer)
+      unreadFeedRefreshTimer = null
+    }
 
     channels.value = []
     directMessages.value = []
     activeChannelId.value = ''
+    chatViewMode.value = 'conversation'
     workspace.value = null
     notifications.value = []
     activeCalls.value = []
@@ -823,6 +915,14 @@ export const useChatStore = defineStore('chat', () => {
     conversationInitialLoadingById.value = {}
     activeThreadRootId.value = ''
     activeThreadConversationId.value = ''
+    focusedMessageId.value = ''
+    focusedThreadMessageId.value = ''
+    unreadFeedItems.value = []
+    unreadFeedTotalCount.value = 0
+    unreadFeedLoading.value = false
+    unreadFeedError.value = ''
+    unreadFeedLoaded.value = false
+    unreadFeedRefreshQueued.value = false
 
     userNames.value = {}
     userEmails.value = {}
@@ -926,7 +1026,11 @@ export const useChatStore = defineStore('chat', () => {
     }
     msg.sendStatus = 'sending'
     msg.failReason = undefined
-    const sent = ws.sendMessage(channelId, msg.body, clientMsgId, undefined, msg.attachments?.map(a => a.id) ?? [], msg.entities)
+    const attachmentIds = msg.attachments?.map(a => a.id) ?? []
+    const entities = msg.entities ?? []
+    const sent = entities.length > 0
+      ? ws.sendMessage(channelId, msg.body, clientMsgId, undefined, attachmentIds, entities)
+      : ws.sendMessage(channelId, msg.body, clientMsgId, undefined, attachmentIds)
     if (!sent) {
       msg.sendStatus = 'failed'
       msg.failReason = 'Connection lost'
@@ -959,7 +1063,11 @@ export const useChatStore = defineStore('chat', () => {
     }
     msg.sendStatus = 'sending'
     msg.failReason = undefined
-    const sent = ws.sendMessage(msg.channelId, msg.body, clientMsgId, rootMessageId, msg.attachments?.map(a => a.id) ?? [], msg.entities)
+    const attachmentIds = msg.attachments?.map(a => a.id) ?? []
+    const entities = msg.entities ?? []
+    const sent = entities.length > 0
+      ? ws.sendMessage(msg.channelId, msg.body, clientMsgId, rootMessageId, attachmentIds, entities)
+      : ws.sendMessage(msg.channelId, msg.body, clientMsgId, rootMessageId, attachmentIds)
     if (!sent) {
       msg.sendStatus = 'failed'
       msg.failReason = 'Connection lost'
@@ -1005,6 +1113,7 @@ export const useChatStore = defineStore('chat', () => {
     clearThreadReplayResyncTimer(activeThreadRootId.value)
     activeThreadRootId.value = ''
     activeThreadConversationId.value = ''
+    focusedThreadMessageId.value = ''
   }
 
   function sendThreadReply(body: string, attachmentIds: string[] = [], attachments: MessageAttachment[] = [], entities: MessageEntity[] = []) {
@@ -1068,7 +1177,9 @@ export const useChatStore = defineStore('chat', () => {
         useOfflineQueue().enqueue({ conversationId: channelId, body: text, clientMsgId, threadRootMessageId: rootId, entities })
       })
     } else {
-      const sent = ws.sendMessage(channelId, text, clientMsgId, rootId, attachmentIds, entities)
+      const sent = entities.length > 0
+        ? ws.sendMessage(channelId, text, clientMsgId, rootId, attachmentIds, entities)
+        : ws.sendMessage(channelId, text, clientMsgId, rootId, attachmentIds)
       if (!sent) {
         updateThreadSendStatus(rootId, clientMsgId, 'failed', 'Connection lost')
       } else {
@@ -1393,6 +1504,9 @@ export const useChatStore = defineStore('chat', () => {
     } else {
       clearActiveConversationSelection()
     }
+    unreadFeedLoaded.value = false
+    unreadFeedError.value = ''
+    void refreshUnreadFeed()
   }
 
   async function ensureConversationHistory(conversationId: string, selectStartedAt?: number) {
@@ -1512,6 +1626,57 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function loadMessageContext(
+    conversationId: string,
+    messageId: string,
+  ): Promise<'loaded' | 'not_found' | 'forbidden' | 'error'> {
+    if (!conversationId || !messageId) return 'error'
+    try {
+      const page = await getMessageContext(conversationId, messageId)
+      applyConversationHistory(conversationId, page.messages)
+      return 'loaded'
+    } catch (err) {
+      if (err instanceof ChatApiError) {
+        if (err.status === 403) return 'forbidden'
+        if (err.status === 404) return 'not_found'
+      }
+      return 'error'
+    }
+  }
+
+  async function refreshUnreadFeed(): Promise<void> {
+    if (!bootstrapped.value) return
+    unreadFeedLoading.value = true
+    unreadFeedError.value = ''
+    try {
+      const response = await listUnreadFeed()
+      unreadFeedItems.value = (response.items ?? []).map(unreadFeedItemFromHttp)
+      unreadFeedTotalCount.value = Math.max(0, Math.floor(response.total_count ?? 0))
+      unreadFeedLoaded.value = true
+    } catch (err) {
+      unreadFeedError.value = err instanceof Error ? err.message : 'Failed to load unread feed'
+      unreadFeedLoaded.value = true
+    } finally {
+      unreadFeedLoading.value = false
+      unreadFeedRefreshQueued.value = false
+      if (unreadFeedRefreshTimer) {
+        clearTimeout(unreadFeedRefreshTimer)
+        unreadFeedRefreshTimer = null
+      }
+    }
+  }
+
+  function scheduleUnreadFeedRefresh() {
+    if (!bootstrapped.value) return
+    unreadFeedRefreshQueued.value = true
+    if (!unreadFeedLoaded.value && chatViewMode.value !== 'unread') return
+    if (unreadFeedRefreshTimer) return
+    unreadFeedRefreshTimer = setTimeout(() => {
+      unreadFeedRefreshTimer = null
+      void refreshUnreadFeed()
+    }, 1000)
+  }
+
   function handleSyncSinceResponse(resp: SyncSinceResponse) {
     const ws = useWsStore()
     const previousCursor = lastAppliedEventSeq.value
@@ -1574,6 +1739,7 @@ export const useChatStore = defineStore('chat', () => {
     if (targetChannel) targetChannel.unread = 0
     const targetDm = directMessages.value.find(dm => dm.id === ack.conversationId)
     if (targetDm) targetDm.unread = 0
+    scheduleUnreadFeedRefresh()
   }
 
   function handlePresenceEvent(evt: PresenceEvent) {
@@ -1852,6 +2018,7 @@ export const useChatStore = defineStore('chat', () => {
         break
       case 'notificationResolved':
         notifications.value = notifications.value.filter(item => item.id !== (evt.payload.value as NotificationResolvedEvent).notificationId)
+        scheduleUnreadFeedRefresh()
         break
       case 'callStateChanged':
         applyCallStateChanged(evt.payload.value)
@@ -1955,6 +2122,7 @@ export const useChatStore = defineStore('chat', () => {
     if (counter.hasUnreadThreadReplies && activeThreadConversationId.value === counter.conversationId && activeThreadRootId.value) {
       maybeRecoverActiveThread(activeThreadRootId.value, counter.conversationId)
     }
+    scheduleUnreadFeedRefresh()
   }
 
   function applyNotificationAdded(evt: NotificationAddedEvent) {
@@ -1968,7 +2136,6 @@ export const useChatStore = defineStore('chat', () => {
       emitIncomingMessageNotification({
         reason: evt.notification.type === NotificationType.MENTION ? 'mention' : 'notification',
         conversationId: evt.notification.conversationId,
-        messageId: evt.notification.notificationId,
         senderId: '',
         senderName: evt.notification.title || 'Msgnr',
         body: evt.notification.body,
@@ -1977,6 +2144,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     const conversationId = evt.notification.conversationId
     if (!conversationId) return
+    scheduleUnreadFeedRefresh()
     if (conversationExists(conversationId)) return
     const ws = useWsStore()
     if (ws.state === 'BOOTSTRAPPING' || ws.state === 'RECOVERING_GAP' || ws.state === 'STALE_REBOOTSTRAP') return
@@ -2006,6 +2174,7 @@ export const useChatStore = defineStore('chat', () => {
     if (dm) {
       dm.notificationLevel = evt.level
     }
+    scheduleUnreadFeedRefresh()
   }
 
   // Tracks the pending notification level request for optimistic rollback.
@@ -2164,6 +2333,7 @@ export const useChatStore = defineStore('chat', () => {
         clearActiveConversationSelection()
       }
     }
+    scheduleUnreadFeedRefresh()
   }
 
   function removeConversationLocal(conversationId: string) {
@@ -2193,6 +2363,8 @@ export const useChatStore = defineStore('chat', () => {
     upsertDirectMessage(dm)
     if (!messages.value[dm.id]) messages.value[dm.id] = []
     activeChannelId.value = dm.id
+    showConversationView()
+    clearFocusedMessages()
     saveActiveConversationSelection(dm.id)
     closeThread()
     const target = directMessages.value.find(item => item.id === dm.id)
@@ -2261,6 +2433,7 @@ export const useChatStore = defineStore('chat', () => {
       } else {
         maybeRecoverActiveThread(rootId, channelId)
       }
+      scheduleUnreadFeedRefresh()
       return
     }
 
@@ -2281,8 +2454,10 @@ export const useChatStore = defineStore('chat', () => {
       } else {
         queuePendingReadMark(channelId, evt.channelSeq)
       }
+      scheduleUnreadFeedRefresh()
       return
     }
+    scheduleUnreadFeedRefresh()
   }
 
   function isClientTabActive(): boolean {
@@ -2319,6 +2494,22 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
     queuePendingReadMark(conversationId, lastReadSeq)
+  }
+
+  async function markUnreadFeedItemRead(item: UnreadFeedItem): Promise<void> {
+    if (!item?.id || !item.conversationId) return
+    if (item.notificationId) {
+      await resolveUnreadFeedNotification(item.notificationId)
+      removeUnreadFeedItemLocally(item.id, item.notificationId)
+      return
+    }
+
+    const rootMessageId = item.threadRootMessageId || item.messageId
+    if (!rootMessageId) return
+    const rootMessage = (messages.value[item.conversationId] ?? []).find(message => message.id === rootMessageId)
+    if (!rootMessage || rootMessage.channelSeq <= 0n) return
+    requestReadMark(item.conversationId, rootMessage.channelSeq)
+    removeUnreadFeedItemLocally(item.id)
   }
 
   function onClientFocus() {
@@ -2411,6 +2602,7 @@ export const useChatStore = defineStore('chat', () => {
       if (!msg) continue
       apply(msg)
     }
+    scheduleUnreadFeedRefresh()
   }
 
   function _onMessageDeleted(evt: MessageDeletedEvent) {
@@ -2453,6 +2645,7 @@ export const useChatStore = defineStore('chat', () => {
     if (activeThreadRootId.value === evt.messageId) {
       closeThread()
     }
+    scheduleUnreadFeedRefresh()
   }
 
   function applyLocalMessageDeleted(conversationId: string, messageId: string, threadRootMessageId?: string) {
@@ -2619,12 +2812,7 @@ export const useChatStore = defineStore('chat', () => {
   // ── App badge (PWA) ────────────────────────────────────────────────────────
   // Update the app icon badge count when the total unread changes.
 
-  const totalUnreadCount = computed(() => {
-    let count = 0
-    for (const ch of channels.value) count += ch.unread
-    for (const dm of directMessages.value) count += dm.unread
-    return count
-  })
+  const totalUnreadCount = computed(() => unreadFeedTotalCount.value)
 
   watch(totalUnreadCount, (count) => {
     const platform = getPlatformOrNull()
@@ -2649,6 +2837,7 @@ export const useChatStore = defineStore('chat', () => {
   return {
     channels,
     directMessages,
+    chatViewMode,
     totalUnreadCount,
     activeChannelId,
     activeChannel,
@@ -2659,6 +2848,14 @@ export const useChatStore = defineStore('chat', () => {
     activeThreadConversationId,
     activeThreadRootMessage,
     activeThreadReplies,
+    focusedMessageId,
+    focusedThreadMessageId,
+    unreadFeedItems,
+    unreadFeedTotalCount,
+    unreadFeedLoading,
+    unreadFeedError,
+    unreadFeedLoaded,
+    unreadFeedRefreshQueued,
     workspace,
     notifications,
     activeCalls,
@@ -2677,6 +2874,8 @@ export const useChatStore = defineStore('chat', () => {
     lastAppliedEventSeq,
     lastAckedEventSeq,
     setChannels,
+    showConversationView,
+    showUnreadView,
     selectChannel,
     registerUserName,
     registerUserIdentity,
@@ -2711,6 +2910,10 @@ export const useChatStore = defineStore('chat', () => {
     loadCachedState,
     applyBootstrapSnapshot,
     ensureConversationHistory,
+    loadMessageContext,
+    refreshUnreadFeed,
+    scheduleUnreadFeedRefresh,
+    markUnreadFeedItemRead,
     loadOlderConversationHistory,
     openDirectMessage,
     removeConversationLocal,
@@ -2718,6 +2921,9 @@ export const useChatStore = defineStore('chat', () => {
     setClientActive,
     onIncomingMessageNotification,
     onTaskStatusChanged,
+    focusConversationMessage,
+    focusThreadMessage,
+    clearFocusedMessages,
     resetRuntimeState,
     setNotificationLevel,
     updateSendStatus,

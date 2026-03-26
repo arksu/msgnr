@@ -31,7 +31,7 @@
       <!-- Unread badge (suppressed when muted) -->
       <span
         v-else-if="(unread ?? 0) > 0"
-        class="shrink-0 min-w-[18px] h-[18px] text-[11px] font-bold rounded-full bg-red-500 text-sidebar-unreadBage flex items-center justify-center px-1"
+        class="shrink-0 min-w-[18px] h-[18px] text-[11px] font-bold rounded-full bg-red-500 text-sidebar-unreadBadge flex items-center justify-center px-1"
       >
         {{ unread }}
       </span>

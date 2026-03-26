@@ -1961,3 +1961,310 @@ func TestIntegration_MessageAttachment_SendRejectsWrongOwner(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, chat.ErrAttachmentOwnership))
 }
+
+func TestIntegration_ListUnreadFeed_DedupesMentionsAndIncludesThreadReplies(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	authorID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	var recipientID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'Target', 'member')
+		 RETURNING id`,
+		"target_"+uuid.New().String()+"@example.com",
+	).Scan(&recipientID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, recipientID)
+	require.NoError(t, err)
+
+	rootResult, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    recipientID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "thread root",
+	})
+	require.NoError(t, err)
+
+	genericResult, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "plain unread",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "hello @Target",
+		Entities: []chat.MessageEntity{
+			{
+				Kind:     chat.MessageEntityKindUser,
+				TargetID: recipientID,
+				Label:    "@Target",
+				Start:    6,
+				End:      13,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	threadResult, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            authorID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "thread reply",
+		ThreadRootMessageID: rootResult.MessageID,
+	})
+	require.NoError(t, err)
+
+	items, err := svc.ListUnreadFeed(ctx, recipientID)
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+
+	var genericCount int
+	var mentionCount int
+	var threadCount int
+	for _, item := range items {
+		switch item.Kind {
+		case "message":
+			genericCount++
+			assert.Equal(t, genericResult.MessageID, item.MessageID)
+		case "mention":
+			mentionCount++
+			assert.Equal(t, channelID, item.ConversationID)
+			assert.Equal(t, uuid.Nil, item.ThreadRootMessageID)
+		case "thread":
+			threadCount++
+			assert.Equal(t, threadResult.MessageID, item.MessageID)
+			assert.Equal(t, rootResult.MessageID, item.ThreadRootMessageID)
+		}
+	}
+	assert.Equal(t, 1, genericCount)
+	assert.Equal(t, 1, mentionCount)
+	assert.Equal(t, 1, threadCount)
+}
+
+func TestIntegration_ListUnreadFeed_MentionsOnlyIncludesMentionsAndThreadsButNotGenericMessages(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	authorID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	var recipientID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'Target', 'member')
+		 RETURNING id`,
+		"mentions_only_"+uuid.New().String()+"@example.com",
+	).Scan(&recipientID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, recipientID)
+	require.NoError(t, err)
+	setChannelMemberNotificationLevel(t, ctx, pool, channelID, recipientID, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY))
+	setChannelMemberNotificationLevel(t, ctx, pool, channelID, recipientID, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY))
+
+	rootResult, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    recipientID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "thread root",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "plain unread",
+	})
+	require.NoError(t, err)
+
+	mentionResult, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "hello @Target",
+		Entities: []chat.MessageEntity{
+			{
+				Kind:     chat.MessageEntityKindUser,
+				TargetID: recipientID,
+				Label:    "@Target",
+				Start:    6,
+				End:      13,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	threadResult, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            authorID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "thread reply",
+		ThreadRootMessageID: rootResult.MessageID,
+	})
+	require.NoError(t, err)
+
+	items, err := svc.ListUnreadFeed(ctx, recipientID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	kinds := make([]string, 0, len(items))
+	for _, item := range items {
+		kinds = append(kinds, item.Kind)
+	}
+	assert.ElementsMatch(t, []string{"mention", "thread"}, kinds)
+	for _, item := range items {
+		assert.NotEqual(t, "message", item.Kind)
+		if item.Kind == "mention" {
+			assert.Equal(t, mentionResult.MessageID, item.MessageID)
+			assert.Equal(t, uuid.Nil, item.ThreadRootMessageID)
+		}
+		if item.Kind == "thread" {
+			assert.Equal(t, threadResult.MessageID, item.MessageID)
+			assert.Equal(t, rootResult.MessageID, item.ThreadRootMessageID)
+		}
+	}
+}
+
+func TestIntegration_ListUnreadFeed_LegacyNotificationsKeepStableIDs(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	userID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	var notificationID uuid.UUID
+	err := pool.QueryRow(ctx, `
+		INSERT INTO notifications (user_id, type, title, body, channel_id, is_read, created_at)
+		VALUES ($1, 'mention', 'Mention', 'legacy notification', $2, false, now())
+		RETURNING id`,
+		userID, channelID,
+	).Scan(&notificationID)
+	require.NoError(t, err)
+
+	firstItems, err := svc.ListUnreadFeed(ctx, userID)
+	require.NoError(t, err)
+	require.Len(t, firstItems, 1)
+
+	secondItems, err := svc.ListUnreadFeed(ctx, userID)
+	require.NoError(t, err)
+	require.Len(t, secondItems, 1)
+
+	expectedID := "mention:" + notificationID.String()
+	assert.Equal(t, expectedID, firstItems[0].ID)
+	assert.Equal(t, expectedID, secondItems[0].ID)
+	assert.Equal(t, uuid.Nil, firstItems[0].MessageID)
+}
+
+func TestIntegration_ResolveNotification_ResolvesOnlyTargetNotification(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	authorID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	var recipientID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', 'Target', 'member')
+		 RETURNING id`,
+		"resolve_notification_"+uuid.New().String()+"@example.com",
+	).Scan(&recipientID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, recipientID)
+	require.NoError(t, err)
+	setChannelMemberNotificationLevel(t, ctx, pool, channelID, recipientID, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY))
+
+	first, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "hello @Target",
+		Entities: []chat.MessageEntity{{
+			Kind:     chat.MessageEntityKindUser,
+			TargetID: recipientID,
+			Label:    "@Target",
+			Start:    6,
+			End:      13,
+		}},
+	})
+	require.NoError(t, err)
+	second, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "again @Target",
+		Entities: []chat.MessageEntity{{
+			Kind:     chat.MessageEntityKindUser,
+			TargetID: recipientID,
+			Label:    "@Target",
+			Start:    6,
+			End:      13,
+		}},
+	})
+	require.NoError(t, err)
+
+	items, err := svc.ListUnreadFeed(ctx, recipientID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.NotEqual(t, uuid.Nil, items[0].NotificationID)
+	require.NotEqual(t, items[0].NotificationID, items[1].NotificationID)
+
+	result, err := svc.ResolveNotification(ctx, chat.ResolveNotificationParams{
+		NotificationID: items[0].NotificationID,
+		UserID:         recipientID,
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Resolved)
+	require.Len(t, result.DirectDeliveries, 1)
+
+	remaining, err := svc.ListUnreadFeed(ctx, recipientID)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, items[1].NotificationID, remaining[0].NotificationID)
+	assert.ElementsMatch(t, []uuid.UUID{first.MessageID, second.MessageID}, []uuid.UUID{items[0].MessageID, items[1].MessageID})
+}
+
+func TestIntegration_ListMessageContext_ReturnsMessagesAroundTarget(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	userID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	var targetMessageID uuid.UUID
+	for idx, body := range []string{"one", "two", "three", "four", "five"} {
+		result, err := svc.SendMessage(ctx, chat.SendMessageParams{
+			ChannelID:   channelID,
+			SenderID:    userID,
+			ClientMsgID: uuid.New().String(),
+			Body:        body,
+		})
+		require.NoError(t, err)
+		if idx == 2 {
+			targetMessageID = result.MessageID
+		}
+	}
+
+	messages, err := svc.ListMessageContext(ctx, userID, channelID, targetMessageID, 1, 1)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	assert.Equal(t, targetMessageID, messages[1].ID)
+	assert.Equal(t, []string{"two", "three", "four"}, []string{
+		messages[0].Body,
+		messages[1].Body,
+		messages[2].Body,
+	})
+}

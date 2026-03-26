@@ -94,7 +94,13 @@
           Logout
         </button>
       </div>
-      <ChatArea v-if="appMode === 'chat'" />
+      <template v-if="appMode === 'chat'">
+        <UnreadFeedPane
+          v-if="chatStore.chatViewMode === 'unread'"
+          @open-item="openUnreadFeedItem"
+        />
+        <ChatArea v-else />
+      </template>
       <template v-else-if="appMode === 'task-tracker'">
         <TaskTrackerShell
           v-model="selectedTemplateFilter"
@@ -313,7 +319,7 @@ import { computed, ref, watch, onMounted, onUnmounted, defineAsyncComponent, def
 import { useRoute, useRouter } from 'vue-router'
 import { PresenceStatus } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
-import { useChatStore, type IncomingMessageNotification } from '@/stores/chat'
+import { useChatStore, type IncomingMessageNotification, type UnreadFeedItem } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
@@ -342,6 +348,7 @@ import {
 import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ChatArea from '@/components/ChatArea.vue'
+import UnreadFeedPane from '@/components/UnreadFeedPane.vue'
 import CallDock from '@/components/CallDock.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useTasksStore } from '@/stores/tasks'
@@ -550,6 +557,58 @@ function hasConversationInSnapshot(conversationId: string): boolean {
     || chatStore.directMessages.some(dm => dm.id === conversationId)
 }
 
+function hasRootMessageInConversation(conversationId: string, messageId: string): boolean {
+  if (!conversationId || !messageId) return false
+  return (chatStore.messages[conversationId] ?? []).some(message => message.id === messageId)
+}
+
+function rootMessageIdFromIntent(intent: NotificationOpenIntent): string {
+  return intent.threadRootMessageId || intent.messageId || ''
+}
+
+async function openChatTarget(intent: NotificationOpenIntent): Promise<boolean> {
+  if (!intent.conversationId) return false
+
+  if (router.currentRoute.value.name !== 'main') {
+    await router.replace({ name: 'main' })
+  }
+
+  chatStore.showConversationView()
+  chatStore.clearFocusedMessages()
+
+  if (chatStore.activeChannelId !== intent.conversationId) {
+    await chatStore.selectChannel(intent.conversationId)
+  } else {
+    await chatStore.ensureConversationHistory(intent.conversationId)
+  }
+
+  const rootMessageId = rootMessageIdFromIntent(intent)
+  if (rootMessageId && !hasRootMessageInConversation(intent.conversationId, rootMessageId)) {
+    const contextLoadResult = await chatStore.loadMessageContext(intent.conversationId, rootMessageId)
+    if (contextLoadResult === 'forbidden') {
+      chatStore.showToast('You no longer have access to this conversation.')
+      return false
+    }
+  }
+
+  if (intent.threadRootMessageId) {
+    const rootMessage = (chatStore.messages[intent.conversationId] ?? []).find(message => message.id === intent.threadRootMessageId)
+    if (rootMessage) {
+      chatStore.focusConversationMessage(rootMessage.id)
+      chatStore.openThread(rootMessage)
+      if (intent.messageId) {
+        chatStore.focusThreadMessage(intent.messageId)
+      }
+      return true
+    }
+  }
+
+  if (intent.messageId) {
+    chatStore.focusConversationMessage(intent.messageId)
+  }
+  return true
+}
+
 async function clearNotificationOpenQueryParams() {
   const currentRoute = router.currentRoute.value
   if (!notificationOpenIntentFromQuery(currentRoute.query as Record<string, unknown>)) return
@@ -580,16 +639,19 @@ async function tryConsumeNotificationOpenIntent() {
     return
   }
 
-  if (router.currentRoute.value.name !== 'main') {
-    await router.replace({ name: 'main' })
-  }
-
-  if (chatStore.activeChannelId !== intent.conversationId) {
-    chatStore.selectChannel(intent.conversationId)
-  }
-
   pendingNotificationOpenIntent.value = null
+  await openChatTarget(intent)
   await clearNotificationOpenQueryParams()
+}
+
+async function openUnreadFeedItem(item: UnreadFeedItem) {
+  const opened = await openChatTarget({
+    conversationId: item.conversationId,
+    ...(item.messageId ? { messageId: item.messageId } : {}),
+    ...(item.threadRootMessageId ? { threadRootMessageId: item.threadRootMessageId } : {}),
+  })
+  if (!opened) return
+  await chatStore.markUnreadFeedItemRead(item)
 }
 
 function canonicalTaskSlugFromPublicId(publicId: string): string {

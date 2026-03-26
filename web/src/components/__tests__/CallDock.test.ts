@@ -112,8 +112,17 @@ function createLocalShareRoom() {
   }
 }
 
-function createRemoteShareRoom() {
-  const remoteScreenTrack = createVideoTrack('remote-screen-track')
+function createRemoteShareRoom(options?: {
+  trackSid?: string
+  participantSid?: string
+  participantIdentity?: string
+  participantName?: string
+}) {
+  const trackSid = options?.trackSid ?? 'remote-screen-track'
+  const participantSid = options?.participantSid ?? 'remote-sid'
+  const participantIdentity = options?.participantIdentity ?? 'user-b'
+  const participantName = options?.participantName ?? 'Bob'
+  const remoteScreenTrack = createVideoTrack(trackSid)
   const remoteScreenPublication = {
     trackSid: remoteScreenTrack.sid,
     source: 'screen_share',
@@ -134,16 +143,36 @@ function createRemoteShareRoom() {
         audioTrackPublications: new Map(),
       },
       remoteParticipants: new Map([
-        ['remote-sid', {
-          sid: 'remote-sid',
-          identity: 'user-b',
-          name: 'Bob',
+        [participantSid, {
+          sid: participantSid,
+          identity: participantIdentity,
+          name: participantName,
           getTrackPublication: () => undefined,
           videoTrackPublications: new Map([['remote-screen', remoteScreenPublication]]),
           audioTrackPublications: new Map(),
         }],
       ]),
     },
+  }
+}
+
+function seedCallUserState() {
+  const authStore = useAuthStore()
+  const chatStore = useChatStore()
+  authStore.user = {
+    id: 'user-a',
+    email: 'ada@example.com',
+    displayName: 'Ada',
+    avatarUrl: '',
+    role: 'member',
+  }
+  chatStore.workspace = {
+    id: 'workspace-1',
+    name: 'Acme',
+    selfUserId: 'user-a',
+    selfDisplayName: 'Ada',
+    selfAvatarUrl: '',
+    selfRole: 'member',
   }
 }
 
@@ -465,6 +494,128 @@ describe('CallDock drag behavior', () => {
     await wrapper.get('[data-testid="calldock-minimized-expand"]').trigger('click')
     await flushAll()
     expect(callStore.minimized).toBe(false)
+
+    wrapper.unmount()
+  })
+})
+
+describe('CallDock remote share presentation', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('switches between full-stage and user-card remote share views for the local viewer', async () => {
+    const callStore = useCallStore()
+    const remoteShare = createRemoteShareRoom()
+    seedCallUserState()
+
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.room = remoteShare.room as never
+    callStore.mediaVersion = 1
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    await wrapper.get('button[title="Maximize"]').trigger('click')
+    await flushAll()
+    expect(wrapper.find('button[title="Restore"]').exists()).toBe(true)
+
+    const stage = wrapper.get('[data-testid="calldock-remote-share-stage"]').element as HTMLVideoElement
+    expect(stage.style.display).not.toBe('none')
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-toggle"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="calldock-remote-share-stage-toggle"]').trigger('click')
+    await flushAll()
+
+    expect(wrapper.find('button[title="Restore"]').exists()).toBe(true)
+    expect(stage.style.display).toBe('none')
+    expect(wrapper.find('[data-testid="calldock-remote-share-badge-remote-sid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-toggle"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="calldock-remote-share-tile-toggle-remote-sid"]').trigger('click')
+    await flushAll()
+
+    expect(stage.style.display).not.toBe('none')
+    expect(wrapper.find('[data-testid="calldock-remote-share-badge-remote-sid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-toggle"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('resets the local presentation mode when the remote share track changes', async () => {
+    const callStore = useCallStore()
+    seedCallUserState()
+
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.room = createRemoteShareRoom({ trackSid: 'remote-screen-track-a' }).room as never
+    callStore.mediaVersion = 1
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    await wrapper.get('[data-testid="calldock-remote-share-stage-toggle"]').trigger('click')
+    await flushAll()
+    expect(wrapper.find('[data-testid="calldock-remote-share-badge-remote-sid"]').exists()).toBe(true)
+
+    callStore.room = createRemoteShareRoom({ trackSid: 'remote-screen-track-b' }).room as never
+    callStore.mediaVersion = 2
+    await flushAll()
+    await flushAll()
+
+    const stage = wrapper.get('[data-testid="calldock-remote-share-stage"]').element as HTMLVideoElement
+    expect(stage.style.display).not.toBe('none')
+    expect(wrapper.find('[data-testid="calldock-remote-share-badge-remote-sid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-toggle"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('uses the remote tile pin-style button to switch back to full-stage shared screen', async () => {
+    const callStore = useCallStore()
+    const remoteShare = createRemoteShareRoom()
+    seedCallUserState()
+
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.room = remoteShare.room as never
+    callStore.mediaVersion = 1
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    await wrapper.get('[data-testid="calldock-remote-share-stage-toggle"]').trigger('click')
+    await flushAll()
+
+    await wrapper.get('[data-testid="calldock-remote-share-tile-toggle-remote-sid"]').trigger('click')
+    await flushAll()
+
+    expect((wrapper.get('[data-testid="calldock-remote-share-stage"]').element as HTMLVideoElement).style.display).not.toBe('none')
+    expect(wrapper.find('[data-testid="calldock-remote-share-badge-remote-sid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-toggle"]').exists()).toBe(true)
 
     wrapper.unmount()
   })

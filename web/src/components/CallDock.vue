@@ -112,17 +112,29 @@
             -->
             <video
               ref="remoteScreenEl"
-              v-show="remoteScreenActive && !pinnedSid"
+              v-show="remoteScreenStageVisible"
               class="absolute inset-0 h-full w-full bg-black object-contain"
+              data-testid="calldock-remote-share-stage"
               autoplay
               playsinline
             />
             <div
-              v-if="remoteScreenActive && !pinnedSid"
+              v-if="remoteScreenStageVisible"
               class="absolute left-3 top-3 z-10 rounded-md border border-slate-500/70 bg-black/60 px-2 py-1 text-[11px] text-white"
             >
               {{ remoteScreenOwnerLabel }}
             </div>
+            <button
+              v-if="remoteScreenStageVisible"
+              class="absolute top-3 right-3 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
+              :title="remoteScreenViewerToggleTitle"
+              data-testid="calldock-remote-share-stage-toggle"
+              @click="toggleRemoteScreenPresentationMode"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M15 3h6v6M9 21L21 3M21 9V3h-6"/>
+              </svg>
+            </button>
 
             <!-- Pinned view: fills stage when a tile is pinned -->
             <template v-if="pinnedSid">
@@ -165,7 +177,7 @@
             </template>
 
             <!-- Camera tile grid (shown when no remote screen share and nothing pinned) -->
-            <template v-if="!remoteScreenActive && !pinnedSid">
+            <template v-if="!remoteScreenStageVisible && !pinnedSid">
               <div :class="tileGridClass">
 
                   <!-- Local tile — NOT in v-for so ref="localVideoEl" / ref="localScreenEl"
@@ -245,11 +257,13 @@
                     v-for="tile in remoteTiles"
                     :key="tile.sid"
                     :class="[tileItemClass, tile.isSpeaking ? 'ring-2 ring-emerald-400 ring-offset-1 ring-offset-slate-900' : '']"
+                    :data-testid="`calldock-remote-tile-${tile.sid}`"
                   >
                     <video
-                      v-if="tile.cameraOn"
+                      v-if="tile.cameraOn || tile.screenShareOn"
                       :ref="(el) => setRemoteTileRef(tile.sid, el as HTMLVideoElement | null)"
-                      class="h-full w-full object-cover"
+                      class="h-full w-full"
+                      :class="tile.screenShareOn ? 'bg-black object-contain' : 'object-cover'"
                       autoplay
                       playsinline
                     />
@@ -276,11 +290,19 @@
                         <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
                       </svg>
                     </div>
+                    <div
+                      v-if="tile.screenShareOn"
+                      class="absolute left-2 top-2 z-10 rounded border border-emerald-400/50 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-200"
+                      :data-testid="`calldock-remote-share-badge-${tile.sid}`"
+                    >
+                      Sharing screen
+                    </div>
                     <!-- Pin button (hover) -->
                     <button
                       class="absolute top-1.5 right-1.5 z-10 flex h-6 w-6 items-center justify-center rounded bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
-                      title="Pin to full view"
-                      @click.stop="pinTile(tile.sid)"
+                      :title="tile.screenShareOn ? remoteScreenViewerToggleTitle : 'Pin to full view'"
+                      :data-testid="tile.screenShareOn ? `calldock-remote-share-tile-toggle-${tile.sid}` : undefined"
+                      @click.stop="tile.screenShareOn ? toggleRemoteScreenPresentationMode() : pinTile(tile.sid)"
                     >
                       <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path d="M15 3h6v6M9 21L21 3M21 9V3h-6"/>
@@ -569,7 +591,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, toRaw, watch, watchEffect, type CSSProperties } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, toRaw, watch, watchEffect, type CSSProperties } from 'vue'
 import { Track } from 'livekit-client'
 import { useCallStore, type ScreenAnnotationEvent, type ScreenAnnotationSegmentV1 } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
@@ -690,11 +712,12 @@ const inputDeviceMenuOpen = ref(false)
 const annotationDrawMode = ref(false)
 const annotationActiveSegmentCount = ref(0)
 const annotationFadingSegmentCount = ref(0)
+const remoteScreenPresentationMode = ref<'stage' | 'tile'>('stage')
 
 // Imperative track attachment state (not reactive — lives outside Vue reactivity)
 let attachedLocalCameraTrack: AttachableMediaTrack | null = null
 let attachedLocalScreenTrack: AttachableMediaTrack | null = null
-let attachedRemoteScreenTrack: AttachableMediaTrack | null = null
+let attachedRemoteScreenTrack: { track: AttachableMediaTrack; element: HTMLVideoElement } | null = null
 let attachedPinnedTrack: AttachableMediaTrack | null = null
 const attachedRemoteAudio = new Map<string, { track: AttachableMediaTrack; element: HTMLMediaElement }>()
 const attachedRemoteCamera = new Map<string, { track: AttachableMediaTrack; element: HTMLVideoElement }>()
@@ -1005,6 +1028,9 @@ function handleExpandedDockPointerDown(event: PointerEvent) {
 
 const participantTiles = computed<ParticipantTile[]>(() => {
   callStore.mediaVersion // reactive dependency on topology changes
+  const remoteScreenTileSid = remoteScreenPresentationMode.value === 'tile'
+    ? activeRemoteScreenShareParticipantSid.value
+    : ''
 
   const currentRoom = callStore.room
   const speakerSids = callStore.activeSpeakerSids
@@ -1050,7 +1076,7 @@ const participantTiles = computed<ParticipantTile[]>(() => {
       avatarUrl: chatStore.resolveAvatarUrl(participant.identity),
       isLocal: false,
       cameraOn: Boolean(cameraPub?.isSubscribed && cameraPub?.track && !cameraPub?.isMuted),
-      screenShareOn: false, // remote screen share is handled separately via remoteScreenActive
+      screenShareOn: participant.sid === remoteScreenTileSid,
       micOn: Boolean(micPub?.isSubscribed && micPub?.track && !micPub?.isMuted),
       isSpeaking: speakerSids.has(participant.sid),
     })
@@ -1096,19 +1122,52 @@ function resolveLocalScreenShareTrackSid(): string {
   return publication.track.sid ?? ''
 }
 
-function resolveRemoteScreenShareTrackSid(): string {
+function resolveRemoteScreenShareSource() {
   const currentRoom = callStore.room
-  if (!currentRoom) return ''
+  if (!currentRoom) return null
   for (const participant of currentRoom.remoteParticipants.values()) {
     for (const publication of participant.videoTrackPublications.values()) {
       if (!isScreenSource(publication.source)) continue
       if (!publication.track || publication.isMuted) continue
       if (!publication.track.sid) continue
-      return publication.track.sid
+      const identity = participant.identity ?? ''
+      const owner = identity
+        ? (chatStore.resolveDisplayName(identity).trim() || identity.slice(0, 8))
+        : (participant.name ?? '').trim() || 'Teammate'
+      return {
+        participantSid: participant.sid,
+        participantIdentity: identity,
+        ownerLabel: owner,
+        publication,
+        track: publication.track as AttachableMediaTrack,
+        trackSid: publication.track.sid,
+      }
     }
   }
-  return ''
+  return null
 }
+
+function resolveRemoteScreenShareTrackSid(): string {
+  return resolveRemoteScreenShareSource()?.trackSid ?? ''
+}
+
+const activeRemoteScreenShare = computed(() => {
+  void callStore.mediaVersion
+  return resolveRemoteScreenShareSource()
+})
+
+const activeRemoteScreenShareTrackSid = computed(() => activeRemoteScreenShare.value?.trackSid ?? '')
+const activeRemoteScreenShareParticipantSid = computed(() => activeRemoteScreenShare.value?.participantSid ?? '')
+const remoteScreenStageVisible = computed(() => (
+  Boolean(activeRemoteScreenShareTrackSid.value)
+  && remoteScreenPresentationMode.value === 'stage'
+  && !pinnedSid.value
+))
+const remoteScreenViewerToggleTitle = computed(() => (
+  remoteScreenPresentationMode.value === 'stage'
+    ? 'Fit shared screen into the sharer user card'
+    : 'Focus the shared screen again'
+))
 
 const pinnedScreenShareTrackSid = computed(() => {
   void callStore.mediaVersion
@@ -1188,6 +1247,10 @@ function pinTile(sid: string) {
   pinnedSid.value = sid
 }
 
+function toggleRemoteScreenPresentationMode() {
+  remoteScreenPresentationMode.value = remoteScreenPresentationMode.value === 'stage' ? 'tile' : 'stage'
+}
+
 function unpinTile() {
   // Detach the pinned track from pinnedVideoEl before clearing
   const video = unwrapEl(pinnedVideoEl.value)
@@ -1215,7 +1278,12 @@ function annotationSegmentKey(segment: Pick<ScreenAnnotationSegmentV1, 'senderId
 }
 
 function resolveActiveAnnotationVideoEl(kind: AnnotationSurfaceGeometry['kind']): HTMLVideoElement | null {
-  if (kind === 'remote') return unwrapEl(remoteScreenEl.value)
+  if (kind === 'remote') {
+    if (remoteScreenPresentationMode.value === 'tile') {
+      return unwrapEl(remoteTileEls.get(activeRemoteScreenShareParticipantSid.value) ?? null)
+    }
+    return unwrapEl(remoteScreenEl.value)
+  }
   if (kind === 'local') return unwrapEl(localScreenEl.value)
   return unwrapEl(pinnedVideoEl.value)
 }
@@ -1554,6 +1622,12 @@ watch(pinnedSid, () => {
   renderAnnotationOverlay()
 })
 
+watch(activeRemoteScreenShareTrackSid, (next, prev) => {
+  if (next !== prev) {
+    remoteScreenPresentationMode.value = 'stage'
+  }
+})
+
 watch(currentScreenShareTrackSid, (next, prev) => {
   if (!next) {
     annotationDrawMode.value = false
@@ -1584,6 +1658,14 @@ watch(annotationSurfaceKind, () => {
 
 watch(maximized, () => {
   renderAnnotationOverlay()
+})
+
+watch([remoteScreenPresentationMode, pinnedSid], () => {
+  void nextTick(() => {
+    syncRemoteCameraTracks()
+    syncRemoteScreenTrack()
+    renderAnnotationOverlay()
+  })
 })
 
 // ── Local camera track ────────────────────────────────────────────────────────
@@ -1629,11 +1711,15 @@ function syncLocalScreenTrack() {
 function syncRemoteCameraTracks() {
   const currentRoom = callStore.room
   if (!currentRoom) { detachAllRemoteCameraTracks(); return }
+  const remoteScreenTileSid = remoteScreenPresentationMode.value === 'tile'
+    ? activeRemoteScreenShareParticipantSid.value
+    : ''
 
   const activeCameraTracks = new Map<string, AttachableMediaTrack>()
   for (const participant of currentRoom.remoteParticipants.values()) {
     // Skip: if this participant is pinned, their track goes to pinnedVideoEl instead
     if (participant.sid === pinnedSid.value) continue
+    if (participant.sid === remoteScreenTileSid) continue
     const pub = participant.getTrackPublication(Track.Source.Camera)
     if (!pub) continue
     if (!pub.isSubscribed) { pub.setSubscribed(true); continue }
@@ -1682,10 +1768,9 @@ function detachAllRemoteCameraTracks() {
 // ── Remote screen share track ─────────────────────────────────────────────────
 
 function detachRemoteScreenTrack() {
-  const video = unwrapEl(remoteScreenEl.value)
   if (attachedRemoteScreenTrack) {
-    callDebug('detaching remote screen track', { sid: attachedRemoteScreenTrack.sid })
-    attachedRemoteScreenTrack.detach(video ?? undefined)
+    callDebug('detaching remote screen track', { sid: attachedRemoteScreenTrack.track.sid })
+    attachedRemoteScreenTrack.track.detach(attachedRemoteScreenTrack.element)
     attachedRemoteScreenTrack = null
   }
   remoteScreenActive.value = false
@@ -1694,40 +1779,38 @@ function detachRemoteScreenTrack() {
 
 function syncRemoteScreenTrack() {
   const currentRoom = callStore.room
-  // remoteScreenEl is always in DOM (v-show, not v-if) so this ref is always populated
-  const video = unwrapEl(remoteScreenEl.value)
-  if (!currentRoom || !video) { detachRemoteScreenTrack(); return }
+  const source = activeRemoteScreenShare.value
+  if (!currentRoom || !source) { detachRemoteScreenTrack(); return }
 
-  let nextTrack: AttachableMediaTrack | null = null
-  let owner = ''
-  for (const participant of currentRoom.remoteParticipants.values()) {
-    for (const publication of participant.videoTrackPublications.values()) {
-      if (!isScreenSource(publication.source)) continue
-      const participantId = participant.identity
-      owner = participantId
-        ? (chatStore.resolveDisplayName(participantId).trim() || participantId.slice(0, 8))
-        : 'Teammate'
-      if (!publication.isSubscribed) publication.setSubscribed(true)
-      const track = publication.track as AttachableMediaTrack | null
-      if (!track || track.kind !== 'video') continue
-      nextTrack = track
-      break
-    }
-    if (nextTrack) break
-  }
+  if (!source.publication.isSubscribed) source.publication.setSubscribed(true)
+  const nextTrack = source.track.kind === 'video' ? source.track : null
 
   remoteScreenActive.value = Boolean(nextTrack)
-  if (owner) remoteScreenOwnerLabel.value = `${owner} is sharing`
+  remoteScreenOwnerLabel.value = `${source.ownerLabel} is sharing`
 
-  if (attachedRemoteScreenTrack && attachedRemoteScreenTrack !== nextTrack) {
-    callDebug('detaching stale remote screen track', { sid: attachedRemoteScreenTrack.sid })
-    attachedRemoteScreenTrack.detach(video)
+  const video = remoteScreenPresentationMode.value === 'tile'
+    ? unwrapEl(remoteTileEls.get(source.participantSid) ?? null)
+    : unwrapEl(remoteScreenEl.value)
+  if (!video) {
+    if (attachedRemoteScreenTrack && attachedRemoteScreenTrack.track !== nextTrack) {
+      attachedRemoteScreenTrack.track.detach(attachedRemoteScreenTrack.element)
+      attachedRemoteScreenTrack = null
+    }
+    return
+  }
+
+  if (attachedRemoteScreenTrack && (
+    attachedRemoteScreenTrack.track !== nextTrack || attachedRemoteScreenTrack.element !== video
+  )) {
+    callDebug('detaching stale remote screen track', { sid: attachedRemoteScreenTrack.track.sid })
+    attachedRemoteScreenTrack.track.detach(attachedRemoteScreenTrack.element)
     attachedRemoteScreenTrack = null
   }
-  if (!nextTrack || attachedRemoteScreenTrack === nextTrack) return
+  if (!nextTrack) return
+  if (attachedRemoteScreenTrack?.track === nextTrack && attachedRemoteScreenTrack.element === video) return
 
   nextTrack.attach(video)
-  attachedRemoteScreenTrack = nextTrack
+  attachedRemoteScreenTrack = { track: nextTrack, element: video }
   callDebug('attached remote screen track', { sid: nextTrack.sid })
   safePlay(video)
 }
@@ -2103,6 +2186,7 @@ async function handleLeave() {
   forceStopLocalCapturePreviews()
   maximized.value = false
   pinnedSid.value = null
+  remoteScreenPresentationMode.value = 'stage'
   inviteDialogOpen.value = false
 }
 

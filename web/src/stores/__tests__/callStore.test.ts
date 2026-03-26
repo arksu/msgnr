@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { Track } from 'livekit-client'
 import { NotificationLevel } from '@/shared/proto/packets_pb'
 import { useCallStore } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
@@ -436,5 +437,141 @@ describe('callStore screen annotations', () => {
     }])
 
     unsubscribe()
+  })
+})
+
+describe('callStore remote screen share receive toggle', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  function createRemoteShareRoom() {
+    const remoteAudioPublication = {
+      trackSid: 'remote-audio-track',
+      source: Track.Source.Microphone,
+      isSubscribed: true,
+      setSubscribed: vi.fn(),
+    }
+    const remoteCameraPublication = {
+      trackSid: 'remote-camera-track',
+      source: Track.Source.Camera,
+      isSubscribed: true,
+      setSubscribed: vi.fn(),
+    }
+    const remoteScreenPublication = {
+      trackSid: 'remote-screen-track',
+      source: Track.Source.ScreenShare,
+      isSubscribed: true,
+      setSubscribed: vi.fn(),
+    }
+
+    return {
+      remoteAudioPublication,
+      remoteCameraPublication,
+      remoteScreenPublication,
+      room: {
+        localParticipant: {
+          identity: 'user-a',
+          videoTrackPublications: new Map(),
+          audioTrackPublications: new Map(),
+        },
+        remoteParticipants: new Map([
+          ['remote-sid', {
+            sid: 'remote-sid',
+            identity: 'user-b',
+            audioTrackPublications: new Map([['mic', remoteAudioPublication]]),
+            videoTrackPublications: new Map([
+              ['camera', remoteCameraPublication],
+              ['screen', remoteScreenPublication],
+            ]),
+          }],
+        ]),
+      },
+    }
+  }
+
+  it('unsubscribes only the remote screen share for the local viewer and can resume it', () => {
+    const callStore = useCallStore()
+    const remoteShare = createRemoteShareRoom()
+
+    callStore.room = remoteShare.room as never
+
+    callStore.stopRemoteScreenShareForMe()
+
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(false)
+    expect(remoteShare.remoteScreenPublication.setSubscribed).toHaveBeenCalledWith(false)
+    expect(remoteShare.remoteAudioPublication.setSubscribed).not.toHaveBeenCalled()
+    expect(remoteShare.remoteCameraPublication.setSubscribed).not.toHaveBeenCalled()
+
+    remoteShare.remoteScreenPublication.isSubscribed = false
+    callStore.startRemoteScreenShareForMe()
+
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(true)
+    expect(remoteShare.remoteScreenPublication.setSubscribed).toHaveBeenLastCalledWith(true)
+  })
+
+  it('resets incoming remote screen share receive to enabled on leave and runtime reset', async () => {
+    const callStore = useCallStore()
+
+    callStore.remoteScreenShareReceiveEnabled = false
+    await callStore.leaveCall()
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(true)
+
+    callStore.remoteScreenShareReceiveEnabled = false
+    await callStore.resetRuntimeState()
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(true)
+  })
+
+  it('keeps later remote screen publications blocked while still syncing other remote media', () => {
+    const callStore = useCallStore()
+    const firstRoom = createRemoteShareRoom()
+
+    callStore.room = firstRoom.room as never
+    callStore.stopRemoteScreenShareForMe()
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(false)
+
+    const remoteAudioPublication = {
+      trackSid: 'remote-audio-track-b',
+      source: Track.Source.Microphone,
+      isSubscribed: false,
+      setSubscribed: vi.fn(),
+    }
+    const remoteCameraPublication = {
+      trackSid: 'remote-camera-track-b',
+      source: Track.Source.Camera,
+      isSubscribed: false,
+      setSubscribed: vi.fn(),
+    }
+    const remoteScreenPublication = {
+      trackSid: 'remote-screen-track-b',
+      source: Track.Source.ScreenShare,
+      isSubscribed: false,
+      setSubscribed: vi.fn(),
+    }
+
+    callStore.room = {
+      localParticipant: {
+        identity: 'user-a',
+        videoTrackPublications: new Map(),
+        audioTrackPublications: new Map(),
+      },
+      remoteParticipants: new Map([
+        ['remote-sid-b', {
+          sid: 'remote-sid-b',
+          identity: 'user-c',
+          audioTrackPublications: new Map([['mic', remoteAudioPublication]]),
+          videoTrackPublications: new Map([
+            ['camera', remoteCameraPublication],
+            ['screen', remoteScreenPublication],
+          ]),
+        }],
+      ]),
+    } as never
+
+    callStore.stopRemoteScreenShareForMe()
+
+    expect(remoteAudioPublication.setSubscribed).toHaveBeenCalledWith(true)
+    expect(remoteCameraPublication.setSubscribed).toHaveBeenCalledWith(true)
+    expect(remoteScreenPublication.setSubscribed).not.toHaveBeenCalled()
   })
 })

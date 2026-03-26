@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { ConversationType, ErrorCode } from '@/shared/proto/packets_pb'
 import { Room, RoomEvent, Track, ScreenSharePresets, type AudioCaptureOptions, type LocalVideoTrack, type LocalAudioTrack, type TrackPublishOptions, type ScreenShareCaptureOptions } from 'livekit-client'
 import { useWsStore } from '@/stores/ws'
@@ -453,6 +453,7 @@ export const useCallStore = defineStore('call', () => {
   const micEnabled = ref(false)
   const cameraEnabled = ref(false)
   const screenShareEnabled = ref(false)
+  const remoteScreenShareReceiveEnabled = ref(true)
   const remoteParticipantCount = ref(0)
   const mediaVersion = ref(0)
   const annotationSessionState = ref<ScreenAnnotationSessionState | null>(null)
@@ -463,9 +464,10 @@ export const useCallStore = defineStore('call', () => {
     void mediaVersion.value
     const current = room.value
     if (!current) return false
+    if (!current.remoteParticipants || typeof current.remoteParticipants.values !== 'function') return false
     for (const participant of current.remoteParticipants.values()) {
       for (const pub of participant.videoTrackPublications.values()) {
-        if (isScreenSource(pub.source) && pub.track && !pub.isMuted) return true
+        if (isScreenSource(pub.source) && !pub.isMuted) return true
       }
     }
     return false
@@ -639,6 +641,82 @@ export const useCallStore = defineStore('call', () => {
 
   function clearAnnotationSession() {
     setAnnotationSession(null)
+  }
+
+  function syncRemoteScreenPublicationSubscription(
+    publication: {
+      trackSid?: string
+      source?: unknown
+      isSubscribed: boolean
+      setSubscribed?: (next: boolean) => void
+    },
+    participant: { identity?: string; sid?: string },
+    reason: string,
+  ) {
+    const nextSubscribed = remoteScreenShareReceiveEnabled.value
+    if (publication.isSubscribed === nextSubscribed || typeof publication.setSubscribed !== 'function') return
+    callDebug(nextSubscribed ? 'forcing remote screen share subscribe' : 'stopping remote screen share for local viewer', {
+      participant: participant.identity,
+      participantSid: participant.sid,
+      trackSid: publication.trackSid,
+      source: publication.source,
+      reason,
+    })
+    publication.setSubscribed(nextSubscribed)
+  }
+
+  function syncRemoteParticipantSubscriptions(
+    participant: {
+      identity?: string
+      sid?: string
+      audioTrackPublications: Map<unknown, {
+        isSubscribed: boolean
+        trackSid?: string
+        setSubscribed?: (next: boolean) => void
+      }>
+      videoTrackPublications: Map<unknown, {
+        isSubscribed: boolean
+        trackSid?: string
+        source?: unknown
+        setSubscribed?: (next: boolean) => void
+      }>
+    },
+    reason: string,
+  ) {
+    for (const publication of participant.audioTrackPublications.values()) {
+      if (!publication.isSubscribed && typeof publication.setSubscribed === 'function') {
+        callDebug('forcing remote audio subscribe', {
+          participant: participant.identity,
+          participantSid: participant.sid,
+          trackSid: publication.trackSid,
+          reason,
+        })
+        publication.setSubscribed(true)
+      }
+    }
+    for (const publication of participant.videoTrackPublications.values()) {
+      if (isScreenSource(publication.source)) {
+        syncRemoteScreenPublicationSubscription(publication, participant, reason)
+        continue
+      }
+      if (!publication.isSubscribed && typeof publication.setSubscribed === 'function') {
+        callDebug('forcing remote video subscribe', {
+          participant: participant.identity,
+          participantSid: participant.sid,
+          trackSid: publication.trackSid,
+          source: publication.source,
+          reason,
+        })
+        publication.setSubscribed(true)
+      }
+    }
+  }
+
+  function syncRemoteTrackSubscriptions(current: Room, reason: string) {
+    if (!current.remoteParticipants || typeof current.remoteParticipants.values !== 'function') return
+    for (const participant of current.remoteParticipants.values()) {
+      syncRemoteParticipantSubscriptions(participant, reason)
+    }
   }
 
   function emitScreenAnnotation(event: ScreenAnnotationEvent) {
@@ -1100,6 +1178,7 @@ export const useCallStore = defineStore('call', () => {
       cameraEnabled.value = false
       screenShareEnabled.value = false
       micEnabled.value = false
+      remoteScreenShareReceiveEnabled.value = true
       remoteParticipantCount.value = 0
       mediaVersion.value += 1
       activeSpeakerSids.value = new Set()
@@ -1161,26 +1240,7 @@ export const useCallStore = defineStore('call', () => {
         void publishLocalAnnotationSessionUpdate(true, capture.shareType, capture.shareLabel)
       }
 
-      for (const publication of participant.audioTrackPublications.values()) {
-        if (!publication.isSubscribed) {
-          callDebug('forcing remote audio subscribe on participant connect', {
-            participant: participant.identity,
-            trackSid: publication.trackSid,
-          })
-          publication.setSubscribed(true)
-        }
-      }
-      for (const publication of participant.videoTrackPublications.values()) {
-        if (!publication.isSubscribed) {
-          callDebug('forcing remote video subscribe on participant connect', {
-            participant: participant.identity,
-            participantSid: participant.sid,
-            trackSid: publication.trackSid,
-            source: publication.source,
-          })
-          publication.setSubscribed(true)
-        }
-      }
+      syncRemoteParticipantSubscriptions(participant, 'participant-connected')
       callDebug('remote participant connected', {
         participant: participant.identity,
         sid: participant.sid,
@@ -1263,7 +1323,7 @@ export const useCallStore = defineStore('call', () => {
         source: publication.source,
       })
       if (isScreenSource(publication.source)) {
-        if (annotationSessionState.value?.sharerIdentity === participant.identity) {
+        if (remoteScreenShareReceiveEnabled.value && annotationSessionState.value?.sharerIdentity === participant.identity) {
           clearAnnotationSession()
         }
         logScreenShare('remote screen track unsubscribed', {
@@ -1277,14 +1337,18 @@ export const useCallStore = defineStore('call', () => {
     })
 
     next.on(RoomEvent.TrackPublished, (publication, participant) => {
-      if (!participant.isLocal && !publication.isSubscribed) {
-        callDebug('forcing remote track subscribe on track publish', {
-          participant: participant.identity,
-          trackSid: publication.trackSid,
-          kind: publication.kind,
-          source: publication.source,
-        })
-        publication.setSubscribed(true)
+      if (!participant.isLocal) {
+        if (isScreenSource(publication.source)) {
+          syncRemoteScreenPublicationSubscription(publication, participant, 'track-published')
+        } else if (!publication.isSubscribed) {
+          callDebug('forcing remote track subscribe on track publish', {
+            participant: participant.identity,
+            trackSid: publication.trackSid,
+            kind: publication.kind,
+            source: publication.source,
+          })
+          publication.setSubscribed(true)
+        }
       }
       callDebug('track published event', {
         participant: participant.identity,
@@ -1406,28 +1470,7 @@ export const useCallStore = defineStore('call', () => {
   }
 
   function ensureRemoteTracksSubscribed(current: Room) {
-    for (const participant of current.remoteParticipants.values()) {
-      for (const publication of participant.audioTrackPublications.values()) {
-        if (!publication.isSubscribed) {
-          callDebug('forcing remote audio subscribe during sync', {
-            participant: participant.identity,
-            trackSid: publication.trackSid,
-          })
-          publication.setSubscribed(true)
-        }
-      }
-      for (const publication of participant.videoTrackPublications.values()) {
-        if (!publication.isSubscribed) {
-          callDebug('forcing remote video subscribe during sync', {
-            participant: participant.identity,
-            participantSid: participant.sid,
-            trackSid: publication.trackSid,
-            source: publication.source,
-          })
-          publication.setSubscribed(true)
-        }
-      }
-    }
+    syncRemoteTrackSubscriptions(current, 'sync')
   }
 
   function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
@@ -1468,6 +1511,7 @@ export const useCallStore = defineStore('call', () => {
     clearEmptyCallAutoCloseTimer()
     if (!current) {
       clearAnnotationSession()
+      remoteScreenShareReceiveEnabled.value = true
       suppressParticipantChangeSounds = false
       logScreenShare('ensureDisconnected skipped: no active room', { teardownId })
       return
@@ -1496,6 +1540,7 @@ export const useCallStore = defineStore('call', () => {
     }
     room.value = null
     clearAnnotationSession()
+    remoteScreenShareReceiveEnabled.value = true
     knownRemoteParticipantSids.clear()
     suppressParticipantChangeSounds = false
     logTrackedDisplayCaptureState('ensureDisconnected:end', { teardownId })
@@ -1884,6 +1929,7 @@ export const useCallStore = defineStore('call', () => {
       }
       playbackBlocked.value = !nextRoom.canPlaybackAudio
       connected.value = true
+      remoteScreenShareReceiveEnabled.value = true
       remoteParticipantCount.value = nextRoom.remoteParticipants.size
       if (remoteParticipantCount.value === 0) {
         scheduleEmptyCallAutoClose()
@@ -1966,6 +2012,7 @@ export const useCallStore = defineStore('call', () => {
     micEnabled.value = false
     cameraEnabled.value = false
     screenShareEnabled.value = false
+    remoteScreenShareReceiveEnabled.value = true
     remoteParticipantCount.value = 0
     mediaVersion.value = 0
     activeSpeakerSids.value = new Set()
@@ -2158,6 +2205,22 @@ export const useCallStore = defineStore('call', () => {
     })
   }
 
+  function stopRemoteScreenShareForMe() {
+    const current = room.value
+    remoteScreenShareReceiveEnabled.value = false
+    if (current) {
+      syncRemoteTrackSubscriptions(current, 'viewer-stop-remote-screen-share')
+    }
+  }
+
+  function startRemoteScreenShareForMe() {
+    const current = room.value
+    remoteScreenShareReceiveEnabled.value = true
+    if (current) {
+      syncRemoteTrackSubscriptions(current, 'viewer-start-remote-screen-share')
+    }
+  }
+
   async function publishScreenAnnotationSegment(segment: ScreenAnnotationSegmentV1): Promise<boolean> {
     const current = room.value
     if (!current) return false
@@ -2215,6 +2278,11 @@ export const useCallStore = defineStore('call', () => {
   function toggleMinimized() {
     minimized.value = !minimized.value
   }
+
+  watch([remoteScreenShareActive, screenShareEnabled], ([remoteActive, localSharing]) => {
+    if (localSharing || remoteActive) return
+    clearAnnotationSession()
+  })
 
   function registerWsHandlers() {
     const ws = useWsStore()
@@ -2284,6 +2352,7 @@ export const useCallStore = defineStore('call', () => {
     micEnabled,
     cameraEnabled,
     screenShareEnabled,
+    remoteScreenShareReceiveEnabled,
     annotationSessionState,
     annotationAvailable,
     annotationDisabledReason,
@@ -2302,6 +2371,8 @@ export const useCallStore = defineStore('call', () => {
     switchInputDevice,
     toggleCamera,
     toggleScreenShare,
+    stopRemoteScreenShareForMe,
+    startRemoteScreenShareForMe,
     publishScreenAnnotationSegment,
     onScreenAnnotation,
     ingestScreenAnnotationPacket,

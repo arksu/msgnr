@@ -125,7 +125,7 @@ function createRemoteShareRoom(options?: {
   const remoteScreenTrack = createVideoTrack(trackSid)
   const remoteScreenPublication = {
     trackSid: remoteScreenTrack.sid,
-    source: 'screen_share',
+    source: Track.Source.ScreenShare,
     track: remoteScreenTrack,
     isMuted: false,
     isSubscribed: true,
@@ -133,6 +133,7 @@ function createRemoteShareRoom(options?: {
   }
   return {
     trackSid: remoteScreenTrack.sid,
+    remoteScreenPublication,
     room: {
       localParticipant: {
         sid: 'local-sid',
@@ -633,6 +634,166 @@ describe('CallDock remote share presentation', () => {
     wrapper.unmount()
   })
 
+  it('renders a remote share after the track becomes available on a mediaVersion update', async () => {
+    const callStore = useCallStore()
+    const remoteShare = createRemoteShareRoom()
+    seedCallUserState()
+
+    remoteShare.remoteScreenPublication.track = null as never
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.room = remoteShare.room as never
+    callStore.mediaVersion = 1
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    const stage = wrapper.get('[data-testid="calldock-remote-share-stage"]').element as HTMLVideoElement
+    expect(stage.style.display).toBe('none')
+
+    remoteShare.remoteScreenPublication.track = createVideoTrack('remote-screen-track-live') as never
+    remoteShare.trackSid = 'remote-screen-track-live'
+    callStore.mediaVersion = 2
+    await flushAll()
+    await flushAll()
+
+    expect(stage.style.display).not.toBe('none')
+
+    wrapper.unmount()
+  })
+
+  it('stops and resumes remote screen share locally from the stage overlay', async () => {
+    const callStore = useCallStore()
+    const remoteShare = createRemoteShareRoom()
+    seedCallUserState()
+
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.room = remoteShare.room as never
+    callStore.mediaVersion = 1
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-stop"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="calldock-remote-share-stage-stop"]').trigger('click')
+    await flushAll()
+
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(false)
+    expect(remoteShare.remoteScreenPublication.setSubscribed).toHaveBeenCalledWith(false)
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-paused"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-resume"]').exists()).toBe(true)
+
+    remoteShare.remoteScreenPublication.isSubscribed = false
+    await wrapper.get('[data-testid="calldock-remote-share-stage-resume"]').trigger('click')
+    await flushAll()
+
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(true)
+    expect(remoteShare.remoteScreenPublication.setSubscribed).toHaveBeenLastCalledWith(true)
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-paused"]').exists()).toBe(false)
+    expect((wrapper.get('[data-testid="calldock-remote-share-stage"]').element as HTMLVideoElement).style.display).not.toBe('none')
+
+    wrapper.unmount()
+  })
+
+  it('keeps the paused frame visible when switching between stage and tile modes while paused', async () => {
+    const callStore = useCallStore()
+    const remoteShare = createRemoteShareRoom()
+    seedCallUserState()
+
+    const originalGetContext = HTMLCanvasElement.prototype.getContext
+    const originalToDataURL = HTMLCanvasElement.prototype.toDataURL
+    const canvasContextStub = {
+      drawImage: vi.fn(),
+      setTransform: vi.fn(),
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      beginPath: vi.fn(),
+      rect: vi.fn(),
+      clip: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      restore: vi.fn(),
+      globalAlpha: 1,
+      lineCap: 'round',
+      lineJoin: 'round',
+      strokeStyle: '',
+      lineWidth: 1,
+    } as unknown as CanvasRenderingContext2D
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value: vi.fn(() => canvasContextStub) as unknown as typeof HTMLCanvasElement.prototype.getContext,
+    })
+    Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
+      configurable: true,
+      value: vi.fn(() => 'data:image/jpeg;base64,frozen-frame') as typeof HTMLCanvasElement.prototype.toDataURL,
+    })
+
+    try {
+      callStore.connected = true
+      callStore.minimized = false
+      callStore.room = remoteShare.room as never
+      callStore.mediaVersion = 1
+
+      const wrapper = mount(CallDock, {
+        attachTo: document.body,
+        global: {
+          stubs: {
+            UserAvatar: true,
+          },
+        },
+      })
+      await flushAll()
+
+      const stageVideo = wrapper.get('[data-testid="calldock-remote-share-stage"]').element as HTMLVideoElement
+      Object.defineProperty(stageVideo, 'videoWidth', {
+        configurable: true,
+        value: 1280,
+      })
+      Object.defineProperty(stageVideo, 'videoHeight', {
+        configurable: true,
+        value: 720,
+      })
+
+      await wrapper.get('[data-testid="calldock-remote-share-stage-stop"]').trigger('click')
+      await flushAll()
+
+      expect(wrapper.get('[data-testid="calldock-remote-share-stage-paused-image"]').attributes('src')).toContain('frozen-frame')
+
+      await wrapper.get('[data-testid="calldock-remote-share-stage-toggle"]').trigger('click')
+      await flushAll()
+
+      expect(wrapper.get('[data-testid="calldock-remote-share-tile-paused-image-remote-sid"]').attributes('src')).toContain('frozen-frame')
+
+      wrapper.unmount()
+    } finally {
+      Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+        configurable: true,
+        value: originalGetContext,
+      })
+      Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
+        configurable: true,
+        value: originalToDataURL,
+      })
+    }
+  })
+
   it('resets the local presentation mode when the remote share track changes', async () => {
     const callStore = useCallStore()
     seedCallUserState()
@@ -698,6 +859,83 @@ describe('CallDock remote share presentation', () => {
     expect((wrapper.get('[data-testid="calldock-remote-share-stage"]').element as HTMLVideoElement).style.display).not.toBe('none')
     expect(wrapper.find('[data-testid="calldock-remote-share-badge-remote-sid"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="calldock-remote-share-stage-toggle"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('supports pausing and resuming the remote share from tile mode with a fallback placeholder', async () => {
+    const callStore = useCallStore()
+    const remoteShare = createRemoteShareRoom()
+    seedCallUserState()
+
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.room = remoteShare.room as never
+    callStore.mediaVersion = 1
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    await wrapper.get('[data-testid="calldock-remote-share-stage-toggle"]').trigger('click')
+    await flushAll()
+
+    await wrapper.get('[data-testid="calldock-remote-share-tile-stop-remote-sid"]').trigger('click')
+    await flushAll()
+
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(false)
+    expect(wrapper.find('[data-testid="calldock-remote-share-tile-paused-remote-sid"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="calldock-remote-share-badge-remote-sid"]').text()).toContain('paused')
+
+    remoteShare.remoteScreenPublication.isSubscribed = false
+    await wrapper.get('[data-testid="calldock-remote-share-tile-resume-remote-sid"]').trigger('click')
+    await flushAll()
+
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(true)
+    expect(remoteShare.remoteScreenPublication.setSubscribed).toHaveBeenLastCalledWith(true)
+    expect(wrapper.find('[data-testid="calldock-remote-share-tile-paused-remote-sid"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('keeps a new remote share blocked later in the same call until resumed', async () => {
+    const callStore = useCallStore()
+    seedCallUserState()
+
+    const firstShare = createRemoteShareRoom({ trackSid: 'remote-screen-track-a' })
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.room = firstShare.room as never
+    callStore.mediaVersion = 1
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushAll()
+
+    await wrapper.get('[data-testid="calldock-remote-share-stage-stop"]').trigger('click')
+    await flushAll()
+    expect(callStore.remoteScreenShareReceiveEnabled).toBe(false)
+
+    callStore.room = createRemoteShareRoom({ trackSid: 'remote-screen-track-b' }).room as never
+    callStore.mediaVersion = 2
+    await flushAll()
+    await flushAll()
+
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-paused"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="calldock-remote-share-stage-resume"]').exists()).toBe(true)
+    expect((wrapper.get('[data-testid="calldock-remote-share-stage"]').element as HTMLVideoElement).style.display).toBe('none')
 
     wrapper.unmount()
   })

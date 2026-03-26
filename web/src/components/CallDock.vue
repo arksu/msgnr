@@ -119,22 +119,51 @@
               playsinline
             />
             <div
-              v-if="remoteScreenStageVisible"
+              v-if="remoteScreenStagePausedVisible"
+              class="absolute inset-0 bg-black"
+              data-testid="calldock-remote-share-stage-paused"
+            >
+              <img
+                v-if="remoteScreenPauseFrameSrc"
+                :src="remoteScreenPauseFrameSrc"
+                class="h-full w-full object-contain"
+                data-testid="calldock-remote-share-stage-paused-image"
+                alt="Paused shared screen"
+              >
+              <div v-else class="flex h-full w-full items-center justify-center bg-slate-950 text-sm text-slate-300">
+                Shared screen paused for you
+              </div>
+              <div class="absolute inset-0 bg-black/35" />
+            </div>
+            <div
+              v-if="remoteScreenStageVisible || remoteScreenStagePausedVisible"
               class="absolute left-3 top-3 z-10 rounded-md border border-slate-500/70 bg-black/60 px-2 py-1 text-[11px] text-white"
             >
-              {{ remoteScreenOwnerLabel }}
+              {{ remoteScreenStagePausedVisible ? `${remoteScreenOwnerDisplayLabel} paused for you` : remoteScreenOwnerDisplayLabel }}
             </div>
-            <button
-              v-if="remoteScreenStageVisible"
-              class="absolute top-3 right-3 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
-              :title="remoteScreenViewerToggleTitle"
-              data-testid="calldock-remote-share-stage-toggle"
-              @click="toggleRemoteScreenPresentationMode"
+            <div
+              v-if="remoteScreenStageVisible || remoteScreenStagePausedVisible"
+              class="absolute top-3 right-3 z-10 flex items-center gap-2"
             >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path d="M15 3h6v6M9 21L21 3M21 9V3h-6"/>
-              </svg>
-            </button>
+              <button
+                class="flex h-7 items-center justify-center rounded-full bg-black/60 px-3 text-xs text-white hover:bg-black/90 transition-colors"
+                :title="remoteScreenReceiveToggleTitle"
+                :data-testid="callStore.remoteScreenShareReceiveEnabled ? 'calldock-remote-share-stage-stop' : 'calldock-remote-share-stage-resume'"
+                @click="callStore.remoteScreenShareReceiveEnabled ? handleStopRemoteScreenShareForMe() : handleStartRemoteScreenShareForMe()"
+              >
+                {{ callStore.remoteScreenShareReceiveEnabled ? 'Pause for me' : 'Resume' }}
+              </button>
+              <button
+                class="flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
+                :title="remoteScreenViewerToggleTitle"
+                data-testid="calldock-remote-share-stage-toggle"
+                @click="toggleRemoteScreenPresentationMode"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M15 3h6v6M9 21L21 3M21 9V3h-6"/>
+                </svg>
+              </button>
+            </div>
 
             <!-- Pinned view: fills stage when a tile is pinned -->
             <template v-if="pinnedSid">
@@ -260,13 +289,30 @@
                     :data-testid="`calldock-remote-tile-${tile.sid}`"
                   >
                     <video
-                      v-if="tile.cameraOn || tile.screenShareOn"
+                      v-if="tile.cameraOn || isLiveRemoteScreenTile(tile.sid)"
                       :ref="(el) => setRemoteTileRef(tile.sid, el as HTMLVideoElement | null)"
                       class="h-full w-full"
-                      :class="tile.screenShareOn ? 'bg-black object-contain' : 'object-cover'"
+                      :class="isLiveRemoteScreenTile(tile.sid) ? 'bg-black object-contain' : 'object-cover'"
                       autoplay
                       playsinline
                     />
+                    <div
+                      v-else-if="isPausedRemoteScreenTile(tile.sid)"
+                      class="relative h-full w-full bg-black"
+                      :data-testid="`calldock-remote-share-tile-paused-${tile.sid}`"
+                    >
+                      <img
+                        v-if="remoteScreenPauseFrameSrc"
+                        :src="remoteScreenPauseFrameSrc"
+                        class="h-full w-full object-contain"
+                        :data-testid="`calldock-remote-share-tile-paused-image-${tile.sid}`"
+                        alt="Paused shared screen"
+                      >
+                      <div v-else class="flex h-full w-full items-center justify-center text-sm text-slate-300">
+                        Shared screen paused for you
+                      </div>
+                      <div class="absolute inset-0 bg-black/30" />
+                    </div>
                     <div
                       v-else
                       class="flex h-full w-full items-center justify-center"
@@ -295,14 +341,36 @@
                       class="absolute left-2 top-2 z-10 rounded border border-emerald-400/50 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-200"
                       :data-testid="`calldock-remote-share-badge-${tile.sid}`"
                     >
-                      Sharing screen
+                      {{ callStore.remoteScreenShareReceiveEnabled ? 'Sharing screen' : 'Screen share paused' }}
                     </div>
-                    <!-- Pin button (hover) -->
+                    <div
+                      v-if="tile.screenShareOn"
+                      class="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
+                    >
+                      <button
+                        class="flex h-6 items-center justify-center rounded bg-black/50 px-2 text-[10px] text-white hover:bg-black/80"
+                        :title="remoteScreenReceiveToggleTitle"
+                        :data-testid="callStore.remoteScreenShareReceiveEnabled ? `calldock-remote-share-tile-stop-${tile.sid}` : `calldock-remote-share-tile-resume-${tile.sid}`"
+                        @click.stop="callStore.remoteScreenShareReceiveEnabled ? handleStopRemoteScreenShareForMe() : handleStartRemoteScreenShareForMe()"
+                      >
+                        {{ callStore.remoteScreenShareReceiveEnabled ? 'Pause' : 'Resume' }}
+                      </button>
+                      <button
+                        class="flex h-6 w-6 items-center justify-center rounded bg-black/50 text-white hover:bg-black/80"
+                        :title="remoteScreenViewerToggleTitle"
+                        :data-testid="`calldock-remote-share-tile-toggle-${tile.sid}`"
+                        @click.stop="toggleRemoteScreenPresentationMode()"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                          <path d="M15 3h6v6M9 21L21 3M21 9V3h-6"/>
+                        </svg>
+                      </button>
+                    </div>
                     <button
+                      v-else
                       class="absolute top-1.5 right-1.5 z-10 flex h-6 w-6 items-center justify-center rounded bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
-                      :title="tile.screenShareOn ? remoteScreenViewerToggleTitle : 'Pin to full view'"
-                      :data-testid="tile.screenShareOn ? `calldock-remote-share-tile-toggle-${tile.sid}` : undefined"
-                      @click.stop="tile.screenShareOn ? toggleRemoteScreenPresentationMode() : pinTile(tile.sid)"
+                      title="Pin to full view"
+                      @click.stop="pinTile(tile.sid)"
                     >
                       <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path d="M15 3h6v6M9 21L21 3M21 9V3h-6"/>
@@ -661,6 +729,12 @@ interface ActiveAnnotationStroke {
   lastPoint: NormalizedPoint
 }
 
+interface PausedRemoteScreenFrame {
+  participantSid: string
+  trackSid: string
+  imageDataUrl: string
+}
+
 const ANNOTATION_SEGMENT_TTL_MS = 20_000
 const ANNOTATION_SEGMENT_FADE_MS = 300
 const ANNOTATION_STROKE_WIDTH_PX = 3
@@ -713,6 +787,7 @@ const annotationDrawMode = ref(false)
 const annotationActiveSegmentCount = ref(0)
 const annotationFadingSegmentCount = ref(0)
 const remoteScreenPresentationMode = ref<'stage' | 'tile'>('stage')
+const pausedRemoteScreenFrame = ref<PausedRemoteScreenFrame | null>(null)
 
 // Imperative track attachment state (not reactive — lives outside Vue reactivity)
 let attachedLocalCameraTrack: AttachableMediaTrack | null = null
@@ -725,7 +800,6 @@ const attachedRemoteCamera = new Map<string, { track: AttachableMediaTrack; elem
 // Remote video element refs set by :ref callback in v-for
 const remoteTileEls = new Map<string, HTMLVideoElement | null>()
 
-const remoteScreenActive = ref(false)
 const remoteScreenOwnerLabel = ref('Screen share')
 const annotationSegments: RenderedAnnotationSegment[] = []
 const annotationSegmentKeys = new Set<string>()
@@ -1028,9 +1102,6 @@ function handleExpandedDockPointerDown(event: PointerEvent) {
 
 const participantTiles = computed<ParticipantTile[]>(() => {
   callStore.mediaVersion // reactive dependency on topology changes
-  const remoteScreenTileSid = remoteScreenPresentationMode.value === 'tile'
-    ? activeRemoteScreenShareParticipantSid.value
-    : ''
 
   const currentRoom = callStore.room
   const speakerSids = callStore.activeSpeakerSids
@@ -1076,7 +1147,7 @@ const participantTiles = computed<ParticipantTile[]>(() => {
       avatarUrl: chatStore.resolveAvatarUrl(participant.identity),
       isLocal: false,
       cameraOn: Boolean(cameraPub?.isSubscribed && cameraPub?.track && !cameraPub?.isMuted),
-      screenShareOn: participant.sid === remoteScreenTileSid,
+      screenShareOn: participant.sid === remoteScreenTileSid.value,
       micOn: Boolean(micPub?.isSubscribed && micPub?.track && !micPub?.isMuted),
       isSpeaking: speakerSids.has(participant.sid),
     })
@@ -1122,14 +1193,14 @@ function resolveLocalScreenShareTrackSid(): string {
   return publication.track.sid ?? ''
 }
 
-function resolveRemoteScreenShareSource() {
+function resolveRemoteScreenShareSource(options?: { requireTrack?: boolean }) {
   const currentRoom = callStore.room
   if (!currentRoom) return null
   for (const participant of currentRoom.remoteParticipants.values()) {
     for (const publication of participant.videoTrackPublications.values()) {
       if (!isScreenSource(publication.source)) continue
-      if (!publication.track || publication.isMuted) continue
-      if (!publication.track.sid) continue
+      if (publication.isMuted) continue
+      if (options?.requireTrack && (!publication.track || !publication.track.sid)) continue
       const identity = participant.identity ?? ''
       const owner = identity
         ? (chatStore.resolveDisplayName(identity).trim() || identity.slice(0, 8))
@@ -1139,27 +1210,44 @@ function resolveRemoteScreenShareSource() {
         participantIdentity: identity,
         ownerLabel: owner,
         publication,
-        track: publication.track as AttachableMediaTrack,
-        trackSid: publication.track.sid,
+        track: publication.track as AttachableMediaTrack | null,
+        trackSid: publication.track?.sid ?? publication.trackSid ?? '',
       }
     }
   }
   return null
 }
 
-function resolveRemoteScreenShareTrackSid(): string {
-  return resolveRemoteScreenShareSource()?.trackSid ?? ''
-}
-
-const activeRemoteScreenShare = computed(() => {
+// Publication-level view of a remote share. This remains truthy while a remote
+// participant is sharing even if this viewer has locally paused receiving it.
+const availableRemoteScreenShare = computed(() => {
   void callStore.mediaVersion
   return resolveRemoteScreenShareSource()
 })
 
-const activeRemoteScreenShareTrackSid = computed(() => activeRemoteScreenShare.value?.trackSid ?? '')
-const activeRemoteScreenShareParticipantSid = computed(() => activeRemoteScreenShare.value?.participantSid ?? '')
+// Live attached remote share for this viewer. This requires local receive to be
+// enabled and the publication to currently expose a track.
+const activeRemoteScreenShare = computed(() => {
+  void callStore.mediaVersion
+  if (!callStore.remoteScreenShareReceiveEnabled) return null
+  const source = resolveRemoteScreenShareSource({ requireTrack: true })
+  if (!source?.track) return null
+  return source
+})
+
+const activeRemoteScreenShareTrackSid = computed(() => availableRemoteScreenShare.value?.trackSid ?? '')
+const activeRemoteScreenShareParticipantSid = computed(() => availableRemoteScreenShare.value?.participantSid ?? '')
+const remoteScreenTileSid = computed(() => (
+  remoteScreenPresentationMode.value === 'tile' ? activeRemoteScreenShareParticipantSid.value : ''
+))
+const remoteScreenStagePausedVisible = computed(() => (
+  Boolean(availableRemoteScreenShare.value)
+  && !callStore.remoteScreenShareReceiveEnabled
+  && remoteScreenPresentationMode.value === 'stage'
+  && !pinnedSid.value
+))
 const remoteScreenStageVisible = computed(() => (
-  Boolean(activeRemoteScreenShareTrackSid.value)
+  Boolean(activeRemoteScreenShare.value?.trackSid)
   && remoteScreenPresentationMode.value === 'stage'
   && !pinnedSid.value
 ))
@@ -1168,6 +1256,19 @@ const remoteScreenViewerToggleTitle = computed(() => (
     ? 'Fit shared screen into the sharer user card'
     : 'Focus the shared screen again'
 ))
+const remoteScreenReceiveToggleTitle = computed(() => (
+  callStore.remoteScreenShareReceiveEnabled ? 'Stop shared screen for me' : 'Resume shared screen'
+))
+const remoteScreenOwnerDisplayLabel = computed(() => (
+  availableRemoteScreenShare.value ? `${availableRemoteScreenShare.value.ownerLabel} is sharing` : remoteScreenOwnerLabel.value
+))
+const remoteScreenPauseFrameSrc = computed(() => {
+  const frame = pausedRemoteScreenFrame.value
+  const source = availableRemoteScreenShare.value
+  if (!frame || !source) return ''
+  if (frame.participantSid !== source.participantSid || frame.trackSid !== source.trackSid) return ''
+  return frame.imageDataUrl
+})
 
 const pinnedScreenShareTrackSid = computed(() => {
   void callStore.mediaVersion
@@ -1183,7 +1284,11 @@ const pinnedScreenShareTrackSid = computed(() => {
   if (!participant) return ''
   for (const publication of participant.videoTrackPublications.values()) {
     if (!isScreenSource(publication.source)) continue
-    if (!publication.isSubscribed && typeof publication.setSubscribed === 'function') {
+    if (
+      !publication.isSubscribed
+      && callStore.remoteScreenShareReceiveEnabled
+      && typeof publication.setSubscribed === 'function'
+    ) {
       publication.setSubscribed(true)
     }
     if (!publication.track || publication.isMuted) continue
@@ -1199,7 +1304,7 @@ const currentScreenShareTrackSid = computed(() => {
   if (callStore.screenShareEnabled) {
     return resolveLocalScreenShareTrackSid()
   }
-  return resolveRemoteScreenShareTrackSid()
+  return activeRemoteScreenShare.value?.trackSid ?? ''
 })
 
 const annotationSurfaceMeta = computed(() => {
@@ -1209,7 +1314,7 @@ const annotationSurfaceMeta = computed(() => {
     if (!trackSid) return null
     return { kind: 'pinned' as const, trackSid }
   }
-  const remoteTrackSid = resolveRemoteScreenShareTrackSid()
+  const remoteTrackSid = activeRemoteScreenShare.value?.trackSid ?? ''
   if (remoteTrackSid) {
     return { kind: 'remote' as const, trackSid: remoteTrackSid }
   }
@@ -1249,6 +1354,59 @@ function pinTile(sid: string) {
 
 function toggleRemoteScreenPresentationMode() {
   remoteScreenPresentationMode.value = remoteScreenPresentationMode.value === 'stage' ? 'tile' : 'stage'
+}
+
+function isPausedRemoteScreenTile(sid: string): boolean {
+  return !callStore.remoteScreenShareReceiveEnabled
+    && remoteScreenPresentationMode.value === 'tile'
+    && activeRemoteScreenShareParticipantSid.value === sid
+}
+
+function isLiveRemoteScreenTile(sid: string): boolean {
+  return callStore.remoteScreenShareReceiveEnabled
+    && remoteScreenPresentationMode.value === 'tile'
+    && activeRemoteScreenShareParticipantSid.value === sid
+}
+
+function clearPausedRemoteScreenFrame() {
+  pausedRemoteScreenFrame.value = null
+}
+
+function capturePausedRemoteScreenFrame(): string {
+  const source = activeRemoteScreenShare.value
+  if (!source) return ''
+  const video = remoteScreenPresentationMode.value === 'tile'
+    ? unwrapEl(remoteTileEls.get(source.participantSid) ?? null)
+    : unwrapEl(remoteScreenEl.value)
+  if (!video || !video.videoWidth || !video.videoHeight) return ''
+  const canvas = document.createElement('canvas')
+  canvas.width = video.videoWidth
+  canvas.height = video.videoHeight
+  const ctx = safeGetCanvasContext(canvas)
+  if (!ctx) return ''
+  try {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/jpeg', 0.85)
+  } catch {
+    return ''
+  }
+}
+
+function handleStopRemoteScreenShareForMe() {
+  const source = activeRemoteScreenShare.value
+  if (!source) return
+  const imageDataUrl = capturePausedRemoteScreenFrame()
+  pausedRemoteScreenFrame.value = {
+    participantSid: source.participantSid,
+    trackSid: source.trackSid,
+    imageDataUrl,
+  }
+  callStore.stopRemoteScreenShareForMe()
+}
+
+function handleStartRemoteScreenShareForMe() {
+  clearPausedRemoteScreenFrame()
+  callStore.startRemoteScreenShareForMe()
 }
 
 function unpinTile() {
@@ -1624,7 +1782,16 @@ watch(pinnedSid, () => {
 
 watch(activeRemoteScreenShareTrackSid, (next, prev) => {
   if (next !== prev) {
-    remoteScreenPresentationMode.value = 'stage'
+    clearPausedRemoteScreenFrame()
+    if (callStore.remoteScreenShareReceiveEnabled) {
+      remoteScreenPresentationMode.value = 'stage'
+    }
+  }
+})
+
+watch(() => callStore.remoteScreenShareReceiveEnabled, (enabled) => {
+  if (enabled) {
+    clearPausedRemoteScreenFrame()
   }
 })
 
@@ -1711,15 +1878,12 @@ function syncLocalScreenTrack() {
 function syncRemoteCameraTracks() {
   const currentRoom = callStore.room
   if (!currentRoom) { detachAllRemoteCameraTracks(); return }
-  const remoteScreenTileSid = remoteScreenPresentationMode.value === 'tile'
-    ? activeRemoteScreenShareParticipantSid.value
-    : ''
 
   const activeCameraTracks = new Map<string, AttachableMediaTrack>()
   for (const participant of currentRoom.remoteParticipants.values()) {
     // Skip: if this participant is pinned, their track goes to pinnedVideoEl instead
     if (participant.sid === pinnedSid.value) continue
-    if (participant.sid === remoteScreenTileSid) continue
+    if (participant.sid === remoteScreenTileSid.value) continue
     const pub = participant.getTrackPublication(Track.Source.Camera)
     if (!pub) continue
     if (!pub.isSubscribed) { pub.setSubscribed(true); continue }
@@ -1773,7 +1937,6 @@ function detachRemoteScreenTrack() {
     attachedRemoteScreenTrack.track.detach(attachedRemoteScreenTrack.element)
     attachedRemoteScreenTrack = null
   }
-  remoteScreenActive.value = false
   remoteScreenOwnerLabel.value = 'Screen share'
 }
 
@@ -1782,10 +1945,8 @@ function syncRemoteScreenTrack() {
   const source = activeRemoteScreenShare.value
   if (!currentRoom || !source) { detachRemoteScreenTrack(); return }
 
-  if (!source.publication.isSubscribed) source.publication.setSubscribed(true)
-  const nextTrack = source.track.kind === 'video' ? source.track : null
+  const nextTrack = source.track?.kind === 'video' ? source.track : null
 
-  remoteScreenActive.value = Boolean(nextTrack)
   remoteScreenOwnerLabel.value = `${source.ownerLabel} is sharing`
 
   const video = remoteScreenPresentationMode.value === 'tile'
@@ -2001,6 +2162,7 @@ onBeforeUnmount(() => {
   detachAllRemoteCameraTracks()
   forceStopLocalCapturePreviews()
   clearRenderedAnnotationSegments()
+  clearPausedRemoteScreenFrame()
 })
 
 // ── Maximize / minimize ───────────────────────────────────────────────────────
@@ -2061,6 +2223,7 @@ watch(isVisible, (visible) => {
   stopActiveAnnotationStroke()
   clearRenderedAnnotationSegments()
   forceStopLocalCapturePreviews()
+  clearPausedRemoteScreenFrame()
 })
 
 if (isVisible.value) {
@@ -2187,6 +2350,7 @@ async function handleLeave() {
   maximized.value = false
   pinnedSid.value = null
   remoteScreenPresentationMode.value = 'stage'
+  clearPausedRemoteScreenFrame()
   inviteDialogOpen.value = false
 }
 

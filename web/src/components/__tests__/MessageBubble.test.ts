@@ -339,6 +339,81 @@ describe('MessageBubble reactions', () => {
     wrapper.unmount()
   })
 
+  it('sizes inline edit textarea to full message content on open', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+      body: 'line 1\nline 2\nline 3\nline 4\nline 5',
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
+    editMenu.click()
+    await flushAll()
+
+    const textarea = wrapper.get('[data-testid="message-edit-textarea"]').element as HTMLTextAreaElement
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => 240,
+    })
+
+    textarea.dispatchEvent(new Event('input'))
+    await flushAll()
+
+    expect(textarea.style.maxHeight).toBe('')
+    expect(textarea.style.height).toBe('240px')
+    expect(textarea.style.overflowY).toBe('hidden')
+    wrapper.unmount()
+  })
+
+  it('keeps inline edit textarea synced with content growth', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+      body: 'start',
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
+    editMenu.click()
+    await flushAll()
+
+    const textareaWrapper = wrapper.get('[data-testid="message-edit-textarea"]')
+    const textarea = textareaWrapper.element as HTMLTextAreaElement
+    let scrollHeight = 96
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    })
+
+    await textareaWrapper.setValue('line 1')
+    expect(textarea.style.height).toBe('96px')
+
+    scrollHeight = 232
+    await textareaWrapper.setValue('line 1\nline 2\nline 3\nline 4')
+    expect(textarea.style.height).toBe('232px')
+    expect(textarea.style.overflowY).toBe('hidden')
+    wrapper.unmount()
+  })
+
   it('uses Shift+Enter for newline and Enter for submit while editing', async () => {
     const auth = useAuthStore()
     auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }

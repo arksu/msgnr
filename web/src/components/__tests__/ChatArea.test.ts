@@ -82,6 +82,35 @@ describe('ChatArea', () => {
     expect(wsStore.sendMessage).toHaveBeenCalledWith('channel-1', 'hello world', expect.any(String), undefined, [])
   })
 
+  it('passes the conversation focus token to the main composer', () => {
+    const chatStore = useChatStore()
+
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.conversationComposerFocusToken = 7
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: {
+            props: ['focusToken'],
+            template: '<div data-testid="composer-focus-token">{{ focusToken }}</div>',
+          },
+        },
+      },
+    })
+
+    expect(wrapper.get('[data-testid="composer-focus-token"]').text()).toBe('7')
+  })
+
   it('sends a message when self display name is empty', async () => {
     const authStore = useAuthStore()
     const chatStore = useChatStore()

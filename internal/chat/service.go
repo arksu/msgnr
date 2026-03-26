@@ -3952,6 +3952,12 @@ func (s *Service) buildUnreadCounterTx(ctx context.Context, tx pgx.Tx, channelID
 			   		 WHERE participant_msg.thread_root_id = ts.root_message_id
 			   		   AND participant_msg.sender_id = $2
 			   	)
+			   	OR EXISTS (
+			   		SELECT 1
+			   		  FROM thread_reads thread_reader
+			   		 WHERE thread_reader.root_message_id = ts.root_message_id
+			   		   AND thread_reader.user_id = $2
+			   	)
 			   )
 			   AND COALESCE((
 			   	SELECT tr.last_read_thread_seq
@@ -4084,6 +4090,10 @@ func (s *Service) threadNotificationRecipientsTx(ctx context.Context, tx pgx.Tx,
 			SELECT participant.sender_id AS candidate_id
 			  FROM messages participant
 			 WHERE participant.thread_root_id = $1
+			UNION
+			SELECT tr.user_id AS candidate_id
+			  FROM thread_reads tr
+			 WHERE tr.root_message_id = $1
 		  ) candidates
 		  JOIN messages root ON root.id = $1
 		  JOIN channel_members cm

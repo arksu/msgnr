@@ -302,6 +302,7 @@ import router from '@/router'
 import { useTasksStore } from '@/stores/tasks'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
+import { useTextareaAutosize } from '@/composables/useTextareaAutosize'
 import { renderMarkdownToHtml } from '@/utils/markdown'
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
@@ -335,7 +336,6 @@ const isDragOver = ref(false)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 let dragDepth = 0
-let lastTextareaHeight = 0
 
 const attachmentUrls = ref<Record<string, string>>({})
 const loadingAttachmentIds = ref(new Set<string>())
@@ -358,6 +358,13 @@ const {
   onSelectEmoji,
 } = useComposerEmojiPicker({
   onSelect: insertEmojiAtCursor,
+})
+const {
+  resize: autosizeCommentTextarea,
+  reset: resetCommentTextarea,
+} = useTextareaAutosize(inputEl, {
+  maxLines: MAX_TEXTAREA_LINES,
+  onHeightDelta: preserveScrollOnComposerResize,
 })
 
 const canSubmit = computed(() => {
@@ -559,26 +566,7 @@ function insertEmojiAtCursor(emoji: string) {
 }
 
 function autoResize() {
-  const el = inputEl.value
-  if (!el) return
-  const previousHeight = lastTextareaHeight
-
-  const style = window.getComputedStyle(el)
-  const fontSize = Number.parseFloat(style.fontSize) || 16
-  const lineHeight = Number.parseFloat(style.lineHeight) || (fontSize * 1.5)
-  const paddingTop = Number.parseFloat(style.paddingTop) || 0
-  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
-  const maxHeight = Math.ceil((lineHeight * MAX_TEXTAREA_LINES) + paddingTop + paddingBottom)
-
-  el.style.maxHeight = `${maxHeight}px`
-  el.style.height = '0px'
-  const nextHeight = Math.min(el.scrollHeight, maxHeight)
-  el.style.height = `${nextHeight}px`
-  el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
-  lastTextareaHeight = nextHeight
-  if (previousHeight > 0 && previousHeight !== nextHeight) {
-    preserveScrollOnComposerResize(nextHeight - previousHeight)
-  }
+  autosizeCommentTextarea()
 }
 
 function findNearestScrollContainer(start: HTMLElement | null): HTMLElement | null {
@@ -618,7 +606,7 @@ async function submit() {
     comments.value = sortCommentsNewestFirst([comment, ...comments.value])
     newBody.value = ''
     stagedAttachments.value = []
-    nextTick(() => autoResize())
+    nextTick(() => resetCommentTextarea())
     closeEmojiPicker()
     preloadAttachmentUrls()
     tasksStore.loadUsers()

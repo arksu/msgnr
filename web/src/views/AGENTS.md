@@ -14,6 +14,7 @@ This directory owns route-level orchestration (page composition, lifecycle wirin
 2. Incoming call invite ring starts when an invite is active and stops when invites clear or view unmounts.
 3. On unmount, unsubscribe listeners and stop active audio playback; do not break singleton sound engine reuse.
 4. Admin user editing must treat bot users as integration-only principals: hide password mutation UI and expose integration-token editing instead.
+5. Chat navigation that opens a conversation or thread should also request focus for the matching composer so click-driven and programmatic opens behave the same.
 
 ## Change Guidance
 
@@ -21,3 +22,4 @@ This directory owns route-level orchestration (page composition, lifecycle wirin
 2. When adding route lifecycle effects, ensure cleanup in `onUnmounted`.
 3. Keep settings/profile dialogs accessible and non-blocking for realtime flows.
 4. If the admin user form diverges by role, keep the conditional UX explicit in the view layer rather than burying it inside generic field helpers.
+5. When `MainView` routes a user into a conversation target, prefer store focus actions over direct DOM focus work in the view.

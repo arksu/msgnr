@@ -606,6 +606,7 @@ async function openChatTarget(intent: NotificationOpenIntent): Promise<boolean> 
   if (intent.messageId) {
     chatStore.focusConversationMessage(intent.messageId)
   }
+  chatStore.requestConversationComposerFocus()
   return true
 }
 

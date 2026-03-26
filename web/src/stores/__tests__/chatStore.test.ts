@@ -30,6 +30,7 @@ import {
   PresenceEventSchema,
   PresenceStatus,
   EventType,
+  NotificationType,
   NotificationLevel,
 } from '@/shared/proto/packets_pb'
 
@@ -340,6 +341,7 @@ describe('chatStore phase 6 flows', () => {
     chat.selectChannel('channel-1')
 
     expect(loadLastOpenedConversation('workspace-1', 'user-1')).toBe('channel-1')
+    expect(chat.conversationComposerFocusToken).toBe(1)
   })
 
   it('accepts authorized live events even when global seq values skip filtered events', () => {
@@ -1387,6 +1389,47 @@ describe('chatStore phase 6 flows', () => {
     off()
   })
 
+  it('emits thread reply notifications even when the client is active', () => {
+    const chat = useChatStore()
+    chat.setClientActive(true)
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-thread-reply-active-1',
+      eventType: EventType.NOTIFICATION_ADDED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'notificationAdded',
+        value: create(NotificationAddedEventSchema, {
+          userId: 'user-1',
+          notification: create(NotificationSummarySchema, {
+            notificationId: 'thread-reply-active-1',
+            type: NotificationType.THREAD_REPLY,
+            title: 'Thread reply',
+            body: 'Someone replied in a thread',
+            conversationId: 'channel-1',
+            isRead: false,
+          }),
+        }),
+      },
+    }))
+
+    expect(onIncoming).toHaveBeenCalledWith({
+      reason: 'notification',
+      conversationId: 'channel-1',
+      senderId: '',
+      senderName: 'Thread reply',
+      body: 'Someone replied in a thread',
+      attachmentCount: 0,
+    })
+
+    off()
+  })
+
   it('routes direct task status changed events to subscribers', () => {
     const chat = useChatStore()
     const onTaskStatusChanged = vi.fn()
@@ -1599,6 +1642,7 @@ describe('chatStore phase 6 flows', () => {
     })
 
     expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+    expect(chat.threadComposerFocusToken).toBe(1)
   })
 
   it('keeps acked optimistic thread replies visible without advancing reopen replay cursor', () => {

@@ -371,7 +371,8 @@ describe('MainView server unavailable state', () => {
       unread: 0,
       notificationLevel: NotificationLevel.ALL,
     }] as any
-    vi.spyOn(chatStore, 'selectChannel').mockImplementation((conversationId: string) => {
+    const requestConversationComposerFocusSpy = vi.spyOn(chatStore, 'requestConversationComposerFocus')
+    vi.spyOn(chatStore, 'selectChannel').mockImplementation(async (conversationId: string) => {
       chatStore.activeChannelId = conversationId
     })
 
@@ -387,6 +388,7 @@ describe('MainView server unavailable state', () => {
 
     expect(router.currentRoute.value.name).toBe('main')
     expect(chatStore.activeChannelId).toBe('dm-1')
+    expect(requestConversationComposerFocusSpy).toHaveBeenCalled()
   })
 
   it('consumes cold-start notification query params after bootstrap and clears them', async () => {
@@ -407,7 +409,7 @@ describe('MainView server unavailable state', () => {
       unread: 0,
       notificationLevel: NotificationLevel.ALL,
     }] as any
-    vi.spyOn(chatStore, 'selectChannel').mockImplementation((conversationId: string) => {
+    vi.spyOn(chatStore, 'selectChannel').mockImplementation(async (conversationId: string) => {
       chatStore.activeChannelId = conversationId
     })
 
@@ -431,7 +433,7 @@ describe('MainView server unavailable state', () => {
     wsStore.state = 'BOOTSTRAPPING'
     const chatStore = useChatStore()
     chatStore.bootstrapped = false
-    const selectChannelSpy = vi.spyOn(chatStore, 'selectChannel').mockImplementation((conversationId: string) => {
+    const selectChannelSpy = vi.spyOn(chatStore, 'selectChannel').mockImplementation(async (conversationId: string) => {
       chatStore.activeChannelId = conversationId
     })
 
@@ -757,9 +759,9 @@ describe('MainView server unavailable state', () => {
         myReactions: [],
       }],
     } as any
-    vi.spyOn(chatStore, 'ensureConversationHistory').mockResolvedValue()
-    vi.spyOn(chatStore, 'loadMessageContext').mockResolvedValue()
-    const markUnreadFeedItemReadSpy = vi.spyOn(chatStore, 'markUnreadFeedItemRead').mockResolvedValue()
+    vi.spyOn(chatStore, 'ensureConversationHistory').mockResolvedValue(undefined)
+    vi.spyOn(chatStore, 'loadMessageContext').mockResolvedValue('loaded')
+    const markUnreadFeedItemReadSpy = vi.spyOn(chatStore, 'markUnreadFeedItemRead').mockResolvedValue(undefined)
     const openThreadSpy = vi.spyOn(chatStore, 'openThread')
 
     const wrapper = mountAtRoute(router)
@@ -776,6 +778,7 @@ describe('MainView server unavailable state', () => {
     expect(chatStore.focusedMessageId).toBe('root-1')
     expect(chatStore.focusedThreadMessageId).toBe('msg-1')
     expect(openThreadSpy).toHaveBeenCalled()
+    expect(chatStore.threadComposerFocusToken).toBeGreaterThan(0)
     expect(markUnreadFeedItemReadSpy).toHaveBeenCalledWith(expect.objectContaining({
       notificationId: 'notif-1',
       conversationId: 'dm-1',

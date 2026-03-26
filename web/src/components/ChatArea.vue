@@ -188,6 +188,7 @@
       :disabled="!canComposeMessage"
       :typing-label="typingLabel"
       :online="wsStore.state !== 'DISCONNECTED' && wsStore.state !== 'CONNECTING'"
+      :focus-token="chatStore.conversationComposerFocusToken"
       @send="handleSend"
       @typing="handleTyping"
       @resize="handleComposerResize"

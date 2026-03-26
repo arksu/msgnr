@@ -559,6 +559,7 @@ import {
 } from '@/services/http/chatApi'
 import UserAvatar from './UserAvatar.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
+import { useTextareaAutosize } from '@/composables/useTextareaAutosize'
 import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
 import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
 import {
@@ -669,6 +670,10 @@ const editTagPickerStyle = ref<Record<string, string>>({ top: '0px', left: '0px'
 const editTagRange = ref<{ start: number; end: number } | null>(null)
 const editTagSearchResults = ref<TagSearchResponse>({ users: [], tasks: [], documents: [] })
 const editSelectedTagIndex = ref(0)
+const {
+  resize: resizeEditTextarea,
+  reset: resetEditTextarea,
+} = useTextareaAutosize(editTextarea)
 const isDeleting = ref(false)
 const ws = useWsStore()
 const chat = useChatStore()
@@ -906,6 +911,7 @@ function handleEditTextareaInput() {
     insertedLength,
   ).filter(entity => editBody.value.slice(entity.start, entity.end) === entity.label)
   captureEditSelectionAndRefreshTagSearch()
+  resizeEditTextarea()
 }
 
 function selectEditTagItem(item: MessageTagPickerItem) {
@@ -933,6 +939,7 @@ function selectEditTagItem(item: MessageTagPickerItem) {
     editTextarea.value.selectionStart = next.nextCursor
     editTextarea.value.selectionEnd = next.nextCursor
     captureEditSelection()
+    resizeEditTextarea()
   })
 }
 
@@ -1491,12 +1498,14 @@ function startEdit() {
   if (!canModifyMessage.value) return
   showContextMenu.value = false
   editError.value = ''
+  closeEditTagPicker()
   editBody.value = props.message.body
   editEntities.value = (props.message.entities ?? []).map(entity => ({ ...entity }))
   isEditing.value = true
   nextTick(() => {
     editTextarea.value?.focus()
     captureEditSelection()
+    resizeEditTextarea()
   })
 }
 
@@ -1506,7 +1515,8 @@ function cancelEdit() {
   editError.value = ''
   editBody.value = ''
   editEntities.value = []
-  editTagPickerOpen.value = false
+  closeEditTagPicker()
+  resetEditTextarea()
 }
 
 function handleEditTextareaKeydown(evt: KeyboardEvent) {
@@ -1558,6 +1568,7 @@ function handleEditTextareaKeydown(evt: KeyboardEvent) {
         editTextarea.value.selectionStart = removed.nextCursor
         editTextarea.value.selectionEnd = removed.nextCursor
         captureEditSelectionAndRefreshTagSearch()
+        resizeEditTextarea()
       })
       return
     }
@@ -1616,6 +1627,8 @@ async function saveEdit() {
     isEditing.value = false
     editBody.value = ''
     editEntities.value = []
+    closeEditTagPicker()
+    resetEditTextarea()
   } catch (error) {
     editError.value = error instanceof Error ? error.message : 'Failed to edit message'
   } finally {

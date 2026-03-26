@@ -15,6 +15,7 @@ This directory contains UI components and interaction surfaces.
 3. Visual-only changes must not alter protocol/store semantics.
 4. Chat- and task-comment markdown display should stay consistent: rendered markdown surfaces use the shared marked-based helper path and `markdown-body` styling.
 5. Image lightboxes should support both backdrop-click close and `Escape` close for keyboard parity.
+6. Chat composers must accept explicit focus requests from parent orchestration; do not rely on global DOM queries to move focus into message inputs.
 
 ## Change Guidance
 
@@ -22,3 +23,4 @@ This directory contains UI components and interaction surfaces.
 2. When adding controls, include disabled/loading/error states and test IDs where existing patterns use them.
 3. Maintain consistency with existing design language unless a deliberate redesign is requested.
 4. When adding markdown rendering to a component, add/adjust tests to assert rendered HTML output rather than plain-text rendering.
+5. For message-composer focus behavior, prefer explicit props/tokens or exposed methods over ad hoc `document.querySelector(...).focus()` logic.

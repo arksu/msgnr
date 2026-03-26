@@ -77,6 +77,7 @@
       :conversation-id="chat.activeThreadConversationId"
       :disabled="!chat.activeThreadConversationId"
       :online="ws.state !== 'DISCONNECTED' && ws.state !== 'CONNECTING'"
+      :focus-token="chat.threadComposerFocusToken"
       @send="sendReply"
       @resize="handleComposerResize"
     />

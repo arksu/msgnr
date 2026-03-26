@@ -251,4 +251,23 @@ describe('MessageInput', () => {
     expect(textarea.style.height).toBe(textarea.style.maxHeight)
     expect(textarea.style.overflowY).toBe('auto')
   })
+
+  it('focuses the textarea when focusToken changes', async () => {
+    const wrapper = mount(MessageInput, {
+      attachTo: document.body,
+      props: {
+        channelName: 'general',
+        disabled: false,
+        focusToken: 0,
+      },
+    })
+
+    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement
+    expect(document.activeElement).not.toBe(textarea)
+
+    await wrapper.setProps({ focusToken: 1 })
+    await flushAll()
+
+    expect(document.activeElement).toBe(textarea)
+  })
 })

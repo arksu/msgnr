@@ -172,6 +172,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { uploadChatAttachment, deleteChatAttachment, searchTagEntities, type TagSearchResponse } from '@/services/http/chatApi'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
+import { useTextareaAutosize } from '@/composables/useTextareaAutosize'
 import type { MessageEntity } from '@/stores/chat'
 import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
 import {
@@ -204,6 +205,7 @@ const props = defineProps<{
   disabled?: boolean
   typingLabel?: string
   online?: boolean
+  focusToken?: number
 }>()
 const emit = defineEmits<{
   send: [payload: ComposerSendPayload]
@@ -223,12 +225,12 @@ const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
 let dragDepth = 0
-let lastTextareaHeight = 0
 let lastSelectionStart = 0
 let lastSelectionEnd = 0
 let lastTextSnapshot = ''
 let searchRequestToken = 0
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let handledFocusToken = 0
 
 const tagPickerOpen = ref(false)
 const tagPickerLoading = ref(false)
@@ -244,6 +246,13 @@ const tagSearchResults = ref<TagSearchResponse>({
   documents: [],
 })
 const selectedTagIndex = ref(0)
+const {
+  resize: autosizeComposerTextarea,
+  reset: resetComposerTextarea,
+} = useTextareaAutosize(inputEl, {
+  maxLines: MAX_TEXTAREA_LINES,
+  onHeightDelta: (deltaPx) => emit('resize', deltaPx),
+})
 
 function logComposerAutogrow(event: string, payload: Record<string, unknown>) {
   if (!DEBUG_COMPOSER_AUTOGROW) return
@@ -356,7 +365,7 @@ function submit() {
   closeEmojiPicker()
   emitTyping(false)
   nextTick(() => {
-    resizeTextarea()
+    resetComposerTextarea()
   })
 }
 
@@ -591,20 +600,10 @@ function autoResize() {
 function resizeTextarea() {
   const el = inputEl.value
   if (!el) return
-  const previousHeight = lastTextareaHeight
-  const style = window.getComputedStyle(el)
-  const fontSize = Number.parseFloat(style.fontSize) || 16
-  const lineHeight = Number.parseFloat(style.lineHeight) || (fontSize * 1.5)
-  const paddingTop = Number.parseFloat(style.paddingTop) || 0
-  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
-  const maxHeight = Math.ceil((lineHeight * MAX_TEXTAREA_LINES) + paddingTop + paddingBottom)
-
-  el.style.maxHeight = `${maxHeight}px`
-  el.style.height = '0px'
-  const nextHeight = Math.min(el.scrollHeight, maxHeight)
-  el.style.height = `${nextHeight}px`
-  el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
-  lastTextareaHeight = nextHeight
+  const previousHeight = Number.parseFloat(el.style.height) || 0
+  autosizeComposerTextarea()
+  const nextHeight = Number.parseFloat(el.style.height) || 0
+  const maxHeight = Number.parseFloat(el.style.maxHeight) || 0
   const delta = nextHeight - previousHeight
   logComposerAutogrow('resize', {
     conversationId: props.conversationId ?? '',
@@ -616,14 +615,29 @@ function resizeTextarea() {
     overflowY: el.style.overflowY,
     textLength: text.value.length,
   })
-  if (previousHeight > 0 && previousHeight !== nextHeight) {
-    emit('resize', delta)
-  }
 }
 
 function emitTyping(active: boolean) {
   if (props.disabled) return
   emit('typing', active)
+}
+
+function focusTextarea() {
+  const el = inputEl.value
+  if (!el || props.disabled) return
+  el.focus({ preventScroll: true })
+  const cursor = el.value.length
+  el.setSelectionRange(cursor, cursor)
+  captureSelection()
+}
+
+async function maybeApplyFocusToken() {
+  const token = props.focusToken ?? 0
+  if (token === 0 || token === handledFocusToken || props.disabled) return
+  await nextTick()
+  if (props.disabled) return
+  focusTextarea()
+  handledFocusToken = token
 }
 
 function openFilePicker() {
@@ -805,6 +819,10 @@ watch(() => props.conversationId, (next, prev) => {
 watch(text, () => {
   nextTick(() => resizeTextarea())
 })
+
+watch(() => [props.focusToken ?? 0, props.disabled ?? false], () => {
+  void maybeApplyFocusToken()
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   if (searchDebounceTimer) {

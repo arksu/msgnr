@@ -428,6 +428,8 @@ export const useChatStore = defineStore('chat', () => {
   const activeThreadConversationId = ref('')
   const focusedMessageId = ref('')
   const focusedThreadMessageId = ref('')
+  const conversationComposerFocusToken = ref(0)
+  const threadComposerFocusToken = ref(0)
   const unreadFeedItems = ref<UnreadFeedItem[]>([])
   const unreadFeedTotalCount = ref(0)
   const unreadFeedLoading = ref(false)
@@ -662,6 +664,14 @@ export const useChatStore = defineStore('chat', () => {
     focusedThreadMessageId.value = messageId
   }
 
+  function requestConversationComposerFocus() {
+    conversationComposerFocusToken.value += 1
+  }
+
+  function requestThreadComposerFocus() {
+    threadComposerFocusToken.value += 1
+  }
+
   function clearFocusedMessages() {
     focusedMessageId.value = ''
     focusedThreadMessageId.value = ''
@@ -690,6 +700,7 @@ export const useChatStore = defineStore('chat', () => {
     activeChannelId.value = id
     showConversationView()
     clearFocusedMessages()
+    requestConversationComposerFocus()
     saveActiveConversationSelection(id)
     if (activeThreadConversationId.value !== id) {
       closeThread()
@@ -1103,6 +1114,7 @@ export const useChatStore = defineStore('chat', () => {
     activeThreadConversationId.value = rootMessage.channelId
     activeThreadRootId.value = rootMessage.id
     if (!threadMessages.value[rootMessage.id]) threadMessages.value[rootMessage.id] = []
+    requestThreadComposerFocus()
     // Only server-confirmed replies advance the replay cursor. ACK-only
     // optimistic replies stay visible but must not suppress a later backfill.
     const lastKnownSeq = highestConfirmedThreadSeq(rootMessage.id)
@@ -1330,6 +1342,7 @@ export const useChatStore = defineStore('chat', () => {
           || cached.dms.some(dm => dm.id === lastConversation)
         if (exists) {
           activeChannelId.value = lastConversation
+          requestConversationComposerFocus()
           preloadIds.push(lastConversation)
         }
       }
@@ -1500,6 +1513,7 @@ export const useChatStore = defineStore('chat', () => {
     const restoredConversation = resolveSnapshotActiveConversation(nextChannels, nextDms, stage.workspace)
     activeChannelId.value = restoredConversation
     if (restoredConversation) {
+      requestConversationComposerFocus()
       saveActiveConversationSelection(restoredConversation)
     } else {
       clearActiveConversationSelection()
@@ -2131,7 +2145,10 @@ export const useChatStore = defineStore('chat', () => {
       notificationSummaryToItem(evt.notification),
       ...notifications.value.filter(item => item.id !== evt.notification?.notificationId),
     ]
-    const shouldEmitIncoming = evt.notification.type === NotificationType.MENTION || !isClientTabActive()
+    const isHighPriorityNotification =
+      evt.notification.type === NotificationType.MENTION
+      || evt.notification.type === NotificationType.THREAD_REPLY
+    const shouldEmitIncoming = isHighPriorityNotification || !isClientTabActive()
     if (shouldEmitIncoming) {
       emitIncomingMessageNotification({
         reason: evt.notification.type === NotificationType.MENTION ? 'mention' : 'notification',
@@ -2328,6 +2345,7 @@ export const useChatStore = defineStore('chat', () => {
       const fallbackConversation = firstPublicChannelId(channels.value)
       activeChannelId.value = fallbackConversation
       if (fallbackConversation) {
+        requestConversationComposerFocus()
         saveActiveConversationSelection(fallbackConversation)
       } else {
         clearActiveConversationSelection()
@@ -2365,6 +2383,7 @@ export const useChatStore = defineStore('chat', () => {
     activeChannelId.value = dm.id
     showConversationView()
     clearFocusedMessages()
+    requestConversationComposerFocus()
     saveActiveConversationSelection(dm.id)
     closeThread()
     const target = directMessages.value.find(item => item.id === dm.id)
@@ -2850,6 +2869,8 @@ export const useChatStore = defineStore('chat', () => {
     activeThreadReplies,
     focusedMessageId,
     focusedThreadMessageId,
+    conversationComposerFocusToken,
+    threadComposerFocusToken,
     unreadFeedItems,
     unreadFeedTotalCount,
     unreadFeedLoading,
@@ -2923,6 +2944,8 @@ export const useChatStore = defineStore('chat', () => {
     onTaskStatusChanged,
     focusConversationMessage,
     focusThreadMessage,
+    requestConversationComposerFocus,
+    requestThreadComposerFocus,
     clearFocusedMessages,
     resetRuntimeState,
     setNotificationLevel,

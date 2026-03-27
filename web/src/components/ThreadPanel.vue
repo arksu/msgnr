@@ -121,7 +121,7 @@ function scrollMessageIntoView(messageId: string) {
   target.scrollIntoView({ block: 'center' })
 }
 
-function scheduleGuaranteedBottomScroll() {
+function scheduleGuaranteedBottomScroll(immediate = false) {
   forceScrollToBottomOnNextRender.value = true
   if (forceScrollResetTimer) {
     clearTimeout(forceScrollResetTimer)
@@ -132,14 +132,13 @@ function scheduleGuaranteedBottomScroll() {
     scrollToBottom()
   }
 
-  runScroll()
+  if (immediate) {
+    runScroll()
+  }
   void nextTick(() => {
     runScroll()
-    requestAnimationFrame(() => {
+    void nextTick(() => {
       runScroll()
-      requestAnimationFrame(() => {
-        runScroll()
-      })
     })
   })
 
@@ -167,7 +166,7 @@ function handleComposerResize(deltaPx: number) {
 
 function sendReply(payload: { body: string; entities: NonNullable<Message['entities']>; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> }) {
   chat.sendThreadReply(payload.body, payload.attachmentIds, payload.attachments, payload.entities)
-  scheduleGuaranteedBottomScroll()
+  scheduleGuaranteedBottomScroll(true)
 }
 
 function shouldShowHeader(idx: number): boolean {
@@ -179,6 +178,11 @@ function shouldShowHeader(idx: number): boolean {
   const currTime = new Date(curr.createdAt).getTime()
   return currTime - prevTime > 5 * 60 * 1000
 }
+
+watch(() => rootMessage.value?.id ?? '', (rootId) => {
+  if (!rootId) return
+  scheduleGuaranteedBottomScroll()
+}, { immediate: true })
 
 watch(() => {
   const list = replies.value

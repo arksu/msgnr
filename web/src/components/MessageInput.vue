@@ -38,24 +38,21 @@
         @change="onFileInputChange"
       >
 
-      <!-- Text area -->
-      <textarea
-        ref="inputEl"
+      <RichTextComposer
+        ref="composerRef"
         v-model="text"
-        class="bg-transparent text-gray-100 placeholder-gray-500 resize-none outline-none leading-relaxed min-h-[24px]"
+        v-model:entities="entities"
+        data-testid="composer-editor"
         :placeholder="`Message #${channelName}`"
         :disabled="disabled"
-        rows="1"
-        @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
-        @keydown="handleTextareaKeydown"
-        @click="captureSelectionAndRefreshTagSearch"
-        @keyup="handleTextareaKeyup"
-        @input="handleTextareaInput"
-        @paste="onPaste"
-        @dragenter.prevent="onDragEnter"
-        @dragover.prevent="onDragOver"
-        @dragleave.prevent="onDragLeave"
-        @drop.prevent="onDrop"
+        :focus-token="focusToken"
+        :max-lines="MAX_COMPOSER_LINES"
+        :enable-message-entities="true"
+        :conversation-id="conversationId"
+        :submit-on-enter="true"
+        :on-files="handleComposerFiles"
+        @submit="submit"
+        @resize="handleComposerResize"
       />
 
       <div data-testid="composer-controls-row" class="flex items-center justify-between">
@@ -99,6 +96,7 @@
         </button>
       </div>
     </div>
+
     <Teleport to="body">
       <div
         v-if="showEmojiPicker"
@@ -132,12 +130,14 @@
         </div>
       </div>
     </Teleport>
-    <p class="mt-1 flex items-center justify-between gap-2 text-xs text-gray-600 pl-1">
+
+    <p class="mt-1 flex items-center justify-between gap-2 pl-1 text-xs text-gray-600">
       <span class="truncate text-gray-500">{{ typingLabel || '' }}</span>
       <span class="whitespace-nowrap">
-        <kbd class="font-mono">Enter</kbd> to send · <kbd class="font-mono">Shift+Enter</kbd> for new line
+        <kbd class="font-mono">Enter</kbd> sends in plain text · <kbd class="font-mono">Shift+Enter</kbd> newline · <kbd class="font-mono">Ctrl/Cmd+Enter</kbd> send anywhere
       </span>
     </p>
+
     <div v-if="uploading" class="mt-1 pl-1">
       <div class="mb-1 flex items-center justify-between gap-2 text-[11px] text-gray-500">
         <span class="truncate">
@@ -154,33 +154,15 @@
     </div>
     <p v-else-if="attachmentWarning" class="mt-1 pl-1 text-[11px] text-amber-300">{{ attachmentWarning }}</p>
     <p v-else-if="attachmentError" class="mt-1 pl-1 text-[11px] text-red-400">{{ attachmentError }}</p>
-    <MessageTagPicker
-      :open="tagPickerOpen"
-      :loading="tagPickerLoading"
-      :error="tagPickerError"
-      :style="tagPickerStyle"
-      :selected-index="selectedTagIndex"
-      :users="tagPickerUsers"
-      :tasks="tagPickerTasks"
-      :documents="tagPickerDocuments"
-      @select="selectTagItem"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { uploadChatAttachment, deleteChatAttachment, searchTagEntities, type TagSearchResponse } from '@/services/http/chatApi'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { deleteChatAttachment, uploadChatAttachment } from '@/services/http/chatApi'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
-import { useTextareaAutosize } from '@/composables/useTextareaAutosize'
 import type { MessageEntity } from '@/stores/chat'
-import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
-import {
-  applyTextEditToEntities,
-  findMentionQuery,
-  removeEntityAroundCursor,
-  replaceTextRangeWithEntity,
-} from '@/utils/messageEntities'
+import RichTextComposer from './RichTextComposer.vue'
 
 interface ComposerAttachment {
   id: string
@@ -197,8 +179,8 @@ interface ComposerSendPayload {
 }
 
 const MAX_ATTACHMENTS = 5
-const MAX_TEXTAREA_LINES = 8
-const DEBUG_COMPOSER_AUTOGROW = import.meta.env.DEV
+const MAX_COMPOSER_LINES = 8
+
 const props = defineProps<{
   channelName: string
   conversationId?: string
@@ -207,6 +189,7 @@ const props = defineProps<{
   online?: boolean
   focusToken?: number
 }>()
+
 const emit = defineEmits<{
   send: [payload: ComposerSendPayload]
   typing: [active: boolean]
@@ -215,7 +198,7 @@ const emit = defineEmits<{
 
 const text = ref('')
 const entities = ref<MessageEntity[]>([])
-const inputEl = ref<HTMLTextAreaElement | null>(null)
+const composerRef = ref<InstanceType<typeof RichTextComposer> | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const attachments = ref<ComposerAttachment[]>([])
 const uploading = ref(false)
@@ -224,40 +207,6 @@ const currentUploadingFileName = ref('')
 const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
-let dragDepth = 0
-let lastSelectionStart = 0
-let lastSelectionEnd = 0
-let lastTextSnapshot = ''
-let searchRequestToken = 0
-let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
-let handledFocusToken = 0
-
-const tagPickerOpen = ref(false)
-const tagPickerLoading = ref(false)
-const tagPickerError = ref('')
-const tagPickerStyle = ref<Record<string, string>>({
-  top: '0px',
-  left: '0px',
-})
-const tagQueryRange = ref<{ start: number; end: number } | null>(null)
-const tagSearchResults = ref<TagSearchResponse>({
-  users: [],
-  tasks: [],
-  documents: [],
-})
-const selectedTagIndex = ref(0)
-const {
-  resize: autosizeComposerTextarea,
-  reset: resetComposerTextarea,
-} = useTextareaAutosize(inputEl, {
-  maxLines: MAX_TEXTAREA_LINES,
-  onHeightDelta: (deltaPx) => emit('resize', deltaPx),
-})
-
-function logComposerAutogrow(event: string, payload: Record<string, unknown>) {
-  if (!DEBUG_COMPOSER_AUTOGROW) return
-  console.debug(`[debug][composer-autogrow] ${event}`, payload)
-}
 
 const {
   showEmojiPicker,
@@ -270,7 +219,9 @@ const {
   closeEmojiPicker,
   onSelectEmoji,
 } = useComposerEmojiPicker({
-  onSelect: insertEmojiAtCursor,
+  onSelect: (emoji) => {
+    composerRef.value?.insertText(emoji)
+  },
 })
 
 const attachmentWarning = computed(() => {
@@ -293,67 +244,23 @@ const attachButtonTitle = computed(() => {
   return 'Attach file'
 })
 
-const flatTagItems = computed(() => [
-  ...tagPickerUsers.value,
-  ...tagPickerTasks.value,
-  ...tagPickerDocuments.value,
-])
-
-const tagPickerUsers = computed<MessageTagPickerItem[]>(() =>
-  (tagSearchResults.value.users ?? []).map((item, index) => ({
-    kind: 'user',
-    id: item.user_id,
-    label: `@${item.display_name || item.email}`,
-    subtitle: item.email,
-    href: '',
-    icon: '@',
-    avatarUrl: item.avatar_url,
-    flatIndex: index,
-    meta: {
-      email: item.email,
-      presence: item.presence,
-    },
-  })),
-)
-
-const tagPickerTasks = computed<MessageTagPickerItem[]>(() =>
-  (tagSearchResults.value.tasks ?? []).map((item, index) => ({
-    kind: 'task',
-    id: item.task_id,
-    label: item.label,
-    subtitle: item.title,
-    href: item.href,
-    icon: '#',
-    flatIndex: tagPickerUsers.value.length + index,
-  })),
-)
-
-const tagPickerDocuments = computed<MessageTagPickerItem[]>(() =>
-  (tagSearchResults.value.documents ?? []).map((item, index) => ({
-    kind: 'document',
-    id: item.document_id,
-    label: item.label,
-    subtitle: item.title,
-    href: item.href,
-    icon: 'D',
-    flatIndex: tagPickerUsers.value.length + tagPickerTasks.value.length + index,
-  })),
-)
-
-function submit() {
-  if (!canSend.value) return
-  const body = text.value.trim()
+function normalizedEntitiesForSend(body: string): MessageEntity[] {
   const trimmedDelta = text.value.length - text.value.trimStart().length
-  const nextEntities = entities.value
+  return entities.value
     .map(entity => ({
       ...entity,
       start: entity.start - trimmedDelta,
       end: entity.end - trimmedDelta,
     }))
     .filter(entity => entity.start >= 0 && entity.end <= body.length)
+}
+
+function submit() {
+  if (!canSend.value) return
+  const body = text.value.trim()
   emit('send', {
     body,
-    entities: nextEntities,
+    entities: normalizedEntitiesForSend(body),
     attachmentIds: attachments.value.map(item => item.id),
     attachments: attachments.value.slice(),
   })
@@ -361,260 +268,8 @@ function submit() {
   entities.value = []
   attachments.value = []
   attachmentError.value = ''
-  closeTagPicker()
   closeEmojiPicker()
   emitTyping(false)
-  nextTick(() => {
-    resetComposerTextarea()
-  })
-}
-
-function insertEmojiAtCursor(emoji: string) {
-  const el = inputEl.value
-  if (!el) {
-    text.value += emoji
-    nextTick(() => autoResize())
-    return
-  }
-
-  const start = el.selectionStart ?? text.value.length
-  const end = el.selectionEnd ?? start
-  text.value = `${text.value.slice(0, start)}${emoji}${text.value.slice(end)}`
-  entities.value = applyTextEditToEntities(entities.value, start, end, emoji.length)
-
-  nextTick(() => {
-    const cursor = start + emoji.length
-    el.focus()
-    el.selectionStart = cursor
-    el.selectionEnd = cursor
-    autoResize()
-  })
-}
-
-function onShiftEnter(event: KeyboardEvent) {
-  const el = event.target as HTMLTextAreaElement
-  const start = el.selectionStart ?? text.value.length
-  const end = el.selectionEnd ?? start
-  text.value = text.value.slice(0, start) + '\n' + text.value.slice(end)
-  entities.value = applyTextEditToEntities(entities.value, start, end, 1)
-  nextTick(() => {
-    const cursor = start + 1
-    el.selectionStart = cursor
-    el.selectionEnd = cursor
-    autoResize()
-  })
-}
-
-function closeTagPicker() {
-  tagPickerOpen.value = false
-  tagPickerLoading.value = false
-  tagPickerError.value = ''
-  tagQueryRange.value = null
-  selectedTagIndex.value = 0
-}
-
-function updateTagPickerPosition() {
-  const el = inputEl.value
-  if (!el) return
-  const rect = el.getBoundingClientRect()
-  tagPickerStyle.value = {
-    position: 'fixed',
-    top: `${rect.top - 8}px`,
-    left: `${rect.left}px`,
-    transform: 'translateY(-100%)',
-  }
-}
-
-function captureSelection() {
-  const el = inputEl.value
-  if (!el) return
-  lastSelectionStart = el.selectionStart ?? text.value.length
-  lastSelectionEnd = el.selectionEnd ?? lastSelectionStart
-  lastTextSnapshot = text.value
-}
-
-function refreshTagSearch() {
-  const el = inputEl.value
-  if (!el || !props.conversationId) {
-    closeTagPicker()
-    return
-  }
-  if ((el.selectionStart ?? 0) !== (el.selectionEnd ?? 0)) {
-    closeTagPicker()
-    return
-  }
-
-  const cursor = el.selectionStart ?? text.value.length
-  const match = findMentionQuery(text.value, cursor, entities.value)
-  if (!match) {
-    closeTagPicker()
-    return
-  }
-
-  tagQueryRange.value = { start: match.start, end: match.end }
-  tagPickerOpen.value = true
-  updateTagPickerPosition()
-  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
-  searchDebounceTimer = setTimeout(async () => {
-    const token = ++searchRequestToken
-    tagPickerLoading.value = true
-    tagPickerError.value = ''
-    try {
-      const results = await searchTagEntities(props.conversationId!, match.query)
-      if (token !== searchRequestToken) return
-      tagSearchResults.value = results
-      selectedTagIndex.value = 0
-    } catch (error) {
-      if (token !== searchRequestToken) return
-      tagPickerError.value = error instanceof Error ? error.message : 'Search failed'
-      tagSearchResults.value = { users: [], tasks: [], documents: [] }
-    } finally {
-      if (token === searchRequestToken) {
-        tagPickerLoading.value = false
-      }
-    }
-  }, 120)
-}
-
-function captureSelectionAndRefreshTagSearch() {
-  captureSelection()
-  refreshTagSearch()
-}
-
-function selectTagItem(item: MessageTagPickerItem) {
-  if (!tagQueryRange.value) return
-  const next = replaceTextRangeWithEntity(
-    text.value,
-    entities.value,
-    tagQueryRange.value.start,
-    tagQueryRange.value.end,
-    {
-      kind: item.kind,
-      targetId: item.id,
-      label: item.label,
-      href: item.href,
-      start: tagQueryRange.value.start,
-      end: tagQueryRange.value.end,
-    },
-  )
-  text.value = next.text
-  entities.value = next.entities
-  closeTagPicker()
-  nextTick(() => {
-    const el = inputEl.value
-    if (!el) return
-    el.focus()
-    el.selectionStart = next.nextCursor
-    el.selectionEnd = next.nextCursor
-    captureSelection()
-    autoResize()
-  })
-}
-
-function handleTextareaKeydown(event: KeyboardEvent) {
-  captureSelection()
-  if (tagPickerOpen.value) {
-    if (event.key === 'ArrowDown') {
-      if (flatTagItems.value.length === 0) return
-      event.preventDefault()
-      selectedTagIndex.value = (selectedTagIndex.value + 1) % flatTagItems.value.length
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      if (flatTagItems.value.length === 0) return
-      event.preventDefault()
-      selectedTagIndex.value = (selectedTagIndex.value - 1 + flatTagItems.value.length) % flatTagItems.value.length
-      return
-    }
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      const item = flatTagItems.value[selectedTagIndex.value]
-      if (item) selectTagItem(item)
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closeTagPicker()
-      return
-    }
-  }
-
-  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-    event.preventDefault()
-    submit()
-    return
-  }
-
-  if (!inputEl.value) return
-  if ((event.key === 'Backspace' || event.key === 'Delete') && inputEl.value.selectionStart === inputEl.value.selectionEnd) {
-    const cursor = inputEl.value.selectionStart ?? 0
-    const removed = removeEntityAroundCursor(
-      text.value,
-      entities.value,
-      cursor,
-      event.key === 'Backspace' ? 'backward' : 'forward',
-    )
-    if (removed) {
-      event.preventDefault()
-      text.value = removed.text
-      entities.value = removed.entities
-      nextTick(() => {
-        const el = inputEl.value
-        if (!el) return
-        el.selectionStart = removed.nextCursor
-        el.selectionEnd = removed.nextCursor
-        captureSelectionAndRefreshTagSearch()
-        autoResize()
-      })
-    }
-  }
-}
-
-function handleTextareaKeyup(event: KeyboardEvent) {
-  if (tagPickerOpen.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-    return
-  }
-  captureSelectionAndRefreshTagSearch()
-}
-
-function handleTextareaInput() {
-  const el = inputEl.value
-  const currentSelectionStart = el?.selectionStart ?? text.value.length
-  const replacedLength = lastSelectionEnd - lastSelectionStart
-  const insertedLength = text.value.length - (lastTextSnapshot.length - replacedLength)
-  entities.value = applyTextEditToEntities(
-    entities.value,
-    lastSelectionStart,
-    lastSelectionEnd,
-    insertedLength,
-  ).filter(entity => text.value.slice(entity.start, entity.end) === entity.label)
-  captureSelectionAndRefreshTagSearch()
-  autoResize()
-}
-
-function autoResize() {
-  emitTyping(text.value.trim().length > 0)
-  resizeTextarea()
-}
-
-function resizeTextarea() {
-  const el = inputEl.value
-  if (!el) return
-  const previousHeight = Number.parseFloat(el.style.height) || 0
-  autosizeComposerTextarea()
-  const nextHeight = Number.parseFloat(el.style.height) || 0
-  const maxHeight = Number.parseFloat(el.style.maxHeight) || 0
-  const delta = nextHeight - previousHeight
-  logComposerAutogrow('resize', {
-    conversationId: props.conversationId ?? '',
-    previousHeight,
-    nextHeight,
-    delta,
-    maxHeight,
-    scrollHeight: el.scrollHeight,
-    overflowY: el.style.overflowY,
-    textLength: text.value.length,
-  })
 }
 
 function emitTyping(active: boolean) {
@@ -622,22 +277,14 @@ function emitTyping(active: boolean) {
   emit('typing', active)
 }
 
-function focusTextarea() {
-  const el = inputEl.value
-  if (!el || props.disabled) return
-  el.focus({ preventScroll: true })
-  const cursor = el.value.length
-  el.setSelectionRange(cursor, cursor)
-  captureSelection()
+function handleComposerResize(deltaPx: number) {
+  emit('resize', deltaPx)
 }
 
-async function maybeApplyFocusToken() {
-  const token = props.focusToken ?? 0
-  if (token === 0 || token === handledFocusToken || props.disabled) return
-  await nextTick()
-  if (props.disabled) return
-  focusTextarea()
-  handledFocusToken = token
+async function handleComposerFiles(files: File[]) {
+  if (!props.conversationId || props.disabled || uploading.value) return
+  isDragOver.value = false
+  await uploadFiles(files)
 }
 
 function openFilePicker() {
@@ -669,6 +316,7 @@ async function uploadFiles(files: File[]) {
   uploading.value = true
   uploadProgressPercent.value = 0
   currentUploadingFileName.value = ''
+  isDragOver.value = files.length > 0
   try {
     const totalBytes = selected.reduce((sum, file) => sum + Math.max(0, file.size), 0)
     let uploadedBytes = 0
@@ -698,89 +346,8 @@ async function uploadFiles(files: File[]) {
     currentUploadingFileName.value = ''
     uploadProgressPercent.value = 0
     uploading.value = false
-  }
-}
-
-function isFileDragEvent(event: DragEvent): boolean {
-  return event.dataTransfer?.types?.includes('Files') ?? false
-}
-
-function onDragEnter(event: DragEvent) {
-  if (!isFileDragEvent(event)) return
-  if (!props.conversationId || props.disabled || uploading.value) return
-  dragDepth += 1
-  isDragOver.value = true
-}
-
-function onDragOver(event: DragEvent) {
-  if (!isFileDragEvent(event)) return
-  if (!props.conversationId || props.disabled || uploading.value) return
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  isDragOver.value = true
-}
-
-function onDragLeave(event: DragEvent) {
-  if (!isFileDragEvent(event)) return
-  dragDepth = Math.max(0, dragDepth - 1)
-  if (dragDepth === 0) {
     isDragOver.value = false
   }
-}
-
-async function onDrop(event: DragEvent) {
-  if (!isFileDragEvent(event)) return
-  const files = Array.from(event.dataTransfer?.files ?? [])
-  dragDepth = 0
-  isDragOver.value = false
-  if (files.length === 0) return
-  await uploadFiles(files)
-}
-
-function clipboardFileKey(file: File): string {
-  return `${file.name}:${file.size}:${file.type}:${file.lastModified}`
-}
-
-function extractClipboardFiles(event: ClipboardEvent): File[] {
-  const data = event.clipboardData
-  if (!data) return []
-
-  const files: File[] = []
-  const seen = new Set<string>()
-  const pushFile = (file: File | null | undefined) => {
-    if (!file) return
-    const key = clipboardFileKey(file)
-    if (seen.has(key)) return
-    seen.add(key)
-    files.push(file)
-  }
-
-  const itemFiles: File[] = []
-  for (const item of Array.from(data.items ?? [])) {
-    if (item.kind !== 'file') continue
-    const file = item.getAsFile()
-    if (file) itemFiles.push(file)
-  }
-
-  // Browsers may expose the same pasted image in both `items` and `files`.
-  // Prefer `items` when available to avoid duplicate uploads from one paste.
-  if (itemFiles.length > 0) {
-    for (const file of itemFiles) pushFile(file)
-    return files
-  }
-
-  for (const file of Array.from(data.files ?? [])) pushFile(file)
-  return files
-}
-
-function onPaste(event: ClipboardEvent) {
-  const files = extractClipboardFiles(event)
-  if (files.length === 0) return
-  if (!props.conversationId || props.disabled || uploading.value) return
-
-  event.preventDefault()
-  void uploadFiles(files)
 }
 
 async function removeAttachment(attachmentId: string) {
@@ -808,41 +375,29 @@ async function cleanupStagedAttachments() {
   }))
 }
 
+watch(text, (next) => {
+  emitTyping(next.trim().length > 0)
+})
+
 watch(() => props.conversationId, (next, prev) => {
   closeEmojiPicker()
-  closeTagPicker()
   if (prev && prev !== next && attachments.value.length > 0) {
     void cleanupStagedAttachments()
   }
 })
 
-watch(text, () => {
-  nextTick(() => resizeTextarea())
-})
-
-watch(() => [props.focusToken ?? 0, props.disabled ?? false], () => {
-  void maybeApplyFocusToken()
-}, { immediate: true })
-
 onBeforeUnmount(() => {
-  if (searchDebounceTimer) {
-    clearTimeout(searchDebounceTimer)
-    searchDebounceTimer = null
-  }
-  closeTagPicker()
   closeEmojiPicker()
   if (attachments.value.length > 0) {
     void cleanupStagedAttachments()
   }
 })
 
-onMounted(() => {
-  nextTick(() => {
-    resizeTextarea()
-    captureSelection()
-  })
-})
-
+watch(() => props.focusToken, async () => {
+  if (!props.focusToken || props.disabled) return
+  await nextTick()
+  composerRef.value?.focusAtEnd()
+}, { immediate: true })
 
 function formatFileSize(size: number): string {
   if (size < 1024) return `${size} B`

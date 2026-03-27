@@ -1,5 +1,9 @@
 import type { JSONContent } from '@tiptap/core'
 
+interface MarkdownSerializeOptions {
+  hardBreakStyle?: 'markdown' | 'newline'
+}
+
 function escapeMarkdownText(input: string): string {
   return input
     .replace(/\\/g, '\\\\')
@@ -45,18 +49,21 @@ function applyMarks(text: string, marks: JSONContent['marks']): string {
   return out
 }
 
-function serializeInline(nodes: JSONContent[] = []): string {
+function serializeInline(nodes: JSONContent[] = [], options: MarkdownSerializeOptions = {}): string {
   return nodes.map((node) => {
     if (node.type === 'text') {
       return applyMarks(node.text ?? '', node.marks)
     }
+    if (node.type === 'messageEntity') {
+      return String(node.attrs?.label ?? '')
+    }
     if (node.type === 'hardBreak') {
-      return '  \n'
+      return options.hardBreakStyle === 'newline' ? '\n' : '  \n'
     }
     if (node.type === 'codeBlock') {
       return `\`${extractText(node)}\``
     }
-    return serializeInline(node.content ?? [])
+    return serializeInline(node.content ?? [], options)
   }).join('')
 }
 
@@ -67,17 +74,17 @@ function indentLines(input: string, indent: string): string {
     .join('\n')
 }
 
-function serializeListItem(item: JSONContent, depth: number, marker: string): string {
+function serializeListItem(item: JSONContent, depth: number, marker: string, options: MarkdownSerializeOptions = {}): string {
   const children = item.content ?? []
   const firstParagraph = children.find(child => child.type === 'paragraph')
-  const firstLine = firstParagraph ? serializeInline(firstParagraph.content ?? []) : ''
+  const firstLine = firstParagraph ? serializeInline(firstParagraph.content ?? [], options) : ''
   const baseIndent = '  '.repeat(depth)
   const childIndent = '  '.repeat(depth + 1)
   const lines: string[] = [`${baseIndent}${marker} ${firstLine}`.trimEnd()]
 
   const remainder = children.filter(child => child !== firstParagraph)
   remainder.forEach((child) => {
-    const block = serializeBlock(child, depth + 1)
+    const block = serializeBlock(child, depth + 1, options)
     if (!block) return
     lines.push(indentLines(block, childIndent))
   })
@@ -85,7 +92,7 @@ function serializeListItem(item: JSONContent, depth: number, marker: string): st
   return lines.join('\n')
 }
 
-function serializeList(node: JSONContent, depth: number): string {
+function serializeList(node: JSONContent, depth: number, options: MarkdownSerializeOptions = {}): string {
   const ordered = node.type === 'orderedList'
   const start = Number(node.attrs?.start ?? 1)
   const items = node.content ?? []
@@ -94,19 +101,19 @@ function serializeList(node: JSONContent, depth: number): string {
     .filter(item => item.type === 'listItem')
     .map((item, index) => {
       const marker = ordered ? `${start + index}.` : '-'
-      return serializeListItem(item, depth, marker)
+      return serializeListItem(item, depth, marker, options)
     })
     .join('\n')
 }
 
-function serializeTaskList(node: JSONContent, depth: number): string {
+function serializeTaskList(node: JSONContent, depth: number, options: MarkdownSerializeOptions = {}): string {
   const items = node.content ?? []
 
   return items
     .filter(item => item.type === 'taskItem')
     .map((item) => {
       const checked = item.attrs?.checked ? '- [x]' : '- [ ]'
-      return serializeListItem(item, depth, checked)
+      return serializeListItem(item, depth, checked, options)
     })
     .join('\n')
 }
@@ -152,7 +159,7 @@ function serializeTable(node: JSONContent): string {
   return lines.join('\n')
 }
 
-function serializeBlock(node: JSONContent, depth = 0): string {
+function serializeBlock(node: JSONContent, depth = 0, options: MarkdownSerializeOptions = {}): string {
   if (node.type === 'image') {
     const src = String(node.attrs?.src ?? '').trim()
     const alt = String(node.attrs?.alt ?? '').replace(/\\/g, '\\\\').replace(/\]/g, '\\]')
@@ -161,27 +168,27 @@ function serializeBlock(node: JSONContent, depth = 0): string {
   }
 
   if (node.type === 'paragraph') {
-    return serializeInline(node.content ?? [])
+    return serializeInline(node.content ?? [], options)
   }
 
   if (node.type === 'heading') {
     const levelRaw = Number(node.attrs?.level ?? 1)
     const level = Number.isFinite(levelRaw) ? Math.min(6, Math.max(1, levelRaw)) : 1
-    const content = serializeInline(node.content ?? [])
+    const content = serializeInline(node.content ?? [], options)
     return `${'#'.repeat(level)} ${content}`.trimEnd()
   }
 
   if (node.type === 'bulletList' || node.type === 'orderedList') {
-    return serializeList(node, depth)
+    return serializeList(node, depth, options)
   }
 
   if (node.type === 'taskList') {
-    return serializeTaskList(node, depth)
+    return serializeTaskList(node, depth, options)
   }
 
   if (node.type === 'taskItem') {
     const checked = node.attrs?.checked ? '- [x]' : '- [ ]'
-    return serializeListItem(node, depth, checked)
+    return serializeListItem(node, depth, checked, options)
   }
 
   if (node.type === 'table') {
@@ -189,7 +196,7 @@ function serializeBlock(node: JSONContent, depth = 0): string {
   }
 
   if (node.type === 'blockquote') {
-    const body = serializeBlocks(node.content ?? [], depth).trim()
+    const body = serializeBlocks(node.content ?? [], depth, options).trim()
     if (!body) return '>'
     return body
       .split('\n')
@@ -203,17 +210,17 @@ function serializeBlock(node: JSONContent, depth = 0): string {
     return `\`\`\`${language}\n${source}\n\`\`\``
   }
 
-  return serializeBlocks(node.content ?? [], depth)
+  return serializeBlocks(node.content ?? [], depth, options)
 }
 
-function serializeBlocks(nodes: JSONContent[] = [], depth = 0): string {
+function serializeBlocks(nodes: JSONContent[] = [], depth = 0, options: MarkdownSerializeOptions = {}): string {
   return nodes
-    .map(node => serializeBlock(node, depth).trimEnd())
+    .map(node => serializeBlock(node, depth, options).trimEnd())
     .filter(Boolean)
     .join('\n\n')
 }
 
-export function tiptapJsonToMarkdown(doc: JSONContent | null | undefined): string {
+export function tiptapJsonToMarkdown(doc: JSONContent | null | undefined, options: MarkdownSerializeOptions = {}): string {
   if (!doc) return ''
-  return serializeBlocks(doc.content ?? []).trim()
+  return serializeBlocks(doc.content ?? [], 0, options).trim()
 }

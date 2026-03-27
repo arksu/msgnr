@@ -3,6 +3,7 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import MessageBubble from '@/components/MessageBubble.vue'
+import RichTextComposer from '@/components/RichTextComposer.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
@@ -24,6 +25,32 @@ vi.mock('@/services/http/chatApi', () => ({
 async function flushAll() {
   await Promise.resolve()
   await nextTick()
+}
+
+async function waitForEditComposer(wrapper: ReturnType<typeof mount>) {
+  for (let index = 0; index < 10; index += 1) {
+    await flushAll()
+    if (wrapper.find('[data-testid="message-edit-textarea"] .ProseMirror').exists()) return
+  }
+  throw new Error('edit composer did not mount')
+}
+
+function editComposer(wrapper: ReturnType<typeof mount>) {
+  return wrapper.getComponent(RichTextComposer)
+}
+
+function editProse(wrapper: ReturnType<typeof mount>) {
+  return wrapper.get('[data-testid="message-edit-textarea"] .ProseMirror')
+}
+
+async function insertEditText(wrapper: ReturnType<typeof mount>, value: string) {
+  ;(editComposer(wrapper).vm as unknown as { setValue: (text: string) => void }).setValue(value)
+  await flushAll()
+}
+
+async function appendEditText(wrapper: ReturnType<typeof mount>, value: string) {
+  ;(editComposer(wrapper).vm as unknown as { insertText: (text: string) => void }).insertText(value)
+  await flushAll()
 }
 
 function buildMessage(overrides: Partial<Message> = {}): Message {
@@ -323,13 +350,13 @@ describe('MessageBubble reactions', () => {
     const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
     expect(editMenu).toBeTruthy()
     editMenu.click()
-    await flushAll()
+    await waitForEditComposer(wrapper)
 
-    const textarea = wrapper.get('[data-testid="message-edit-textarea"]')
+    const editor = editProse(wrapper)
     expect(wrapper.find('[data-testid="message-edit-save"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="message-edit-cancel"]').exists()).toBe(false)
-    await textarea.setValue('edited body')
-    await textarea.trigger('keydown', { key: 'Enter' })
+    await insertEditText(wrapper, 'edited body')
+    await editor.trigger('keydown', { key: 'Enter' })
     await flushAll()
 
     expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'edited body', [])
@@ -339,7 +366,7 @@ describe('MessageBubble reactions', () => {
     wrapper.unmount()
   })
 
-  it('sizes inline edit textarea to full message content on open', async () => {
+  it('sizes inline edit composer to its content on open', async () => {
     const auth = useAuthStore()
     auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
 
@@ -358,24 +385,24 @@ describe('MessageBubble reactions', () => {
     await flushAll()
     const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
     editMenu.click()
-    await flushAll()
+    await waitForEditComposer(wrapper)
 
-    const textarea = wrapper.get('[data-testid="message-edit-textarea"]').element as HTMLTextAreaElement
-    Object.defineProperty(textarea, 'scrollHeight', {
+    const editor = editProse(wrapper).element as HTMLDivElement
+    Object.defineProperty(editor, 'scrollHeight', {
       configurable: true,
       get: () => 240,
     })
 
-    textarea.dispatchEvent(new Event('input'))
+    await insertEditText(wrapper, '\nextra')
     await flushAll()
 
-    expect(textarea.style.maxHeight).toBe('')
-    expect(textarea.style.height).toBe('240px')
-    expect(textarea.style.overflowY).toBe('hidden')
+    expect(editor.style.maxHeight).toBe('')
+    expect(editor.style.height).toBe('240px')
+    expect(editor.style.overflowY).toBe('hidden')
     wrapper.unmount()
   })
 
-  it('keeps inline edit textarea synced with content growth', async () => {
+  it('keeps inline edit composer synced with content growth', async () => {
     const auth = useAuthStore()
     auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
 
@@ -394,23 +421,22 @@ describe('MessageBubble reactions', () => {
     await flushAll()
     const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
     editMenu.click()
-    await flushAll()
+    await waitForEditComposer(wrapper)
 
-    const textareaWrapper = wrapper.get('[data-testid="message-edit-textarea"]')
-    const textarea = textareaWrapper.element as HTMLTextAreaElement
+    const editor = editProse(wrapper).element as HTMLDivElement
     let scrollHeight = 96
-    Object.defineProperty(textarea, 'scrollHeight', {
+    Object.defineProperty(editor, 'scrollHeight', {
       configurable: true,
       get: () => scrollHeight,
     })
 
-    await textareaWrapper.setValue('line 1')
-    expect(textarea.style.height).toBe('96px')
+    await insertEditText(wrapper, 'line 1')
+    expect(editor.style.height).toBe('96px')
 
     scrollHeight = 232
-    await textareaWrapper.setValue('line 1\nline 2\nline 3\nline 4')
-    expect(textarea.style.height).toBe('232px')
-    expect(textarea.style.overflowY).toBe('hidden')
+    await insertEditText(wrapper, '\nline 2\nline 3\nline 4')
+    expect(editor.style.height).toBe('232px')
+    expect(editor.style.overflowY).toBe('hidden')
     wrapper.unmount()
   })
 
@@ -433,16 +459,16 @@ describe('MessageBubble reactions', () => {
     await flushAll()
     const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
     editMenu.click()
-    await flushAll()
+    await waitForEditComposer(wrapper)
 
-    const textarea = wrapper.get('[data-testid="message-edit-textarea"]')
-    await textarea.setValue('line 1')
-    await textarea.trigger('keydown', { key: 'Enter', shiftKey: true })
+    const editor = editProse(wrapper)
+    await insertEditText(wrapper, 'line 1')
+    await editor.trigger('keydown', { key: 'Enter', shiftKey: true })
     await flushAll()
     expect(chatApiMocks.editMessage).not.toHaveBeenCalled()
 
-    await textarea.setValue('line 1\nline 2')
-    await textarea.trigger('keydown', { key: 'Enter' })
+    await appendEditText(wrapper, 'line 2')
+    await editor.trigger('keydown', { key: 'Enter' })
     await flushAll()
 
     expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'line 1\nline 2', [])
@@ -496,7 +522,7 @@ describe('MessageBubble reactions', () => {
     await flushAll()
     const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
     editMenu.click()
-    await flushAll()
+    await waitForEditComposer(wrapper)
     expect(wrapper.find('[data-testid="message-edit-textarea"]').exists()).toBe(true)
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))

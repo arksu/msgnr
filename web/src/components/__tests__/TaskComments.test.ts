@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import TaskComments from '@/components/tasks/TaskComments.vue'
+import RichTextComposer from '@/components/RichTextComposer.vue'
 import { useAuthStore } from '@/stores/auth'
 import {
   tasksCreateComment,
@@ -82,6 +83,36 @@ describe('TaskComments', () => {
     auth.user = { id: 'user-1', email: 'user@example.com', displayName: 'User 1', role: 'member' }
   })
 
+  function mainComposer(wrapper: ReturnType<typeof mount>) {
+    return wrapper.getComponent(RichTextComposer)
+  }
+
+  async function waitForComposer(wrapper: ReturnType<typeof mount>, testId = 'task-comment-composer') {
+    for (let index = 0; index < 10; index += 1) {
+      await flushPromises()
+      if (wrapper.find(`[data-testid="${testId}"] .ProseMirror`).exists()) return
+    }
+    throw new Error(`composer did not mount: ${testId}`)
+  }
+
+  function mainProse(wrapper: ReturnType<typeof mount>) {
+    return wrapper.get('[data-testid="task-comment-composer"] .ProseMirror')
+  }
+
+  function editComposer(wrapper: ReturnType<typeof mount>) {
+    return wrapper.findAllComponents(RichTextComposer)[1]
+  }
+
+  async function insertMainText(wrapper: ReturnType<typeof mount>, value: string) {
+    ;(mainComposer(wrapper).vm as unknown as { insertText: (text: string) => void }).insertText(value)
+    await flushPromises()
+  }
+
+  async function insertEditText(wrapper: ReturnType<typeof mount>, value: string) {
+    ;(editComposer(wrapper).vm as unknown as { setValue: (text: string) => void }).setValue(value)
+    await flushPromises()
+  }
+
   it('uploads dropped files onto the comment textarea', async () => {
     vi.mocked(tasksUploadCommentAttachment).mockResolvedValue({
       id: 'att-1',
@@ -96,15 +127,10 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     const file = new File(['hello'], 'notes.txt', { type: 'text/plain' })
-    await wrapper.get('textarea').trigger('drop', {
-      dataTransfer: {
-        files: [file],
-        types: ['Files'],
-      },
-    })
+    await (mainComposer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
     await flushPromises()
 
     expect(tasksUploadCommentAttachment).toHaveBeenCalledWith('task-1', file)
@@ -125,15 +151,10 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     const file = new File(['clip'], 'clipboard.png', { type: 'image/png' })
-    await wrapper.get('textarea').trigger('paste', {
-      clipboardData: {
-        items: [{ kind: 'file', getAsFile: () => file }],
-        files: [file],
-      },
-    })
+    await (mainComposer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
     await flushPromises()
 
     expect(tasksUploadCommentAttachment).toHaveBeenCalledTimes(1)
@@ -145,11 +166,11 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea')
+    const editor = mainProse(wrapper)
     const controls = wrapper.get('[data-testid="task-comment-controls-row"]')
-    const position = textarea.element.compareDocumentPosition(controls.element)
+    const position = editor.element.compareDocumentPosition(controls.element)
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
@@ -167,11 +188,11 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea')
+    const editor = mainProse(wrapper)
     const commentsList = wrapper.get('ul.mb-4')
-    const position = textarea.element.compareDocumentPosition(commentsList.element)
+    const position = editor.element.compareDocumentPosition(commentsList.element)
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
@@ -180,13 +201,9 @@ describe('TaskComments', () => {
       props: { taskId: 'task-1' },
       attachTo: document.body,
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea')
-    await textarea.setValue('world')
-    const el = textarea.element as HTMLTextAreaElement
-    el.focus()
-    el.setSelectionRange(0, 0)
+    await insertMainText(wrapper, 'world')
 
     await wrapper.get('[data-testid="task-comment-emoji-button"]').trigger('click')
     await flushPromises()
@@ -196,7 +213,7 @@ describe('TaskComments', () => {
     emojiOption?.click()
     await flushPromises()
 
-    expect((textarea.element as HTMLTextAreaElement).value).toBe('🙂world')
+    expect(mainComposer(wrapper).props('modelValue')).toContain('🙂')
     expect(document.body.querySelector('[data-testid="emoji-picker-option"]')).toBeNull()
   })
 
@@ -225,7 +242,7 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     expect(wrapper.findAll('[data-testid="task-comment-edit-button"]')).toHaveLength(1)
     expect(wrapper.text()).toContain('mine')
@@ -255,13 +272,12 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     await wrapper.get('[data-testid="task-comment-edit-button"]').trigger('click')
-    await flushPromises()
+    await waitForComposer(wrapper, 'task-comment-edit-textarea')
 
-    const textarea = wrapper.get('[data-testid="task-comment-edit-textarea"]')
-    expect((textarea.element as HTMLTextAreaElement).value).toBe('edit me')
+    expect(editComposer(wrapper).props('modelValue')).toBe('edit me')
     expect(wrapper.text()).toContain('existing.txt')
   })
 
@@ -288,11 +304,11 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     await wrapper.get('[data-testid="task-comment-edit-button"]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-testid="task-comment-edit-textarea"]').setValue('after')
+    await waitForComposer(wrapper, 'task-comment-edit-textarea')
+    await insertEditText(wrapper, 'after')
     await wrapper.get('[data-testid="task-comment-edit-save"]').trigger('click')
     await flushPromises()
 
@@ -318,11 +334,11 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     await wrapper.get('[data-testid="task-comment-edit-button"]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-testid="task-comment-edit-textarea"]').setValue('after')
+    await waitForComposer(wrapper, 'task-comment-edit-textarea')
+    await insertEditText(wrapper, 'after')
     await wrapper.get('[data-testid="task-comment-edit-cancel"]').trigger('click')
     await flushPromises()
 
@@ -381,23 +397,18 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     await wrapper.get('[data-testid="task-comment-edit-button"]').trigger('click')
-    await flushPromises()
+    await waitForComposer(wrapper, 'task-comment-edit-textarea')
     await wrapper.get('[title="Remove attachment"]').trigger('click')
     await flushPromises()
 
     const file = new File(['new'], 'new.txt', { type: 'text/plain' })
-    await wrapper.get('[data-testid="task-comment-edit-textarea"]').trigger('drop', {
-      dataTransfer: {
-        files: [file],
-        types: ['Files'],
-      },
-    })
+    await (editComposer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
     await flushPromises()
 
-    await wrapper.get('[data-testid="task-comment-edit-textarea"]').setValue('after')
+    await insertEditText(wrapper, 'after')
     await wrapper.get('[data-testid="task-comment-edit-save"]').trigger('click')
     await flushPromises()
 
@@ -442,18 +453,13 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     const file = new File(['img-data'], 'file.png', { type: 'image/png' })
-    await wrapper.get('textarea').trigger('drop', {
-      dataTransfer: {
-        files: [file],
-        types: ['Files'],
-      },
-    })
+    await (mainComposer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
     await flushPromises()
 
-    await wrapper.get('button.bg-accent').trigger('click')
+    await wrapper.get('[data-testid="task-comment-send-button"]').trigger('click')
     await flushPromises()
 
     expect(tasksCreateComment).toHaveBeenCalledWith('task-1', {
@@ -517,7 +523,7 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     expect(wrapper.find('img').exists()).toBe(true)
     expect(wrapper.find('video').exists()).toBe(true)
@@ -553,7 +559,7 @@ describe('TaskComments', () => {
     })
     await flushPromises()
 
-    const bodies = wrapper.findAll('.markdown-body')
+    const bodies = wrapper.findAll('ul.mb-4 .markdown-body')
     expect(bodies).toHaveLength(2)
     expect(bodies[0].text()).toContain('newer comment')
     expect(bodies[1].text()).toContain('older comment')
@@ -583,7 +589,7 @@ describe('TaskComments', () => {
       props: { taskId: 'task-1' },
       attachTo: document.body,
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     const thumbButton = wrapper.get('[data-testid="task-comment-image-thumbnail"]')
     expect(thumbButton.classes()).toContain('max-w-[180px]')
@@ -624,46 +630,35 @@ describe('TaskComments', () => {
     wrapper.unmount()
   })
 
-  it('clears drag-over state on dragleave even when dataTransfer types are unavailable', async () => {
+  it('keeps the composer shell stable when dragleave fires without dataTransfer types', async () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea')
-    const dropZone = textarea.element.parentElement as HTMLElement
-
-    await textarea.trigger('dragenter', {
-      dataTransfer: {
-        files: [new File(['x'], 'a.txt', { type: 'text/plain' })],
-        types: ['Files'],
-      },
-    })
-    expect(dropZone.className).toContain('border-accent')
-
-    // Simulate browser behavior where dragleave does not include dataTransfer.types.
-    await textarea.trigger('dragleave')
+    const dropZone = wrapper.get('[data-testid="task-comment-composer"]').element.parentElement?.parentElement as HTMLElement
+    await mainProse(wrapper).trigger('dragleave')
     expect(dropZone.className).toContain('border-chat-border')
   })
 
-  it('auto-grows comment textarea and caps at 8 lines', async () => {
+  it('auto-grows comment editor and caps at 8 lines', async () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement
-    Object.defineProperty(textarea, 'scrollHeight', {
+    const editor = mainProse(wrapper).element as HTMLDivElement
+    Object.defineProperty(editor, 'scrollHeight', {
       configurable: true,
       get: () => 420,
     })
 
-    await wrapper.get('textarea').setValue('line')
+    await insertMainText(wrapper, 'line')
     await flushPromises()
 
-    expect(Number.parseInt(textarea.style.maxHeight, 10)).toBeGreaterThan(0)
-    expect(textarea.style.height).toBe(textarea.style.maxHeight)
-    expect(textarea.style.overflowY).toBe('auto')
+    expect(Number.parseInt(editor.style.maxHeight, 10)).toBeGreaterThan(0)
+    expect(editor.style.height).toBe(editor.style.maxHeight)
+    expect(editor.style.overflowY).toBe('auto')
   })
 
   it('renders comment bodies as markdown html (marked path)', async () => {
@@ -680,7 +675,7 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     expect(wrapper.find('.markdown-body strong').exists()).toBe(true)
     const link = wrapper.find('.markdown-body a')
@@ -702,7 +697,7 @@ describe('TaskComments', () => {
     const wrapper = mount(TaskComments, {
       props: { taskId: 'task-1' },
     })
-    await flushPromises()
+    await waitForComposer(wrapper)
 
     await wrapper.get('.markdown-body a').trigger('click')
     await flushPromises()

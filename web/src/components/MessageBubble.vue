@@ -168,19 +168,20 @@
 
       <!-- Message body -->
       <div v-if="isEditing" class="mt-1">
-        <textarea
-          ref="editTextarea"
+        <RichTextComposer
+          ref="editComposer"
           v-model="editBody"
+          v-model:entities="editEntities"
           data-testid="message-edit-textarea"
-          class="w-full min-h-[72px] rounded border border-white/10 bg-chat-input px-2.5 py-2 text-[14px] text-gray-100 outline-none focus:border-accent"
+          class="rounded border border-white/10 bg-chat-input px-2.5 py-2"
+          :conversation-id="message.channelId"
+          :enable-message-entities="true"
           :disabled="editSaving"
-          @input="handleEditTextareaInput"
-          @click="captureEditSelectionAndRefreshTagSearch"
-          @keyup="handleEditTextareaKeyup"
-          @keydown="handleEditTextareaKeydown"
+          :submit-on-enter="true"
+          @submit="saveEdit"
         />
         <div class="mt-1.5 flex items-center justify-between gap-2">
-          <span class="text-[11px] text-gray-500">Enter to save - Shift+Enter for new line - Esc to cancel</span>
+          <span class="text-[11px] text-gray-500">Enter saves in plain text · Shift+Enter newline · Ctrl/Cmd+Enter save anywhere · Esc cancel</span>
           <span v-if="editError" class="text-xs text-red-300">{{ editError }}</span>
         </div>
       </div>
@@ -345,20 +346,6 @@
 
     </div>
   </div>
-
-  <Teleport to="body">
-    <MessageTagPicker
-      :open="editTagPickerOpen"
-      :loading="editTagPickerLoading"
-      :error="editTagPickerError"
-      :style="editTagPickerStyle"
-      :selected-index="editSelectedTagIndex"
-      :users="editTagPickerUsers"
-      :tasks="editTagPickerTasks"
-      :documents="editTagPickerDocuments"
-      @select="selectEditTagItem"
-    />
-  </Teleport>
 
   <Teleport to="body">
     <div
@@ -554,20 +541,11 @@ import {
   listMessageReactionUsers,
   editMessage as editMessageApi,
   deleteMessage as deleteMessageApi,
-  searchTagEntities,
-  type TagSearchResponse,
 } from '@/services/http/chatApi'
 import UserAvatar from './UserAvatar.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
-import { useTextareaAutosize } from '@/composables/useTextareaAutosize'
 import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
-import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
-import {
-  applyTextEditToEntities,
-  findMentionQuery,
-  removeEntityAroundCursor,
-  replaceTextRangeWithEntity,
-} from '@/utils/messageEntities'
+import RichTextComposer from './RichTextComposer.vue'
 
 const props = defineProps({
   message: {
@@ -657,23 +635,8 @@ const editBody = ref('')
 const editEntities = ref<NonNullable<Message['entities']>>([])
 const editSaving = ref(false)
 const editError = ref('')
-const editTextarea = ref<HTMLTextAreaElement | null>(null)
-let lastEditSelectionStart = 0
-let lastEditSelectionEnd = 0
-let lastEditTextSnapshot = ''
-let editTagSearchToken = 0
-let editTagSearchDebounce: ReturnType<typeof setTimeout> | null = null
+const editComposer = ref<InstanceType<typeof RichTextComposer> | null>(null)
 const editTagPickerOpen = ref(false)
-const editTagPickerLoading = ref(false)
-const editTagPickerError = ref('')
-const editTagPickerStyle = ref<Record<string, string>>({ top: '0px', left: '0px', position: 'fixed' })
-const editTagRange = ref<{ start: number; end: number } | null>(null)
-const editTagSearchResults = ref<TagSearchResponse>({ users: [], tasks: [], documents: [] })
-const editSelectedTagIndex = ref(0)
-const {
-  resize: resizeEditTextarea,
-  reset: resetEditTextarea,
-} = useTextareaAutosize(editTextarea)
 const isDeleting = ref(false)
 const ws = useWsStore()
 const chat = useChatStore()
@@ -765,49 +728,6 @@ const renderedMessageHtml = computed(() => {
   return renderMessageBodyWithEntities(props.message.body, props.message.entities ?? [])
 })
 
-const editTagPickerUsers = computed<MessageTagPickerItem[]>(() =>
-  (editTagSearchResults.value.users ?? []).map((item, index) => ({
-    kind: 'user',
-    id: item.user_id,
-    label: `@${item.display_name || item.email}`,
-    subtitle: item.email,
-    href: '',
-    icon: '@',
-    avatarUrl: item.avatar_url,
-    flatIndex: index,
-  })),
-)
-
-const editTagPickerTasks = computed<MessageTagPickerItem[]>(() =>
-  (editTagSearchResults.value.tasks ?? []).map((item, index) => ({
-    kind: 'task',
-    id: item.task_id,
-    label: item.label,
-    subtitle: item.title,
-    href: item.href,
-    icon: '#',
-    flatIndex: editTagPickerUsers.value.length + index,
-  })),
-)
-
-const editTagPickerDocuments = computed<MessageTagPickerItem[]>(() =>
-  (editTagSearchResults.value.documents ?? []).map((item, index) => ({
-    kind: 'document',
-    id: item.document_id,
-    label: item.label,
-    subtitle: item.title,
-    href: item.href,
-    icon: 'D',
-    flatIndex: editTagPickerUsers.value.length + editTagPickerTasks.value.length + index,
-  })),
-)
-
-const editFlatTagItems = computed(() => [
-  ...editTagPickerUsers.value,
-  ...editTagPickerTasks.value,
-  ...editTagPickerDocuments.value,
-])
-
 const activeUserPresence = computed<'online' | 'away' | 'offline' | undefined>(() => {
   const userId = activeUserCard.value?.userId
   if (!userId) return undefined
@@ -836,111 +756,8 @@ function onMarkdownClick(event: MouseEvent) {
   handleMarkdownLinkClick(event, router)
 }
 
-function captureEditSelection() {
-  if (!editTextarea.value) return
-  lastEditSelectionStart = editTextarea.value.selectionStart ?? editBody.value.length
-  lastEditSelectionEnd = editTextarea.value.selectionEnd ?? lastEditSelectionStart
-  lastEditTextSnapshot = editBody.value
-}
-
 function closeEditTagPicker() {
   editTagPickerOpen.value = false
-  editTagPickerLoading.value = false
-  editTagPickerError.value = ''
-  editTagRange.value = null
-}
-
-function refreshEditTagSearch() {
-  if (!editTextarea.value || !props.message.channelId) {
-    closeEditTagPicker()
-    return
-  }
-  if ((editTextarea.value.selectionStart ?? 0) !== (editTextarea.value.selectionEnd ?? 0)) {
-    closeEditTagPicker()
-    return
-  }
-  const cursor = editTextarea.value.selectionStart ?? editBody.value.length
-  const match = findMentionQuery(editBody.value, cursor, editEntities.value)
-  if (!match) {
-    closeEditTagPicker()
-    return
-  }
-  editTagRange.value = { start: match.start, end: match.end }
-  editTagPickerOpen.value = true
-  const rect = editTextarea.value.getBoundingClientRect()
-  editTagPickerStyle.value = {
-    position: 'fixed',
-    top: `${rect.top - 8}px`,
-    left: `${rect.left}px`,
-    transform: 'translateY(-100%)',
-  }
-  if (editTagSearchDebounce) clearTimeout(editTagSearchDebounce)
-  editTagSearchDebounce = setTimeout(async () => {
-    const token = ++editTagSearchToken
-    editTagPickerLoading.value = true
-    editTagPickerError.value = ''
-    try {
-      const results = await searchTagEntities(props.message.channelId, match.query)
-      if (token !== editTagSearchToken) return
-      editTagSearchResults.value = results
-      editSelectedTagIndex.value = 0
-    } catch (error) {
-      if (token !== editTagSearchToken) return
-      editTagPickerError.value = error instanceof Error ? error.message : 'Search failed'
-      editTagSearchResults.value = { users: [], tasks: [], documents: [] }
-    } finally {
-      if (token === editTagSearchToken) {
-        editTagPickerLoading.value = false
-      }
-    }
-  }, 120)
-}
-
-function captureEditSelectionAndRefreshTagSearch() {
-  captureEditSelection()
-  refreshEditTagSearch()
-}
-
-function handleEditTextareaInput() {
-  const replacedLength = lastEditSelectionEnd - lastEditSelectionStart
-  const insertedLength = editBody.value.length - (lastEditTextSnapshot.length - replacedLength)
-  editEntities.value = applyTextEditToEntities(
-    editEntities.value,
-    lastEditSelectionStart,
-    lastEditSelectionEnd,
-    insertedLength,
-  ).filter(entity => editBody.value.slice(entity.start, entity.end) === entity.label)
-  captureEditSelectionAndRefreshTagSearch()
-  resizeEditTextarea()
-}
-
-function selectEditTagItem(item: MessageTagPickerItem) {
-  if (!editTagRange.value) return
-  const next = replaceTextRangeWithEntity(
-    editBody.value,
-    editEntities.value,
-    editTagRange.value.start,
-    editTagRange.value.end,
-    {
-      kind: item.kind,
-      targetId: item.id,
-      label: item.label,
-      href: item.href,
-      start: editTagRange.value.start,
-      end: editTagRange.value.end,
-    },
-  )
-  editBody.value = next.text
-  editEntities.value = next.entities
-  closeEditTagPicker()
-  nextTick(() => {
-    if (!editTextarea.value) return
-    editTextarea.value.focus()
-    editTextarea.value.selectionStart = next.nextCursor
-    editTextarea.value.selectionEnd = next.nextCursor
-    captureEditSelection()
-    resizeEditTextarea()
-  })
 }
 
 // ── Send status actions ──────────────────────────────────────────────────────
@@ -1503,9 +1320,7 @@ function startEdit() {
   editEntities.value = (props.message.entities ?? []).map(entity => ({ ...entity }))
   isEditing.value = true
   nextTick(() => {
-    editTextarea.value?.focus()
-    captureEditSelection()
-    resizeEditTextarea()
+    editComposer.value?.focusAtEnd()
   })
 }
 
@@ -1516,75 +1331,19 @@ function cancelEdit() {
   editBody.value = ''
   editEntities.value = []
   closeEditTagPicker()
-  resetEditTextarea()
 }
 
 function handleEditTextareaKeydown(evt: KeyboardEvent) {
-  captureEditSelection()
-  if (editTagPickerOpen.value) {
-    if (evt.key === 'ArrowDown') {
-      if (editFlatTagItems.value.length === 0) return
-      evt.preventDefault()
-      editSelectedTagIndex.value = (editSelectedTagIndex.value + 1) % editFlatTagItems.value.length
-      return
-    }
-    if (evt.key === 'ArrowUp') {
-      if (editFlatTagItems.value.length === 0) return
-      evt.preventDefault()
-      editSelectedTagIndex.value = (editSelectedTagIndex.value - 1 + editFlatTagItems.value.length) % editFlatTagItems.value.length
-      return
-    }
-    if (evt.key === 'Enter' && !evt.shiftKey) {
-      evt.preventDefault()
-      const item = editFlatTagItems.value[editSelectedTagIndex.value]
-      if (item) selectEditTagItem(item)
-      return
-    }
-    if (evt.key === 'Escape') {
-      evt.preventDefault()
-      closeEditTagPicker()
-      return
-    }
-  }
   if (evt.key === 'Escape') {
     evt.preventDefault()
     cancelEdit()
-    return
   }
-  if ((evt.key === 'Backspace' || evt.key === 'Delete') && editTextarea.value && editTextarea.value.selectionStart === editTextarea.value.selectionEnd) {
-    const cursor = editTextarea.value.selectionStart ?? 0
-    const removed = removeEntityAroundCursor(
-      editBody.value,
-      editEntities.value,
-      cursor,
-      evt.key === 'Backspace' ? 'backward' : 'forward',
-    )
-    if (removed) {
-      evt.preventDefault()
-      editBody.value = removed.text
-      editEntities.value = removed.entities
-      nextTick(() => {
-        if (!editTextarea.value) return
-        editTextarea.value.selectionStart = removed.nextCursor
-        editTextarea.value.selectionEnd = removed.nextCursor
-        captureEditSelectionAndRefreshTagSearch()
-        resizeEditTextarea()
-      })
-      return
-    }
-  }
-  if (evt.key !== 'Enter') return
-  if (evt.shiftKey || evt.isComposing) return
-  evt.preventDefault()
-  if (!canSaveEdit.value) return
-  void saveEdit()
 }
 
 function handleEditTextareaKeyup(evt: KeyboardEvent) {
-  if (editTagPickerOpen.value && (evt.key === 'ArrowDown' || evt.key === 'ArrowUp')) {
-    return
+  if (evt.key === 'Escape') {
+    cancelEdit()
   }
-  captureEditSelectionAndRefreshTagSearch()
 }
 
 async function saveEdit() {
@@ -1628,7 +1387,6 @@ async function saveEdit() {
     editBody.value = ''
     editEntities.value = []
     closeEditTagPicker()
-    resetEditTextarea()
   } catch (error) {
     editError.value = error instanceof Error ? error.message : 'Failed to edit message'
   } finally {

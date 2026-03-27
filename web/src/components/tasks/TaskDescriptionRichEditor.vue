@@ -251,6 +251,7 @@ import { buildAttachmentUrl, parseAttachmentUrl, type AttachmentOwnerKind } from
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
+import { FenceOnEnterExtension, convertFenceParagraphToCodeBlock, shouldConvertFenceParagraph } from '@/editor/richTextShortcuts'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -466,6 +467,7 @@ const extensions = computed(() => {
       undoRedo: collabEnabled.value ? false : {},
       link: false,
     }),
+    FenceOnEnterExtension,
     Link.configure({
       openOnClick: false,
       autolink: false,
@@ -520,6 +522,13 @@ const editor = useEditor({
         return handleMarkdownLinkClick(event as MouseEvent, router, {
           onAttachmentLink: openAttachmentLinkFromEditor,
         })
+      },
+      keydown(_view, event) {
+        if (event.key === ' ' && shouldConvertFenceParagraph(editor.value!)) {
+          event.preventDefault()
+          return convertFenceParagraphToCodeBlock(editor.value!)
+        }
+        return false
       },
     },
     handlePaste(_view, event) {

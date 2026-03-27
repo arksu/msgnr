@@ -46,21 +46,18 @@
           multiple
           @change="onFileInputChange"
         >
-        <textarea
-          ref="inputEl"
+        <RichTextComposer
+          ref="composerRef"
           v-model="newBody"
-          class="min-h-[24px] resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
-          placeholder="Add a comment…"
+          data-testid="task-comment-composer"
+          :placeholder="'Add a comment…'"
           :disabled="submitting"
-          rows="1"
-          @keydown.enter.exact.prevent="submit"
-          @keydown.shift.enter.exact.prevent.stop="onShiftEnter"
-          @input="autoResize"
-          @paste="onPaste"
-          @dragenter.prevent="onDragEnter"
-          @dragover.prevent="onDragOver"
-          @dragleave.prevent="onDragLeave"
-          @drop.prevent="onDrop"
+          :max-lines="MAX_COMPOSER_LINES"
+          :enable-task-items="true"
+          :submit-on-enter="true"
+          :on-files="uploadFiles"
+          @submit="submit"
+          @resize="preserveScrollOnComposerResize"
         />
 
         <div data-testid="task-comment-controls-row" class="flex items-center justify-between">
@@ -190,22 +187,17 @@
                 </ul>
               </div>
 
-              <textarea
-                :ref="setEditTextareaRef"
+              <RichTextComposer
+                :ref="setEditComposerRef"
                 v-model="editBody"
                 data-testid="task-comment-edit-textarea"
-                class="min-h-[24px] resize-none bg-transparent leading-relaxed text-gray-100 placeholder-gray-500 outline-none"
-                placeholder="Edit comment…"
+                :placeholder="'Edit comment…'"
                 :disabled="editSaving"
-                rows="1"
-                @keydown.enter.exact.prevent="saveEditingComment"
-                @keydown.shift.enter.exact.prevent.stop="onEditShiftEnter"
-                @input="autoResizeEditTextarea"
-                @paste="onEditPaste"
-                @dragenter.prevent="onEditDragEnter"
-                @dragover.prevent="onEditDragOver"
-                @dragleave.prevent="onEditDragLeave"
-                @drop.prevent="onEditDrop"
+                :max-lines="MAX_COMPOSER_LINES"
+                :enable-task-items="true"
+                :submit-on-enter="true"
+                :on-files="uploadEditFiles"
+                @submit="saveEditingComment"
               />
 
               <div class="flex items-center justify-between">
@@ -467,9 +459,9 @@ import { useTasksStore } from '@/stores/tasks'
 import { useAuthStore } from '@/stores/auth'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
-import { useTextareaAutosize } from '@/composables/useTextareaAutosize'
 import { renderMarkdownToHtml } from '@/utils/markdown'
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
+import RichTextComposer from '@/components/RichTextComposer.vue'
 import {
   tasksListComments,
   tasksCreateComment,
@@ -482,7 +474,7 @@ import {
 } from '@/services/http/tasksApi'
 
 const MAX_ATTACHMENTS = 5
-const MAX_TEXTAREA_LINES = 8
+const MAX_COMPOSER_LINES = 8
 
 const props = defineProps<{ taskId: string }>()
 
@@ -500,12 +492,10 @@ const uploading = ref(false)
 const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
-const inputEl = ref<HTMLTextAreaElement | null>(null)
 const editFileInputEl = ref<HTMLInputElement | null>(null)
-const editTextareaEl = ref<HTMLTextAreaElement | null>(null)
+const composerRef = ref<InstanceType<typeof RichTextComposer> | null>(null)
+const editComposerRef = ref<InstanceType<typeof RichTextComposer> | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
-let dragDepth = 0
-let editDragDepth = 0
 
 const editingCommentId = ref<string | null>(null)
 const editBody = ref('')
@@ -535,7 +525,11 @@ function setEditFileInputRef(value: Element | ComponentPublicInstance | null) {
 }
 
 function setEditTextareaRef(value: Element | ComponentPublicInstance | null) {
-  editTextareaEl.value = asElement<HTMLTextAreaElement>(value)
+  editComposerRef.value = value as InstanceType<typeof RichTextComposer> | null
+}
+
+function setEditComposerRef(value: Element | ComponentPublicInstance | null) {
+  editComposerRef.value = value as InstanceType<typeof RichTextComposer> | null
 }
 
 function setEditPickerToggleButtonRef(value: Element | ComponentPublicInstance | null) {
@@ -567,19 +561,6 @@ const {
   onSelectEmoji: onSelectEditEmoji,
 } = useComposerEmojiPicker({
   onSelect: insertEditEmojiAtCursor,
-})
-const {
-  resize: autosizeCommentTextarea,
-  reset: resetCommentTextarea,
-} = useTextareaAutosize(inputEl, {
-  maxLines: MAX_TEXTAREA_LINES,
-  onHeightDelta: preserveScrollOnComposerResize,
-})
-const {
-  resize: autosizeEditTextarea,
-  reset: resetEditTextarea,
-} = useTextareaAutosize(editTextareaEl, {
-  maxLines: MAX_TEXTAREA_LINES,
 })
 
 const canSubmit = computed(() => {
@@ -756,66 +737,6 @@ function isFileDragEvent(event: DragEvent): boolean {
   return event.dataTransfer?.types?.includes('Files') ?? false
 }
 
-function onDragEnter(event: DragEvent) {
-  if (!isFileDragEvent(event) || submitting.value || uploading.value) return
-  dragDepth += 1
-  isDragOver.value = true
-}
-
-function onEditDragEnter(event: DragEvent) {
-  if (!isFileDragEvent(event) || editSaving.value || editUploading.value) return
-  editDragDepth += 1
-  editDragOver.value = true
-}
-
-function onDragOver(event: DragEvent) {
-  if (!isFileDragEvent(event) || submitting.value || uploading.value) return
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  isDragOver.value = true
-}
-
-function onEditDragOver(event: DragEvent) {
-  if (!isFileDragEvent(event) || editSaving.value || editUploading.value) return
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  editDragOver.value = true
-}
-
-function onDragLeave(_event: DragEvent) {
-  dragDepth = Math.max(0, dragDepth - 1)
-  if (dragDepth === 0) {
-    isDragOver.value = false
-  }
-}
-
-function onEditDragLeave(_event: DragEvent) {
-  editDragDepth = Math.max(0, editDragDepth - 1)
-  if (editDragDepth === 0) {
-    editDragOver.value = false
-  }
-}
-
-async function onDrop(event: DragEvent) {
-  if (!isFileDragEvent(event)) return
-  dragDepth = 0
-  isDragOver.value = false
-  const files = Array.from(event.dataTransfer?.files ?? [])
-  if (files.length === 0) return
-  await uploadFiles(files)
-}
-
-async function onEditDrop(event: DragEvent) {
-  if (!isFileDragEvent(event)) return
-  editDragDepth = 0
-  editDragOver.value = false
-  const files = Array.from(event.dataTransfer?.files ?? [])
-  if (files.length === 0) return
-  await uploadEditFiles(files)
-}
-
 function clipboardFileKey(file: File): string {
   return `${file.name}:${file.size}:${file.type}:${file.lastModified}`
 }
@@ -845,92 +766,12 @@ function extractClipboardFiles(event: ClipboardEvent): File[] {
   return files
 }
 
-function onPaste(event: ClipboardEvent) {
-  const files = extractClipboardFiles(event)
-  if (files.length === 0) return
-  if (submitting.value || uploading.value) return
-
-  event.preventDefault()
-  void uploadFiles(files)
-}
-
-function onEditPaste(event: ClipboardEvent) {
-  const files = extractClipboardFiles(event)
-  if (files.length === 0) return
-  if (editSaving.value || editUploading.value) return
-
-  event.preventDefault()
-  void uploadEditFiles(files)
-}
-
-function onShiftEnter(event: KeyboardEvent) {
-  const el = event.target as HTMLTextAreaElement
-  const start = el.selectionStart
-  const end = el.selectionEnd
-  newBody.value = newBody.value.slice(0, start) + '\n' + newBody.value.slice(end)
-  nextTick(() => {
-    el.selectionStart = el.selectionEnd = start + 1
-    autoResize()
-  })
-}
-
-function onEditShiftEnter(event: KeyboardEvent) {
-  const el = event.target as HTMLTextAreaElement
-  const start = el.selectionStart
-  const end = el.selectionEnd
-  editBody.value = editBody.value.slice(0, start) + '\n' + editBody.value.slice(end)
-  nextTick(() => {
-    el.selectionStart = el.selectionEnd = start + 1
-    autoResizeEditTextarea()
-  })
-}
-
 function insertEmojiAtCursor(emoji: string) {
-  const el = inputEl.value
-  if (!el) {
-    newBody.value += emoji
-    return
-  }
-
-  const start = el.selectionStart ?? newBody.value.length
-  const end = el.selectionEnd ?? start
-  newBody.value = `${newBody.value.slice(0, start)}${emoji}${newBody.value.slice(end)}`
-
-  nextTick(() => {
-    const cursor = start + emoji.length
-    el.focus()
-    el.selectionStart = cursor
-    el.selectionEnd = cursor
-    autoResize()
-  })
+  composerRef.value?.insertText(emoji)
 }
 
 function insertEditEmojiAtCursor(emoji: string) {
-  const el = editTextareaEl.value
-  if (!el) {
-    editBody.value += emoji
-    return
-  }
-
-  const start = el.selectionStart ?? editBody.value.length
-  const end = el.selectionEnd ?? start
-  editBody.value = `${editBody.value.slice(0, start)}${emoji}${editBody.value.slice(end)}`
-
-  nextTick(() => {
-    const cursor = start + emoji.length
-    el.focus()
-    el.selectionStart = cursor
-    el.selectionEnd = cursor
-    autoResizeEditTextarea()
-  })
-}
-
-function autoResize() {
-  autosizeCommentTextarea()
-}
-
-function autoResizeEditTextarea() {
-  autosizeEditTextarea()
+  editComposerRef.value?.insertText(emoji)
 }
 
 function findNearestScrollContainer(start: HTMLElement | null): HTMLElement | null {
@@ -970,7 +811,6 @@ async function submit() {
     comments.value = sortCommentsNewestFirst([comment, ...comments.value])
     newBody.value = ''
     stagedAttachments.value = []
-    nextTick(() => resetCommentTextarea())
     closeEmojiPicker()
     preloadAttachmentUrls()
     tasksStore.loadUsers()
@@ -1001,14 +841,8 @@ async function startEditingComment(comment: TaskComment) {
   editError.value = ''
   editAttachmentError.value = ''
   editDragOver.value = false
-  editDragDepth = 0
   nextTick(() => {
-    const el = editTextareaEl.value
-    if (!el) return
-    el.focus()
-    const cursor = el.value.length
-    el.setSelectionRange(cursor, cursor)
-    autoResizeEditTextarea()
+    editComposerRef.value?.focusAtEnd()
   })
 }
 
@@ -1022,8 +856,6 @@ async function cancelEditingComment() {
   editError.value = ''
   editAttachmentError.value = ''
   editDragOver.value = false
-  editDragDepth = 0
-  nextTick(() => resetEditTextarea())
 }
 
 async function saveEditingComment() {
@@ -1042,7 +874,6 @@ async function saveEditingComment() {
     editingCommentId.value = null
     editBody.value = ''
     editAttachments.value = []
-    nextTick(() => resetEditTextarea())
     preloadAttachmentUrls()
     void tasksStore.loadUsers()
   } catch (e) {
@@ -1178,14 +1009,6 @@ watch(comments, () => {
   preloadAttachmentUrls()
 }, { deep: true })
 
-watch(newBody, () => {
-  nextTick(() => autoResize())
-})
-
-watch(editBody, () => {
-  nextTick(() => autoResizeEditTextarea())
-})
-
 watch(() => props.taskId, (next, prev) => {
   closeEmojiPicker()
   closeEditEmojiPicker()
@@ -1200,9 +1023,6 @@ watch(() => props.taskId, (next, prev) => {
     editError.value = ''
     editAttachmentError.value = ''
     editDragOver.value = false
-    editDragDepth = 0
-    nextTick(() => autoResize())
-    nextTick(() => resetEditTextarea())
     closeImagePreview()
     void load()
   }
@@ -1219,7 +1039,6 @@ watch(() => imagePreview.open, (open) => {
 onMounted(() => {
   void load()
   void tasksStore.loadUsers()
-  nextTick(() => autoResize())
 })
 
 onBeforeUnmount(() => {

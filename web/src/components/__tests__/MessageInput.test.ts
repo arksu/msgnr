@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick, ref, shallowRef } from 'vue'
 import MessageInput from '@/components/MessageInput.vue'
+import RichTextComposer from '@/components/RichTextComposer.vue'
 import { uploadChatAttachment } from '@/services/http/chatApi'
 
 vi.mock('@/composables/useComposerEmojiPicker', () => ({
@@ -44,6 +45,27 @@ describe('MessageInput', () => {
     await nextTick()
   }
 
+  async function waitForComposer(wrapper: ReturnType<typeof mount>) {
+    for (let index = 0; index < 10; index += 1) {
+      await flushAll()
+      if (wrapper.find('.ProseMirror').exists()) return
+    }
+    throw new Error('composer did not mount')
+  }
+
+  function composer(wrapper: ReturnType<typeof mount>) {
+    return wrapper.getComponent(RichTextComposer)
+  }
+
+  function prose(wrapper: ReturnType<typeof mount>) {
+    return wrapper.get('.ProseMirror')
+  }
+
+  async function insertText(wrapper: ReturnType<typeof mount>, value: string) {
+    ;(composer(wrapper).vm as unknown as { insertText: (text: string) => void }).insertText(value)
+    await flushAll()
+  }
+
   it('does not emit typing=false on blur', async () => {
     const wrapper = mount(MessageInput, {
       props: {
@@ -51,10 +73,10 @@ describe('MessageInput', () => {
         disabled: false,
       },
     })
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea')
-    await textarea.setValue('hello')
-    await textarea.trigger('blur')
+    await insertText(wrapper, 'hello')
+    await prose(wrapper).trigger('blur')
 
     const typingEvents = wrapper.emitted('typing') ?? []
     expect(typingEvents).toEqual([[true]])
@@ -67,10 +89,11 @@ describe('MessageInput', () => {
         disabled: false,
       },
     })
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea')
+    const editor = prose(wrapper)
     const controls = wrapper.get('[data-testid="composer-controls-row"]')
-    const position = textarea.element.compareDocumentPosition(controls.element)
+    const position = editor.element.compareDocumentPosition(controls.element)
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
@@ -82,12 +105,9 @@ describe('MessageInput', () => {
         disabled: false,
       },
     })
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea')
-    await textarea.setValue('hello')
-    const el = textarea.element as HTMLTextAreaElement
-    el.focus()
-    el.setSelectionRange(2, 2)
+    await insertText(wrapper, 'hello')
 
     await wrapper.get('[data-testid="composer-emoji-button"]').trigger('click')
     await flushAll()
@@ -97,7 +117,7 @@ describe('MessageInput', () => {
     emojiOption?.click()
     await flushAll()
 
-    expect((textarea.element as HTMLTextAreaElement).value).toBe('he🙂llo')
+    expect(composer(wrapper).props('modelValue')).toContain('🙂')
     expect(document.body.querySelector('[data-testid="emoji-picker-option"]')).toBeNull()
   })
 
@@ -108,6 +128,7 @@ describe('MessageInput', () => {
         disabled: true,
       },
     })
+    await waitForComposer(wrapper)
 
     expect(wrapper.get('[data-testid="composer-emoji-button"]').attributes('disabled')).toBeDefined()
   })
@@ -127,14 +148,11 @@ describe('MessageInput', () => {
         disabled: false,
       },
     })
+    await waitForComposer(wrapper)
 
     const file = new File(['test'], 'photo.png', { type: 'image/png' })
-    await wrapper.get('textarea').trigger('drop', {
-      dataTransfer: {
-        files: [file],
-        types: ['Files'],
-      },
-    })
+    await (composer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
+    await flushAll()
 
     expect(uploadChatAttachment).toHaveBeenCalledWith('channel-1', file, expect.any(Function))
     expect(wrapper.text()).toContain('photo.png')
@@ -147,14 +165,11 @@ describe('MessageInput', () => {
         disabled: false,
       },
     })
+    await waitForComposer(wrapper)
 
     const file = new File(['x'], 'notes.txt', { type: 'text/plain' })
-    await wrapper.get('textarea').trigger('drop', {
-      dataTransfer: {
-        files: [file],
-        types: ['Files'],
-      },
-    })
+    await (composer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
+    await flushAll()
 
     expect(uploadChatAttachment).not.toHaveBeenCalled()
   })
@@ -174,14 +189,11 @@ describe('MessageInput', () => {
         disabled: false,
       },
     })
+    await waitForComposer(wrapper)
 
     const file = new File(['img'], 'clipboard-image.png', { type: 'image/png' })
-    await wrapper.get('textarea').trigger('paste', {
-      clipboardData: {
-        items: [{ kind: 'file', getAsFile: () => file }],
-        files: [file],
-      },
-    })
+    await (composer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
+    await flushAll()
 
     expect(uploadChatAttachment).toHaveBeenCalledTimes(1)
     expect(uploadChatAttachment).toHaveBeenCalledWith('channel-1', file, expect.any(Function))
@@ -211,14 +223,10 @@ describe('MessageInput', () => {
         disabled: false,
       },
     })
+    await waitForComposer(wrapper)
 
     const file = new File(['test'], 'big.png', { type: 'image/png' })
-    const dropPromise = wrapper.get('textarea').trigger('drop', {
-      dataTransfer: {
-        files: [file],
-        types: ['Files'],
-      },
-    })
+    const dropPromise = (composer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
     await flushAll()
 
     expect(wrapper.text()).toContain('Uploading big.png...')
@@ -238,18 +246,19 @@ describe('MessageInput', () => {
         disabled: false,
       },
     })
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement
-    Object.defineProperty(textarea, 'scrollHeight', {
+    const editor = prose(wrapper).element as HTMLDivElement
+    Object.defineProperty(editor, 'scrollHeight', {
       configurable: true,
       get: () => 400,
     })
 
-    await wrapper.get('textarea').setValue('line')
+    await insertText(wrapper, 'line')
 
-    expect(Number.parseInt(textarea.style.maxHeight, 10)).toBeGreaterThan(0)
-    expect(textarea.style.height).toBe(textarea.style.maxHeight)
-    expect(textarea.style.overflowY).toBe('auto')
+    expect(Number.parseInt(editor.style.maxHeight, 10)).toBeGreaterThan(0)
+    expect(editor.style.height).toBe(editor.style.maxHeight)
+    expect(editor.style.overflowY).toBe('auto')
   })
 
   it('focuses the textarea when focusToken changes', async () => {
@@ -261,13 +270,14 @@ describe('MessageInput', () => {
         focusToken: 0,
       },
     })
+    await waitForComposer(wrapper)
 
-    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement
-    expect(document.activeElement).not.toBe(textarea)
+    const editor = prose(wrapper).element as HTMLDivElement
+    expect(document.activeElement).not.toBe(editor)
 
     await wrapper.setProps({ focusToken: 1 })
     await flushAll()
 
-    expect(document.activeElement).toBe(textarea)
+    expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true)
   })
 })

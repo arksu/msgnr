@@ -27,6 +27,7 @@ declare module 'vue' {
     NotificationLevelSelector: typeof import('./src/components/NotificationLevelSelector.vue')['default']
     PwaUpdateBanner: typeof import('./src/components/PwaUpdateBanner.vue')['default']
     ResizableSidebar: typeof import('./src/components/ResizableSidebar.vue')['default']
+    RichTextComposer: typeof import('./src/components/RichTextComposer.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SettingsDialog: typeof import('./src/components/SettingsDialog.vue')['default']

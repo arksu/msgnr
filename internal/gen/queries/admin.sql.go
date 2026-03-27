@@ -197,6 +197,7 @@ func (q *Queries) AdminListChannelMembers(ctx context.Context, channelID uuid.UU
 const adminListChannels = `-- name: AdminListChannels :many
 SELECT id, kind, visibility, name, topic, is_archived, created_by, created_at
 FROM channels
+WHERE kind <> 'dm'
 ORDER BY created_at DESC
 `
 

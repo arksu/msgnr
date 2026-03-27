@@ -31,6 +31,7 @@ RETURNING id, email, display_name, avatar_url, role, status, need_change_passwor
 -- name: AdminListChannels :many
 SELECT id, kind, visibility, name, topic, is_archived, created_by, created_at
 FROM channels
+WHERE kind <> 'dm'
 ORDER BY created_at DESC;
 
 -- name: AdminCreateChannel :one

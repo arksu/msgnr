@@ -173,6 +173,42 @@ func TestIntegration_CreateChannel_CreatesInviteNotificationForAddedMember(t *te
 	assert.Equal(t, 1, notificationCount)
 }
 
+func TestIntegration_ListChannels_ExcludesDirectMessages(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	adminID := seedAdminUser(t, ctx, pool, "admin")
+
+	var publicChannelID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO channels (kind, visibility, name, created_by)
+		 VALUES ('channel', 'public', 'general', $1)
+		 RETURNING id`,
+		adminID,
+	).Scan(&publicChannelID)
+	require.NoError(t, err)
+
+	var dmChannelID uuid.UUID
+	err = pool.QueryRow(ctx,
+		`INSERT INTO channels (kind, visibility, topic, created_by)
+		 VALUES ('dm', 'dm', $1, $2)
+		 RETURNING id`,
+		uuid.NewString(),
+		adminID,
+	).Scan(&dmChannelID)
+	require.NoError(t, err)
+
+	svc := admin.NewService(pool)
+
+	channels, err := svc.ListChannels(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, channels, 1)
+	assert.Equal(t, publicChannelID, channels[0].ID)
+	assert.NotEqual(t, dmChannelID, channels[0].ID)
+	assert.Equal(t, "channel", channels[0].Kind)
+}
+
 func TestIntegration_UpdateBotUserStoresAndReplacesIntegrationToken(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

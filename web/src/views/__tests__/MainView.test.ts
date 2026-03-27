@@ -11,6 +11,7 @@ import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 import { isUuidTaskRouteValue, taskSlugFromPublicId } from '@/services/taskRoute'
+import * as chatApi from '@/services/http/chatApi'
 import { toNotificationOpenMessage } from '@/services/notificationOpen'
 import MainView from '@/views/MainView.vue'
 
@@ -740,7 +741,7 @@ describe('MainView server unavailable state', () => {
       id: 'dm-1',
       userId: 'user-2',
       displayName: 'Bob',
-      unread: 0,
+      unread: 2,
       notificationLevel: NotificationLevel.ALL,
     }] as any
     chatStore.messages = {
@@ -759,9 +760,95 @@ describe('MainView server unavailable state', () => {
         myReactions: [],
       }],
     } as any
+    chatStore.unreadFeedItems = [
+      {
+        id: 'thread:notif-1',
+        kind: 'thread',
+        notificationId: 'notif-1',
+        conversationId: 'dm-1',
+        conversationKind: 'dm',
+        conversationVisibility: 'dm',
+        conversationTitle: 'Bob',
+        messageId: 'msg-1',
+        threadRootMessageId: 'root-1',
+        senderName: 'Bob',
+        body: 'reply 1',
+        createdAt: '2026-03-06T00:01:00Z',
+      },
+      {
+        id: 'thread:notif-2',
+        kind: 'thread',
+        notificationId: 'notif-2',
+        conversationId: 'dm-1',
+        conversationKind: 'dm',
+        conversationVisibility: 'dm',
+        conversationTitle: 'Bob',
+        messageId: 'msg-2',
+        threadRootMessageId: 'root-1',
+        senderName: 'Bob',
+        body: 'reply 2',
+        createdAt: '2026-03-06T00:02:00Z',
+      },
+      {
+        id: 'message:root-1',
+        kind: 'message',
+        conversationId: 'dm-1',
+        conversationKind: 'dm',
+        conversationVisibility: 'dm',
+        conversationTitle: 'Bob',
+        messageId: 'root-1',
+        senderName: 'Bob',
+        body: 'root',
+        createdAt: '2026-03-06T00:00:00Z',
+      },
+      {
+        id: 'thread:notif-3',
+        kind: 'thread',
+        notificationId: 'notif-3',
+        conversationId: 'dm-1',
+        conversationKind: 'dm',
+        conversationVisibility: 'dm',
+        conversationTitle: 'Bob',
+        messageId: 'msg-3',
+        threadRootMessageId: 'root-2',
+        senderName: 'Eve',
+        body: 'other thread',
+        createdAt: '2026-03-06T00:03:00Z',
+      },
+    ] as any
+    chatStore.notifications = [
+      {
+        id: 'notif-1',
+        type: 'thread_reply',
+        title: 'Reply',
+        body: 'reply 1',
+        conversationId: 'dm-1',
+        isRead: false,
+        createdAt: '2026-03-06T00:01:00Z',
+      },
+      {
+        id: 'notif-2',
+        type: 'thread_reply',
+        title: 'Reply',
+        body: 'reply 2',
+        conversationId: 'dm-1',
+        isRead: false,
+        createdAt: '2026-03-06T00:02:00Z',
+      },
+      {
+        id: 'notif-3',
+        type: 'thread_reply',
+        title: 'Reply',
+        body: 'other thread',
+        conversationId: 'dm-1',
+        isRead: false,
+        createdAt: '2026-03-06T00:03:00Z',
+      },
+    ] as any
+    chatStore.unreadFeedTotalCount = 4
     vi.spyOn(chatStore, 'ensureConversationHistory').mockResolvedValue(undefined)
     vi.spyOn(chatStore, 'loadMessageContext').mockResolvedValue('loaded')
-    const markUnreadFeedItemReadSpy = vi.spyOn(chatStore, 'markUnreadFeedItemRead').mockResolvedValue(undefined)
+    vi.spyOn(chatApi, 'resolveUnreadFeedNotification').mockResolvedValue(undefined)
     const openThreadSpy = vi.spyOn(chatStore, 'openThread')
 
     const wrapper = mountAtRoute(router)
@@ -779,9 +866,11 @@ describe('MainView server unavailable state', () => {
     expect(chatStore.focusedThreadMessageId).toBe('msg-1')
     expect(openThreadSpy).toHaveBeenCalled()
     expect(chatStore.threadComposerFocusToken).toBeGreaterThan(0)
-    expect(markUnreadFeedItemReadSpy).toHaveBeenCalledWith(expect.objectContaining({
-      notificationId: 'notif-1',
-      conversationId: 'dm-1',
-    }))
+    expect(chatStore.unreadFeedItems.map(item => item.id)).toEqual(['thread:notif-3'])
+    expect(chatStore.unreadFeedTotalCount).toBe(1)
+    expect(chatStore.notifications.map(notification => notification.id)).toEqual(['notif-3'])
+    expect(chatApi.resolveUnreadFeedNotification).toHaveBeenCalledTimes(2)
+    expect(chatApi.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-1')
+    expect(chatApi.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-2')
   })
 })

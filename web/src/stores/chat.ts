@@ -443,6 +443,7 @@ export const useChatStore = defineStore('chat', () => {
   /** Tracks active send timeouts by clientMsgId. Cleared on ACK or discard. */
   const sendTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
   const threadReplayResyncTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const pendingThreadReadResolutions = new Map<string, Promise<void>>()
   const toast = ref<ToastState | null>(null)
   const lastAppliedEventSeq = ref<bigint>(loadLastAppliedEventSeq())
   const lastAckedEventSeq = ref<bigint>(0n)
@@ -690,6 +691,58 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function removeUnreadFeedItemsForThread(conversationId: string, threadRootMessageId: string): UnreadFeedItem[] {
+    if (!conversationId || !threadRootMessageId) return []
+    const removed = unreadFeedItems.value.filter(item =>
+      item.conversationId === conversationId
+      && (item.threadRootMessageId === threadRootMessageId || item.messageId === threadRootMessageId),
+    )
+    if (removed.length === 0) return []
+
+    const removedIds = new Set(removed.map(item => item.id))
+    const removedNotificationIds = new Set(
+      removed.flatMap(item => item.notificationId ? [item.notificationId] : []),
+    )
+
+    unreadFeedItems.value = unreadFeedItems.value.filter(item => !removedIds.has(item.id))
+    unreadFeedTotalCount.value = Math.max(0, unreadFeedTotalCount.value - removed.length)
+
+    if (removedNotificationIds.size > 0) {
+      notifications.value = notifications.value.filter(item => !removedNotificationIds.has(item.id))
+    }
+
+    return removed
+  }
+
+  async function markThreadUnreadAsRead(
+    conversationId: string,
+    threadRootMessageId: string,
+    lastReadSeq = 0n,
+  ): Promise<void> {
+    if (!conversationId || !threadRootMessageId) return
+    const key = `${conversationId}:${threadRootMessageId}`
+    const existing = pendingThreadReadResolutions.get(key)
+    if (existing) return existing
+
+    const pending = (async () => {
+      const removedItems = removeUnreadFeedItemsForThread(conversationId, threadRootMessageId)
+      const notificationIds = Array.from(new Set(
+        removedItems.flatMap(item => item.notificationId ? [item.notificationId] : []),
+      ))
+      if (notificationIds.length > 0) {
+        await Promise.allSettled(notificationIds.map(notificationId => resolveUnreadFeedNotification(notificationId)))
+      }
+      if (lastReadSeq > 0n) {
+        requestReadMark(conversationId, lastReadSeq)
+      }
+    })().finally(() => {
+      pendingThreadReadResolutions.delete(key)
+    })
+
+    pendingThreadReadResolutions.set(key, pending)
+    return pending
+  }
+
   function selectChannel(id: string) {
     const selectStartedAt = performance.now()
     logConversationPerf('select', {
@@ -906,6 +959,7 @@ export const useChatStore = defineStore('chat', () => {
       clearTimeout(unreadFeedRefreshTimer)
       unreadFeedRefreshTimer = null
     }
+    pendingThreadReadResolutions.clear()
 
     channels.value = []
     directMessages.value = []
@@ -1115,6 +1169,7 @@ export const useChatStore = defineStore('chat', () => {
     activeThreadRootId.value = rootMessage.id
     if (!threadMessages.value[rootMessage.id]) threadMessages.value[rootMessage.id] = []
     requestThreadComposerFocus()
+    void markThreadUnreadAsRead(rootMessage.channelId, rootMessage.id, rootMessage.channelSeq)
     // Only server-confirmed replies advance the replay cursor. ACK-only
     // optimistic replies stay visible but must not suppress a later backfill.
     const lastKnownSeq = highestConfirmedThreadSeq(rootMessage.id)
@@ -2517,18 +2572,17 @@ export const useChatStore = defineStore('chat', () => {
 
   async function markUnreadFeedItemRead(item: UnreadFeedItem): Promise<void> {
     if (!item?.id || !item.conversationId) return
-    if (item.notificationId) {
-      await resolveUnreadFeedNotification(item.notificationId)
-      removeUnreadFeedItemLocally(item.id, item.notificationId)
+    const rootMessageId = item.threadRootMessageId || item.messageId
+    if (rootMessageId) {
+      const rootMessage = (messages.value[item.conversationId] ?? []).find(message => message.id === rootMessageId)
+      await markThreadUnreadAsRead(item.conversationId, rootMessageId, rootMessage?.channelSeq ?? 0n)
       return
     }
 
-    const rootMessageId = item.threadRootMessageId || item.messageId
-    if (!rootMessageId) return
-    const rootMessage = (messages.value[item.conversationId] ?? []).find(message => message.id === rootMessageId)
-    if (!rootMessage || rootMessage.channelSeq <= 0n) return
-    requestReadMark(item.conversationId, rootMessage.channelSeq)
-    removeUnreadFeedItemLocally(item.id)
+    if (item.notificationId) {
+      await resolveUnreadFeedNotification(item.notificationId)
+      removeUnreadFeedItemLocally(item.id, item.notificationId)
+    }
   }
 
   function onClientFocus() {

@@ -1645,6 +1645,226 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.threadComposerFocusToken).toBe(1)
   })
 
+  it('clears unread feed entries for the whole thread when opening a thread', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendUpdateReadCursor = vi.fn()
+    ws.sendSubscribeThread = vi.fn()
+
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 4,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.messages = {
+      'channel-1': [
+        buildMessage({
+          id: 'root-1',
+          channelId: 'channel-1',
+          senderId: 'user-2',
+          channelSeq: 10n,
+          threadSeq: 0n,
+        }),
+      ],
+    }
+    chat.unreadFeedItems = [
+      {
+        id: 'thread:reply-1',
+        kind: 'thread',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'general',
+        messageId: 'reply-1',
+        threadRootMessageId: 'root-1',
+        senderName: 'Bob',
+        body: 'reply 1',
+        createdAt: '2026-03-06T00:01:00Z',
+      },
+      {
+        id: 'thread:reply-2',
+        kind: 'thread',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'general',
+        messageId: 'reply-2',
+        threadRootMessageId: 'root-1',
+        senderName: 'Bob',
+        body: 'reply 2',
+        createdAt: '2026-03-06T00:02:00Z',
+      },
+      {
+        id: 'message:root-1',
+        kind: 'message',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'general',
+        messageId: 'root-1',
+        senderName: 'Bob',
+        body: 'root',
+        createdAt: '2026-03-06T00:00:00Z',
+      },
+      {
+        id: 'thread:reply-3',
+        kind: 'thread',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'general',
+        messageId: 'reply-3',
+        threadRootMessageId: 'root-2',
+        senderName: 'Eve',
+        body: 'other thread',
+        createdAt: '2026-03-06T00:03:00Z',
+      },
+    ] as any
+    chat.unreadFeedTotalCount = 4
+
+    chat.openThread(chat.messages['channel-1'][0])
+
+    expect(chat.unreadFeedItems.map(item => item.id)).toEqual(['thread:reply-3'])
+    expect(chat.unreadFeedTotalCount).toBe(1)
+    expect(chat.channels[0].unread).toBe(0)
+    expect(ws.sendUpdateReadCursor).toHaveBeenCalledWith('channel-1', 10n)
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
+  it('resolves every unread notification for a thread when marking one thread item read', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendUpdateReadCursor = vi.fn()
+
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 2,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.messages = {
+      'channel-1': [
+        buildMessage({
+          id: 'root-1',
+          channelId: 'channel-1',
+          senderId: 'user-2',
+          channelSeq: 10n,
+          threadSeq: 0n,
+        }),
+        buildMessage({
+          id: 'reply-1',
+          channelId: 'channel-1',
+          senderId: 'user-3',
+          channelSeq: 11n,
+          threadSeq: 1n,
+          threadRootMessageId: 'root-1',
+        }),
+      ],
+    }
+    chat.unreadFeedItems = [
+      {
+        id: 'thread:notif-1',
+        kind: 'thread',
+        notificationId: 'notif-1',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'general',
+        messageId: 'reply-1',
+        threadRootMessageId: 'root-1',
+        senderName: 'Bob',
+        body: 'reply 1',
+        createdAt: '2026-03-06T00:01:00Z',
+      },
+      {
+        id: 'thread:notif-2',
+        kind: 'thread',
+        notificationId: 'notif-2',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'general',
+        messageId: 'reply-2',
+        threadRootMessageId: 'root-1',
+        senderName: 'Bob',
+        body: 'reply 2',
+        createdAt: '2026-03-06T00:02:00Z',
+      },
+      {
+        id: 'message:root-1',
+        kind: 'message',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'general',
+        messageId: 'root-1',
+        senderName: 'Bob',
+        body: 'root',
+        createdAt: '2026-03-06T00:00:00Z',
+      },
+      {
+        id: 'thread:notif-3',
+        kind: 'thread',
+        notificationId: 'notif-3',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'general',
+        messageId: 'reply-3',
+        threadRootMessageId: 'root-2',
+        senderName: 'Eve',
+        body: 'other thread',
+        createdAt: '2026-03-06T00:03:00Z',
+      },
+    ] as any
+    chat.notifications = [
+      {
+        id: 'notif-1',
+        type: 'thread_reply',
+        title: 'Reply',
+        body: 'reply 1',
+        conversationId: 'channel-1',
+        isRead: false,
+        createdAt: '2026-03-06T00:01:00Z',
+      },
+      {
+        id: 'notif-2',
+        type: 'thread_reply',
+        title: 'Reply',
+        body: 'reply 2',
+        conversationId: 'channel-1',
+        isRead: false,
+        createdAt: '2026-03-06T00:02:00Z',
+      },
+      {
+        id: 'notif-3',
+        type: 'thread_reply',
+        title: 'Reply',
+        body: 'other thread',
+        conversationId: 'channel-1',
+        isRead: false,
+        createdAt: '2026-03-06T00:03:00Z',
+      },
+    ] as any
+    chat.unreadFeedTotalCount = 4
+
+    await chat.markUnreadFeedItemRead(chat.unreadFeedItems[0])
+
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledTimes(2)
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-1')
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-2')
+    expect(chat.unreadFeedItems.map(item => item.id)).toEqual(['thread:notif-3'])
+    expect(chat.unreadFeedTotalCount).toBe(1)
+    expect(chat.notifications.map(notification => notification.id)).toEqual(['notif-3'])
+    expect(chat.channels[0].unread).toBe(0)
+    expect(ws.sendUpdateReadCursor).toHaveBeenCalledWith('channel-1', 10n)
+  })
+
   it('keeps acked optimistic thread replies visible without advancing reopen replay cursor', () => {
     const chat = useChatStore()
     const ws = useWsStore()

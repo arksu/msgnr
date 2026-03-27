@@ -163,13 +163,24 @@
           <template v-else>
             <div class="flex-1 min-h-0 overflow-y-auto pr-1">
               <div class="space-y-2 mb-3">
-              <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px_56px] gap-3 text-xs text-gray-400 uppercase tracking-wide px-1">
-                <span>Code</span><span>Name</span><span class="text-center">Order</span><span class="text-center">Active</span>
+              <div class="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)_56px] gap-3 text-xs text-gray-400 uppercase tracking-wide px-1">
+                <span></span><span>Code</span><span>Name</span><span class="text-center">Active</span>
               </div>
-              <div v-for="(item, idx) in versionItems" :key="idx" class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px_56px] gap-3 items-center">
+              <div
+                v-for="(item, idx) in versionItems"
+                :key="idx"
+                class="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)_56px] gap-3 items-center"
+                :data-testid="`dictionary-item-row-${idx}`"
+                draggable="true"
+                @dragstart="onDragStart(item)"
+                @dragover.prevent="onDragOver(item)"
+                @drop.prevent="onDrop"
+              >
+                <div class="flex justify-center">
+                  <span class="text-gray-600 cursor-grab select-none">⠿</span>
+                </div>
                 <input v-model="item.value_code" type="text" class="bg-chat-input border border-chat-border rounded px-2 py-1.5 text-white text-sm font-mono outline-none focus:border-accent" placeholder="code" />
                 <input v-model="item.value_name" type="text" class="bg-chat-input border border-chat-border rounded px-2 py-1.5 text-white text-sm outline-none focus:border-accent" placeholder="Name" />
-                <input v-model.number="item.sort_order" type="number" class="w-full bg-chat-input border border-chat-border rounded px-2 py-1.5 text-white text-sm outline-none focus:border-accent text-center" />
                 <div class="flex justify-center">
                   <button
                     class="relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200"
@@ -231,6 +242,8 @@ const versionError = ref<string | null>(null)
 const versionDictId = ref<string | null>(null)
 const versionDictCode = ref('')
 const versionItems = ref<{ value_code: string; value_name: string; sort_order: number; is_active: boolean }[]>([])
+const dragSource = ref<{ value_code: string; value_name: string; sort_order: number; is_active: boolean } | null>(null)
+const dragOver = ref<{ value_code: string; value_name: string; sort_order: number; is_active: boolean } | null>(null)
 
 async function load() {
   loading.value = true
@@ -321,7 +334,7 @@ async function openNewVersion(d: EnumDictionary) {
       // Fetch items from the latest version
       const items = await tasksGetDictionaryVersionItems(d.id, latestVersion.id)
 
-      // Prefill with existing items, incrementing sort_order by 10 to allow insertions
+      // Prefill with the latest item order; drag-and-drop will renumber on save.
       versionItems.value = items.map(item => ({
         value_code: item.value_code,
         value_name: item.value_name,
@@ -346,11 +359,44 @@ function addItem() {
   versionItems.value.push({ value_code: '', value_name: '', sort_order: versionItems.value.length + 1, is_active: true })
 }
 
+function onDragStart(item: { value_code: string; value_name: string; sort_order: number; is_active: boolean }) {
+  dragSource.value = item
+}
+
+function onDragOver(item: { value_code: string; value_name: string; sort_order: number; is_active: boolean }) {
+  dragOver.value = item
+}
+
+function renumberItems(items: { value_code: string; value_name: string; sort_order: number; is_active: boolean }[]) {
+  return items.map((item, idx) => ({
+    ...item,
+    sort_order: idx + 1,
+  }))
+}
+
+function onDrop() {
+  const src = dragSource.value
+  const tgt = dragOver.value
+  dragSource.value = null
+  dragOver.value = null
+
+  if (!src || !tgt || src === tgt) return
+
+  const srcIdx = versionItems.value.indexOf(src)
+  const tgtIdx = versionItems.value.indexOf(tgt)
+  if (srcIdx === -1 || tgtIdx === -1) return
+
+  const reordered = [...versionItems.value]
+  reordered.splice(srcIdx, 1)
+  reordered.splice(tgtIdx, 0, src)
+  versionItems.value = renumberItems(reordered)
+}
+
 async function submitVersion() {
   versionLoading.value = true
   versionError.value = null
   try {
-    await tasksCreateDictionaryVersion(versionDictId.value!, versionItems.value)
+    await tasksCreateDictionaryVersion(versionDictId.value!, renumberItems(versionItems.value))
     versionOpen.value = false
     await load()
     if (activeDictId.value && activeDictId.value === versionDictId.value) {

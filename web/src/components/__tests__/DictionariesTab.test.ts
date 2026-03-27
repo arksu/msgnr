@@ -59,6 +59,14 @@ describe('DictionariesTab', () => {
         sort_order: 1,
         is_active: true,
       },
+      {
+        id: 'item-2',
+        dictionary_version_id: 'ver-2',
+        value_code: 'medium',
+        value_name: 'Medium',
+        sort_order: 2,
+        is_active: true,
+      },
     ])
     apiMocks.tasksCreateDictionaryVersion.mockResolvedValue({
       id: 'ver-2',
@@ -164,26 +172,14 @@ describe('DictionariesTab', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Save Changes')
+    expect(wrapper.text()).not.toContain('Order')
 
-    const codeInputs = wrapper.findAll('input[placeholder="code"]')
-    const nameInputs = wrapper.findAll('input[placeholder="Name"]')
-    expect(codeInputs).toHaveLength(1)
-    expect(nameInputs).toHaveLength(1)
-
-    await codeInputs[0].setValue('high')
-    await nameInputs[0].setValue('High')
-
-    const addItemButton = wrapper.findAll('button').find(button => button.text() === '+ Add Item')
-    expect(addItemButton).toBeTruthy()
-    await addItemButton!.trigger('click')
+    const row0 = wrapper.get('[data-testid="dictionary-item-row-0"]')
+    const row1 = wrapper.get('[data-testid="dictionary-item-row-1"]')
+    await row1.trigger('dragstart')
+    await row0.trigger('dragover')
+    await row0.trigger('drop')
     await flushPromises()
-
-    const updatedCodeInputs = wrapper.findAll('input[placeholder="code"]')
-    const updatedNameInputs = wrapper.findAll('input[placeholder="Name"]')
-    const orderInputs = wrapper.findAll('input[type="number"]')
-    await updatedCodeInputs[1].setValue('medium')
-    await updatedNameInputs[1].setValue('Medium')
-    await orderInputs[1].setValue('2')
 
     const saveButton = wrapper.findAll('button').find(button => button.text() === 'Save Changes')
     expect(saveButton).toBeTruthy()
@@ -191,8 +187,8 @@ describe('DictionariesTab', () => {
     await flushPromises()
 
     expect(apiMocks.tasksCreateDictionaryVersion).toHaveBeenCalledWith('dict-1', [
-      { value_code: 'high', value_name: 'High', sort_order: 1, is_active: true },
-      { value_code: 'medium', value_name: 'Medium', sort_order: 2, is_active: true },
+      { value_code: 'medium', value_name: 'Medium', sort_order: 1, is_active: true },
+      { value_code: 'high', value_name: 'High', sort_order: 2, is_active: true },
     ])
     expect(apiMocks.tasksListDictionaries).toHaveBeenCalledTimes(2)
     expect(apiMocks.tasksListDictionaryVersions).toHaveBeenCalledTimes(3)

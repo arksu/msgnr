@@ -20,9 +20,9 @@
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-chat-border text-gray-400 text-xs uppercase tracking-wide">
+            <th class="w-8 px-3 py-3"></th>
             <th class="text-left px-4 py-3">Code</th>
             <th class="text-left px-4 py-3">Name</th>
-            <th class="text-left px-4 py-3">Order</th>
             <th class="text-left px-4 py-3">Status</th>
             <th class="px-4 py-3"/>
           </tr>
@@ -39,10 +39,17 @@
             :key="st.id"
             class="border-t border-chat-border hover:bg-white/5 transition-colors"
             :class="st.deleted_at ? 'opacity-50' : ''"
+            :draggable="!st.deleted_at"
+            :data-testid="`status-row-${st.id}`"
+            @dragstart="onDragStart(st)"
+            @dragover.prevent="onDragOver(st)"
+            @drop.prevent="onDrop"
           >
+            <td class="px-3 py-3 text-center">
+              <span v-if="!st.deleted_at" class="text-gray-600 cursor-grab select-none">⠿</span>
+            </td>
             <td class="px-4 py-3 font-mono text-gray-300">{{ st.code }}</td>
             <td class="px-4 py-3 text-white">{{ st.name }}</td>
-            <td class="px-4 py-3 text-gray-400">{{ st.sort_order }}</td>
             <td class="px-4 py-3">
               <span v-if="st.deleted_at" class="px-2 py-0.5 rounded text-xs bg-red-500/20 text-red-400">Deleted</span>
               <span v-else class="px-2 py-0.5 rounded text-xs bg-green-500/20 text-green-400">Active</span>
@@ -89,14 +96,6 @@
                 placeholder="In Progress"
               />
             </div>
-            <div>
-              <label class="block text-sm text-gray-400 mb-1">Sort Order</label>
-              <input
-                v-model.number="form.sort_order"
-                type="number"
-                class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
-              />
-            </div>
           </div>
           <div v-if="dialogError" class="text-red-400 text-sm mt-3">{{ dialogError }}</div>
           <div class="flex gap-3 mt-5">
@@ -116,7 +115,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import {
-  tasksListStatuses, tasksCreateStatus, tasksUpdateStatus, tasksDeleteStatus,
+  tasksListStatuses, tasksCreateStatus, tasksUpdateStatus, tasksDeleteStatus, tasksReorderStatuses,
   type TaskStatus,
 } from '@/services/http/tasksApi'
 
@@ -132,6 +131,8 @@ const dialogLoading = ref(false)
 const dialogError = ref<string | null>(null)
 const editId = ref<string | null>(null)
 const form = ref({ code: '', name: '', sort_order: 0 })
+const dragSource = ref<TaskStatus | null>(null)
+const dragOver = ref<TaskStatus | null>(null)
 
 async function load() {
   loading.value = true
@@ -189,6 +190,54 @@ async function deleteStatus(id: string) {
     actionError.value = e instanceof Error ? e.message : 'Failed to delete status'
   } finally {
     actionLoading.value = null
+  }
+}
+
+function onDragStart(st: TaskStatus) {
+  if (st.deleted_at) return
+  dragSource.value = st
+}
+
+function onDragOver(st: TaskStatus) {
+  if (st.deleted_at) return
+  dragOver.value = st
+}
+
+function mergeActiveStatuses(items: TaskStatus[], activeOrder: TaskStatus[]): TaskStatus[] {
+  const next = [...items]
+  let activeIdx = 0
+  for (let i = 0; i < next.length; i += 1) {
+    if (next[i].deleted_at) continue
+    next[i] = activeOrder[activeIdx]
+    activeIdx += 1
+  }
+  return next
+}
+
+async function onDrop() {
+  const src = dragSource.value
+  const tgt = dragOver.value
+  dragSource.value = null
+  dragOver.value = null
+
+  if (!src || !tgt || src.id === tgt.id) return
+
+  const active = statuses.value.filter(st => !st.deleted_at)
+  const srcIdx = active.findIndex(st => st.id === src.id)
+  const tgtIdx = active.findIndex(st => st.id === tgt.id)
+  if (srcIdx === -1 || tgtIdx === -1) return
+
+  const reordered = [...active]
+  reordered.splice(srcIdx, 1)
+  reordered.splice(tgtIdx, 0, src)
+  statuses.value = mergeActiveStatuses(statuses.value, reordered)
+
+  try {
+    await tasksReorderStatuses(reordered.map(st => st.id))
+    await load()
+  } catch (e: unknown) {
+    actionError.value = e instanceof Error ? e.message : 'Failed to reorder statuses'
+    await load()
   }
 }
 

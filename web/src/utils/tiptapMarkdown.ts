@@ -61,7 +61,7 @@ function serializeInline(nodes: JSONContent[] = [], options: MarkdownSerializeOp
       return options.hardBreakStyle === 'newline' ? '\n' : '  \n'
     }
     if (node.type === 'codeBlock') {
-      return `\`${extractText(node)}\``
+      return serializeInline(node.content ?? [], options)
     }
     return serializeInline(node.content ?? [], options)
   }).join('')

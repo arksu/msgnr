@@ -134,7 +134,7 @@
     <p class="mt-1 flex items-center justify-between gap-2 pl-1 text-xs text-gray-600">
       <span class="truncate text-gray-500">{{ typingLabel || '' }}</span>
       <span class="whitespace-nowrap">
-        <kbd class="font-mono">Enter</kbd> sends in plain text · <kbd class="font-mono">Shift+Enter</kbd> newline · <kbd class="font-mono">Ctrl/Cmd+Enter</kbd> send anywhere
+        <kbd class="font-mono">Enter</kbd> sends from a plain paragraph · <kbd class="font-mono">Shift+Enter</kbd> newline · <kbd class="font-mono">Ctrl/Cmd+Enter</kbd> send anywhere
       </span>
     </p>
 
@@ -158,7 +158,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { deleteChatAttachment, uploadChatAttachment } from '@/services/http/chatApi'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 import type { MessageEntity } from '@/stores/chat'
@@ -316,7 +316,6 @@ async function uploadFiles(files: File[]) {
   uploading.value = true
   uploadProgressPercent.value = 0
   currentUploadingFileName.value = ''
-  isDragOver.value = files.length > 0
   try {
     const totalBytes = selected.reduce((sum, file) => sum + Math.max(0, file.size), 0)
     let uploadedBytes = 0
@@ -392,12 +391,6 @@ onBeforeUnmount(() => {
     void cleanupStagedAttachments()
   }
 })
-
-watch(() => props.focusToken, async () => {
-  if (!props.focusToken || props.disabled) return
-  await nextTick()
-  composerRef.value?.focusAtEnd()
-}, { immediate: true })
 
 function formatFileSize(size: number): string {
   if (size < 1024) return `${size} B`

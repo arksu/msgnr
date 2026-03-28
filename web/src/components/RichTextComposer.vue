@@ -36,7 +36,7 @@ import { renderMarkdownToHtml } from '@/utils/markdown'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 import { MessageEntityNode } from '@/editor/messageEntity'
-import { FenceOnEnterExtension, convertFenceParagraphToCodeBlock, shouldConvertFenceParagraph, shouldSubmitOnEnter } from '@/editor/richTextShortcuts'
+import { FenceOnEnterExtension, shouldConvertFenceParagraph, shouldSubmitOnEnter } from '@/editor/richTextShortcuts'
 import { renderMessageEditorHtml, tiptapJsonToMessagePayload } from '@/utils/messageRichText'
 import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
 
@@ -145,16 +145,6 @@ const flatTagItems = computed(() => [
   ...tagPickerTasks.value,
   ...tagPickerDocuments.value,
 ])
-
-function buildInitialHtml(): string {
-  if (props.enableMessageEntities) {
-    return renderMessageEditorHtml(textDraft.value, entitiesDraft.value)
-  }
-  if (props.enableTaskItems) {
-    return renderTaskMarkdownToHtml(textDraft.value)
-  }
-  return renderMarkdownToHtml(textDraft.value)
-}
 
 function renderValueAsHtml(body: string, nextEntities: MessageEntity[]): string {
   if (props.enableMessageEntities) {
@@ -385,7 +375,7 @@ const editor = useEditor({
       : []),
     ...(props.enableMessageEntities ? [MessageEntityNode] : []),
   ],
-  content: buildInitialHtml(),
+  content: renderValueAsHtml(textDraft.value, entitiesDraft.value),
   editable: !props.disabled,
   editorProps: {
     attributes: {
@@ -423,14 +413,11 @@ const editor = useEditor({
         return false
       }
 
-      if (event.key === ' ' && shouldConvertFenceParagraph(editor.value!)) {
-        event.preventDefault()
-        return convertFenceParagraphToCodeBlock(editor.value!)
-      }
-
-      if (event.key === 'Enter' && !event.shiftKey && shouldConvertFenceParagraph(editor.value!)) {
-        event.preventDefault()
-        return convertFenceParagraphToCodeBlock(editor.value!)
+      if (
+        (event.key === ' ' || (event.key === 'Enter' && !event.shiftKey))
+        && shouldConvertFenceParagraph(editor.value!)
+      ) {
+        return false
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -550,12 +537,12 @@ watch(() => props.disabled, (next) => {
 
 watch(
   () => [props.modelValue, JSON.stringify(props.entities ?? [])] as const,
-  ([nextBody, nextEntities]) => {
+  ([nextBody, nextEntitiesJson]) => {
     const normalizedBody = nextBody ?? ''
-    const normalizedEntities = JSON.parse(nextEntities) as MessageEntity[]
-    if (normalizedBody === textDraft.value && JSON.stringify(normalizedEntities) === JSON.stringify(entitiesDraft.value)) {
+    if (normalizedBody === textDraft.value && nextEntitiesJson === JSON.stringify(entitiesDraft.value)) {
       return
     }
+    const normalizedEntities = JSON.parse(nextEntitiesJson) as MessageEntity[]
     applyValue(normalizedBody, normalizedEntities, false)
   },
 )

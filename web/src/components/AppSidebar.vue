@@ -182,7 +182,7 @@
 
       <div v-if="dmsOpen" class="mt-0.5">
         <SidebarItem
-          v-for="dm in chatStore.directMessages"
+          v-for="dm in sortedDirectMessages"
           :key="dm.id"
             :active="chatStore.activeChannelId === dm.id"
             :unread="dm.unread"
@@ -515,6 +515,27 @@ const unreadBadgeLabel = computed(() => (
 ))
 const sortedChannels = computed(() =>
   [...chatStore.channels].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+)
+const sortedDirectMessages = computed(() =>
+  [...chatStore.directMessages].sort((a, b) => {
+    const aUnread = a.unread > 0 || a.hasUnreadThreadReplies === true
+    const bUnread = b.unread > 0 || b.hasUnreadThreadReplies === true
+    if (aUnread !== bUnread) {
+      return aUnread ? -1 : 1
+    }
+
+    const byName = a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' })
+    if (byName !== 0) {
+      return byName
+    }
+
+    const byUserId = a.userId.localeCompare(b.userId, undefined, { sensitivity: 'base' })
+    if (byUserId !== 0) {
+      return byUserId
+    }
+
+    return a.id.localeCompare(b.id, undefined, { sensitivity: 'base' })
+  })
 )
 
 const sidebarIdentity = computed(() => ({

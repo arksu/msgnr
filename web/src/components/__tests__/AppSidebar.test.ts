@@ -509,6 +509,52 @@ describe('AppSidebar', () => {
     expect(text.indexOf('Alpha')).toBeLessThan(text.indexOf('zulu'))
   })
 
+  it('renders direct messages unread first, then alphabetical by display name', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    authStore.sessionRole = 'member'
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chatStore.directMessages = [
+      { id: 'dm-1', userId: 'user-4', displayName: 'Zulu', presence: 'offline', unread: 0, notificationLevel: NotificationLevel.ALL },
+      { id: 'dm-2', userId: 'user-3', displayName: 'bravo', presence: 'offline', unread: 3, notificationLevel: NotificationLevel.ALL },
+      { id: 'dm-3', userId: 'user-2', displayName: 'Alpha', presence: 'offline', unread: 0, notificationLevel: NotificationLevel.ALL },
+      { id: 'dm-4', userId: 'user-5', displayName: 'charlie', presence: 'offline', unread: 0, hasUnreadThreadReplies: true, notificationLevel: NotificationLevel.ALL },
+    ]
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            template: '<button class="sidebar-item" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    const text = wrapper.text()
+    expect(text.indexOf('bravo')).toBeLessThan(text.indexOf('charlie'))
+    expect(text.indexOf('charlie')).toBeLessThan(text.indexOf('Alpha'))
+    expect(text.indexOf('Alpha')).toBeLessThan(text.indexOf('Zulu'))
+  })
+
   it('shows lock icon for private channels', async () => {
     const authStore = useAuthStore()
     const chatStore = useChatStore()

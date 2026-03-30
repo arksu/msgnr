@@ -567,13 +567,6 @@ const editor = useEditor({
       current: markdownSignature(markdownDraft.value),
       snapshot: editorStateSnapshot(),
     })
-    if (collabEnabled.value && nextMarkdown.trim() === '' && markdownDraft.value.trim() !== '') {
-      descLog('onUpdate:unexpected-empty:suppressed', {
-        previousDraft: markdownSignature(markdownDraft.value),
-        snapshot: editorStateSnapshot(),
-      })
-      return
-    }
     if (nextMarkdown === markdownDraft.value) return
     syncingFromEditor.value = true
     markdownDraft.value = nextMarkdown

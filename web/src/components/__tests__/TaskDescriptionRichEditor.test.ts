@@ -13,6 +13,23 @@ vi.mock('@/services/http/attachmentOwnersApi', () => ({
 describe('TaskDescriptionRichEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    Object.defineProperty(globalThis.Node.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [],
+    })
+    Object.defineProperty(globalThis.Node.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }),
+    })
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:editor')
     globalThis.URL.revokeObjectURL = vi.fn()
     window.open = vi.fn(() => ({
@@ -33,6 +50,44 @@ describe('TaskDescriptionRichEditor', () => {
         return
       }
     }
+  }
+
+  async function waitForEditorText(wrapper: ReturnType<typeof mount>, expected: string) {
+    for (let i = 0; i < 10; i += 1) {
+      await flushPromises()
+      await nextTick()
+      const editorContent = wrapper.find('[data-testid="task-description-editor-content"] .ProseMirror')
+      if (editorContent.exists() && editorContent.text().includes(expected)) {
+        return
+      }
+    }
+    throw new Error(`editor text did not include ${JSON.stringify(expected)}`)
+  }
+
+  async function waitForLatestMarkdownUpdate(wrapper: ReturnType<typeof mount>, expected: string) {
+    for (let i = 0; i < 10; i += 1) {
+      await flushPromises()
+      await nextTick()
+      const updates = wrapper.emitted('update:modelValue') ?? []
+      const latest = updates[updates.length - 1]?.[0]
+      if (latest === expected) {
+        return
+      }
+    }
+    throw new Error(`latest markdown update did not equal ${JSON.stringify(expected)}`)
+  }
+
+  function getEditor(wrapper: ReturnType<typeof mount>) {
+    const editor = wrapper.getComponent({ name: 'EditorContent' }).props('editor') as {
+      isEditable: boolean
+      commands: {
+        clearContent: () => boolean
+      }
+    } | undefined
+    if (!editor) {
+      throw new Error('editor did not initialize')
+    }
+    return editor
   }
 
   it('renders markdown task items as checkboxes and toggles them back to markdown', async () => {
@@ -94,6 +149,72 @@ describe('TaskDescriptionRichEditor', () => {
     await waitForRichEditor(wrapper)
 
     expect(wrapper.get('[data-testid="task-description-editor-fallback"] .markdown-body strong').text()).toBe('Bold')
+  })
+
+  it('keeps rendered mode editable after local collab content is cleared', async () => {
+    const collabDoc = new Y.Doc()
+    const collabFragment = collabDoc.getXmlFragment('task_description')
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '**Bold** text',
+        collabDoc,
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    await waitForEditorText(wrapper, 'Bold')
+
+    const editor = getEditor(wrapper)
+    expect(editor.isEditable).toBe(true)
+
+    collabDoc.transact(() => {
+      collabFragment.delete(0, collabFragment.length)
+    }, 'local-clear')
+    await waitForLatestMarkdownUpdate(wrapper, '')
+
+    expect(wrapper.find('[data-testid="task-description-editor-fallback"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror').text()).toBe('')
+    expect(editor.isEditable).toBe(true)
+  })
+
+  it('applies remote collab clears without showing stale rendered fallback', async () => {
+    const collabDoc = new Y.Doc()
+    collabDoc.getXmlFragment('task_description')
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '**Bold** text',
+        collabDoc,
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    await waitForEditorText(wrapper, 'Bold')
+
+    const remoteDoc = new Y.Doc()
+    const remoteFragment = remoteDoc.getXmlFragment('task_description')
+    Y.applyUpdate(remoteDoc, Y.encodeStateAsUpdate(collabDoc), 'initial-sync')
+
+    let remoteClearUpdate: Uint8Array | null = null
+    remoteDoc.on('update', (update, origin) => {
+      if (origin === 'remote-clear') {
+        remoteClearUpdate = update
+      }
+    })
+    remoteDoc.transact(() => {
+      remoteFragment.delete(0, remoteFragment.length)
+    }, 'remote-clear')
+
+    expect(remoteClearUpdate).not.toBeNull()
+    Y.applyUpdate(collabDoc, remoteClearUpdate!, 'remote')
+    await waitForLatestMarkdownUpdate(wrapper, '')
+
+    expect(wrapper.find('[data-testid="task-description-editor-fallback"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror').text()).toBe('')
+    expect(getEditor(wrapper).isEditable).toBe(true)
   })
 
   it('uploads image files from the rendered editor and serializes them back to markdown tokens', async () => {

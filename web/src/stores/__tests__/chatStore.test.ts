@@ -1645,6 +1645,38 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.threadComposerFocusToken).toBe(1)
   })
 
+  it('subscribes from zero when confirmed thread cache is smaller than the summary reply count', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSubscribeThread = vi.fn()
+
+    chat.threadMessages = {
+      'root-1': [
+        buildMessage({
+          id: 'reply-8',
+          channelId: 'channel-1',
+          threadSeq: 8n,
+          threadRootMessageId: 'root-1',
+          serverConfirmed: true,
+        }),
+      ],
+    }
+    chat.threadSummaries = {
+      'root-1': {
+        replyCount: 8,
+        lastThreadSeq: 8n,
+      },
+    }
+
+    chat.openThread(buildMessage({
+      id: 'root-1',
+      channelId: 'channel-1',
+      threadSeq: 0n,
+    }))
+
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
   it('clears unread feed entries for the whole thread when opening a thread', () => {
     const chat = useChatStore()
     const ws = useWsStore()
@@ -1952,7 +1984,7 @@ describe('chatStore phase 6 flows', () => {
 
       vi.advanceTimersByTime(200)
 
-      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 1n)
+      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
     } finally {
       vi.useRealTimers()
     }
@@ -2011,7 +2043,7 @@ describe('chatStore phase 6 flows', () => {
 
       vi.advanceTimersByTime(200)
 
-      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 1n)
+      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
     } finally {
       vi.useRealTimers()
     }
@@ -2071,6 +2103,65 @@ describe('chatStore phase 6 flows', () => {
       vi.advanceTimersByTime(200)
 
       expect(ws.sendSubscribeThread).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('re-subscribes the active thread from zero when summary count exceeds confirmed cached replies', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.sendSubscribeThread = vi.fn()
+      chat.bootstrapped = true
+      chat.messages = {
+        'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+      }
+      chat.threadMessages = {
+        'root-1': [
+          buildMessage({
+            id: 'reply-8',
+            channelId: 'channel-1',
+            threadSeq: 8n,
+            threadRootMessageId: 'root-1',
+            serverConfirmed: true,
+          }),
+        ],
+      }
+      chat.threadSummaries = {
+        'root-1': {
+          replyCount: 8,
+          lastThreadSeq: 8n,
+        },
+      }
+
+      chat.openThread(chat.messages['channel-1'][0])
+      vi.mocked(ws.sendSubscribeThread).mockClear()
+
+      chat.handleServerEvent(create(ServerEventSchema, {
+        eventSeq: 0n,
+        eventType: EventType.READ_COUNTER_UPDATED,
+        conversationId: 'channel-1',
+        payload: {
+          case: 'readCounterUpdated',
+          value: create(ReadCounterUpdatedEventSchema, {
+            userId: 'user-1',
+            counter: create(UnreadCounterSchema, {
+              conversationId: 'channel-1',
+              unreadMessages: 0,
+              unreadMentions: 0,
+              hasUnreadThreadReplies: true,
+              lastReadSeq: 0n,
+            }),
+          }),
+        },
+      }))
+
+      vi.advanceTimersByTime(200)
+
+      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
     } finally {
       vi.useRealTimers()
     }

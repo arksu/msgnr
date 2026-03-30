@@ -545,6 +545,25 @@ export const useChatStore = defineStore('chat', () => {
     }, 0n)
   }
 
+  function confirmedThreadReplyCount(rootId: string): number {
+    const list = threadMessages.value[rootId] ?? []
+    return list.reduce((count, message) => {
+      if (!message.serverConfirmed || message.sendStatus || message.pending) return count
+      return count + 1
+    }, 0)
+  }
+
+  function isThreadReplayCacheIncomplete(rootId: string): boolean {
+    const summary = threadSummaries.value[rootId]
+    if (!summary) return false
+    return confirmedThreadReplyCount(rootId) < summary.replyCount
+  }
+
+  function threadReplayCursor(rootId: string): bigint {
+    if (isThreadReplayCacheIncomplete(rootId)) return 0n
+    return highestConfirmedThreadSeq(rootId)
+  }
+
   function requestThreadReplayRecovery(rootId: string, conversationId: string) {
     if (!rootId || !conversationId) return
     clearThreadReplayResyncTimer(rootId)
@@ -554,7 +573,7 @@ export const useChatStore = defineStore('chat', () => {
       if (activeThreadRootId.value !== rootId || activeThreadConversationId.value !== conversationId) return
       const ws = useWsStore()
       if (ws.state !== 'LIVE_SYNCED') return
-      ws.sendSubscribeThread(conversationId, rootId, highestConfirmedThreadSeq(rootId))
+      ws.sendSubscribeThread(conversationId, rootId, threadReplayCursor(rootId))
     }, 150))
   }
 
@@ -567,7 +586,8 @@ export const useChatStore = defineStore('chat', () => {
     }
     const summary = threadSummaries.value[rootId]
     if (!summary) return
-    if (summary.lastThreadSeq <= highestConfirmedThreadSeq(rootId)) return
+    const highestConfirmedSeq = highestConfirmedThreadSeq(rootId)
+    if (summary.lastThreadSeq <= highestConfirmedSeq && !isThreadReplayCacheIncomplete(rootId)) return
     requestThreadReplayRecovery(rootId, conversationId)
   }
 
@@ -1172,7 +1192,9 @@ export const useChatStore = defineStore('chat', () => {
     void markThreadUnreadAsRead(rootMessage.channelId, rootMessage.id, rootMessage.channelSeq)
     // Only server-confirmed replies advance the replay cursor. ACK-only
     // optimistic replies stay visible but must not suppress a later backfill.
-    const lastKnownSeq = highestConfirmedThreadSeq(rootMessage.id)
+    // If the confirmed cache is smaller than the known reply total, reopen
+    // from zero so older replies are replayed instead of showing a partial thread.
+    const lastKnownSeq = threadReplayCursor(rootMessage.id)
     useWsStore().sendSubscribeThread(rootMessage.channelId, rootMessage.id, lastKnownSeq)
   }
 

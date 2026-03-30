@@ -51,6 +51,26 @@ export function isIosSafariNotInstalled(): boolean {
  * ```
  */
 export function usePushNotifications() {
+  async function waitForActiveRegistration(
+    registration: ServiceWorkerRegistration | null | undefined,
+  ): Promise<ServiceWorkerRegistration | null> {
+    if (!registration) return null
+    if (registration.active) return registration
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+      return registration
+    }
+
+    try {
+      const ready = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+      ])
+      return ready ?? registration
+    } catch {
+      return registration
+    }
+  }
+
   /**
    * Resolve an active service worker registration.
    * This is resilient to startup timing where `useRegisterSW` callback has not
@@ -58,19 +78,24 @@ export function usePushNotifications() {
    */
   async function resolveSwRegistration(): Promise<ServiceWorkerRegistration | null> {
     const cached = getSwRegistration()
-    if (cached) return cached
+    const activeCached = await waitForActiveRegistration(cached)
+    if (activeCached) return activeCached
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return null
 
     try {
       const current = await navigator.serviceWorker.getRegistration()
-      if (current) return current
+      const activeCurrent = await waitForActiveRegistration(current)
+      if (activeCurrent) return activeCurrent
     } catch {
       // Ignore and continue with additional fallbacks.
     }
 
     try {
       const all = await navigator.serviceWorker.getRegistrations()
-      if (all.length > 0) return all[0]
+      if (all.length > 0) {
+        const activeRegistration = await waitForActiveRegistration(all[0])
+        if (activeRegistration) return activeRegistration
+      }
     } catch {
       // Ignore and continue with additional fallbacks.
     }
@@ -133,6 +158,15 @@ export function usePushNotifications() {
         return false
       }
 
+      const existingSubscription = await registration.pushManager.getSubscription()
+      if (existingSubscription) {
+        const existingJson = existingSubscription.toJSON()
+        await subscribePush(existingJson)
+        savePushEndpoint(existingJson.endpoint ?? '')
+        isSubscribed.value = true
+        return true
+      }
+
       // Step 3: Get VAPID key from server
       const vapidKey = await getVapidPublicKey()
       if (!vapidKey) {
@@ -144,7 +178,7 @@ export function usePushNotifications() {
       const applicationServerKey = urlBase64ToUint8Array(vapidKey)
       const pushSubscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: applicationServerKey.buffer as ArrayBuffer,
+        applicationServerKey: applicationServerKey as unknown as BufferSource,
       })
 
       // Step 5: Send subscription to backend

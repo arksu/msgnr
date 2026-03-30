@@ -495,6 +495,7 @@ export const useChatStore = defineStore('chat', () => {
   })
 
   let bootstrapStage: BootstrapStage | null = null
+  let bootstrapPresenceOverlay = new Map<string, PresenceEvent>()
   let bufferedServerEvents: ServerEvent[] = []
   let seenEventIds = new Set<string>()
   let historyLoadToken = 0
@@ -1024,6 +1025,7 @@ export const useChatStore = defineStore('chat', () => {
     taskStatusChangedNotificationHandlers.clear()
 
     bootstrapStage = null
+    bootstrapPresenceOverlay = new Map()
     bufferedServerEvents = []
     seenEventIds = new Set()
     historyLoadToken = 0
@@ -1304,6 +1306,7 @@ export const useChatStore = defineStore('chat', () => {
   function startBootstrap() {
     const ws = useWsStore()
     bootstrapStage = null
+    bootstrapPresenceOverlay = new Map()
     bufferedServerEvents = []
     if (!clientInstanceId) {
       clientInstanceId = getOrCreateClientInstanceId()
@@ -1501,8 +1504,15 @@ export const useChatStore = defineStore('chat', () => {
     const nextChannels: Channel[] = []
     const nextDms: DirectMessage[] = []
 
-    presenceByUserId.value = {}
+    const mergedPresence = new Map<string, PresenceEvent>()
     for (const [userId, evt] of stage.presence.entries()) {
+      mergedPresence.set(userId, evt)
+    }
+    for (const [userId, evt] of bootstrapPresenceOverlay.entries()) {
+      mergedPresence.set(userId, newerPresenceEvent(mergedPresence.get(userId), evt))
+    }
+    presenceByUserId.value = {}
+    for (const [userId, evt] of mergedPresence.entries()) {
       presenceByUserId.value[userId] = evt
     }
 
@@ -1551,6 +1561,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     channels.value = nextChannels
     directMessages.value = nextDms
+    bootstrapPresenceOverlay = new Map()
     cachedBootstrap.value = false
     // Write-through to IndexedDB (fire-and-forget)
     void cacheConversations(nextChannels, nextDms)
@@ -1834,12 +1845,17 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handlePresenceEvent(evt: PresenceEvent) {
-    presenceByUserId.value[evt.userId] = evt
+    const nextPresence = newerPresenceEvent(presenceByUserId.value[evt.userId], evt)
+    presenceByUserId.value[evt.userId] = nextPresence
+    const ws = useWsStore()
+    if (ws.state === 'BOOTSTRAPPING' || ws.state === 'RECOVERING_GAP' || ws.state === 'STALE_REBOOTSTRAP' || !bootstrapped.value) {
+      bootstrapPresenceOverlay.set(evt.userId, newerPresenceEvent(bootstrapPresenceOverlay.get(evt.userId), evt))
+    }
     const targetDm = directMessages.value.find(dm => dm.userId === evt.userId)
     if (targetDm) {
-      targetDm.presence = evt.effectivePresence === PresenceStatus.ONLINE
+      targetDm.presence = nextPresence.effectivePresence === PresenceStatus.ONLINE
         ? 'online'
-        : evt.effectivePresence === PresenceStatus.AWAY
+        : nextPresence.effectivePresence === PresenceStatus.AWAY
           ? 'away'
           : 'offline'
     }
@@ -2488,6 +2504,22 @@ export const useChatStore = defineStore('chat', () => {
 
   function conversationExists(conversationId: string): boolean {
     return channels.value.some(channel => channel.id === conversationId) || directMessages.value.some(dm => dm.id === conversationId)
+  }
+
+  function presenceEventTimestampMs(evt?: PresenceEvent): number {
+    if (!evt?.lastActiveAt) return -1
+    const seconds = Number(evt.lastActiveAt.seconds ?? 0)
+    const nanos = Number(evt.lastActiveAt.nanos ?? 0)
+    return seconds * 1000 + Math.floor(nanos / 1_000_000)
+  }
+
+  function newerPresenceEvent(current: PresenceEvent | undefined, incoming: PresenceEvent): PresenceEvent {
+    if (!current) return incoming
+    const currentTs = presenceEventTimestampMs(current)
+    const incomingTs = presenceEventTimestampMs(incoming)
+    if (incomingTs > currentTs) return incoming
+    if (incomingTs < currentTs) return current
+    return incoming
   }
 
   function resolveConversationPresence(

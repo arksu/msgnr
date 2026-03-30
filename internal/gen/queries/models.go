@@ -414,10 +414,11 @@ type User struct {
 }
 
 type UserPresence struct {
-	UserID       uuid.UUID `json:"user_id"`
-	Status       string    `json:"status"`
-	LastActiveAt time.Time `json:"last_active_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	UserID          uuid.UUID `json:"user_id"`
+	Status          string    `json:"status"`
+	PreferredStatus string    `json:"preferred_status"`
+	LastActiveAt    time.Time `json:"last_active_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type UserSyncCursor struct {
@@ -440,4 +441,14 @@ type WorkspaceEvent struct {
 	ChannelID  uuid.NullUUID   `json:"channel_id"`
 	Payload    json.RawMessage `json:"payload"`
 	OccurredAt time.Time       `json:"occurred_at"`
+}
+
+type WsPresenceLease struct {
+	ConnectionID     uuid.UUID `json:"connection_id"`
+	UserID           uuid.UUID `json:"user_id"`
+	AuthSessionID    uuid.UUID `json:"auth_session_id"`
+	HeartbeatCapable bool      `json:"heartbeat_capable"`
+	LastHeartbeatAt  time.Time `json:"last_heartbeat_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }

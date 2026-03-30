@@ -111,6 +111,7 @@ enum FeatureCapability {
   FEATURE_CAPABILITY_SYNC_SINCE = 6;
   FEATURE_CAPABILITY_CALL_INVITES = 7;
   FEATURE_CAPABILITY_INVITE_ACTIONS = 8;
+  FEATURE_CAPABILITY_PRESENCE_HEARTBEAT = 9;
 }
 
 enum TaskDescriptionCollabMessageKind {
@@ -188,6 +189,7 @@ message Envelope {
     TypingEvent typing_event = 53;
     SetPresenceRequest set_presence_request = 54;
     PresenceEvent presence_event = 55;
+    PresenceHeartbeatRequest presence_heartbeat_request = 65;
 
     SetNotificationLevelRequest set_notification_level_request = 58;
     SetNotificationLevelResponse set_notification_level_response = 59;
@@ -364,6 +366,8 @@ message TypingEvent {
 message SetPresenceRequest {
   PresenceStatus desired_presence = 1;
 }
+
+message PresenceHeartbeatRequest {}
 
 // Updates only this websocket session's foreground/background state.
 // Used by push gating so users can receive push when all connected chat

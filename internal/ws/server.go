@@ -38,6 +38,8 @@ const (
 	taskCollabSyncMagic0    = 0x54 // 'T'
 	taskCollabSyncMagic1    = 0x44 // 'D'
 	taskCollabSyncProtocolV = 1
+	defaultPresenceLeaseTTL = 90 * time.Second
+	defaultPresenceSweepInt = 15 * time.Second
 )
 
 type taskCollabSyncFrameType byte
@@ -69,12 +71,18 @@ var supportedCapabilities = map[packetspb.FeatureCapability]struct{}{
 	packetspb.FeatureCapability_FEATURE_CAPABILITY_SYNC_SINCE:           {},
 	packetspb.FeatureCapability_FEATURE_CAPABILITY_CALL_INVITES:         {},
 	packetspb.FeatureCapability_FEATURE_CAPABILITY_INVITE_ACTIONS:       {},
+	packetspb.FeatureCapability_FEATURE_CAPABILITY_PRESENCE_HEARTBEAT:   {},
 }
 
 // outboundMsg is an item placed on the per-session outbound queue.
 // A nil proto signals the writer goroutine to shut down.
 type outboundMsg struct {
 	env *packetspb.Envelope
+}
+
+type presenceSnapshot struct {
+	status       packetspb.PresenceStatus
+	lastActiveAt time.Time
 }
 
 type sessionState struct {
@@ -216,12 +224,14 @@ type Server struct {
 	taskCollabRooms          map[string]*taskCollabRoom
 	taskCollabTasksBySession map[chan outboundMsg]map[string]struct{}
 	pushNotifier             PushNotifier // optional; nil means push disabled
+	presenceLeaseTTL         time.Duration
+	presenceSweepInterval    time.Duration
 }
 
 // NewServer creates a Server. bus may be nil during tests that don't exercise
 // the fanout path.
 func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bootstrapSvc *bootstrap.Service, callSvc *calls.Service, chatSvc *chat.Service, tasksSvc *tasks.Service, syncSvc *syncsvc.Service, bus *events.Bus) *Server {
-	return &Server{
+	srv := &Server{
 		db:           db,
 		config:       cfg,
 		authSvc:      authSvc,
@@ -239,11 +249,47 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, boots
 		typingExpiry:             make(map[string]time.Time),
 		taskCollabRooms:          make(map[string]*taskCollabRoom),
 		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
+		presenceLeaseTTL:         defaultPresenceLeaseTTL,
+		presenceSweepInterval:    defaultPresenceSweepInt,
 	}
+	srv.startPresenceLeaseSweeper()
+	return srv
 }
 
 func (s *Server) Handler() http.HandlerFunc {
 	return s.handleWebSocket
+}
+
+func (s *Server) presenceLeaseTTLValue() time.Duration {
+	if s.presenceLeaseTTL > 0 {
+		return s.presenceLeaseTTL
+	}
+	return defaultPresenceLeaseTTL
+}
+
+func (s *Server) presenceSweepIntervalValue() time.Duration {
+	if s.presenceSweepInterval > 0 {
+		return s.presenceSweepInterval
+	}
+	return defaultPresenceSweepInt
+}
+
+func (s *Server) startPresenceLeaseSweeper() {
+	if s == nil || s.db == nil || s.db.Pool == nil {
+		return
+	}
+	interval := s.presenceSweepIntervalValue()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := s.expireStalePresenceLeases(ctx); err != nil {
+				s.log.Error("ws presence: lease sweep failed", zap.Error(err))
+			}
+			cancel()
+		}
+	}()
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -299,12 +345,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		helloComplete     bool
-		authComplete      bool
-		principal         auth.Principal
-		unsubscribe       func()
-		fanoutDone        <-chan struct{}
-		unregisterSession func()
+		helloComplete            bool
+		authComplete             bool
+		principal                auth.Principal
+		unsubscribe              func()
+		fanoutDone               <-chan struct{}
+		unregisterSession        func()
+		presenceConnectionID     = uuid.New()
+		presenceHeartbeatCapable bool
 	)
 
 	defer func() {
@@ -320,8 +368,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.removeTaskCollabSession(outboundCh)
 		if authComplete {
 			presenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := s.setPresenceState(presenceCtx, principal.UserID, packetspb.PresenceStatus_PRESENCE_STATUS_OFFLINE); err == nil {
-				s.broadcastPresence(presenceCtx, principal.UserID, packetspb.PresenceStatus_PRESENCE_STATUS_OFFLINE)
+			if err := s.removePresenceLease(presenceCtx, presenceConnectionID); err != nil {
+				s.log.Error("ws auth: failed to remove presence lease", zap.Error(err))
+			} else if snapshot, changed, err := s.recomputePresence(presenceCtx, principal.UserID); err != nil {
+				s.log.Error("ws auth: failed to recompute presence on disconnect", zap.Error(err))
+			} else if changed {
+				s.broadcastPresence(presenceCtx, principal.UserID, snapshot)
 			}
 			cancel()
 		}
@@ -379,6 +431,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 
 			accepted := negotiateCapabilities(clientHelloPayload.ClientHello.GetCapabilities())
+			presenceHeartbeatCapable = hasCapability(accepted, packetspb.FeatureCapability_FEATURE_CAPABILITY_PRESENCE_HEARTBEAT)
 			serverHello := &packetspb.ServerHello{
 				Server:          "msgnr",
 				ProtocolVersion: protocolVersion,
@@ -495,17 +548,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				unsubscribe, fanoutDone = s.startEventFanout(conn, principal, outboundCh, outboundQueueMax, state)
 			}
 			presenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := s.setPresenceState(presenceCtx, principal.UserID, packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE); err != nil {
-				s.log.Error("ws auth: failed to update presence", zap.Error(err))
-			} else {
-				s.broadcastPresence(presenceCtx, principal.UserID, packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE)
+			if err := s.touchPresenceLease(presenceCtx, presenceConnectionID, principal.UserID, principal.SessionID, presenceHeartbeatCapable); err != nil {
+				s.log.Error("ws auth: failed to touch presence lease", zap.Error(err))
+			} else if snapshot, changed, err := s.recomputePresence(presenceCtx, principal.UserID); err != nil {
+				s.log.Error("ws auth: failed to recompute presence", zap.Error(err))
+			} else if changed {
+				s.broadcastPresence(presenceCtx, principal.UserID, snapshot)
 			}
 			cancel()
 			continue
 		}
 
 		// State 3: Authenticated — domain payload dispatch.
-		s.handleDomainPayload(r.Context(), &env, principal, outboundCh, enqueue)
+		s.handleDomainPayload(r.Context(), &env, principal, presenceConnectionID, presenceHeartbeatCapable, outboundCh, enqueue)
 	}
 }
 
@@ -1160,33 +1215,224 @@ func (s *Server) conversationMemberIDs(ctx context.Context, conversationID, excl
 	return recipients, rows.Err()
 }
 
-func (s *Server) setPresenceState(ctx context.Context, userID uuid.UUID, status packetspb.PresenceStatus) error {
+func (s *Server) touchPresenceLease(
+	ctx context.Context,
+	connectionID, userID, authSessionID uuid.UUID,
+	heartbeatCapable bool,
+) error {
+	if s == nil || s.db == nil || s.db.Pool == nil {
+		return nil
+	}
 	if _, err := s.db.Pool.Exec(ctx, `
-		INSERT INTO user_presence (user_id, status, last_active_at, updated_at)
-		VALUES ($1, $2, now(), now())
+		INSERT INTO user_presence (user_id, status, preferred_status, last_active_at, updated_at)
+		VALUES ($1, 'offline', 'online', now(), now())
 		ON CONFLICT (user_id) DO UPDATE
-		    SET status = EXCLUDED.status,
-		        last_active_at = now(),
+		    SET last_active_at = now()`,
+		userID,
+	); err != nil {
+		return err
+	}
+	if _, err := s.db.Pool.Exec(ctx, `
+		INSERT INTO ws_presence_leases (
+			connection_id,
+			user_id,
+			auth_session_id,
+			heartbeat_capable,
+			last_heartbeat_at,
+			created_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, now(), now(), now())
+		ON CONFLICT (connection_id) DO UPDATE
+		    SET user_id = EXCLUDED.user_id,
+		        auth_session_id = EXCLUDED.auth_session_id,
+		        heartbeat_capable = EXCLUDED.heartbeat_capable,
+		        last_heartbeat_at = now(),
 		        updated_at = now()`,
-		userID, presenceStatusToDB(status),
+		connectionID, userID, authSessionID, heartbeatCapable,
 	); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Server) broadcastPresence(ctx context.Context, userID uuid.UUID, status packetspb.PresenceStatus) {
+func (s *Server) removePresenceLease(ctx context.Context, connectionID uuid.UUID) error {
+	if s == nil || s.db == nil || s.db.Pool == nil {
+		return nil
+	}
+	_, err := s.db.Pool.Exec(ctx, `DELETE FROM ws_presence_leases WHERE connection_id = $1`, connectionID)
+	return err
+}
+
+func (s *Server) setPreferredPresence(ctx context.Context, userID uuid.UUID, status packetspb.PresenceStatus) error {
+	if s == nil || s.db == nil || s.db.Pool == nil {
+		return nil
+	}
+	if _, err := s.db.Pool.Exec(ctx, `
+		INSERT INTO user_presence (user_id, status, preferred_status, last_active_at, updated_at)
+		VALUES ($1, 'offline', $2, now(), now())
+		ON CONFLICT (user_id) DO UPDATE
+		    SET preferred_status = EXCLUDED.preferred_status,
+		        last_active_at = now(),
+		        updated_at = now()`,
+		userID, preferredPresenceStatusToDB(status),
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) recomputePresence(ctx context.Context, userID uuid.UUID) (presenceSnapshot, bool, error) {
+	if s == nil || s.db == nil || s.db.Pool == nil {
+		return presenceSnapshot{}, false, nil
+	}
+
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return presenceSnapshot{}, false, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_presence (user_id, status, preferred_status, last_active_at, updated_at)
+		VALUES ($1, 'offline', 'online', now(), now())
+		ON CONFLICT (user_id) DO NOTHING`,
+		userID,
+	); err != nil {
+		return presenceSnapshot{}, false, err
+	}
+
+	var currentStatus string
+	var preferredStatus string
+	var lastActiveAt time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT status, preferred_status, last_active_at
+		  FROM user_presence
+		 WHERE user_id = $1
+		 FOR UPDATE`,
+		userID,
+	).Scan(&currentStatus, &preferredStatus, &lastActiveAt); err != nil {
+		return presenceSnapshot{}, false, err
+	}
+
+	cutoff := time.Now().Add(-s.presenceLeaseTTLValue())
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM ws_presence_leases
+		 WHERE user_id = $1
+		   AND heartbeat_capable = true
+		   AND last_heartbeat_at < $2`,
+		userID, cutoff,
+	); err != nil {
+		return presenceSnapshot{}, false, err
+	}
+
+	var activeLeaseCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM ws_presence_leases
+		 WHERE user_id = $1`,
+		userID,
+	).Scan(&activeLeaseCount); err != nil {
+		return presenceSnapshot{}, false, err
+	}
+
+	nextStatus := "offline"
+	if activeLeaseCount > 0 {
+		if preferredStatus == "away" {
+			nextStatus = "away"
+		} else {
+			nextStatus = "online"
+		}
+	}
+
+	if currentStatus != nextStatus {
+		if _, err := tx.Exec(ctx, `
+			UPDATE user_presence
+			   SET status = $2,
+			       updated_at = now()
+			 WHERE user_id = $1`,
+			userID, nextStatus,
+		); err != nil {
+			return presenceSnapshot{}, false, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return presenceSnapshot{}, false, err
+	}
+
+	return presenceSnapshot{
+		status:       mapPresenceStatus(nextStatus),
+		lastActiveAt: lastActiveAt,
+	}, currentStatus != nextStatus, nil
+}
+
+func (s *Server) expireStalePresenceLeases(ctx context.Context) error {
+	if s == nil || s.db == nil || s.db.Pool == nil {
+		return nil
+	}
+
+	cutoff := time.Now().Add(-s.presenceLeaseTTLValue())
+	rows, err := s.db.Pool.Query(ctx, `
+		WITH expired AS (
+			DELETE FROM ws_presence_leases
+			 WHERE heartbeat_capable = true
+			   AND last_heartbeat_at < $1
+			 RETURNING user_id
+		)
+		SELECT DISTINCT user_id
+		  FROM expired`,
+		cutoff,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var userIDs []uuid.UUID
+	for rows.Next() {
+		var userID uuid.UUID
+		if err := rows.Scan(&userID); err != nil {
+			return err
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, userID := range userIDs {
+		snapshot, changed, err := s.recomputePresence(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if changed {
+			s.broadcastPresence(ctx, userID, snapshot)
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) broadcastPresence(ctx context.Context, userID uuid.UUID, snapshot presenceSnapshot) {
 	recipients, err := s.sharedUserIDs(ctx, userID)
 	if err != nil {
 		s.log.Error("ws: sharedUserIDs presence error", zap.Error(err))
 		return
+	}
+	var lastActiveAt *timestamppb.Timestamp
+	if !snapshot.lastActiveAt.IsZero() {
+		lastActiveAt = timestamppb.New(snapshot.lastActiveAt.UTC())
 	}
 	env := &packetspb.Envelope{
 		ProtocolVersion: protocolVersion,
 		Payload: &packetspb.Envelope_PresenceEvent{
 			PresenceEvent: &packetspb.PresenceEvent{
 				UserId:            userID.String(),
-				EffectivePresence: status,
+				EffectivePresence: snapshot.status,
+				LastActiveAt:      lastActiveAt,
 			},
 		},
 	}
@@ -1296,14 +1542,27 @@ func (s *Server) expireTyping(key string, conversationIDText, threadRootMessageI
 	s.sendDirectEnvelope(recipients, env)
 }
 
-func presenceStatusToDB(status packetspb.PresenceStatus) string {
+func preferredPresenceStatusToDB(status packetspb.PresenceStatus) string {
 	switch status {
 	case packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE:
 		return "online"
 	case packetspb.PresenceStatus_PRESENCE_STATUS_AWAY:
 		return "away"
 	default:
-		return "offline"
+		return "online"
+	}
+}
+
+func mapPresenceStatus(raw string) packetspb.PresenceStatus {
+	switch raw {
+	case "online":
+		return packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE
+	case "away":
+		return packetspb.PresenceStatus_PRESENCE_STATUS_AWAY
+	case "offline":
+		return packetspb.PresenceStatus_PRESENCE_STATUS_OFFLINE
+	default:
+		return packetspb.PresenceStatus_PRESENCE_STATUS_UNSPECIFIED
 	}
 }
 
@@ -1325,6 +1584,8 @@ func (s *Server) handleDomainPayload(
 	ctx context.Context,
 	env *packetspb.Envelope,
 	principal auth.Principal,
+	presenceConnectionID uuid.UUID,
+	presenceHeartbeatCapable bool,
 	outboundCh chan outboundMsg,
 	enqueue func(*packetspb.Envelope) bool,
 ) {
@@ -1876,12 +2137,41 @@ func (s *Server) handleDomainPayload(
 			badReq("set_presence_request: invalid desired_presence")
 			return
 		}
-		if err := s.setPresenceState(ctx, principal.UserID, req.GetDesiredPresence()); err != nil {
+		if err := s.setPreferredPresence(ctx, principal.UserID, req.GetDesiredPresence()); err != nil {
 			s.log.Error("ws: SetPresence error", zap.Error(err))
 			badReq("set_presence_request: internal error")
 			return
 		}
-		s.broadcastPresence(ctx, principal.UserID, req.GetDesiredPresence())
+		snapshot, changed, err := s.recomputePresence(ctx, principal.UserID)
+		if err != nil {
+			s.log.Error("ws: SetPresence recompute error", zap.Error(err))
+			badReq("set_presence_request: internal error")
+			return
+		}
+		if changed {
+			s.broadcastPresence(ctx, principal.UserID, snapshot)
+		}
+
+	case *packetspb.Envelope_PresenceHeartbeatRequest:
+		req := p.PresenceHeartbeatRequest
+		if req == nil {
+			badReq("presence_heartbeat_request: missing payload")
+			return
+		}
+		if err := s.touchPresenceLease(ctx, presenceConnectionID, principal.UserID, principal.SessionID, presenceHeartbeatCapable); err != nil {
+			s.log.Error("ws: PresenceHeartbeat error", zap.Error(err))
+			badReq("presence_heartbeat_request: internal error")
+			return
+		}
+		snapshot, changed, err := s.recomputePresence(ctx, principal.UserID)
+		if err != nil {
+			s.log.Error("ws: PresenceHeartbeat recompute error", zap.Error(err))
+			badReq("presence_heartbeat_request: internal error")
+			return
+		}
+		if changed {
+			s.broadcastPresence(ctx, principal.UserID, snapshot)
+		}
 
 	case *packetspb.Envelope_SetClientWindowActivityRequest:
 		req := p.SetClientWindowActivityRequest
@@ -2248,4 +2538,13 @@ func negotiateCapabilities(clientCaps []packetspb.FeatureCapability) []packetspb
 		}
 	}
 	return accepted
+}
+
+func hasCapability(caps []packetspb.FeatureCapability, target packetspb.FeatureCapability) bool {
+	for _, cap := range caps {
+		if cap == target {
+			return true
+		}
+	}
+	return false
 }

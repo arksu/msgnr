@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf'
-import { EnvelopeSchema, ErrorCode, PresenceStatus, ConversationType, TaskDescriptionCollabMessageKind } from '@/shared/proto/packets_pb'
+import { EnvelopeSchema, ErrorCode, PresenceStatus, ConversationType, TaskDescriptionCollabMessageKind, FeatureCapability } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
 
 // Minimal WebSocket mock
@@ -34,7 +34,7 @@ class MockWebSocket {
   }
 }
 
-function makeServerHelloEnvelope(): ArrayBuffer {
+function makeServerHelloEnvelope(acceptedCapabilities: FeatureCapability[] = []): ArrayBuffer {
   const env = create(EnvelopeSchema, {
     requestId: '1',
     protocolVersion: 1,
@@ -43,7 +43,7 @@ function makeServerHelloEnvelope(): ArrayBuffer {
       value: {
         server: 'msgnr',
         protocolVersion: 1,
-        acceptedCapabilities: [],
+        acceptedCapabilities,
       },
     },
   })
@@ -152,6 +152,7 @@ let groupEndSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   setActivePinia(createPinia())
+  vi.useRealTimers()
   mockSocket = new MockWebSocket()
   vi.stubGlobal('WebSocket', vi.fn(function () { return mockSocket }))
   groupCollapsedSpy = vi.spyOn(console, 'groupCollapsed').mockImplementation(() => {})
@@ -263,6 +264,37 @@ describe('wsStore state machine', () => {
     expect(store.authResult?.sessionId).toBe('session-1')
     expect(store.authResult?.persistedEventSeq).toBe(12n)
     expect(store.authResult?.userRole).toBe('admin')
+  })
+
+  it('starts presence heartbeat after auth when the server advertises support and stops on disconnect/reset', () => {
+    vi.useFakeTimers()
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeServerHelloEnvelope([FeatureCapability.PRESENCE_HEARTBEAT]))
+    store.sendAuth('my-access-token')
+    mockSocket.simulateMessage(makeAuthResponseEnvelope(true))
+
+    const sentBeforeHeartbeat = mockSocket.sent.length
+    vi.advanceTimersByTime(30_000)
+
+    expect(mockSocket.sent).toHaveLength(sentBeforeHeartbeat + 1)
+    expect(decodePayloadType(mockSocket.sent[mockSocket.sent.length - 1])).toBe('presenceHeartbeatRequest')
+
+    store.disconnect()
+    const sentBeforeDisconnectAdvance = mockSocket.sent.length
+    vi.advanceTimersByTime(60_000)
+    expect(mockSocket.sent).toHaveLength(sentBeforeDisconnectAdvance)
+
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeServerHelloEnvelope([FeatureCapability.PRESENCE_HEARTBEAT]))
+    store.sendAuth('my-access-token')
+    mockSocket.simulateMessage(makeAuthResponseEnvelope(true))
+    store.resetRuntimeState()
+    const sentBeforeResetAdvance = mockSocket.sent.length
+    vi.advanceTimersByTime(60_000)
+    expect(mockSocket.sent).toHaveLength(sentBeforeResetAdvance)
   })
 
   it('logs incoming packets in a readable format', () => {

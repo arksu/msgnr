@@ -728,6 +728,87 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.messages['dm-1'].some(message => message.body === 'authoritative history')).toBe(true)
   })
 
+  it('keeps newer realtime presence when reconnect bootstrap finishes with an older snapshot', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.setLiveSynced = vi.fn()
+    ws.sendAck = vi.fn()
+
+    chat.handleBootstrapResponse(create(BootstrapResponseSchema, {
+      snapshotSeq: 50n,
+      userRole: 2,
+      workspace: {
+        workspaceId: 'workspace-1',
+        workspaceName: 'Acme',
+        selfUser: create(UserSummarySchema, { userId: 'user-1', displayName: 'Ada', avatarUrl: '' }),
+        selfRole: 3,
+      },
+      conversations: [create(ConversationSummarySchema, {
+        conversationId: 'channel-1',
+        conversationType: 2,
+        title: 'general',
+        topic: '',
+        isArchived: false,
+        notificationLevel: NotificationLevel.ALL,
+        lastMessageSeq: 10n,
+        lastMessagePreview: '',
+        memberCount: 2,
+        presence: PresenceStatus.OFFLINE,
+      })],
+      unread: [],
+      activeCalls: [],
+      pendingInvites: [],
+      notifications: [],
+      hasMore: true,
+      nextPageToken: 'page-2',
+      bootstrapSessionId: 'session-reconnect',
+      pageIndex: 0,
+      pageSizeEffective: 1,
+      estimatedTotalConversations: 2,
+      presence: [create(PresenceEventSchema, {
+        userId: 'user-2',
+        effectivePresence: PresenceStatus.OFFLINE,
+        lastActiveAt: { seconds: 100n, nanos: 0 },
+      })],
+    }))
+
+    chat.handlePresenceEvent(create(PresenceEventSchema, {
+      userId: 'user-2',
+      effectivePresence: PresenceStatus.ONLINE,
+      lastActiveAt: { seconds: 200n, nanos: 0 },
+    }))
+
+    chat.handleBootstrapResponse(create(BootstrapResponseSchema, {
+      snapshotSeq: 50n,
+      conversations: [create(ConversationSummarySchema, {
+        conversationId: 'dm-1',
+        conversationType: 1,
+        title: 'Bob',
+        topic: 'user-2',
+        isArchived: false,
+        notificationLevel: NotificationLevel.ALL,
+        lastMessageSeq: 11n,
+        lastMessagePreview: '',
+        memberCount: 2,
+        presence: PresenceStatus.OFFLINE,
+      })],
+      unread: [],
+      activeCalls: [],
+      pendingInvites: [],
+      notifications: [],
+      hasMore: false,
+      nextPageToken: '',
+      bootstrapSessionId: 'session-reconnect',
+      pageIndex: 1,
+      pageSizeEffective: 1,
+      estimatedTotalConversations: 2,
+      presence: [],
+    }))
+
+    expect(chat.presenceByUserId['user-2']?.effectivePresence).toBe(PresenceStatus.ONLINE)
+    expect(chat.directMessages[0].presence).toBe('online')
+  })
+
   it('hydrates DM peer user id from bootstrap and applies later presence updates', () => {
     const chat = useChatStore()
     const ws = useWsStore()

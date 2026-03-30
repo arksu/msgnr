@@ -76,6 +76,7 @@ export interface WsAuthResult {
 const PROTOCOL_VERSION = 1
 const WS_OPEN = 1   // WebSocket.OPEN
 const WS_CLOSED = 3 // WebSocket.CLOSED
+const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000
 
 const REQUESTED_CAPABILITIES: FeatureCapability[] = Object.values(FeatureCapability)
   .filter((v): v is FeatureCapability => typeof v === 'number' && v !== FeatureCapability.UNSPECIFIED)
@@ -149,6 +150,56 @@ export const useWsStore = defineStore('ws', () => {
   let onTaskDescriptionCollabSubscribeResponseCallback: TaskDescriptionCollabSubscribeResponseHandler | null = null
   let onTaskDescriptionCollabMessageCallback: TaskDescriptionCollabMessageHandler | null = null
   let onProtocolErrorCallback: ProtocolErrorHandler | null = null
+  let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null
+
+  function serverSupportsPresenceHeartbeat(): boolean {
+    return serverHello.value?.case === 'serverHello'
+      && serverHello.value.value.acceptedCapabilities.includes(FeatureCapability.PRESENCE_HEARTBEAT)
+  }
+
+  function canRunPresenceHeartbeat(): boolean {
+    return serverSupportsPresenceHeartbeat()
+      && authResult.value !== null
+      && socket !== null
+      && socket.readyState === WS_OPEN
+      && (
+        state.value === 'AUTH_COMPLETE'
+        || state.value === 'BOOTSTRAPPING'
+        || state.value === 'LIVE_SYNCED'
+        || state.value === 'RECOVERING_GAP'
+        || state.value === 'STALE_REBOOTSTRAP'
+      )
+  }
+
+  function stopPresenceHeartbeat() {
+    if (presenceHeartbeatTimer) {
+      clearInterval(presenceHeartbeatTimer)
+      presenceHeartbeatTimer = null
+    }
+  }
+
+  function sendPresenceHeartbeat(): boolean {
+    return sendEnvelope(create(EnvelopeSchema, {
+      requestId: generateId(),
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'presenceHeartbeatRequest',
+        value: {},
+      },
+    }))
+  }
+
+  function startPresenceHeartbeat() {
+    if (!canRunPresenceHeartbeat() || presenceHeartbeatTimer) return
+    presenceHeartbeatTimer = setInterval(() => {
+      if (!canRunPresenceHeartbeat()) {
+        stopPresenceHeartbeat()
+        return
+      }
+      sendPresenceHeartbeat()
+    }, PRESENCE_HEARTBEAT_INTERVAL_MS)
+  }
 
   function onAuthFail(cb: (kind: WsErrorKind) => void) {
     onAuthFailCallback = cb
@@ -243,6 +294,7 @@ export const useWsStore = defineStore('ws', () => {
   }
 
   function connect(url: string) {
+    stopPresenceHeartbeat()
     if (socket && socket.readyState !== WS_CLOSED) {
       console.log('[ws:connect] closing old socket, suppressTransportDrop=true, readyState=', socket.readyState)
       suppressTransportDrop = true
@@ -285,6 +337,7 @@ export const useWsStore = defineStore('ws', () => {
 
     wsConn.onerror = () => {
       if (socket !== wsConn) { console.log('[ws:onerror] stale socket, ignored'); return }
+      stopPresenceHeartbeat()
       console.log('[ws:onerror] transport error, suppress=', suppressTransportDrop)
       lastError.value = 'WebSocket transport error'
       lastErrorKind.value = 'TRANSPORT'
@@ -295,6 +348,7 @@ export const useWsStore = defineStore('ws', () => {
 
     wsConn.onclose = (ev: CloseEvent) => {
       if (socket !== wsConn) { console.log('[ws:onclose] stale socket, ignored. code=', ev?.code); return }
+      stopPresenceHeartbeat()
       // Use socketHadOpened rather than state.value !== 'DISCONNECTED': onerror
       // sets state = 'DISCONNECTED' before onclose fires, which would wrongly
       // suppress the transport-drop callback for error-induced disconnects.
@@ -316,6 +370,7 @@ export const useWsStore = defineStore('ws', () => {
   }
 
   function disconnect(reason: 'logout' | 'transport' = 'transport') {
+    stopPresenceHeartbeat()
     // Suppress transport-drop callback for intentional disconnects (logout)
     if (reason === 'logout') {
       onTransportDropCallback = null
@@ -326,6 +381,7 @@ export const useWsStore = defineStore('ws', () => {
   }
 
   function resetRuntimeState() {
+    stopPresenceHeartbeat()
     suppressTransportDrop = true
     try {
       socket?.close()
@@ -793,7 +849,9 @@ export const useWsStore = defineStore('ws', () => {
             userRole: workspaceRoleToSlug(ar.userRole),
           }
           state.value = 'AUTH_COMPLETE'
+          startPresenceHeartbeat()
         } else {
+          stopPresenceHeartbeat()
           lastError.value = 'AuthResponse: ok=false'
           lastErrorKind.value = 'UNAUTHENTICATED'
           state.value = 'DISCONNECTED'

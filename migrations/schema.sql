@@ -458,16 +458,34 @@ CREATE INDEX IF NOT EXISTS idx_call_invites_invitee_active
 -- Presence
 -- ---------------------------------------------------------------------------
 
--- Durable last_active_at for "last seen" UI.
--- Hot online/away state lives in Redis; this table is updated on
--- disconnect or periodic heartbeat.
+-- Durable effective presence plus persistent manual away preference.
+-- last_active_at is updated by websocket auth/heartbeat/manual presence actions
+-- and survives offline transitions for "last seen" style UI.
 CREATE TABLE IF NOT EXISTS user_presence (
-  user_id        UUID        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  status         TEXT        NOT NULL DEFAULT 'offline'
-                   CHECK (status IN ('online', 'away', 'offline')),
-  last_active_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  user_id          UUID        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  status           TEXT        NOT NULL DEFAULT 'offline'
+                     CHECK (status IN ('online', 'away', 'offline')),
+  preferred_status TEXT        NOT NULL DEFAULT 'online'
+                     CHECK (preferred_status IN ('online', 'away')),
+  last_active_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS ws_presence_leases (
+  connection_id     UUID        PRIMARY KEY,
+  user_id           UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  auth_session_id   UUID        NOT NULL REFERENCES refresh_sessions(id) ON DELETE CASCADE,
+  heartbeat_capable BOOLEAN     NOT NULL DEFAULT false,
+  last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ws_presence_leases_user
+  ON ws_presence_leases(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_ws_presence_leases_heartbeat
+  ON ws_presence_leases(heartbeat_capable, last_heartbeat_at);
 
 -- ---------------------------------------------------------------------------
 -- Bootstrap sessions

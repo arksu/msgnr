@@ -82,3 +82,20 @@ func TestHandler_DeleteTeamspaceForbidden(t *testing.T) {
 		t.Fatalf("expected 403, got %d", rec.Code)
 	}
 }
+
+func TestHandler_SearchDocumentsBlankQuery(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := NewService(pool, nil)
+	h := NewHandler(svc, nil, zap.NewNop(), 50)
+
+	userID := seedHandlerUser(t, ctx, pool, "Searcher")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/search?q=%20%20", nil)
+	rec := httptest.NewRecorder()
+	h.searchCollection(rec, req, auth.Principal{UserID: userID, Role: "member"})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}

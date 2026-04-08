@@ -14,6 +14,7 @@ declare module 'vue' {
     ConnectionBanner: typeof import('./src/components/ConnectionBanner.vue')['default']
     DictionariesTab: typeof import('./src/components/admin/DictionariesTab.vue')['default']
     DocumentCard: typeof import('./src/components/documents/DocumentCard.vue')['default']
+    DocumentSearchView: typeof import('./src/components/documents/DocumentSearchView.vue')['default']
     DocumentsShell: typeof import('./src/components/documents/DocumentsShell.vue')['default']
     DocumentsSidebar: typeof import('./src/components/documents/DocumentsSidebar.vue')['default']
     DocumentsTreeNode: typeof import('./src/components/documents/DocumentsTreeNode.vue')['default']

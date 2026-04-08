@@ -68,6 +68,12 @@ const router = createRouter({
       component: () => import('@/views/MainView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/documents/search',
+      name: 'documents-search',
+      component: () => import('@/views/MainView.vue'),
+      meta: { requiresAuth: true },
+    },
     // Keep static `/documents/teamspaces/...` before the dynamic document route.
     {
       path: '/documents/:documentId',

@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -248,6 +249,114 @@ func TestIntegration_DocumentMemberEditAndNonMemberForbidden(t *testing.T) {
 		ActorID:         outsiderID,
 	})
 	require.ErrorIs(t, err, documents.ErrForbidden)
+}
+
+func TestIntegration_SearchDocumentsRejectsBlankQuery(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := documents.NewService(pool, nil)
+	userID := seedDocumentUser(t, ctx, pool, "Searcher", "member")
+
+	results, err := svc.SearchDocuments(ctx, userID, "   ")
+	require.ErrorIs(t, err, documents.ErrBadRequest)
+	require.Nil(t, results)
+}
+
+func TestIntegration_SearchDocumentsRespectsVisibilityAndOrdering(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := documents.NewService(pool, nil)
+
+	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
+	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
+
+	visibleSpace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:      "Visible docs",
+		MemberIDs: []uuid.UUID{memberID},
+		ActorID:   ownerID,
+	}, "member")
+	require.NoError(t, err)
+
+	titleMatch, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:     visibleSpace.ID,
+		Title:           "Spec overview",
+		ContentMarkdown: ptrString("A short design summary for the team."),
+		ActorID:         ownerID,
+	})
+	require.NoError(t, err)
+
+	bodyMatch, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:     visibleSpace.ID,
+		Title:           "Operations notes",
+		ContentMarkdown: ptrString("This body includes the keyword spec deep in the paragraph for search."),
+		ActorID:         memberID,
+	})
+	require.NoError(t, err)
+
+	bodyNeedle, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:     visibleSpace.ID,
+		Title:           "Runbook",
+		ContentMarkdown: ptrString("Start here, then follow the precise needle instructions to recover service."),
+		ActorID:         ownerID,
+	})
+	require.NoError(t, err)
+
+	privateSpace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:    "Private docs",
+		ActorID: ownerID,
+	}, "member")
+	require.NoError(t, err)
+
+	_, err = svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:     privateSpace.ID,
+		Title:           "Secret spec",
+		ContentMarkdown: ptrString("Private spec details"),
+		ActorID:         ownerID,
+	})
+	require.NoError(t, err)
+
+	archivedDoc, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:     visibleSpace.ID,
+		Title:           "Archived spec",
+		ContentMarkdown: ptrString("Old spec content"),
+		ActorID:         ownerID,
+	})
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE document SET archived_at = now() WHERE id = $1`, archivedDoc.ID)
+	require.NoError(t, err)
+
+	deletedSpace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:      "Deleted docs",
+		MemberIDs: []uuid.UUID{memberID},
+		ActorID:   ownerID,
+	}, "member")
+	require.NoError(t, err)
+	_, err = svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:     deletedSpace.ID,
+		Title:           "Deleted spec",
+		ContentMarkdown: ptrString("Deleted teamspace content"),
+		ActorID:         ownerID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteTeamspace(ctx, deletedSpace.ID, ownerID, "member"))
+
+	results, err := svc.SearchDocuments(ctx, memberID, "spec")
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, titleMatch.ID, results[0].ID)
+	assert.Equal(t, bodyMatch.ID, results[1].ID)
+	assert.Equal(t, "Visible docs", results[0].TeamspaceName)
+	assert.NotEmpty(t, results[0].Snippet)
+
+	needleResults, err := svc.SearchDocuments(ctx, memberID, "needle")
+	require.NoError(t, err)
+	require.Len(t, needleResults, 1)
+	assert.Equal(t, bodyNeedle.ID, needleResults[0].ID)
+	assert.True(t, strings.Contains(strings.ToLower(needleResults[0].Snippet), "needle"))
+}
+
+func ptrString(value string) *string {
+	return &value
 }
 
 func TestIntegration_DocumentHistoryDeduplicatesAndPrunes(t *testing.T) {

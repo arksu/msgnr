@@ -131,22 +131,27 @@ vi.mock('@/components/tasks/TaskCreateDialog.vue', () => ({
 
 vi.mock('@/components/documents/DocumentsSidebar.vue', () => ({
   default: {
-    props: ['selectedTeamspaceId', 'selectedDocumentId'],
-    emits: ['openTeamspaces', 'openTeamspace', 'openDocument'],
-    template: '<aside data-testid="documents-sidebar" />',
+    props: ['selectedTeamspaceId', 'selectedDocumentId', 'searchQuery'],
+    emits: ['openTeamspaces', 'openTeamspace', 'openDocument', 'searchQueryChange'],
+    template: '<aside data-testid="documents-sidebar"><input data-testid="documents-search-input" :value="searchQuery" @input="$emit(\'searchQueryChange\', $event.target.value)" /></aside>',
   },
 }))
 
 vi.mock('@/components/documents/DocumentsShell.vue', () => ({
   __isTeleport: false,
   default: {
-    props: ['selectedTeamspaceId', 'selectedDocumentId', 'viewMode'],
-    emits: ['openTeamspaces', 'openTeamspace', 'openDocument', 'documentsDeleted', 'back', 'openParent'],
+    props: ['selectedTeamspaceId', 'selectedDocumentId', 'searchQuery', 'viewMode'],
+    emits: ['openTeamspaces', 'openTeamspace', 'openDocument', 'documentsDeleted', 'searchQueryChange', 'back', 'openParent'],
     template: `
       <div data-testid="documents-mode">
-        <aside data-testid="documents-sidebar" />
+        <aside data-testid="documents-sidebar">
+          <input data-testid="documents-search-input" :value="searchQuery" @input="$emit('searchQueryChange', $event.target.value)" />
+        </aside>
         <section v-if="viewMode === 'card'" data-testid="document-card">
           <button data-testid="document-card-back" @click="$emit('back')">back</button>
+        </section>
+        <section v-else-if="viewMode === 'search'" data-testid="documents-search-view">
+          <button data-testid="documents-search-open" @click="$emit('openDocument', 'search-doc-1')">open</button>
         </section>
         <section v-else data-testid="teamspaces-view" />
       </div>
@@ -202,6 +207,7 @@ function createMainRouter() {
       },
       { path: '/documents', name: 'documents-teamspaces', component: MainView },
       { path: '/documents/teamspaces/:teamspaceId', name: 'documents-teamspace', component: MainView },
+      { path: '/documents/search', name: 'documents-search', component: MainView },
       { path: '/documents/:documentId', name: 'documents-card', component: MainView },
       { path: '/login', name: 'login', component: { template: '<div>login</div>' } },
     ],
@@ -281,6 +287,9 @@ describe('MainView server unavailable state', () => {
     vi.spyOn(documentsStore, 'clearSelectedDocument').mockImplementation(() => {
       documentsStore.selectedDocument = null
     })
+    vi.spyOn(documentsStore, 'setSearchQuery')
+    vi.spyOn(documentsStore, 'clearSearch')
+    vi.spyOn(documentsStore, 'scheduleSearch')
     vi.spyOn(documentsStore, 'loadTeamspaces').mockResolvedValue()
     vi.spyOn(documentsStore, 'loadSidebar').mockResolvedValue()
   })
@@ -563,6 +572,80 @@ describe('MainView server unavailable state', () => {
     expect(wrapper.find('[data-testid="documents-mode"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="documents-sidebar"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="teamspaces-view"]').exists()).toBe(true)
+  })
+
+  it('navigates to documents search and schedules loading when typing a query', async () => {
+    const router = createMainRouter()
+    router.push('/documents')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    const documentsStore = useDocumentsStore(pinia)
+    await (wrapper.findComponent(MainView).vm as any).handleDocumentsSearchQueryChange('spec')
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('documents-search')
+    expect(router.currentRoute.value.query.q).toBe('spec')
+    expect(documentsStore.setSearchQuery).toHaveBeenCalledWith('spec')
+    expect(documentsStore.scheduleSearch).toHaveBeenCalledWith('spec')
+  })
+
+  it('clearing search returns to the prior documents browse route', async () => {
+    const router = createMainRouter()
+    router.push('/documents/teamspaces/teamspace-1')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    await (wrapper.findComponent(MainView).vm as any).handleDocumentsSearchQueryChange('spec')
+    await flushAsyncWork()
+    expect(router.currentRoute.value.name).toBe('documents-search')
+
+    await (wrapper.findComponent(MainView).vm as any).handleDocumentsSearchQueryChange('')
+    await flushAsyncWork()
+
+    const documentsStore = useDocumentsStore(pinia)
+    expect(router.currentRoute.value.name).toBe('documents-teamspace')
+    expect(router.currentRoute.value.params.teamspaceId).toBe('teamspace-1')
+    expect(documentsStore.clearSearch).toHaveBeenCalled()
+  })
+
+  it('returns to search results after backing out of a document opened from search', async () => {
+    const router = createMainRouter()
+    router.push({ name: 'documents-search', query: { q: 'spec' } })
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="documents-search-view"]').exists()).toBe(true)
+
+    await (wrapper.findComponent(MainView).vm as any).openDocument('search-doc-1')
+    await flushAsyncWork()
+    expect(router.currentRoute.value.name).toBe('documents-card')
+
+    await (wrapper.findComponent(MainView).vm as any).backToDocuments()
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('documents-search')
+    expect(router.currentRoute.value.query.q).toBe('spec')
+  })
+
+  it('clears search state and skips scheduling on direct empty search route entry', async () => {
+    const router = createMainRouter()
+    router.push({ name: 'documents-search', query: { q: '' } })
+    await router.isReady()
+
+    mountAtRoute(router)
+    await flushAsyncWork()
+
+    const documentsStore = useDocumentsStore(pinia)
+    expect(router.currentRoute.value.name).toBe('documents-search')
+    expect(documentsStore.clearSearch).toHaveBeenCalled()
+    expect(documentsStore.scheduleSearch).not.toHaveBeenCalled()
   })
 
   it('returns to the documents browser from a teamspace route', async () => {

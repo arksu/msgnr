@@ -60,6 +60,7 @@ describe('DocumentsSidebar', () => {
       props: {
         selectedTeamspaceId: null,
         selectedDocumentId: null,
+        searchQuery: '',
       },
       global: {
         stubs: {
@@ -71,5 +72,24 @@ describe('DocumentsSidebar', () => {
     expect(wrapper.text()).toContain('Alpha')
     expect(wrapper.text()).toContain('Beta')
     expect(wrapper.text()).toContain('Root')
+  })
+
+  it('emits search query changes from the header input', async () => {
+    const wrapper = mount(DocumentsSidebar, {
+      props: {
+        selectedTeamspaceId: null,
+        selectedDocumentId: null,
+        searchQuery: '',
+      },
+      global: {
+        stubs: {
+          Teleport: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="documents-search-input"]').setValue('spec')
+
+    expect(wrapper.emitted('searchQueryChange')).toEqual([['spec']])
   })
 })

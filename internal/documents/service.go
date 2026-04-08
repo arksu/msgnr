@@ -19,6 +19,8 @@ import (
 
 const (
 	defaultDocumentHistoryLimit = 25
+	defaultDocumentSearchLimit  = 50
+	documentSearchSnippetLimit  = 160
 	pgErrUniqueViolation        = "23505"
 	pgErrForeignKeyViolation    = "23503"
 	pgErrCheckViolation         = "23514"
@@ -124,6 +126,14 @@ type DocumentResponse struct {
 	UpdatedBy        uuid.UUID  `json:"updated_by"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+type DocumentSearchResult struct {
+	ID            uuid.UUID `json:"id"`
+	TeamspaceID   uuid.UUID `json:"teamspace_id"`
+	TeamspaceName string    `json:"teamspace_name"`
+	Title         string    `json:"title"`
+	Snippet       string    `json:"snippet"`
 }
 
 type DocumentHistoryEditor struct {
@@ -644,6 +654,62 @@ func (s *Service) GetDocument(ctx context.Context, documentID, userID uuid.UUID)
 		resp.ContentMarkdown = &value
 	}
 	return resp, nil
+}
+
+func (s *Service) SearchDocuments(ctx context.Context, userID uuid.UUID, query string) ([]DocumentSearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("%w: search query is required", ErrBadRequest)
+	}
+
+	pattern := "%" + query + "%"
+	rows, err := s.pool.Query(ctx,
+		`SELECT d.id,
+		        d.teamspace_id,
+		        t.name,
+		        d.title,
+		        d.content_markdown
+		   FROM document d
+		   JOIN teamspace t
+		     ON t.id = d.teamspace_id
+		    AND t.deleted_at IS NULL
+		   JOIN teamspace_member tm
+		     ON tm.teamspace_id = d.teamspace_id
+		    AND tm.user_id = $1
+		  WHERE d.archived_at IS NULL
+		    AND (d.title ILIKE $2 OR d.content_markdown ILIKE $2)
+		  ORDER BY CASE WHEN d.title ILIKE $2 THEN 0 ELSE 1 END,
+		           d.updated_at DESC
+		  LIMIT $3`,
+		userID, pattern, defaultDocumentSearchLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("documents: search documents: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]DocumentSearchResult, 0)
+	for rows.Next() {
+		var (
+			item    DocumentSearchResult
+			content sql.NullString
+		)
+		if err := rows.Scan(
+			&item.ID,
+			&item.TeamspaceID,
+			&item.TeamspaceName,
+			&item.Title,
+			&content,
+		); err != nil {
+			return nil, fmt.Errorf("documents: scan searched document: %w", err)
+		}
+		item.Snippet = buildDocumentSearchSnippet(query, content)
+		results = append(results, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("documents: iterate searched documents: %w", err)
+	}
+	return results, nil
 }
 
 func (s *Service) UpdateDocument(ctx context.Context, documentID uuid.UUID, params UpdateDocumentParams) (DocumentResponse, error) {
@@ -1357,6 +1423,65 @@ func nullStringEqual(value *string, candidate sql.NullString) bool {
 		return !candidate.Valid
 	}
 	return candidate.Valid && candidate.String == *value
+}
+
+func buildDocumentSearchSnippet(query string, content sql.NullString) string {
+	if !content.Valid {
+		return ""
+	}
+
+	normalized := normaliseDocumentSearchText(content.String)
+	if normalized == "" {
+		return ""
+	}
+
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return truncateDocumentSearchSnippet(normalized)
+	}
+
+	normalizedRunes := []rune(normalized)
+	queryRunes := []rune(query)
+	matchIndex := -1
+	for index := 0; index+len(queryRunes) <= len(normalizedRunes); index++ {
+		if strings.EqualFold(string(normalizedRunes[index:index+len(queryRunes)]), query) {
+			matchIndex = index
+			break
+		}
+	}
+	if matchIndex < 0 {
+		return truncateDocumentSearchSnippet(normalized)
+	}
+
+	start := matchIndex - 48
+	if start < 0 {
+		start = 0
+	}
+	end := matchIndex + len(queryRunes) + 96
+	if end > len(normalizedRunes) {
+		end = len(normalizedRunes)
+	}
+
+	snippet := strings.TrimSpace(string(normalizedRunes[start:end]))
+	if start > 0 {
+		snippet = "..." + strings.TrimLeft(snippet, ". ")
+	}
+	if end < len(normalizedRunes) {
+		snippet = strings.TrimRight(snippet, ". ") + "..."
+	}
+	return truncateDocumentSearchSnippet(snippet)
+}
+
+func normaliseDocumentSearchText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func truncateDocumentSearchSnippet(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= documentSearchSnippetLimit {
+		return value
+	}
+	return strings.TrimSpace(value[:documentSearchSnippetLimit-3]) + "..."
 }
 
 func cloneSidebarNode(node *sidebarTempNode) SidebarDocumentNode {

@@ -79,6 +79,14 @@ export interface DocumentItem {
   updated_at: string
 }
 
+export interface DocumentSearchResult {
+  id: string
+  teamspace_id: string
+  teamspace_name: string
+  title: string
+  snippet: string
+}
+
 export interface DocumentHistoryEditor {
   id: string
   display_name: string
@@ -143,6 +151,12 @@ export async function documentsJoinTeamspace(id: string): Promise<Teamspace> {
 
 export async function documentsListSidebar(): Promise<SidebarTeamspace[]> {
   return apiCall(http.get<SidebarTeamspace[]>('/api/documents/sidebar'))
+}
+
+export async function documentsSearchDocuments(query: string): Promise<DocumentSearchResult[]> {
+  return apiCall(http.get<DocumentSearchResult[]>('/api/documents/search', {
+    params: { q: query },
+  }))
 }
 
 export async function documentsCreateDocument(payload: CreateDocumentPayload): Promise<DocumentItem> {

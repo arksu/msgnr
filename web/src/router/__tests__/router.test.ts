@@ -51,6 +51,9 @@ describe('router auth guard', () => {
     await router.push('/documents/teamspaces/teamspace-1')
     expect(router.currentRoute.value.name).toBe('login')
 
+    await router.push('/documents/search?q=spec')
+    expect(router.currentRoute.value.name).toBe('login')
+
     await router.push('/documents/document-1')
     expect(router.currentRoute.value.name).toBe('login')
   })
@@ -76,6 +79,10 @@ describe('router auth guard', () => {
     await router.push('/documents/teamspaces/teamspace-1')
     expect(router.currentRoute.value.name).toBe('documents-teamspace')
     expect(router.currentRoute.value.params.teamspaceId).toBe('teamspace-1')
+
+    await router.push('/documents/search?q=spec')
+    expect(router.currentRoute.value.name).toBe('documents-search')
+    expect(router.currentRoute.value.query.q).toBe('spec')
 
     await router.push('/documents/document-1')
     expect(router.currentRoute.value.name).toBe('documents-card')

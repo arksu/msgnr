@@ -116,11 +116,13 @@
         <DocumentsShell
           :selected-teamspace-id="documentsSelectedTeamspaceId"
           :selected-document-id="routeDocumentId || documentsStore.selectedDocument?.id || null"
+          :search-query="documentsStore.searchQuery"
           :view-mode="documentsViewMode"
           @open-teamspaces="openDocumentsTeamspacesRoute"
           @open-teamspace="openDocumentsTeamspaceRoute"
           @open-document="openDocument"
           @documents-deleted="handleDocumentsDeleted"
+          @search-query-change="handleDocumentsSearchQueryChange"
           @back="backToDocuments"
           @open-parent="openDocument"
         />
@@ -416,15 +418,25 @@ function createDocumentsShellStub() {
         type: String,
         default: null,
       },
+      searchQuery: {
+        type: String,
+        default: '',
+      },
       viewMode: {
         type: String,
         required: true,
       },
     },
-    emits: ['openTeamspaces', 'openTeamspace', 'openDocument', 'documentsDeleted', 'back', 'openParent'],
+    emits: ['openTeamspaces', 'openTeamspace', 'openDocument', 'documentsDeleted', 'searchQueryChange', 'back', 'openParent'],
     setup(props, { emit }) {
       return () => h('div', { 'data-testid': 'documents-mode' }, [
-        h('aside', { 'data-testid': 'documents-sidebar' }),
+        h('aside', { 'data-testid': 'documents-sidebar' }, [
+          h('input', {
+            'data-testid': 'documents-search-input',
+            value: props.searchQuery,
+            onInput: (event: Event) => emit('searchQueryChange', (event.target as HTMLInputElement).value),
+          }),
+        ]),
         props.viewMode === 'card'
           ? h('section', { 'data-testid': 'document-card' }, [
               h('button', {
@@ -433,6 +445,14 @@ function createDocumentsShellStub() {
                 onClick: () => emit('back'),
               }, 'back'),
             ])
+          : props.viewMode === 'search'
+            ? h('section', { 'data-testid': 'documents-search-view' }, [
+                h('button', {
+                  'data-testid': 'documents-search-open',
+                  type: 'button',
+                  onClick: () => emit('openDocument', 'search-doc-1'),
+                }, 'open'),
+              ])
           : h('section', { 'data-testid': 'teamspaces-view' }),
       ])
     },
@@ -482,7 +502,17 @@ const incomingInviteError = ref('')
 const dismissedInviteIds = ref<string[]>([])
 const selectedTemplateFilter = ref<string | null>(null)
 const lastTaskTrackerNonCardRoute = ref<'tasks-list' | 'tasks-kanban'>('tasks-list')
-const lastDocumentsNonCardRoute = ref<{ name: 'documents-teamspaces' | 'documents-teamspace'; teamspaceId?: string }>({
+type DocumentsBrowseRoute =
+  | { name: 'documents-teamspaces' }
+  | { name: 'documents-teamspace'; teamspaceId: string }
+type DocumentsNonCardRoute =
+  | DocumentsBrowseRoute
+  | { name: 'documents-search'; query: string }
+
+const lastDocumentsBrowseRoute = ref<DocumentsBrowseRoute>({
+  name: 'documents-teamspaces',
+})
+const lastDocumentsNonCardRoute = ref<DocumentsNonCardRoute>({
   name: 'documents-teamspaces',
 })
 let unsubscribeIncomingMessageSound: (() => void) | null = null
@@ -496,6 +526,7 @@ const isTaskTrackerRoute = computed(() => (
 const isDocumentsRoute = computed(() => (
   route.name === 'documents-teamspaces'
   || route.name === 'documents-teamspace'
+  || route.name === 'documents-search'
   || route.name === 'documents-card'
 ))
 const taskTrackerBaseRouteName = computed<'tasks-list' | 'tasks-kanban'>(() => {
@@ -513,8 +544,9 @@ const taskTrackerViewMode = computed<'list' | 'kanban' | 'card'>(() => {
   if (route.name === 'tasks-kanban') return 'kanban'
   return 'list'
 })
-const documentsViewMode = computed<'teamspaces' | 'teamspace' | 'card'>(() => {
+const documentsViewMode = computed<'teamspaces' | 'teamspace' | 'search' | 'card'>(() => {
   if (route.name === 'documents-card') return 'card'
+  if (route.name === 'documents-search') return 'search'
   if (route.name === 'documents-teamspace') return 'teamspace'
   return 'teamspaces'
 })
@@ -530,6 +562,10 @@ const routeDocumentId = computed(() =>
 const routeDocumentsTeamspaceId = computed(() =>
   typeof route.params.teamspaceId === 'string' ? route.params.teamspaceId : '',
 )
+const routeDocumentsSearchQuery = computed(() => {
+  const value = route.query.q
+  return typeof value === 'string' ? value : ''
+})
 const documentsSelectedTeamspaceId = computed(() =>
   routeDocumentsTeamspaceId.value || documentsStore.selectedDocument?.teamspace_id || null,
 )
@@ -691,9 +727,19 @@ async function goToTaskTrackerMode() {
 }
 
 async function goToDocumentsMode() {
-  if (route.name === 'documents-card' || route.name === 'documents-teamspace' || route.name === 'documents-teamspaces') return
-  if (lastDocumentsNonCardRoute.value.name === 'documents-teamspace' && lastDocumentsNonCardRoute.value.teamspaceId) {
-    await router.push({ name: 'documents-teamspace', params: { teamspaceId: lastDocumentsNonCardRoute.value.teamspaceId } })
+  if (
+    route.name === 'documents-card'
+    || route.name === 'documents-teamspace'
+    || route.name === 'documents-teamspaces'
+    || route.name === 'documents-search'
+  ) return
+  if (lastDocumentsNonCardRoute.value.name === 'documents-search' && lastDocumentsNonCardRoute.value.query.trim()) {
+    await router.push({ name: 'documents-search', query: { q: lastDocumentsNonCardRoute.value.query } })
+    return
+  }
+  if (lastDocumentsBrowseRoute.value.name === 'documents-teamspace') {
+    const { teamspaceId } = lastDocumentsBrowseRoute.value
+    await router.push({ name: 'documents-teamspace', params: { teamspaceId } })
     return
   }
   await router.push({ name: 'documents-teamspaces' })
@@ -717,19 +763,53 @@ async function openTask(publicId: string) {
 }
 
 async function openDocumentsTeamspacesRoute() {
+  documentsStore.clearSearch()
   lastDocumentsNonCardRoute.value = { name: 'documents-teamspaces' }
+  lastDocumentsBrowseRoute.value = { name: 'documents-teamspaces' }
   if (route.name === 'documents-teamspaces') return
   await router.push({ name: 'documents-teamspaces' })
 }
 
 async function openDocumentsTeamspaceRoute(teamspaceId: string) {
+  documentsStore.clearSearch()
   lastDocumentsNonCardRoute.value = { name: 'documents-teamspace', teamspaceId }
+  lastDocumentsBrowseRoute.value = { name: 'documents-teamspace', teamspaceId }
   if (route.name === 'documents-teamspace' && routeDocumentsTeamspaceId.value === teamspaceId) return
   await router.push({ name: 'documents-teamspace', params: { teamspaceId } })
 }
 
 async function openDocument(id: string) {
   await router.push({ name: 'documents-card', params: { documentId: id } })
+}
+
+async function handleDocumentsSearchQueryChange(value: string) {
+  documentsStore.setSearchQuery(value)
+  const trimmedValue = value.trim()
+
+  if (!trimmedValue) {
+    documentsStore.clearSearch()
+    if (lastDocumentsBrowseRoute.value.name === 'documents-teamspace') {
+      lastDocumentsNonCardRoute.value = {
+        name: 'documents-teamspace',
+        teamspaceId: lastDocumentsBrowseRoute.value.teamspaceId,
+      }
+    } else {
+      lastDocumentsNonCardRoute.value = { name: 'documents-teamspaces' }
+    }
+    if (lastDocumentsBrowseRoute.value.name === 'documents-teamspace') {
+      await router.replace({ name: 'documents-teamspace', params: { teamspaceId: lastDocumentsBrowseRoute.value.teamspaceId } })
+      return
+    }
+    await router.replace({ name: 'documents-teamspaces' })
+    return
+  }
+
+  const target = { name: 'documents-search' as const, query: { q: trimmedValue } }
+  if (route.name === 'documents-search') {
+    await router.replace(target)
+    return
+  }
+  await router.push(target)
 }
 
 async function handleDocumentsDeleted(deletedDocumentIds: string[]) {
@@ -739,7 +819,7 @@ async function handleDocumentsDeleted(deletedDocumentIds: string[]) {
     return
   }
   documentsStore.clearSelectedDocument()
-  await backToDocuments()
+  await backToDocuments(true)
 }
 
 function routeTaskSlugMatchesSelected(routeSlug: string): boolean {
@@ -761,19 +841,31 @@ async function backToList() {
   await router.push({ name: lastTaskTrackerNonCardRoute.value })
 }
 
-async function backToDocuments() {
+async function backToDocuments(forceSidebarRefresh = false) {
   documentsStore.clearSelectedDocument()
-  await documentsStore.loadSidebar(true)
-  if (lastDocumentsNonCardRoute.value.name === 'documents-teamspace' && lastDocumentsNonCardRoute.value.teamspaceId) {
-    await router.push({ name: 'documents-teamspace', params: { teamspaceId: lastDocumentsNonCardRoute.value.teamspaceId } })
+  if (forceSidebarRefresh) {
+    await documentsStore.loadSidebar(true)
+  }
+  if (lastDocumentsNonCardRoute.value.name === 'documents-search' && lastDocumentsNonCardRoute.value.query.trim()) {
+    await router.push({ name: 'documents-search', query: { q: lastDocumentsNonCardRoute.value.query } })
+    return
+  }
+  if (lastDocumentsBrowseRoute.value.name === 'documents-teamspace') {
+    await router.push({ name: 'documents-teamspace', params: { teamspaceId: lastDocumentsBrowseRoute.value.teamspaceId } })
     return
   }
   await router.push({ name: 'documents-teamspaces' })
 }
 
 watch(
-  () => ({ name: route.name, taskSlug: routeTaskSlug.value, documentId: routeDocumentId.value, teamspaceId: routeDocumentsTeamspaceId.value }),
-  async ({ name, taskSlug, documentId, teamspaceId }) => {
+  () => ({
+    name: route.name,
+    taskSlug: routeTaskSlug.value,
+    documentId: routeDocumentId.value,
+    teamspaceId: routeDocumentsTeamspaceId.value,
+    searchQuery: routeDocumentsSearchQuery.value,
+  }),
+  async ({ name, taskSlug, documentId, teamspaceId, searchQuery }) => {
     if (name === 'tasks-card') {
       if (!taskSlug || isUuidTaskRouteValue(taskSlug)) {
         await router.replace({ name: lastTaskTrackerNonCardRoute.value })
@@ -823,15 +915,34 @@ watch(
         await router.replace({ name: 'documents-teamspaces' })
         return
       }
+      documentsStore.clearSearch()
       lastDocumentsNonCardRoute.value = { name: 'documents-teamspace', teamspaceId }
+      lastDocumentsBrowseRoute.value = { name: 'documents-teamspace', teamspaceId }
       documentsStore.clearSelectedDocument()
       void documentsStore.loadTeamspaces()
       void documentsStore.loadSidebar()
       return
     }
 
+    if (name === 'documents-search') {
+      const trimmedSearchQuery = searchQuery.trim()
+      lastDocumentsNonCardRoute.value = { name: 'documents-search', query: trimmedSearchQuery }
+      documentsStore.clearSelectedDocument()
+      void documentsStore.loadTeamspaces()
+      void documentsStore.loadSidebar()
+      documentsStore.setSearchQuery(trimmedSearchQuery)
+      if (!trimmedSearchQuery) {
+        documentsStore.clearSearch()
+        return
+      }
+      documentsStore.scheduleSearch(trimmedSearchQuery)
+      return
+    }
+
     if (name === 'documents-teamspaces') {
+      documentsStore.clearSearch()
       lastDocumentsNonCardRoute.value = { name: 'documents-teamspaces' }
+      lastDocumentsBrowseRoute.value = { name: 'documents-teamspaces' }
       documentsStore.clearSelectedDocument()
       void documentsStore.loadTeamspaces()
       void documentsStore.loadSidebar()
@@ -862,7 +973,12 @@ watch(() => tasksStore.selectedTask?.public_id, (taskPublicId) => {
 
 watch(() => documentsStore.selectedDocument?.id, (documentId) => {
   if (!documentId || !isDocumentsRoute.value) return
-  if (route.name !== 'documents-card' && route.name !== 'documents-teamspace' && route.name !== 'documents-teamspaces') return
+  if (
+    route.name !== 'documents-card'
+    && route.name !== 'documents-teamspace'
+    && route.name !== 'documents-teamspaces'
+    && route.name !== 'documents-search'
+  ) return
   if (route.name === 'documents-card' && routeDocumentId.value === documentId) return
   void router.push({ name: 'documents-card', params: { documentId } })
 })
@@ -876,6 +992,7 @@ watch(
       || name === 'tasks-card'
       || name === 'documents-teamspaces'
       || name === 'documents-teamspace'
+      || name === 'documents-search'
       || name === 'documents-card'
     ) return
     selectedTemplateFilter.value = null

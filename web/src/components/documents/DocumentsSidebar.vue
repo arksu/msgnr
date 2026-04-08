@@ -1,7 +1,29 @@
 <template>
   <aside class="flex h-full w-full min-w-0 flex-col border-r border-white/10 bg-sidebar-bg select-none">
-    <div class="flex items-center justify-between border-b border-white/10 px-4 py-3">
-      <span class="font-bold text-white text-[15px]">Documents</span>
+    <div class="border-b border-white/10 px-4 py-3">
+      <div class="flex items-center justify-between">
+        <span class="font-bold text-white text-[15px]">Documents</span>
+      </div>
+      <div class="relative mt-3">
+        <svg
+          class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+        >
+          <circle cx="11" cy="11" r="8" />
+          <path d="m21 21-4.35-4.35" />
+        </svg>
+        <input
+          :value="searchQuery"
+          type="text"
+          placeholder="Search documents..."
+          class="w-full rounded border border-white/10 bg-chat-input pl-9 pr-3 py-2 text-sm text-white placeholder-gray-500 outline-none transition-colors focus:border-accent"
+          data-testid="documents-search-input"
+          @input="emit('searchQueryChange', (($event.target as HTMLInputElement).value))"
+        >
+      </div>
     </div>
 
     <nav class="flex-1 overflow-y-auto px-2 py-3">
@@ -173,12 +195,14 @@ import DocumentsTreeNode from './DocumentsTreeNode.vue'
 const props = defineProps<{
   selectedTeamspaceId: string | null
   selectedDocumentId: string | null
+  searchQuery: string
 }>()
 
 const emit = defineEmits<{
   openTeamspaces: []
   openDocument: [id: string]
   documentsDeleted: [ids: string[]]
+  searchQueryChange: [value: string]
 }>()
 
 const documentsStore = useDocumentsStore()

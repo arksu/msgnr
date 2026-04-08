@@ -1098,6 +1098,12 @@ CREATE TABLE IF NOT EXISTS document (
 CREATE INDEX IF NOT EXISTS idx_document_teamspace_id ON document (teamspace_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_document_parent_document_id ON document (parent_document_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_document_active_title ON document (teamspace_id, archived_at, lower(title));
+CREATE INDEX IF NOT EXISTS idx_document_active_title_trgm
+    ON document USING gin (title gin_trgm_ops)
+    WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_document_active_content_trgm
+    ON document USING gin (content_markdown gin_trgm_ops)
+    WHERE archived_at IS NULL AND content_markdown IS NOT NULL;
 
 DO $$ BEGIN
     CREATE TRIGGER trg_document_set_updated_at

@@ -42,6 +42,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/documents/teamspaces", h.requireAuth(h.teamspacesCollection))
 	mux.HandleFunc("/api/documents/teamspaces/", h.requireAuth(h.teamspacesItem))
 	mux.HandleFunc("/api/documents/sidebar", h.requireAuth(h.sidebarCollection))
+	mux.HandleFunc("/api/documents/search", h.requireAuth(h.searchCollection))
 	mux.HandleFunc("/api/documents", h.requireAuth(h.documentsCollection))
 	mux.HandleFunc("/api/documents/", h.requireAuth(h.documentItem))
 }
@@ -160,6 +161,21 @@ func (h *Handler) sidebarCollection(w http.ResponseWriter, r *http.Request, p au
 		return
 	}
 	rows, err := h.svc.ListSidebar(r.Context(), p.UserID)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (h *Handler) searchCollection(w http.ResponseWriter, r *http.Request, p auth.Principal) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	rows, err := h.svc.SearchDocuments(r.Context(), p.UserID, query)
 	if err != nil {
 		h.serviceError(w, err)
 		return

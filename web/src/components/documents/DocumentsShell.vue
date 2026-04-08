@@ -9,9 +9,11 @@
       <DocumentsSidebar
         :selected-teamspace-id="selectedTeamspaceId"
         :selected-document-id="selectedDocumentId"
+        :search-query="searchQuery"
         @open-teamspaces="emit('openTeamspaces')"
         @open-document="emit('openDocument', $event)"
         @documents-deleted="emit('documentsDeleted', $event)"
+        @search-query-change="emit('searchQueryChange', $event)"
       />
     </ResizableSidebar>
     <main class="flex-1 min-w-0 overflow-hidden">
@@ -25,6 +27,11 @@
         :selected-teamspace-id="selectedTeamspaceId"
         @open-teamspace="emit('openTeamspace', $event)"
         @open-teamspaces="emit('openTeamspaces')"
+      />
+      <DocumentSearchView
+        v-else-if="viewMode === 'search'"
+        :query="searchQuery"
+        @open-document="emit('openDocument', $event)"
       />
       <TeamspacesView
         v-else
@@ -41,11 +48,13 @@ import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import DocumentsSidebar from '@/components/documents/DocumentsSidebar.vue'
 import TeamspacesView from '@/components/documents/TeamspacesView.vue'
 import DocumentCard from '@/components/documents/DocumentCard.vue'
+import DocumentSearchView from '@/components/documents/DocumentSearchView.vue'
 
 defineProps<{
   selectedTeamspaceId: string | null
   selectedDocumentId: string | null
-  viewMode: 'teamspaces' | 'teamspace' | 'card'
+  searchQuery: string
+  viewMode: 'teamspaces' | 'teamspace' | 'search' | 'card'
 }>()
 
 const emit = defineEmits<{
@@ -53,6 +62,7 @@ const emit = defineEmits<{
   openTeamspace: [teamspaceId: string]
   openDocument: [documentId: string]
   documentsDeleted: [documentIds: string[]]
+  searchQueryChange: [value: string]
   back: []
   openParent: [documentId: string]
 }>()

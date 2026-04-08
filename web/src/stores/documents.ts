@@ -9,12 +9,14 @@ import {
   documentsJoinTeamspace,
   documentsListDocumentHistory,
   documentsListSidebar,
+  documentsSearchDocuments,
   documentsListTeamspaces,
   documentsUpdateDocument,
   documentsUpdateTeamspace,
   type CreateDocumentPayload,
   type DocumentHistoryItem,
   type DocumentItem,
+  type DocumentSearchResult,
   type SidebarTeamspace,
   type Teamspace,
   type UpsertTeamspacePayload,
@@ -40,6 +42,12 @@ export const useDocumentsStore = defineStore('documents', () => {
   const usersLoading = ref(false)
 
   const selectedDocumentRequestKey = ref('')
+  const searchQuery = ref('')
+  const searchResults = ref<DocumentSearchResult[]>([])
+  const searchLoading = ref(false)
+  const searchError = ref<string | null>(null)
+  const searchRequestKey = ref('')
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
   const memberTeamspaces = computed(() => teamspaces.value.filter(item => item.is_member))
 
@@ -110,6 +118,71 @@ export const useDocumentsStore = defineStore('documents', () => {
     documentError.value = null
   }
 
+  function setSearchQuery(query: string) {
+    searchQuery.value = query
+  }
+
+  function clearSearch() {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer)
+      searchDebounceTimer = null
+    }
+    searchRequestKey.value = ''
+    searchQuery.value = ''
+    searchResults.value = []
+    searchLoading.value = false
+    searchError.value = null
+  }
+
+  async function loadSearchResults(query = searchQuery.value) {
+    const trimmedQuery = query.trim()
+    if (!trimmedQuery) {
+      searchResults.value = []
+      searchLoading.value = false
+      searchError.value = null
+      searchRequestKey.value = ''
+      return
+    }
+
+    const requestKey = `${Date.now()}:${trimmedQuery}`
+    searchRequestKey.value = requestKey
+    searchLoading.value = true
+    searchError.value = null
+    try {
+      const results = await documentsSearchDocuments(trimmedQuery)
+      if (searchRequestKey.value !== requestKey) return
+      searchResults.value = results
+    } catch (e) {
+      if (searchRequestKey.value !== requestKey) return
+      searchResults.value = []
+      searchError.value = e instanceof Error ? e.message : 'Failed to search documents'
+    } finally {
+      if (searchRequestKey.value === requestKey) {
+        searchLoading.value = false
+      }
+    }
+  }
+
+  function scheduleSearch(query: string, delayMs = 250) {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer)
+      searchDebounceTimer = null
+    }
+    if (!query.trim()) {
+      searchResults.value = []
+      searchLoading.value = false
+      searchError.value = null
+      searchRequestKey.value = ''
+      return
+    }
+    searchLoading.value = true
+    searchError.value = null
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null
+      void loadSearchResults(query)
+    }, delayMs)
+  }
+
   async function createTeamspace(payload: UpsertTeamspacePayload) {
     const row = await documentsCreateTeamspace(payload)
     await Promise.all([loadTeamspaces(true), loadSidebar(true)])
@@ -177,11 +250,19 @@ export const useDocumentsStore = defineStore('documents', () => {
     users,
     usersLoaded,
     memberTeamspaces,
+    searchQuery,
+    searchResults,
+    searchLoading,
+    searchError,
     loadTeamspaces,
     loadSidebar,
     loadUsers,
     selectDocument,
     clearSelectedDocument,
+    setSearchQuery,
+    clearSearch,
+    loadSearchResults,
+    scheduleSearch,
     createTeamspace,
     updateTeamspace,
     deleteTeamspace,

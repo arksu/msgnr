@@ -272,7 +272,7 @@ function syncComposerHeight() {
   const root = editor.value?.view.dom as HTMLElement | undefined
   if (!root) return
 
-  root.style.height = '0px'
+  root.style.height = 'auto'
   const style = window.getComputedStyle(root)
   const fontSize = parsePx(style.fontSize) || 16
   const lineHeight = parsePx(style.lineHeight) || (fontSize * 1.5)

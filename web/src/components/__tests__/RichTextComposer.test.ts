@@ -36,6 +36,11 @@ function typeText(wrapper: ReturnType<typeof mount>, text: string) {
   }
 }
 
+async function insertHardBreak(wrapper: ReturnType<typeof mount>) {
+  await wrapper.get('.ProseMirror').trigger('keydown', { key: 'Enter', shiftKey: true })
+  await flushPromises()
+}
+
 describe('RichTextComposer shortcuts', () => {
   it('converts 1. space into an ordered list', async () => {
     const wrapper = mount(RichTextComposer, {
@@ -65,6 +70,48 @@ describe('RichTextComposer shortcuts', () => {
     typeText(wrapper, '- ')
     await flushPromises()
 
+    expect(editorInstance(wrapper).isActive('bulletList')).toBe(true)
+  })
+
+  it('splits the current paragraph when ordered-list shortcut is typed after a hard break', async () => {
+    const wrapper = mount(RichTextComposer, {
+      props: {
+        modelValue: '',
+      },
+      attachTo: document.body,
+    })
+    await waitForEditor(wrapper)
+
+    typeText(wrapper, 'alpha')
+    await insertHardBreak(wrapper)
+    typeText(wrapper, '1. ')
+    await flushPromises()
+
+    const content = editorInstance(wrapper).getJSON().content ?? []
+    expect(content[0]?.type).toBe('paragraph')
+    expect(content[1]?.type).toBe('orderedList')
+    expect(editorInstance(wrapper).getJSON().content?.[0]?.content?.[0]?.text).toBe('alpha')
+    expect(editorInstance(wrapper).isActive('orderedList')).toBe(true)
+  })
+
+  it('splits the current paragraph when bullet-list shortcut is typed after a hard break', async () => {
+    const wrapper = mount(RichTextComposer, {
+      props: {
+        modelValue: '',
+      },
+      attachTo: document.body,
+    })
+    await waitForEditor(wrapper)
+
+    typeText(wrapper, 'alpha')
+    await insertHardBreak(wrapper)
+    typeText(wrapper, '- ')
+    await flushPromises()
+
+    const content = editorInstance(wrapper).getJSON().content ?? []
+    expect(content[0]?.type).toBe('paragraph')
+    expect(content[1]?.type).toBe('bulletList')
+    expect(editorInstance(wrapper).getJSON().content?.[0]?.content?.[0]?.text).toBe('alpha')
     expect(editorInstance(wrapper).isActive('bulletList')).toBe(true)
   })
 
@@ -116,6 +163,27 @@ describe('RichTextComposer shortcuts', () => {
     expect(editorInstance(wrapper).getHTML()).toContain('<pre><code></code></pre>')
   })
 
+  it('splits the current paragraph when triple backticks are typed after a hard break', async () => {
+    const wrapper = mount(RichTextComposer, {
+      props: {
+        modelValue: '',
+      },
+      attachTo: document.body,
+    })
+    await waitForEditor(wrapper)
+
+    typeText(wrapper, 'alpha')
+    await insertHardBreak(wrapper)
+    typeText(wrapper, '```')
+    await flushPromises()
+
+    const content = editorInstance(wrapper).getJSON().content ?? []
+    expect(content[0]?.type).toBe('paragraph')
+    expect(content[1]?.type).toBe('codeBlock')
+    expect(editorInstance(wrapper).getJSON().content?.[0]?.content?.[0]?.text).toBe('alpha')
+    expect(editorInstance(wrapper).isActive('codeBlock')).toBe(true)
+  })
+
   it('prefers code block conversion over submit-on-enter when the line is a fence', async () => {
     const wrapper = mount(RichTextComposer, {
       props: {
@@ -132,6 +200,48 @@ describe('RichTextComposer shortcuts', () => {
 
     expect(wrapper.emitted('submit')).toBeFalsy()
     expect(editorInstance(wrapper).isActive('codeBlock')).toBe(true)
+  })
+
+  it('does not submit when Enter is pressed on a fence after a hard break', async () => {
+    const wrapper = mount(RichTextComposer, {
+      props: {
+        modelValue: '',
+        submitOnEnter: true,
+      },
+      attachTo: document.body,
+    })
+    await waitForEditor(wrapper)
+
+    typeText(wrapper, 'alpha')
+    await insertHardBreak(wrapper)
+    typeText(wrapper, '```ts')
+    await wrapper.get('.ProseMirror').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+
+    expect(wrapper.emitted('submit')).toBeFalsy()
+    const content = editorInstance(wrapper).getJSON().content ?? []
+    expect(content[0]?.type).toBe('paragraph')
+    expect(content[1]?.type).toBe('codeBlock')
+    expect(editorInstance(wrapper).isActive('codeBlock')).toBe(true)
+  })
+
+  it('does not submit when Enter is pressed on a visual-line list shortcut candidate', async () => {
+    const wrapper = mount(RichTextComposer, {
+      props: {
+        modelValue: '',
+        submitOnEnter: true,
+      },
+      attachTo: document.body,
+    })
+    await waitForEditor(wrapper)
+
+    typeText(wrapper, 'alpha')
+    await insertHardBreak(wrapper)
+    typeText(wrapper, '1.')
+    await wrapper.get('.ProseMirror').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+
+    expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
   it('converts single backticks into inline code', async () => {

@@ -57,12 +57,41 @@ describe('MessageInput', () => {
     return wrapper.getComponent(RichTextComposer)
   }
 
+  function composerEditor(wrapper: ReturnType<typeof mount>) {
+    return (composer(wrapper).vm as unknown as { getEditor: () => any }).getEditor()
+  }
+
   function prose(wrapper: ReturnType<typeof mount>) {
     return wrapper.get('.ProseMirror')
   }
 
   async function insertText(wrapper: ReturnType<typeof mount>, value: string) {
     ;(composer(wrapper).vm as unknown as { insertText: (text: string) => void }).insertText(value)
+    await flushAll()
+  }
+
+  async function typeText(wrapper: ReturnType<typeof mount>, value: string) {
+    const editor = composerEditor(wrapper)
+    const view = editor.view
+
+    for (const char of value) {
+      const from = view.state.selection.from
+      const to = view.state.selection.to
+      let handled = false
+      view.someProp('handleTextInput', (handler: (view: any, from: number, to: number, text: string) => boolean) => {
+        handled = handler(view, from, to, char)
+        return handled
+      })
+      if (!handled) {
+        view.dispatch(view.state.tr.insertText(char, from, to))
+      }
+    }
+
+    await flushAll()
+  }
+
+  async function insertHardBreak(wrapper: ReturnType<typeof mount>) {
+    await prose(wrapper).trigger('keydown', { key: 'Enter', shiftKey: true })
     await flushAll()
   }
 
@@ -279,5 +308,23 @@ describe('MessageInput', () => {
     await flushAll()
 
     expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true)
+  })
+
+  it('supports visual-line code fence shortcuts below existing message text', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    await insertText(wrapper, 'alpha')
+    await insertHardBreak(wrapper)
+    await typeText(wrapper, '```')
+
+    const content = composerEditor(wrapper).getJSON().content ?? []
+    expect(content[0]?.type).toBe('paragraph')
+    expect(content[1]?.type).toBe('codeBlock')
   })
 })

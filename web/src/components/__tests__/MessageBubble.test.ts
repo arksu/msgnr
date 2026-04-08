@@ -39,6 +39,10 @@ function editComposer(wrapper: ReturnType<typeof mount>) {
   return wrapper.getComponent(RichTextComposer)
 }
 
+function editEditor(wrapper: ReturnType<typeof mount>) {
+  return (editComposer(wrapper).vm as unknown as { getEditor: () => any }).getEditor()
+}
+
 function editProse(wrapper: ReturnType<typeof mount>) {
   return wrapper.get('[data-testid="message-edit-textarea"] .ProseMirror')
 }
@@ -50,6 +54,31 @@ async function insertEditText(wrapper: ReturnType<typeof mount>, value: string) 
 
 async function appendEditText(wrapper: ReturnType<typeof mount>, value: string) {
   ;(editComposer(wrapper).vm as unknown as { insertText: (text: string) => void }).insertText(value)
+  await flushAll()
+}
+
+async function typeEditText(wrapper: ReturnType<typeof mount>, value: string) {
+  const editor = editEditor(wrapper)
+  const view = editor.view
+
+  for (const char of value) {
+    const from = view.state.selection.from
+    const to = view.state.selection.to
+    let handled = false
+    view.someProp('handleTextInput', (handler: (view: any, from: number, to: number, text: string) => boolean) => {
+      handled = handler(view, from, to, char)
+      return handled
+    })
+    if (!handled) {
+      view.dispatch(view.state.tr.insertText(char, from, to))
+    }
+  }
+
+  await flushAll()
+}
+
+async function insertEditHardBreak(wrapper: ReturnType<typeof mount>) {
+  await editProse(wrapper).trigger('keydown', { key: 'Enter', shiftKey: true })
   await flushAll()
 }
 
@@ -472,6 +501,37 @@ describe('MessageBubble reactions', () => {
     await flushAll()
 
     expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'line 1\nline 2', [])
+    wrapper.unmount()
+  })
+
+  it('supports visual-line list shortcuts while editing inline', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+      body: 'alpha',
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    const editMenu = document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement
+    editMenu.click()
+    await waitForEditComposer(wrapper)
+
+    await insertEditText(wrapper, 'alpha')
+    await insertEditHardBreak(wrapper)
+    await typeEditText(wrapper, '1. ')
+
+    const content = editEditor(wrapper).getJSON().content ?? []
+    expect(content[0]?.type).toBe('paragraph')
+    expect(content[1]?.type).toBe('orderedList')
     wrapper.unmount()
   })
 

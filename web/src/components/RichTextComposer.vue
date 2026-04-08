@@ -36,7 +36,7 @@ import { renderMarkdownToHtml } from '@/utils/markdown'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 import { MessageEntityNode } from '@/editor/messageEntity'
-import { FenceOnEnterExtension, shouldConvertFenceParagraph, shouldSubmitOnEnter } from '@/editor/richTextShortcuts'
+import { FenceOnEnterExtension, shouldSubmitOnEnter } from '@/editor/richTextShortcuts'
 import { renderMessageEditorHtml, tiptapJsonToMessagePayload } from '@/utils/messageRichText'
 import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
 
@@ -410,13 +410,6 @@ const editor = useEditor({
 
       if (event.key === 'Escape') {
         closeTagPicker()
-        return false
-      }
-
-      if (
-        (event.key === ' ' || (event.key === 'Enter' && !event.shiftKey))
-        && shouldConvertFenceParagraph(editor.value!)
-      ) {
         return false
       }
 

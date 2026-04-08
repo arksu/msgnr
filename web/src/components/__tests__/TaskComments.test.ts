@@ -87,6 +87,10 @@ describe('TaskComments', () => {
     return wrapper.getComponent(RichTextComposer)
   }
 
+  function mainEditor(wrapper: ReturnType<typeof mount>) {
+    return (mainComposer(wrapper).vm as unknown as { getEditor: () => any }).getEditor()
+  }
+
   async function waitForComposer(wrapper: ReturnType<typeof mount>, testId = 'task-comment-composer') {
     for (let index = 0; index < 10; index += 1) {
       await flushPromises()
@@ -105,6 +109,31 @@ describe('TaskComments', () => {
 
   async function insertMainText(wrapper: ReturnType<typeof mount>, value: string) {
     ;(mainComposer(wrapper).vm as unknown as { insertText: (text: string) => void }).insertText(value)
+    await flushPromises()
+  }
+
+  async function typeMainText(wrapper: ReturnType<typeof mount>, value: string) {
+    const editor = mainEditor(wrapper)
+    const view = editor.view
+
+    for (const char of value) {
+      const from = view.state.selection.from
+      const to = view.state.selection.to
+      let handled = false
+      view.someProp('handleTextInput', (handler: (view: any, from: number, to: number, text: string) => boolean) => {
+        handled = handler(view, from, to, char)
+        return handled
+      })
+      if (!handled) {
+        view.dispatch(view.state.tr.insertText(char, from, to))
+      }
+    }
+
+    await flushPromises()
+  }
+
+  async function insertMainHardBreak(wrapper: ReturnType<typeof mount>) {
+    await mainProse(wrapper).trigger('keydown', { key: 'Enter', shiftKey: true })
     await flushPromises()
   }
 
@@ -703,5 +732,20 @@ describe('TaskComments', () => {
     await flushPromises()
 
     expect(window.open).toHaveBeenCalledWith('https://example.com/', '_blank')
+  })
+
+  it('supports visual-line bullet shortcuts below existing comment text', async () => {
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await waitForComposer(wrapper)
+
+    await insertMainText(wrapper, 'alpha')
+    await insertMainHardBreak(wrapper)
+    await typeMainText(wrapper, '- ')
+
+    const content = mainEditor(wrapper).getJSON().content ?? []
+    expect(content[0]?.type).toBe('paragraph')
+    expect(content[1]?.type).toBe('bulletList')
   })
 })

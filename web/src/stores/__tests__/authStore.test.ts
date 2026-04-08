@@ -11,6 +11,41 @@ import { saveLastOpenedTaskPublicId, loadLastOpenedTaskPublicId } from '@/servic
 import { setBackendBaseUrl, getBackendBaseUrl } from '@/services/runtime/backendEndpoint'
 import { saveAudioPrefs, loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve
+  })
+  return { promise, resolve }
+}
+
+function installQueuedRefreshLocks() {
+  let locked = false
+  const waiters: Array<() => void> = []
+  const request = vi.fn(async <T>(_name: string, callback: () => Promise<T>) => {
+    if (locked) {
+      await new Promise<void>((resolve) => {
+        waiters.push(resolve)
+      })
+    }
+    locked = true
+    try {
+      return await callback()
+    } finally {
+      locked = false
+      const next = waiters.shift()
+      next?.()
+    }
+  })
+
+  Object.defineProperty(globalThis.navigator, 'locks', {
+    value: { request },
+    configurable: true,
+  })
+
+  return request
+}
+
 const mockUser = {
   id: 'user-1',
   email: 'alice@example.com',
@@ -37,6 +72,10 @@ beforeEach(() => {
   tokenStorage.clearRefreshToken()
   tokenStorage.clearAccessToken()
   localStorage.clear()
+  Object.defineProperty(globalThis.navigator, 'locks', {
+    value: undefined,
+    configurable: true,
+  })
 })
 
 describe('authStore.login', () => {
@@ -244,6 +283,33 @@ describe('authStore.refresh', () => {
     const token = await store.refresh()
 
     expect(token).toBe('access-new')
+    expect(store.authState).toBe('AUTHENTICATED')
+    expect(tokenStorage.getRefreshToken()).toBe('refresh-new')
+    expect(tokenStorage.getAccessToken()).toBe('access-new')
+  })
+
+  it('serializes concurrent refresh calls and adopts the winning tab tokens', async () => {
+    installQueuedRefreshLocks()
+    tokenStorage.setRefreshToken('refresh-old')
+    tokenStorage.setAccessToken('access-old')
+
+    const deferredRefresh = createDeferred<typeof mockRefreshResponse>()
+    const refreshSpy = vi.spyOn(authApi, 'apiRefresh').mockImplementation(async () => {
+      return await deferredRefresh.promise
+    })
+
+    const store = useAuthStore()
+    const first = store.refresh()
+    await Promise.resolve()
+    const second = store.refresh()
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1)
+
+    deferredRefresh.resolve(mockRefreshResponse)
+
+    await expect(first).resolves.toBe('access-new')
+    await expect(second).resolves.toBe('access-new')
+    expect(refreshSpy).toHaveBeenCalledTimes(1)
     expect(store.authState).toBe('AUTHENTICATED')
     expect(tokenStorage.getRefreshToken()).toBe('refresh-new')
     expect(tokenStorage.getAccessToken()).toBe('access-new')

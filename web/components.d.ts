@@ -53,5 +53,6 @@ declare module 'vue' {
     ThreadPanel: typeof import('./src/components/ThreadPanel.vue')['default']
     UnreadFeedPane: typeof import('./src/components/UnreadFeedPane.vue')['default']
     UserAvatar: typeof import('./src/components/UserAvatar.vue')['default']
+    UserMentionCard: typeof import('./src/components/UserMentionCard.vue')['default']
   }
 }

@@ -1,16 +1,25 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
+import router from '@/router'
 import { fetchOwnedAttachmentBlob } from '@/services/http/attachmentOwnersApi'
+import { tasksListUsers } from '@/services/http/tasksApi'
+import { resetDescriptionMentionCacheForTests } from '@/utils/descriptionMentions'
 
 vi.mock('@/services/http/attachmentOwnersApi', () => ({
   fetchOwnedAttachmentBlob: vi.fn(),
+}))
+
+vi.mock('@/services/http/tasksApi', () => ({
+  tasksListUsers: vi.fn(),
+  tasksListTasks: vi.fn(),
 }))
 
 describe('AttachmentMarkdownContent', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
+    resetDescriptionMentionCacheForTests()
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:attachment')
     globalThis.URL.revokeObjectURL = vi.fn()
     window.open = vi.fn(() => ({
@@ -20,6 +29,7 @@ describe('AttachmentMarkdownContent', () => {
       close: vi.fn(),
     } as unknown as Window))
     vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['blob'], { type: 'application/octet-stream' }))
+    vi.mocked(tasksListUsers).mockResolvedValue([])
   })
 
   it('renders image tokens with fetched previews and opens file tokens in a new tab', async () => {
@@ -79,5 +89,52 @@ describe('AttachmentMarkdownContent', () => {
     expect(fetchOwnedAttachmentBlob).not.toHaveBeenCalled()
     expect(window.open).toHaveBeenCalledWith('about:blank', '_blank')
     expect(URL.createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('opens a user popover for rendered user mention links', async () => {
+    vi.mocked(tasksListUsers).mockResolvedValue([
+      {
+        id: 'user-1',
+        display_name: 'Alice Example',
+        email: 'alice@example.com',
+        avatar_url: 'https://example.com/alice.png',
+      },
+    ])
+
+    const wrapper = mount(AttachmentMarkdownContent, {
+      props: {
+        markdown: 'Hello [@Alice Example](msgnr-mention://user/user-1)',
+      },
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('.markdown-body a').trigger('click')
+    await flushPromises()
+
+    const card = document.body.querySelector('[data-testid="attachment-markdown-user-card"]')
+    expect(card?.textContent).toContain('Alice Example')
+    expect(card?.textContent).toContain('alice@example.com')
+  })
+
+  it('routes rendered task mention links through vue-router', async () => {
+    const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined as never)
+    const wrapper = mount(AttachmentMarkdownContent, {
+      props: {
+        markdown: 'See [@TASK-123 Fix search](/tasks/task-123)',
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('.markdown-body a').trigger('click')
+    await flushPromises()
+
+    expect(pushSpy).toHaveBeenCalledWith('/tasks/task-123')
+    pushSpy.mockRestore()
   })
 })

@@ -221,14 +221,27 @@
       class="task-description-editor-content markdown-body"
       data-testid="task-description-editor-content"
     />
+
+    <MessageTagPicker
+      :open="mentionPickerOpen"
+      :loading="mentionPickerLoading"
+      :error="mentionPickerError"
+      :style="mentionPickerStyle"
+      :selected-index="selectedMentionIndex"
+      :users="mentionPickerUsers"
+      :tasks="mentionPickerTasks"
+      :documents="[]"
+      @select="selectMentionItem"
+    />
   </div>
+
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Doc as YDoc } from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
-import { Node, type AnyExtension } from '@tiptap/core'
+import { Node as TiptapNode, type AnyExtension } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Collaboration from '@tiptap/extension-collaboration'
 import CollaborationCaret from '@tiptap/extension-collaboration-caret'
@@ -245,13 +258,23 @@ import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
 import router from '@/router'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
+import MessageTagPicker, { type MessageTagPickerItem } from '@/components/MessageTagPicker.vue'
 import { fetchOwnedAttachmentBlob, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
+import { createOrOpenDm } from '@/services/http/chatApi'
 import { openBlobInBrowser } from '@/utils/attachmentBrowser'
 import { buildAttachmentUrl, parseAttachmentUrl, type AttachmentOwnerKind } from '@/utils/attachmentMarkdown'
+import {
+  decorateDescriptionMentionAnchors,
+  parseUserMentionHref,
+  searchDescriptionMentionSuggestions,
+  warmDescriptionMentionUsersCache,
+} from '@/utils/descriptionMentions'
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 import { FenceOnEnterExtension } from '@/editor/richTextShortcuts'
+import { useChatStore } from '@/stores/chat'
+import { NotificationLevel } from '@/shared/proto/packets_pb'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -296,6 +319,7 @@ const DEBUG_TASK_DESC = import.meta.env.DEV
 
 const collabEnabled = computed(() => !!props.collabDoc)
 const editable = computed(() => !!props.editable)
+const chatStore = useChatStore()
 const showRenderedFallback = computed(() =>
   collabEnabled.value &&
   markdownDraft.value.trim() !== '' &&
@@ -303,8 +327,23 @@ const showRenderedFallback = computed(() =>
 )
 const attachmentObjectUrls = new Map<string, string>()
 const attachmentLoadsInFlight = new Set<string>()
+const mentionPickerOpen = ref(false)
+const mentionPickerLoading = ref(false)
+const mentionPickerError = ref('')
+const mentionPickerStyle = ref<Record<string, string>>({
+  top: '0px',
+  left: '0px',
+})
+const selectedMentionIndex = ref(0)
+const mentionPickerItems = ref<MessageTagPickerItem[]>([])
+const activeMentionQueryRange = ref<{ from: number; to: number; query: string } | null>(null)
+let mentionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let mentionSearchRequestToken = 0
 
-const AttachmentImage = Node.create({
+const mentionPickerUsers = computed(() => mentionPickerItems.value.filter(item => item.kind === 'user'))
+const mentionPickerTasks = computed(() => mentionPickerItems.value.filter(item => item.kind === 'task'))
+
+const AttachmentImage = TiptapNode.create({
   name: 'image',
   group: 'block',
   draggable: true,
@@ -421,6 +460,180 @@ function queueResolveEditorAttachmentImages() {
   })
 }
 
+function queueDecorateEditorMentionAnchors() {
+  queueMicrotask(() => {
+    const root = editor.value?.view.dom as HTMLElement | undefined
+    if (!root) return
+    decorateDescriptionMentionAnchors(root)
+  })
+}
+
+function closeMentionPicker() {
+  if (mentionSearchDebounceTimer) {
+    clearTimeout(mentionSearchDebounceTimer)
+    mentionSearchDebounceTimer = null
+  }
+  mentionSearchRequestToken += 1
+  mentionPickerOpen.value = false
+  mentionPickerLoading.value = false
+  mentionPickerError.value = ''
+  selectedMentionIndex.value = 0
+  activeMentionQueryRange.value = null
+  mentionPickerItems.value = []
+}
+
+async function ensureMentionUsersLoaded() {
+  try {
+    await warmDescriptionMentionUsersCache()
+  } catch {
+    return
+  }
+}
+
+function updateMentionPickerPosition() {
+  if (!editor.value) return
+  const root = editor.value.view.dom as HTMLElement
+  let top = 0
+  let left = 0
+  try {
+    const position = activeMentionQueryRange.value?.to ?? editor.value.state.selection.from
+    const coords = editor.value.view.coordsAtPos(position)
+    top = coords.bottom + 8
+    left = coords.left
+  } catch {
+    const rect = root.getBoundingClientRect()
+    top = rect.top + 40
+    left = rect.left
+  }
+  mentionPickerStyle.value = {
+    position: 'fixed',
+    top: `${top}px`,
+    left: `${left}px`,
+  }
+}
+
+function findMentionQueryAtCursor(): { from: number; to: number; query: string } | null {
+  if (!editor.value) return null
+  if (editor.value.isActive('code') || editor.value.isActive('codeBlock')) return null
+
+  const selection = editor.value.state.selection
+  if (!selection.empty) return null
+
+  const parent = selection.$from.parent
+  if (!parent.isTextblock) return null
+
+  const cursorOffset = selection.$from.parentOffset
+  const textBefore = parent.textBetween(0, cursorOffset, '\n', '\uFFFC')
+  const match = textBefore.match(/(?:^|[\s([{])@([^\s@]*)$/)
+  if (!match) return null
+
+  const query = match[1] ?? ''
+  return {
+    from: selection.from - query.length - 1,
+    to: selection.from,
+    query,
+  }
+}
+
+function refreshMentionSearch() {
+  if (!editable.value) {
+    closeMentionPicker()
+    return
+  }
+
+  const query = findMentionQueryAtCursor()
+  if (!query) {
+    closeMentionPicker()
+    return
+  }
+
+  activeMentionQueryRange.value = query
+  mentionPickerOpen.value = true
+  mentionPickerError.value = ''
+  updateMentionPickerPosition()
+
+  if (mentionSearchDebounceTimer) {
+    clearTimeout(mentionSearchDebounceTimer)
+  }
+
+  mentionSearchDebounceTimer = setTimeout(async () => {
+    const token = ++mentionSearchRequestToken
+    mentionPickerLoading.value = true
+    mentionPickerError.value = ''
+    try {
+      const results = await searchDescriptionMentionSuggestions(query.query)
+      if (token !== mentionSearchRequestToken) return
+      mentionPickerItems.value = results
+      selectedMentionIndex.value = 0
+      const userItems = results.filter(item => item.kind === 'user')
+      if (userItems.length > 0) {
+        void ensureMentionUsersLoaded()
+      }
+    } catch (error) {
+      if (token !== mentionSearchRequestToken) return
+      mentionPickerError.value = error instanceof Error ? error.message : 'Mention search failed'
+      mentionPickerItems.value = []
+    } finally {
+      if (token === mentionSearchRequestToken) {
+        mentionPickerLoading.value = false
+      }
+    }
+  }, 120)
+}
+
+async function openDirectMessageFromMention(href: string) {
+  const mention = parseUserMentionHref(href)
+  if (!mention) return
+
+  try {
+    const dm = await createOrOpenDm(mention.userId)
+    chatStore.openDirectMessage({
+      id: dm.conversation_id,
+      userId: dm.user_id,
+      displayName: dm.display_name || dm.email,
+      avatarUrl: dm.avatar_url,
+      presence: 'offline',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    })
+    if (router.currentRoute.value.name !== 'main') {
+      await router.push({ name: 'main' })
+    }
+  } catch (error) {
+    descLog('openDirectMessageFromMention:error', {
+      href,
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+function selectMentionItem(item: MessageTagPickerItem) {
+  if (!editor.value || !activeMentionQueryRange.value) return
+  editor.value.chain().focus().insertContentAt(
+    { from: activeMentionQueryRange.value.from, to: activeMentionQueryRange.value.to },
+    [
+      {
+        type: 'text',
+        text: item.label,
+        marks: [{
+          type: 'link',
+          attrs: {
+            href: item.href,
+          },
+        }],
+      },
+      {
+        type: 'text',
+        text: ' ',
+      },
+    ],
+  ).run()
+  closeMentionPicker()
+  nextTick(() => {
+    queueDecorateEditorMentionAnchors()
+  })
+}
+
 function buildEditorAttachmentNodes(ownerKind: AttachmentOwnerKind, ownerId: string, rows: OwnedAttachmentUpload[]) {
   return rows.map((row) => {
     const url = buildAttachmentUrl(ownerKind, ownerId, row.id)
@@ -517,11 +730,50 @@ const editor = useEditor({
     attributes: {
       class: 'min-h-[140px] text-sm text-gray-100 outline-none',
     },
+    handleKeyDown(_view, event) {
+      if (mentionPickerOpen.value) {
+        if (event.key === 'ArrowDown') {
+          if (mentionPickerItems.value.length === 0) return false
+          event.preventDefault()
+          selectedMentionIndex.value = (selectedMentionIndex.value + 1) % mentionPickerItems.value.length
+          return true
+        }
+        if (event.key === 'ArrowUp') {
+          if (mentionPickerItems.value.length === 0) return false
+          event.preventDefault()
+          selectedMentionIndex.value = (selectedMentionIndex.value - 1 + mentionPickerItems.value.length) % mentionPickerItems.value.length
+          return true
+        }
+        if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+          const item = mentionPickerItems.value[selectedMentionIndex.value]
+          if (!item) return false
+          event.preventDefault()
+          selectMentionItem(item)
+          return true
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          closeMentionPicker()
+          return true
+        }
+      }
+
+      if (event.key === 'Escape') {
+        closeMentionPicker()
+      }
+
+      return false
+    },
     handleDOMEvents: {
-      click(_view, event) {
-        return handleMarkdownLinkClick(event as MouseEvent, router, {
+      mousedown(_view, event) {
+        const handled = handleMarkdownLinkClick(event as MouseEvent, router, {
           onAttachmentLink: openAttachmentLinkFromEditor,
+          onUserMentionLink: openDirectMessageFromMention,
         })
+        if (handled) {
+          event.stopPropagation()
+        }
+        return handled
       },
     },
     handlePaste(_view, event) {
@@ -549,6 +801,7 @@ const editor = useEditor({
   onCreate() {
     syncEditorContentEmpty('onCreate')
     queueResolveEditorAttachmentImages()
+    queueDecorateEditorMentionAnchors()
   },
   onUpdate({ editor: nextEditor }) {
     syncEditorContentEmpty('onUpdate:start')
@@ -567,6 +820,12 @@ const editor = useEditor({
     syncingFromEditor.value = false
     syncEditorContentEmpty('onUpdate:done')
     queueResolveEditorAttachmentImages()
+    queueDecorateEditorMentionAnchors()
+    refreshMentionSearch()
+  },
+  onSelectionUpdate() {
+    updateMentionPickerPosition()
+    refreshMentionSearch()
   },
 })
 
@@ -619,6 +878,7 @@ function setEditorContentFromMarkdown(markdown: string, emitUpdate: boolean, rea
     })
     syncEditorContentEmpty(`setEditorContentFromMarkdown:${reason}`)
     queueResolveEditorAttachmentImages()
+    queueDecorateEditorMentionAnchors()
   } catch (error) {
     descLog('setEditorContentFromMarkdown:error', {
       reason,
@@ -784,6 +1044,7 @@ watch(editor, (next) => {
     if (transaction.docChanged) {
       queueResolveEditorAttachmentImages()
     }
+    queueDecorateEditorMentionAnchors()
   })
   if (collabEnabled.value) {
     descLog('watch:editor', { collab: true, skip: true })
@@ -798,7 +1059,8 @@ watch(editor, (next) => {
 watch(showRenderedFallback, (next, prev) => {
   if (!collabEnabled.value) return
   if (next === prev) return
-  console.debug('[task-desc-editor]', next ? 'render-fallback:on' : 'render-fallback:off', {
+  descLog('showRenderedFallback', {
+    next,
     collab: collabEnabled.value,
     allowLocalDraftSeed: props.allowLocalDraftSeed,
     markdown: markdownSignature(markdownDraft.value),
@@ -807,6 +1069,10 @@ watch(showRenderedFallback, (next, prev) => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
+  if (mentionSearchDebounceTimer) {
+    clearTimeout(mentionSearchDebounceTimer)
+    mentionSearchDebounceTimer = null
+  }
   revokeAttachmentObjectUrls()
 })
 

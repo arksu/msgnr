@@ -2,17 +2,36 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as Y from 'yjs'
+import { createPinia, setActivePinia } from 'pinia'
 import TaskDescriptionRichEditor from '@/components/tasks/TaskDescriptionRichEditor.vue'
 import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
+import { createOrOpenDm } from '@/services/http/chatApi'
+import { tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
+import MessageTagPicker from '@/components/MessageTagPicker.vue'
+import { resetDescriptionMentionCacheForTests } from '@/utils/descriptionMentions'
+import router from '@/router'
+import { useChatStore } from '@/stores/chat'
 
 vi.mock('@/services/http/attachmentOwnersApi', () => ({
   uploadOwnedAttachment: vi.fn(),
   fetchOwnedAttachmentBlob: vi.fn(),
 }))
 
+vi.mock('@/services/http/chatApi', () => ({
+  createOrOpenDm: vi.fn(),
+}))
+
+vi.mock('@/services/http/tasksApi', () => ({
+  tasksListUsers: vi.fn(),
+  tasksListTasks: vi.fn(),
+}))
+
 describe('TaskDescriptionRichEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useRealTimers()
+    setActivePinia(createPinia())
+    resetDescriptionMentionCacheForTests()
     Object.defineProperty(globalThis.Node.prototype, 'getClientRects', {
       configurable: true,
       value: () => [],
@@ -30,6 +49,42 @@ describe('TaskDescriptionRichEditor', () => {
         left: 0,
       }),
     })
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [],
+    })
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }),
+    })
+    if (typeof globalThis.Range !== 'undefined') {
+      Object.defineProperty(globalThis.Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: () => [],
+      })
+      Object.defineProperty(globalThis.Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+        }),
+      })
+    }
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:editor')
     globalThis.URL.revokeObjectURL = vi.fn()
     window.open = vi.fn(() => ({
@@ -40,6 +95,17 @@ describe('TaskDescriptionRichEditor', () => {
       close: vi.fn(),
     } as unknown as Window))
     vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    vi.mocked(createOrOpenDm).mockResolvedValue({
+      conversation_id: 'dm-1',
+      user_id: 'user-1',
+      display_name: 'Alice Example',
+      email: 'alice@example.com',
+      avatar_url: 'https://example.com/alice.png',
+      kind: 'dm',
+      visibility: 'dm',
+    })
+    vi.mocked(tasksListUsers).mockResolvedValue([])
+    vi.mocked(tasksListTasks).mockResolvedValue({ groups: [], grand_total: 0 })
   })
 
   async function waitForRichEditor(wrapper: ReturnType<typeof mount>) {
@@ -82,6 +148,9 @@ describe('TaskDescriptionRichEditor', () => {
       isEditable: boolean
       commands: {
         clearContent: () => boolean
+        focus: (...args: unknown[]) => boolean
+        insertContent: (value: unknown) => boolean
+        setCodeBlock: () => boolean
       }
     } | undefined
     if (!editor) {
@@ -251,7 +320,7 @@ describe('TaskDescriptionRichEditor', () => {
     expect(fetchOwnedAttachmentBlob).toHaveBeenCalledWith('task', 'task-1', 'att-image')
   })
 
-  it('opens attachment links from the rendered editor on click', async () => {
+  it('opens attachment links from the editor on first mouse press', async () => {
     const wrapper = mount(TaskDescriptionRichEditor, {
       props: {
         modelValue: '[Spec.pdf](msgnr-attachment://document/doc-1/att-2)',
@@ -264,9 +333,10 @@ describe('TaskDescriptionRichEditor', () => {
     await waitForRichEditor(wrapper)
 
     const link = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror a')
-    link.element.dispatchEvent(new MouseEvent('click', {
+    link.element.dispatchEvent(new MouseEvent('mousedown', {
       bubbles: true,
       cancelable: true,
+      button: 0,
     }))
     await flushPromises()
 
@@ -276,7 +346,7 @@ describe('TaskDescriptionRichEditor', () => {
     expect(opened.location.replace).toHaveBeenCalledWith('blob:editor')
   })
 
-  it('opens normal markdown links from the rendered editor on click', async () => {
+  it('opens normal markdown links from the editor on first mouse press', async () => {
     const wrapper = mount(TaskDescriptionRichEditor, {
       props: {
         modelValue: '[OpenAI](https://openai.com)',
@@ -287,9 +357,10 @@ describe('TaskDescriptionRichEditor', () => {
     await waitForRichEditor(wrapper)
 
     const link = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror a')
-    link.element.dispatchEvent(new MouseEvent('click', {
+    link.element.dispatchEvent(new MouseEvent('mousedown', {
       bubbles: true,
       cancelable: true,
+      button: 0,
     }))
     await flushPromises()
 
@@ -297,5 +368,137 @@ describe('TaskDescriptionRichEditor', () => {
     expect(window.open).toHaveBeenCalledWith('https://openai.com/', '_blank')
     const opened = vi.mocked(window.open).mock.results[0]?.value as { focus: ReturnType<typeof vi.fn> }
     expect(opened.focus).toHaveBeenCalled()
+  })
+
+  it('opens task mention links from the editor on first mouse press', async () => {
+    const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined as never)
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: 'See [@TASK-123 Fix search](/tasks/task-123)',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    const link = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror a')
+    link.element.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    }))
+    await flushPromises()
+
+    expect(pushSpy).toHaveBeenCalledWith('/tasks/task-123')
+    pushSpy.mockRestore()
+  })
+
+  it('opens a direct message when a user mention is pressed in the editor', async () => {
+    const chatStore = useChatStore()
+    const openDirectMessageSpy = vi.spyOn(chatStore, 'openDirectMessage').mockImplementation(() => {})
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: 'Hello [@Alice Example](msgnr-mention://user/user-1)',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    const link = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror a')
+    link.element.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    }))
+    await flushPromises()
+
+    expect(createOrOpenDm).toHaveBeenCalledWith('user-1')
+    expect(openDirectMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'dm-1',
+      userId: 'user-1',
+      displayName: 'Alice Example',
+    }))
+  })
+
+  it('opens mention picker and inserts markdown-backed user mentions', async () => {
+    vi.useFakeTimers()
+    vi.mocked(tasksListUsers).mockResolvedValue([
+      {
+        id: 'user-1',
+        display_name: 'Alice Example',
+        email: 'alice@example.com',
+        avatar_url: 'https://example.com/alice.png',
+      },
+    ])
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+    await waitForRichEditor(wrapper)
+
+    const editor = getEditor(wrapper)
+    editor.commands.focus('end')
+    editor.commands.insertContent('@ali')
+    await nextTick()
+    vi.advanceTimersByTime(130)
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Tag search')
+    wrapper.getComponent(MessageTagPicker).vm.$emit('select', {
+      kind: 'user',
+      id: 'user-1',
+      label: '@Alice Example',
+      subtitle: 'alice@example.com',
+      href: 'msgnr-mention://user/user-1',
+      icon: '@',
+      flatIndex: 0,
+    })
+    await flushPromises()
+
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    const latest = updates[updates.length - 1]?.[0] as string
+    expect(latest).toContain('[@Alice Example](msgnr-mention://user/user-1)')
+    vi.useRealTimers()
+  })
+
+  it('does not open mention picker inside code blocks', async () => {
+    vi.useFakeTimers()
+    vi.mocked(tasksListUsers).mockResolvedValue([
+      {
+        id: 'user-1',
+        display_name: 'Alice Example',
+        email: 'alice@example.com',
+      },
+    ])
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    const editor = getEditor(wrapper)
+    editor.commands.focus('end')
+    editor.commands.setCodeBlock()
+    editor.commands.insertContent('@ali')
+    await nextTick()
+    vi.advanceTimersByTime(130)
+    await flushPromises()
+
+    expect(wrapper.getComponent(MessageTagPicker).props('open')).toBe(false)
+    vi.useRealTimers()
   })
 })

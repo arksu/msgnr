@@ -48,7 +48,7 @@
   }
 
   .markdown-body a {
-    @apply text-accent hover:text-accent-hover underline;
+    @apply cursor-pointer text-accent hover:text-accent-hover underline;
   }
 
   .markdown-body table {

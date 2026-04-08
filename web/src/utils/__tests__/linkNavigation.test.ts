@@ -83,6 +83,14 @@ describe('linkNavigation', () => {
     expect(window.open).not.toHaveBeenCalled()
   })
 
+  it('classifies user mention links separately from internal and external links', () => {
+    const router = createRouterMock()
+
+    const target = resolveMarkdownLinkTarget('msgnr-mention://user/user-1', router)
+
+    expect(target.kind).toBe('mention-user')
+  })
+
   it('handles delegated markdown clicks on anchors', () => {
     const router = createRouterMock()
     const link = document.createElement('a')
@@ -97,5 +105,23 @@ describe('linkNavigation', () => {
 
     expect(handled).toBe(true)
     expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('delegates user mention clicks to the provided callback', () => {
+    const router = createRouterMock()
+    const link = document.createElement('a')
+    link.href = 'msgnr-mention://user/user-1'
+    const wrapper = document.createElement('div')
+    wrapper.appendChild(link)
+    const onUserMentionLink = vi.fn()
+
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'target', { value: link })
+
+    const handled = handleMarkdownLinkClick(event, router, { onUserMentionLink })
+
+    expect(handled).toBe(true)
+    expect(onUserMentionLink).toHaveBeenCalledWith('msgnr-mention://user/user-1', link, event)
+    expect(router.push).not.toHaveBeenCalled()
   })
 })

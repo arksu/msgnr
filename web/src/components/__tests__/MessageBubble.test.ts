@@ -9,6 +9,7 @@ import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 
 const chatApiMocks = vi.hoisted(() => ({
+  createOrOpenDm: vi.fn(),
   fetchMessageAttachmentBlob: vi.fn(),
   listMessageReactionUsers: vi.fn(),
   editMessage: vi.fn(),
@@ -16,6 +17,7 @@ const chatApiMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
+  createOrOpenDm: chatApiMocks.createOrOpenDm,
   fetchMessageAttachmentBlob: chatApiMocks.fetchMessageAttachmentBlob,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
   editMessage: chatApiMocks.editMessage,
@@ -103,6 +105,16 @@ function buildMessage(overrides: Partial<Message> = {}): Message {
 describe('MessageBubble reactions', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    chatApiMocks.createOrOpenDm.mockReset()
+    chatApiMocks.createOrOpenDm.mockResolvedValue({
+      conversation_id: 'dm-1',
+      user_id: 'user-3',
+      display_name: 'Alice Example',
+      email: 'alice@example.com',
+      avatar_url: 'https://example.com/alice.png',
+      kind: 'dm',
+      visibility: 'dm',
+    })
     chatApiMocks.fetchMessageAttachmentBlob.mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
     chatApiMocks.listMessageReactionUsers.mockReset()
     chatApiMocks.listMessageReactionUsers.mockResolvedValue([])
@@ -615,6 +627,43 @@ describe('MessageBubble reactions', () => {
     await flushAll()
 
     expect(window.open).toHaveBeenCalledWith('https://openai.com/', '_blank')
+
+    wrapper.unmount()
+  })
+
+  it('opens a direct message when clicking a user mention in the rendered message body', async () => {
+    const chat = useChatStore()
+    const openDirectMessageSpy = vi.spyOn(chat, 'openDirectMessage').mockImplementation(() => {})
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      body: '@Alice Example hi',
+      entities: [{
+        kind: 'user',
+        targetId: 'user-3',
+        label: '@Alice Example',
+        href: '',
+        start: 0,
+        end: 14,
+      }],
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await flushAll()
+
+    await wrapper.get('[data-message-entity-kind="user"]').trigger('click')
+    await flushAll()
+
+    expect(chatApiMocks.createOrOpenDm).toHaveBeenCalledWith('user-3')
+    expect(openDirectMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'dm-1',
+      userId: 'user-3',
+      displayName: 'Alice Example',
+    }))
 
     wrapper.unmount()
   })

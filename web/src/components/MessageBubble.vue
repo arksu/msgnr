@@ -383,36 +383,6 @@
 
   <Teleport to="body">
     <div
-      v-if="activeUserCard"
-      class="fixed z-[10030] w-64 rounded-xl border border-chat-border bg-chat-header p-3 shadow-2xl"
-      :style="{ top: `${activeUserCard.top}px`, left: `${activeUserCard.left}px` }"
-      @click.stop
-    >
-      <div class="flex items-center gap-3">
-        <UserAvatar
-          :user-id="activeUserCard.userId"
-          :display-name="chat.userNames[activeUserCard.userId] || chat.userEmails[activeUserCard.userId] || activeUserCard.userId"
-          :avatar-url="chat.userAvatars[activeUserCard.userId]"
-          :presence="activeUserPresence"
-          size="md"
-        />
-        <div class="min-w-0">
-          <div class="truncate text-sm font-semibold text-white">
-            {{ chat.userNames[activeUserCard.userId] || chat.userEmails[activeUserCard.userId] || activeUserCard.userId }}
-          </div>
-          <div class="truncate text-xs text-gray-400">
-            {{ chat.userEmails[activeUserCard.userId] || 'No email available' }}
-          </div>
-          <div class="mt-1 text-[11px] uppercase tracking-[0.12em] text-gray-500">
-            {{ activeUserPresence || 'offline' }}
-          </div>
-        </div>
-      </div>
-    </div>
-  </Teleport>
-
-  <Teleport to="body">
-    <div
       v-if="reactionPopupVisible"
       ref="reactionUsersPopupRoot"
       data-testid="reaction-users-popup"
@@ -532,11 +502,12 @@ import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
-import { PresenceStatus } from '@/shared/proto/packets_pb'
+import { NotificationLevel } from '@/shared/proto/packets_pb'
 import router from '@/router'
 import { generateId } from '@/services/id'
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
+  createOrOpenDm,
   fetchMessageAttachmentBlob,
   listMessageReactionUsers,
   editMessage as editMessageApi,
@@ -642,7 +613,6 @@ const ws = useWsStore()
 const chat = useChatStore()
 const auth = useAuthStore()
 const DEBUG_REACTIONS = false
-const activeUserCard = ref<{ userId: string; top: number; left: number } | null>(null)
 
 function debugReaction(label: string, payload?: unknown) {
   if (!DEBUG_REACTIONS) return
@@ -728,14 +698,24 @@ const renderedMessageHtml = computed(() => {
   return renderMessageBodyWithEntities(props.message.body, props.message.entities ?? [])
 })
 
-const activeUserPresence = computed<'online' | 'away' | 'offline' | undefined>(() => {
-  const userId = activeUserCard.value?.userId
-  if (!userId) return undefined
-  const status = chat.presenceByUserId[userId]?.effectivePresence
-  if (status === PresenceStatus.ONLINE) return 'online'
-  if (status === PresenceStatus.AWAY) return 'away'
-  return 'offline'
-})
+async function openDirectMessageFromUserMention(userId: string) {
+  if (!userId.trim()) return
+
+  const dm = await createOrOpenDm(userId)
+  chat.openDirectMessage({
+    id: dm.conversation_id,
+    userId: dm.user_id,
+    displayName: dm.display_name || dm.email,
+    avatarUrl: dm.avatar_url,
+    presence: 'offline',
+    unread: 0,
+    notificationLevel: NotificationLevel.ALL,
+  })
+
+  if (router.currentRoute.value.name !== 'main') {
+    await router.push({ name: 'main' })
+  }
+}
 
 function onMarkdownClick(event: MouseEvent) {
   const target = event.target
@@ -744,12 +724,7 @@ function onMarkdownClick(event: MouseEvent) {
     if (entityNode instanceof HTMLElement) {
       event.preventDefault()
       const targetId = entityNode.getAttribute('data-target-id') ?? ''
-      const rect = entityNode.getBoundingClientRect()
-      activeUserCard.value = {
-        userId: targetId,
-        top: rect.bottom + 8,
-        left: rect.left,
-      }
+      void openDirectMessageFromUserMention(targetId)
       return
     }
   }
@@ -1218,9 +1193,6 @@ function handleDocumentClick(evt: MouseEvent) {
       closeReactionUsersPopup()
     }
   }
-  if (activeUserCard.value) {
-    activeUserCard.value = null
-  }
   if (editTagPickerOpen.value) {
     closeEditTagPicker()
   }
@@ -1238,15 +1210,14 @@ function handleEscape(evt: KeyboardEvent) {
   showEmojiPicker.value = false
   showContextMenu.value = false
   closeReactionUsersPopup()
-  activeUserCard.value = null
   closeEditTagPicker()
   debugReaction('picker:escape-close')
 }
 
 watch(
-  [showEmojiPicker, showContextMenu, () => imagePreview.value.open, reactionPopupVisible, isEditing, editTagPickerOpen, activeUserCard],
-  ([pickerVisible, menuVisible, previewVisible, popupVisible, editingVisible, editPickerVisible, userCardVisible]) => {
-  const anyOpen = pickerVisible || menuVisible || previewVisible || popupVisible || editingVisible || editPickerVisible || Boolean(userCardVisible)
+  [showEmojiPicker, showContextMenu, () => imagePreview.value.open, reactionPopupVisible, isEditing, editTagPickerOpen],
+  ([pickerVisible, menuVisible, previewVisible, popupVisible, editingVisible, editPickerVisible]) => {
+  const anyOpen = pickerVisible || menuVisible || previewVisible || popupVisible || editingVisible || editPickerVisible
   if (anyOpen) {
     document.addEventListener('click', handleDocumentClick)
     document.addEventListener('keydown', handleEscape)

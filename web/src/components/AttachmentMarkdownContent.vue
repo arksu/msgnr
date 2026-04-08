@@ -82,13 +82,38 @@
       >
     </div>
   </Teleport>
+
+  <Teleport to="body">
+    <div
+      v-if="activeUserCard"
+      ref="userCardRef"
+    >
+      <UserMentionCard
+        data-testid="attachment-markdown-user-card"
+        :user-id="activeUserCard.userId"
+        :display-name="activeUserCard.displayName"
+        :email="activeUserCard.email"
+        :avatar-url="activeUserCard.avatarUrl"
+        :top="activeUserCard.top"
+        :left="activeUserCard.left"
+      />
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import UserMentionCard from '@/components/UserMentionCard.vue'
 import router from '@/router'
 import { fetchOwnedAttachmentBlob } from '@/services/http/attachmentOwnersApi'
 import { openBlobInBrowser } from '@/utils/attachmentBrowser'
+import {
+  decorateDescriptionMentionHtml,
+  getDescriptionMentionUser,
+  markdownContainsUserMention,
+  parseUserMentionHref,
+  warmDescriptionMentionUsersCache,
+} from '@/utils/descriptionMentions'
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
   type AttachmentToken,
@@ -109,13 +134,27 @@ const imagePreview = reactive({
   src: '',
   fileName: '',
 })
+const userCardRef = ref<HTMLElement | null>(null)
+const activeUserCard = ref<{
+  userId: string
+  displayName: string
+  email: string
+  avatarUrl: string
+  top: number
+  left: number
+} | null>(null)
 
 function renderMarkdownBlock(value: string): string {
-  return renderTaskMarkdownToHtml(value)
+  return decorateDescriptionMentionHtml(renderTaskMarkdownToHtml(value))
 }
 
 function onMarkdownClick(event: MouseEvent) {
-  handleMarkdownLinkClick(event, router)
+  const handled = handleMarkdownLinkClick(event, router, {
+    onUserMentionLink: openUserMentionCard,
+  })
+  if (handled) {
+    event.stopPropagation()
+  }
 }
 
 function attachmentKey(token: AttachmentToken): string {
@@ -192,9 +231,49 @@ function closeImagePreview() {
   imagePreview.fileName = ''
 }
 
+function closeUserMentionCard() {
+  activeUserCard.value = null
+}
+
+async function ensureMentionUsersLoaded() {
+  if (!markdownContainsUserMention(props.markdown)) return
+  try {
+    await warmDescriptionMentionUsersCache()
+  } catch {
+    return
+  }
+}
+
+async function openUserMentionCard(href: string, link: HTMLAnchorElement) {
+  const mention = parseUserMentionHref(href)
+  if (!mention) return
+  const user = await getDescriptionMentionUser(mention.userId)
+  const rect = link.getBoundingClientRect()
+  const fallbackName = link.textContent?.trim().replace(/^@/, '') || mention.userId
+  activeUserCard.value = {
+    userId: mention.userId,
+    displayName: user?.display_name || fallbackName,
+    email: user?.email || '',
+    avatarUrl: user?.avatar_url ?? '',
+    top: rect.bottom + 8,
+    left: rect.left,
+  }
+}
+
+function onDocumentClick(event: MouseEvent) {
+  const target = event.target as Node | null
+  if (!target) return
+  if (userCardRef.value?.contains(target)) return
+  closeUserMentionCard()
+}
+
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && imagePreview.open) {
     closeImagePreview()
+    return
+  }
+  if (event.key === 'Escape' && activeUserCard.value) {
+    closeUserMentionCard()
   }
 }
 
@@ -206,16 +285,23 @@ watch(blocks, (nextBlocks) => {
   }
 }, { immediate: true })
 
-watch(() => imagePreview.open, (open) => {
+watch(() => imagePreview.open || !!activeUserCard.value, (open) => {
   if (open) {
     window.addEventListener('keydown', onKeydown)
+    document.addEventListener('click', onDocumentClick)
   } else {
     window.removeEventListener('keydown', onKeydown)
+    document.removeEventListener('click', onDocumentClick)
   }
 })
 
+watch(() => props.markdown, () => {
+  void ensureMentionUsersLoaded()
+}, { immediate: true })
+
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  document.removeEventListener('click', onDocumentClick)
   for (const key of Object.keys(attachmentUrls.value)) {
     revokeAttachmentUrl(key)
   }

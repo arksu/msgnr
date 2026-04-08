@@ -5,6 +5,7 @@ import { openHrefInBrowser } from '@/utils/attachmentBrowser'
 
 export interface MarkdownLinkNavigationOptions {
   onAttachmentLink?: (href: string) => Promise<void> | void
+  onUserMentionLink?: (href: string, link: HTMLAnchorElement, event: MouseEvent) => Promise<void> | void
 }
 
 function hasScheme(value: string): boolean {
@@ -47,7 +48,11 @@ function isAttachmentHref(href: string): boolean {
   return href.trim().startsWith('msgnr-attachment://')
 }
 
-export function resolveMarkdownLinkTarget(href: string, router: Router): { kind: 'invalid' | 'attachment' | 'internal' | 'external'; href: string; target?: string } {
+function isUserMentionHref(href: string): boolean {
+  return href.trim().startsWith('msgnr-mention://user/')
+}
+
+export function resolveMarkdownLinkTarget(href: string, router: Router): { kind: 'invalid' | 'attachment' | 'mention-user' | 'internal' | 'external'; href: string; target?: string } {
   const trimmed = href.trim()
   if (!trimmed) {
     return { kind: 'invalid', href: trimmed }
@@ -55,6 +60,10 @@ export function resolveMarkdownLinkTarget(href: string, router: Router): { kind:
 
   if (isAttachmentHref(trimmed)) {
     return { kind: 'attachment', href: trimmed }
+  }
+
+  if (isUserMentionHref(trimmed)) {
+    return { kind: 'mention-user', href: trimmed }
   }
 
   const url = resolveUrl(trimmed)
@@ -100,6 +109,10 @@ export async function openMarkdownLink(
     return false
   }
 
+  if (target.kind === 'mention-user') {
+    return false
+  }
+
   if (target.kind === 'internal') {
     await router.push(target.target ?? target.href)
     return true
@@ -131,6 +144,15 @@ export function handleMarkdownLinkClick(
   if (!(link instanceof HTMLAnchorElement)) return false
 
   const href = link.getAttribute('href') ?? ''
+  const targetInfo = resolveMarkdownLinkTarget(href, router)
+  if (targetInfo.kind === 'mention-user') {
+    if (options.onUserMentionLink) {
+      event.preventDefault()
+      void options.onUserMentionLink(href, link, event)
+      return true
+    }
+    return false
+  }
   event.preventDefault()
   void openMarkdownLink(href, router, options)
   return true

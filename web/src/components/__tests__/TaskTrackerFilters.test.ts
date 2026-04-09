@@ -205,7 +205,7 @@ describe('TaskTrackerFilters', () => {
     await flushPromises()
 
     expect(wrapper.get('button.toolbar-btn').text()).toContain('2')
-    expect(showSubtasksCheckbox(wrapper).element.checked).toBe(true)
+    expect((showSubtasksCheckbox(wrapper).element as HTMLInputElement).checked).toBe(true)
     const statusChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Status'))
     expect(statusChip!.classes()).toContain('active')
   })

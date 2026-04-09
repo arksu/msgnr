@@ -1,5 +1,5 @@
 import type { MessageEntity } from '@/stores/chat'
-import { escapeHtml, renderMarkdownInlineToHtml, renderMarkdownToHtml } from '@/utils/markdown'
+import { escapeHtml, renderMarkdownToHtml } from '@/utils/markdown'
 import { sortMessageEntities } from '@/utils/messageEntities'
 
 function renderEntity(entity: MessageEntity): string {
@@ -21,17 +21,27 @@ export function renderMessageBodyWithEntities(body: string, entities: MessageEnt
 
   const sorted = sortMessageEntities(entities)
   let cursor = 0
-  let html = ''
+  let tokenizedBody = ''
+  const replacements: Array<{ token: string; html: string }> = []
 
   for (const entity of sorted) {
     if (entity.start < cursor || entity.end > body.length || entity.start >= entity.end) {
       continue
     }
-    html += renderMarkdownInlineToHtml(body.slice(cursor, entity.start))
-    html += renderEntity(entity)
+    const token = `MSGNRENTITYTOKEN${replacements.length}END`
+    tokenizedBody += body.slice(cursor, entity.start)
+    tokenizedBody += token
+    replacements.push({
+      token,
+      html: renderEntity(entity),
+    })
     cursor = entity.end
   }
 
-  html += renderMarkdownInlineToHtml(body.slice(cursor))
+  tokenizedBody += body.slice(cursor)
+  let html = renderMarkdownToHtml(tokenizedBody)
+  for (const replacement of replacements) {
+    html = html.replace(replacement.token, replacement.html)
+  }
   return html
 }

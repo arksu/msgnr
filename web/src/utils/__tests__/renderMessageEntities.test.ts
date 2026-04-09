@@ -22,13 +22,41 @@ describe('renderMessageBodyWithEntities', () => {
     expect(html).toContain('task:')
   })
 
-  it('renders inline fragments without paragraph wrappers around entities', () => {
+  it('renders multiline messages with normal paragraph wrappers around entities', () => {
     const html = renderMessageBodyWithEntities('before\n@Alice\nafter', [
       { kind: 'user', targetId: 'user-1', label: '@Alice', href: '', start: 7, end: 13 },
     ])
 
-    expect(html).not.toContain('<p>')
+    expect(html).toContain('<p>')
     expect(html).toContain('<br>')
     expect(html).toContain('after')
+  })
+
+  it('preserves unordered lists when a list item contains a mention', () => {
+    const body = '- first\n- @Alice\n- third'
+    const start = body.indexOf('@Alice')
+    const html = renderMessageBodyWithEntities(body, [
+      { kind: 'user', targetId: 'user-1', label: '@Alice', href: '', start, end: start + '@Alice'.length },
+    ])
+
+    expect(html).toContain('<ul>')
+    expect(html).toContain('<li>first</li>')
+    expect(html).toContain('data-message-entity-kind="user"')
+    expect(html).toContain('<li><button')
+    expect(html).toContain('<li>third</li>')
+  })
+
+  it('preserves ordered lists when a list item contains a mention', () => {
+    const body = '1. first\n2. @Alice\n3. third'
+    const start = body.indexOf('@Alice')
+    const html = renderMessageBodyWithEntities(body, [
+      { kind: 'user', targetId: 'user-1', label: '@Alice', href: '', start, end: start + '@Alice'.length },
+    ])
+
+    expect(html).toContain('<ol>')
+    expect(html).toContain('<li>first</li>')
+    expect(html).toContain('data-message-entity-kind="user"')
+    expect(html).toContain('<li><button')
+    expect(html).toContain('<li>third</li>')
   })
 })

@@ -104,7 +104,16 @@ const replyCount = computed(() =>
 )
 const scrollEl = ref<HTMLElement | null>(null)
 const forceScrollToBottomOnNextRender = ref(false)
-let forceScrollResetTimer: ReturnType<typeof setTimeout> | null = null
+const pendingFocusedMessageId = ref('')
+let bottomScrollTimers: ReturnType<typeof setTimeout>[] = []
+let focusScrollTimers: ReturnType<typeof setTimeout>[] = []
+
+function clearScheduledTimers(timers: ReturnType<typeof setTimeout>[]) {
+  for (const timer of timers) {
+    clearTimeout(timer)
+  }
+  timers.length = 0
+}
 
 function scrollToBottom() {
   const el = scrollEl.value
@@ -122,11 +131,10 @@ function scrollMessageIntoView(messageId: string) {
 }
 
 function scheduleGuaranteedBottomScroll(immediate = false) {
+  clearScheduledTimers(bottomScrollTimers)
+  clearScheduledTimers(focusScrollTimers)
+  pendingFocusedMessageId.value = ''
   forceScrollToBottomOnNextRender.value = true
-  if (forceScrollResetTimer) {
-    clearTimeout(forceScrollResetTimer)
-    forceScrollResetTimer = null
-  }
 
   const runScroll = () => {
     scrollToBottom()
@@ -142,12 +150,38 @@ function scheduleGuaranteedBottomScroll(immediate = false) {
     })
   })
 
-  setTimeout(runScroll, 60)
-  setTimeout(runScroll, 140)
-  forceScrollResetTimer = setTimeout(() => {
+  bottomScrollTimers.push(setTimeout(runScroll, 60))
+  bottomScrollTimers.push(setTimeout(runScroll, 140))
+  bottomScrollTimers.push(setTimeout(() => {
     forceScrollToBottomOnNextRender.value = false
-    forceScrollResetTimer = null
-  }, 260)
+  }, 260))
+}
+
+function scheduleFocusedMessageScroll(messageId: string) {
+  if (!messageId) return
+  clearScheduledTimers(bottomScrollTimers)
+  clearScheduledTimers(focusScrollTimers)
+  forceScrollToBottomOnNextRender.value = false
+  pendingFocusedMessageId.value = messageId
+
+  const runScroll = () => {
+    scrollMessageIntoView(messageId)
+  }
+
+  void nextTick(() => {
+    runScroll()
+    void nextTick(() => {
+      runScroll()
+    })
+  })
+
+  focusScrollTimers.push(setTimeout(runScroll, 60))
+  focusScrollTimers.push(setTimeout(runScroll, 140))
+  focusScrollTimers.push(setTimeout(() => {
+    if (pendingFocusedMessageId.value === messageId) {
+      pendingFocusedMessageId.value = ''
+    }
+  }, 260))
 }
 
 function isNearBottom(thresholdPx = 72): boolean {
@@ -181,6 +215,10 @@ function shouldShowHeader(idx: number): boolean {
 
 watch(() => rootMessage.value?.id ?? '', (rootId) => {
   if (!rootId) return
+  if (chat.focusedThreadMessageId) {
+    scheduleFocusedMessageScroll(chat.focusedThreadMessageId)
+    return
+  }
   scheduleGuaranteedBottomScroll()
 }, { immediate: true })
 
@@ -189,21 +227,22 @@ watch(() => {
   const last = list[list.length - 1]
   return `${list.length}|${last?.id ?? ''}`
 }, async () => {
-  if (!forceScrollToBottomOnNextRender.value) return
   await nextTick()
+  if (pendingFocusedMessageId.value) {
+    scrollMessageIntoView(pendingFocusedMessageId.value)
+    return
+  }
+  if (!forceScrollToBottomOnNextRender.value) return
   scrollToBottom()
 })
 
 watch(() => chat.focusedThreadMessageId, async (messageId) => {
   if (!messageId) return
-  await nextTick()
-  scrollMessageIntoView(messageId)
+  scheduleFocusedMessageScroll(messageId)
 })
 
 onBeforeUnmount(() => {
-  if (forceScrollResetTimer) {
-    clearTimeout(forceScrollResetTimer)
-    forceScrollResetTimer = null
-  }
+  clearScheduledTimers(bottomScrollTimers)
+  clearScheduledTimers(focusScrollTimers)
 })
 </script>

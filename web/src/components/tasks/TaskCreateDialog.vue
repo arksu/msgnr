@@ -3,9 +3,8 @@
     <div
       v-if="tasksStore.createDialogOpen"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      @click.self="close"
     >
-      <div class="w-full max-w-lg rounded-xl border border-chat-border bg-chat-header shadow-2xl flex flex-col max-h-[90vh]">
+      <div class="w-[80vw] max-w-[80vw] rounded-xl border border-chat-border bg-chat-header shadow-2xl flex flex-col max-h-[90vh]">
         <!-- Header -->
         <div class="flex items-center justify-between px-6 py-4 border-b border-chat-border shrink-0">
           <h2 class="text-base font-semibold text-white">New task</h2>

@@ -132,4 +132,26 @@ describe('TaskCreateDialog', () => {
       description: null,
     }))
   })
+
+  it('does not close when clicking the backdrop', async () => {
+    const wrapper = mount(TaskCreateDialog, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          Teleport: false,
+          TaskFieldInput: true,
+          TaskDescriptionEditor: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const backdrop = document.body.querySelector('.fixed.inset-0.z-50') as HTMLElement | null
+    expect(backdrop).toBeTruthy()
+    backdrop!.click()
+    await flushPromises()
+
+    expect(tasksStoreMock.closeCreateDialog).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })

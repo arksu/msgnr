@@ -1,16 +1,29 @@
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskTrackerFilters from '@/components/tasks/TaskTrackerFilters.vue'
+
+const filtersMock = {
+  searchInput: ref(''),
+  filtersVisible: ref(false),
+  selectedStatusIds: ref<string[]>([]),
+  selectedTemplateId: ref<string | null>(null),
+  selectedAssigneeIds: ref<string[]>([]),
+  showSubtasks: ref(false),
+}
+
+vi.mock('@/composables/useTaskFilters', () => ({
+  useTaskFilters: () => filtersMock,
+}))
 
 const tasksStoreMock = reactive({
   activeStatuses: [{ id: 'st-1', name: 'Todo' }],
   activeTemplates: [{ id: 'tpl-1', prefix: 'BUG' }],
   assigneeFieldIds: ['fld-assignee'],
   users: [{ id: 'u-1', display_name: 'Ada', email: 'ada@example.com', avatar_url: '' }],
-  loadConfig: vi.fn(async () => {}),
-  loadAllTemplateFields: vi.fn(async () => {}),
-  loadUsers: vi.fn(async () => {}),
+  loadConfig: vi.fn(async () => { }),
+  loadAllTemplateFields: vi.fn(async () => { }),
+  loadUsers: vi.fn(async () => { }),
   activeFieldsFor: vi.fn(() => [{ id: 'fld-assignee', field_role: 'assignee', deleted_at: null }]),
 })
 
@@ -24,6 +37,12 @@ describe('TaskTrackerFilters', () => {
     vi.clearAllMocks()
     tasksStoreMock.activeFieldsFor.mockReset()
     tasksStoreMock.activeFieldsFor.mockReturnValue([{ id: 'fld-assignee', field_role: 'assignee', deleted_at: null }])
+    filtersMock.searchInput.value = ''
+    filtersMock.filtersVisible.value = false
+    filtersMock.selectedStatusIds.value = []
+    filtersMock.selectedTemplateId.value = null
+    filtersMock.selectedAssigneeIds.value = []
+    filtersMock.showSubtasks.value = false
   })
 
   function showSubtasksCheckbox(wrapper: ReturnType<typeof mount>) {
@@ -165,5 +184,29 @@ describe('TaskTrackerFilters', () => {
     const latest = emitted![emitted!.length - 1][0] as any
     expect(latest.include_subtasks).toBe(false)
     expect(wrapper.get('button.toolbar-btn').text()).not.toContain('1')
+  })
+
+  it('restores filter state from composable when remounted (view switch)', async () => {
+    filtersMock.selectedStatusIds.value = ['st-1']
+    filtersMock.showSubtasks.value = true
+    filtersMock.filtersVisible.value = true
+
+    const wrapper = mount(TaskTrackerFilters, {
+      props: {
+        templateFilter: null,
+        total: 5,
+      },
+      global: {
+        stubs: {
+          UserAvatar: { template: '<div />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('button.toolbar-btn').text()).toContain('2')
+    expect(showSubtasksCheckbox(wrapper).element.checked).toBe(true)
+    const statusChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Status'))
+    expect(statusChip!.classes()).toContain('active')
   })
 })

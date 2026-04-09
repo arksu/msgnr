@@ -153,6 +153,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { FieldFilter, TaskFilterPayload } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
+import { useTaskFilters } from '@/composables/useTaskFilters'
 import UserAvatar from '@/components/UserAvatar.vue'
 
 const props = defineProps<{
@@ -165,22 +166,17 @@ const emit = defineEmits<{
 }>()
 
 const tasksStore = useTasksStore()
+const { searchInput, filtersVisible, selectedStatusIds, selectedTemplateId, selectedAssigneeIds, showSubtasks } = useTaskFilters()
 
-const searchInput = ref('')
-const filtersVisible = ref(false)
 const statusDropdownOpen = ref(false)
 const templateDropdownOpen = ref(false)
-const selectedStatusIds = ref<string[]>([])
-const selectedTemplateId = ref<string | null>(props.templateFilter)
 
 const statusDropdownEl = ref<HTMLElement | null>(null)
 const templateDropdownEl = ref<HTMLElement | null>(null)
 const assigneeDropdownEl = ref<HTMLElement | null>(null)
 
-const selectedAssigneeIds = ref<string[]>([])
 const assigneeDropdownOpen = ref(false)
 const assigneeSearch = ref('')
-const showSubtasks = ref(false)
 
 const selectedTemplatePrefix = computed(() =>
   tasksStore.activeTemplates.find(t => t.id === selectedTemplateId.value)?.prefix ?? '',

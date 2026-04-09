@@ -146,6 +146,9 @@
               :show-header="shouldShowHeader(idx)"
               :thread-reply-count="threadReplyCount(msg.id)"
               :is-active-thread="chatStore.activeThreadRootId === msg.id"
+              @edit-open="handleInlineEditOpen"
+              @edit-close="handleInlineEditClose"
+              @edit-resize="handleInlineEditResize"
               @open-thread="openThreadFromMessage"
             />
           </div>
@@ -301,6 +304,7 @@ const openRenderProbe = ref<{ conversationId: string; startedAt: number } | null
 const loadingOlderHistory = ref(false)
 const forceScrollToBottomOnNextRender = ref(false)
 const composerBottomStickArmed = ref(false)
+const activeInlineEditMessageId = ref('')
 const pendingSwitchAutoScrollConversationId = ref('')
 const pendingSwitchAutoScrollAttempts = ref(0)
 const switchFollowConversationId = ref('')
@@ -901,6 +905,12 @@ function scrollToBottom() {
   el.scrollTop = el.scrollHeight
 }
 
+function isLastTimelineMessage(messageId: string): boolean {
+  if (!messageId) return false
+  const lastMessage = messages.value[messages.value.length - 1]
+  return lastMessage?.id === messageId
+}
+
 function stickToBottomAfterComposerResize() {
   scrollToBottom()
   void nextTick(() => {
@@ -915,6 +925,35 @@ function stickToBottomAfterComposerResize() {
       })
     })
   })
+}
+
+function keepTailInlineEditVisible() {
+  composerBottomStickArmed.value = true
+  stickToBottomAfterComposerResize()
+}
+
+function handleInlineEditOpen(messageId: string) {
+  activeInlineEditMessageId.value = messageId
+  if (!isLastTimelineMessage(messageId)) return
+  void nextTick(() => {
+    if (activeInlineEditMessageId.value !== messageId) return
+    if (!isLastTimelineMessage(messageId)) return
+    keepTailInlineEditVisible()
+  })
+}
+
+function handleInlineEditClose(messageId: string) {
+  if (activeInlineEditMessageId.value === messageId) {
+    activeInlineEditMessageId.value = ''
+  }
+  composerBottomStickArmed.value = isNearBottom()
+}
+
+function handleInlineEditResize(messageId: string, deltaPx: number) {
+  if (deltaPx === 0) return
+  activeInlineEditMessageId.value = messageId
+  if (!isLastTimelineMessage(messageId)) return
+  keepTailInlineEditVisible()
 }
 
 function handleComposerResize(deltaPx: number) {
@@ -1073,6 +1112,7 @@ watch(() => {
 watch(() => chatStore.activeChannelId, async (conversationId) => {
   const startedAt = performance.now()
   openRenderProbe.value = { conversationId, startedAt }
+  activeInlineEditMessageId.value = ''
   composerBottomStickArmed.value = true
   pendingSwitchAutoScrollConversationId.value = conversationId
   pendingSwitchAutoScrollAttempts.value = 0

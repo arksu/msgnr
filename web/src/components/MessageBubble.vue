@@ -178,6 +178,7 @@
           :enable-message-entities="true"
           :disabled="editSaving"
           :submit-on-enter="true"
+          @resize="handleEditComposerResize"
           @submit="saveEdit"
         />
         <div class="mt-1.5 flex items-center justify-between gap-2">
@@ -545,8 +546,11 @@ const props = defineProps({
   },
 })
 
-defineEmits<{
+const emit = defineEmits<{
   openThread: [message: Message]
+  'edit-open': [messageId: string]
+  'edit-close': [messageId: string]
+  'edit-resize': [messageId: string, deltaPx: number]
 }>()
 
 const showEmojiPicker = ref(false)
@@ -1026,6 +1030,15 @@ watch(() => props.message.id, () => {
   editSaving.value = false
 })
 
+watch(isEditing, (next, previous) => {
+  if (next === previous) return
+  if (next) {
+    emit('edit-open', props.message.id)
+    return
+  }
+  emit('edit-close', props.message.id)
+})
+
 // ── Reactions ────────────────────────────────────────────────────────────────
 
 function toggleReaction(emoji: string) {
@@ -1302,6 +1315,11 @@ function cancelEdit() {
   editBody.value = ''
   editEntities.value = []
   closeEditTagPicker()
+}
+
+function handleEditComposerResize(deltaPx: number) {
+  if (!isEditing.value || deltaPx === 0) return
+  emit('edit-resize', props.message.id, deltaPx)
 }
 
 function handleEditTextareaKeydown(evt: KeyboardEvent) {

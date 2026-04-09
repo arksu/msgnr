@@ -19,6 +19,11 @@ vi.mock('@/services/http/chatApi', () => ({
 const listActiveCallMembersMock = vi.mocked(listActiveCallMembers)
 const listConversationMembersMock = vi.mocked(listConversationMembers)
 
+async function flushAll() {
+  await Promise.resolve()
+  await nextTick()
+}
+
 describe('ChatArea', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -580,6 +585,102 @@ describe('ChatArea', () => {
     await Promise.resolve()
 
     expect(el.scrollTop).toBe(120)
+  })
+
+  it('keeps the last inline edit bottom-anchored while the editor grows', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [
+        {
+          id: 'message-1',
+          channelId: 'channel-1',
+          senderId: 'user-1',
+          senderName: 'Ada',
+          body: 'older',
+          channelSeq: 1n,
+          threadSeq: 0n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:00:00Z',
+          reactions: [],
+          myReactions: [],
+        },
+        {
+          id: 'message-2',
+          channelId: 'channel-1',
+          senderId: 'user-1',
+          senderName: 'Ada',
+          body: 'latest',
+          channelSeq: 2n,
+          threadSeq: 0n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:01:00Z',
+          reactions: [],
+          myReactions: [],
+        },
+      ],
+    }
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: {
+            props: ['message'],
+            emits: ['edit-open', 'edit-close', 'edit-resize'],
+            template: `
+              <div>
+                <button
+                  v-if="message.id === 'message-2'"
+                  data-testid="tail-edit-open"
+                  @click="$emit('edit-open', message.id)"
+                >
+                  open
+                </button>
+                <button
+                  v-if="message.id === 'message-2'"
+                  data-testid="tail-edit-grow"
+                  @click="$emit('edit-resize', message.id, 120)"
+                >
+                  grow
+                </button>
+              </div>
+            `,
+          },
+          MessageInput: true,
+        },
+      },
+    })
+
+    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
+    let scrollHeight = 1500
+    Object.defineProperty(el, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    el.scrollTop = 1000
+
+    scrollHeight = 1580
+    await wrapper.get('[data-testid="tail-edit-open"]').trigger('click')
+    await flushAll()
+    expect(el.scrollTop).toBe(1580)
+
+    scrollHeight = 1700
+    await wrapper.get('[data-testid="tail-edit-grow"]').trigger('click')
+    await flushAll()
+    expect(el.scrollTop).toBe(1700)
   })
 
   it('opens thread panel from message bubble and subscribes to thread', async () => {

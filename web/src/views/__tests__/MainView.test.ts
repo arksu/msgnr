@@ -257,6 +257,7 @@ let serviceWorkerContainerMock: ReturnType<typeof createServiceWorkerContainerMo
 
 describe('MainView server unavailable state', () => {
   beforeEach(() => {
+    localStorage.clear()
     pinia = createPinia()
     setActivePinia(pinia)
     serviceWorkerContainerMock = createServiceWorkerContainerMock()
@@ -361,6 +362,52 @@ describe('MainView server unavailable state', () => {
     expect(router.currentRoute.value.name).toBe('tasks-list')
     expect(wrapper.find('[data-testid=\"task-tracker\"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid=\"task-list-view\"]').exists()).toBe(true)
+  })
+
+  it('renders the collapse button for the modes rail', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+
+    expect(wrapper.find('[data-testid="mode-collapse"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="mode-collapse"]').attributes('aria-label')).toBe('Collapse sidebar')
+  })
+
+  it('toggles the chat sidebar from the collapse button', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+
+    expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="mode-collapse"]').trigger('click')
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="mode-collapse"]').attributes('aria-label')).toBe('Expand sidebar')
+
+    await wrapper.get('[data-testid="mode-collapse"]').trigger('click')
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="mode-collapse"]').attributes('aria-label')).toBe('Collapse sidebar')
+  })
+
+  it('restores persisted collapsed sidebar state on mount', async () => {
+    localStorage.setItem('msgnr:sidebar-collapsed:v1', 'true')
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="mode-collapse"]').attributes('aria-label')).toBe('Expand sidebar')
   })
 
   it('opens the notified conversation from a service worker message without reloading the app shell', async () => {
@@ -558,6 +605,25 @@ describe('MainView server unavailable state', () => {
     expect(wrapper.find('[data-testid=\"task-card\"]').exists()).toBe(true)
   })
 
+  it('opens task tracker mode with its sidebar when selected from collapsed chat', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+
+    await wrapper.get('[data-testid="mode-collapse"]').trigger('click')
+    await flushUi()
+    expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="mode-task-tracker"]').trigger('click')
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('tasks-list')
+    expect(wrapper.find('[data-testid="task-tracker"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="task-tracker-sidebar"]').exists()).toBe(true)
+  })
+
   it('opens documents route when documents button is clicked', async () => {
     const router = createMainRouter()
     router.push('/')
@@ -572,6 +638,46 @@ describe('MainView server unavailable state', () => {
     expect(wrapper.find('[data-testid="documents-mode"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="documents-sidebar"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="teamspaces-view"]').exists()).toBe(true)
+  })
+
+  it('opens documents mode with its sidebar when selected from collapsed chat', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+
+    await wrapper.get('[data-testid="mode-collapse"]').trigger('click')
+    await flushUi()
+    expect(wrapper.find('[data-testid="sidebar"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="mode-documents"]').trigger('click')
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('documents-teamspaces')
+    expect(wrapper.find('[data-testid="documents-mode"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="documents-sidebar"]').exists()).toBe(true)
+  })
+
+  it('reopens the active mode sidebar without changing the current sub-route', async () => {
+    const router = createMainRouter()
+    router.push('/tasks/kanban')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    await wrapper.get('[data-testid="mode-collapse"]').trigger('click')
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="task-tracker-sidebar"]').exists()).toBe(false)
+    expect(router.currentRoute.value.name).toBe('tasks-kanban')
+
+    await wrapper.get('[data-testid="mode-task-tracker"]').trigger('click')
+    await flushUi()
+
+    expect(router.currentRoute.value.name).toBe('tasks-kanban')
+    expect(wrapper.find('[data-testid="task-tracker-sidebar"]').exists()).toBe(true)
   })
 
   it('navigates to documents search and schedules loading when typing a query', async () => {

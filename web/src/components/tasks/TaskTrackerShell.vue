@@ -1,6 +1,7 @@
 <template>
   <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="task-tracker">
     <ResizableSidebar
+      v-if="!sidebarCollapsed"
       storage-key="msgnr:sidebar-width:task:v1"
       :default-width="240"
       :min-width="220"
@@ -45,6 +46,7 @@ import TaskCreateDialog from '@/components/tasks/TaskCreateDialog.vue'
 
 defineProps<{
   modelValue: string | null
+  sidebarCollapsed: boolean
   currentView: 'tasks-list' | 'tasks-kanban'
   viewMode: 'list' | 'kanban' | 'card'
 }>()

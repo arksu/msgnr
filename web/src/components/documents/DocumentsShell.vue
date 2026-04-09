@@ -1,6 +1,7 @@
 <template>
   <div class="flex h-full overflow-hidden bg-chat-bg" data-testid="documents-mode">
     <ResizableSidebar
+      v-if="!sidebarCollapsed"
       storage-key="msgnr:sidebar-width:documents:v1"
       :default-width="256"
       :min-width="220"
@@ -51,6 +52,7 @@ import DocumentCard from '@/components/documents/DocumentCard.vue'
 import DocumentSearchView from '@/components/documents/DocumentSearchView.vue'
 
 defineProps<{
+  sidebarCollapsed: boolean
   selectedTeamspaceId: string | null
   selectedDocumentId: string | null
   searchQuery: string

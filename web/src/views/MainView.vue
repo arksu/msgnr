@@ -4,6 +4,26 @@
       <div class="group relative">
         <button
           type="button"
+          class="flex h-10 w-10 items-center justify-center rounded-lg text-sidebar-textMuted transition-colors hover:bg-sidebar-hover hover:text-sidebar-text"
+          :title="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+          :aria-label="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+          data-testid="mode-collapse"
+          @click="toggleSidebarCollapsed"
+        >
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="4" y="5" width="16" height="14" rx="2" />
+            <path d="M9 5v14" />
+            <path v-if="sidebarCollapsed" d="m11 12 3-3v6l-3-3Z" fill="currentColor" stroke="none" />
+            <path v-else d="m13 12 3-3v6l-3-3Z" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
+        <span class="pointer-events-none absolute left-12 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-chat-border bg-chat-header px-2 py-1 text-xs text-gray-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+          {{ sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar' }}
+        </span>
+      </div>
+      <div class="group relative">
+        <button
+          type="button"
           class="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
           :class="appMode === 'chat' ? 'bg-sidebar-active text-white' : 'text-sidebar-textMuted hover:bg-sidebar-hover hover:text-sidebar-text'"
           title="Chat"
@@ -66,7 +86,7 @@
       </div>
     </aside>
     <ResizableSidebar
-      v-if="appMode === 'chat'"
+      v-if="appMode === 'chat' && !sidebarCollapsed"
       storage-key="msgnr:sidebar-width:chat:v1"
       :default-width="240"
       :min-width="220"
@@ -104,6 +124,7 @@
       <template v-else-if="appMode === 'task-tracker'">
         <TaskTrackerShell
           v-model="selectedTemplateFilter"
+          :sidebar-collapsed="sidebarCollapsed"
           :current-view="taskTrackerBaseRouteName"
           :view-mode="taskTrackerViewMode"
           @open-list="openTaskListRoute"
@@ -114,6 +135,7 @@
       </template>
       <template v-else>
         <DocumentsShell
+          :sidebar-collapsed="sidebarCollapsed"
           :selected-teamspace-id="documentsSelectedTeamspaceId"
           :selected-document-id="routeDocumentId || documentsStore.selectedDocument?.id || null"
           :search-query="documentsStore.searchQuery"
@@ -347,6 +369,7 @@ import {
   stripNotificationOpenQuery,
   type NotificationOpenIntent,
 } from '@/services/notificationOpen'
+import { loadSidebarCollapsed, saveSidebarCollapsed } from '@/services/storage/sidebarCollapseStorage'
 import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ChatArea from '@/components/ChatArea.vue'
@@ -372,11 +395,15 @@ function createTaskTrackerShellStub() {
         type: String,
         required: true,
       },
+      sidebarCollapsed: {
+        type: Boolean,
+        required: true,
+      },
     },
     emits: ['update:modelValue', 'openList', 'openKanban', 'openTask', 'back'],
     setup(props, { emit }) {
       return () => h('div', { 'data-testid': 'task-tracker' }, [
-        h('aside', { 'data-testid': 'task-tracker-sidebar' }),
+        !props.sidebarCollapsed ? h('aside', { 'data-testid': 'task-tracker-sidebar' }) : null,
         props.viewMode === 'card'
           ? h('section', { 'data-testid': 'task-card' }, [
               h('button', {
@@ -426,17 +453,21 @@ function createDocumentsShellStub() {
         type: String,
         required: true,
       },
+      sidebarCollapsed: {
+        type: Boolean,
+        required: true,
+      },
     },
     emits: ['openTeamspaces', 'openTeamspace', 'openDocument', 'documentsDeleted', 'searchQueryChange', 'back', 'openParent'],
     setup(props, { emit }) {
       return () => h('div', { 'data-testid': 'documents-mode' }, [
-        h('aside', { 'data-testid': 'documents-sidebar' }, [
+        !props.sidebarCollapsed ? h('aside', { 'data-testid': 'documents-sidebar' }, [
           h('input', {
             'data-testid': 'documents-search-input',
             value: props.searchQuery,
             onInput: (event: Event) => emit('searchQueryChange', (event.target as HTMLInputElement).value),
           }),
-        ]),
+        ]) : null,
         props.viewMode === 'card'
           ? h('section', { 'data-testid': 'document-card' }, [
               h('button', {
@@ -486,6 +517,7 @@ const settingsPasswordSuccess = ref('')
 const settingsAvatarLoading = ref(false)
 const settingsAvatarError = ref('')
 const profileAvatarInput = ref<HTMLInputElement | null>(null)
+const sidebarCollapsed = ref(loadSidebarCollapsed())
 const wsStore = useWsStore()
 const chatStore = useChatStore()
 const callStore = useCallStore()
@@ -571,8 +603,23 @@ const documentsSelectedTeamspaceId = computed(() =>
 )
 let serviceWorkerMessageHandler: ((event: MessageEvent) => void) | null = null
 
+function setSidebarCollapsed(value: boolean) {
+  sidebarCollapsed.value = value
+  saveSidebarCollapsed(value)
+}
+
+function toggleSidebarCollapsed() {
+  setSidebarCollapsed(!sidebarCollapsed.value)
+}
+
 async function goToChatMode() {
-  if (route.name === 'main') return
+  if (route.name === 'main') {
+    if (sidebarCollapsed.value) {
+      setSidebarCollapsed(false)
+    }
+    return
+  }
+  setSidebarCollapsed(false)
   await router.push({ name: 'main' })
 }
 
@@ -718,6 +765,13 @@ async function syncTaskRouteToSelectedTask(replace = false) {
 }
 
 async function goToTaskTrackerMode() {
+  if (isTaskTrackerRoute.value) {
+    if (sidebarCollapsed.value) {
+      setSidebarCollapsed(false)
+    }
+    return
+  }
+  setSidebarCollapsed(false)
   const rememberedTaskPublicId = loadLastOpenedTaskPublicId()
   if (rememberedTaskPublicId) {
     await pushTaskRoute(rememberedTaskPublicId)
@@ -732,7 +786,13 @@ async function goToDocumentsMode() {
     || route.name === 'documents-teamspace'
     || route.name === 'documents-teamspaces'
     || route.name === 'documents-search'
-  ) return
+  ) {
+    if (sidebarCollapsed.value) {
+      setSidebarCollapsed(false)
+    }
+    return
+  }
+  setSidebarCollapsed(false)
   if (lastDocumentsNonCardRoute.value.name === 'documents-search' && lastDocumentsNonCardRoute.value.query.trim()) {
     await router.push({ name: 'documents-search', query: { q: lastDocumentsNonCardRoute.value.query } })
     return

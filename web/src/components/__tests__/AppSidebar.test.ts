@@ -524,7 +524,7 @@ describe('AppSidebar', () => {
       { id: 'dm-1', userId: 'user-4', displayName: 'Zulu', presence: 'offline', unread: 0, notificationLevel: NotificationLevel.ALL },
       { id: 'dm-2', userId: 'user-3', displayName: 'bravo', presence: 'offline', unread: 3, notificationLevel: NotificationLevel.ALL },
       { id: 'dm-3', userId: 'user-2', displayName: 'Alpha', presence: 'offline', unread: 0, notificationLevel: NotificationLevel.ALL },
-      { id: 'dm-4', userId: 'user-5', displayName: 'charlie', presence: 'offline', unread: 0, hasUnreadThreadReplies: true, notificationLevel: NotificationLevel.ALL },
+      { id: 'dm-4', userId: 'user-5', displayName: 'charlie', presence: 'offline', unread: 0, notificationLevel: NotificationLevel.ALL },
     ]
 
     const router = createRouter({
@@ -550,9 +550,9 @@ describe('AppSidebar', () => {
     })
 
     const text = wrapper.text()
-    expect(text.indexOf('bravo')).toBeLessThan(text.indexOf('charlie'))
-    expect(text.indexOf('charlie')).toBeLessThan(text.indexOf('Alpha'))
-    expect(text.indexOf('Alpha')).toBeLessThan(text.indexOf('Zulu'))
+    expect(text.indexOf('bravo')).toBeLessThan(text.indexOf('Alpha'))
+    expect(text.indexOf('Alpha')).toBeLessThan(text.indexOf('charlie'))
+    expect(text.indexOf('charlie')).toBeLessThan(text.indexOf('Zulu'))
   })
 
   it('shows lock icon for private channels', async () => {

@@ -35,11 +35,6 @@
       >
         {{ unread }}
       </span>
-      <span
-        v-else-if="hasUnreadThreadReplies && !muted"
-        class="shrink-0 w-2 h-2 rounded-full bg-cyan-300"
-        title="Unread thread replies"
-      />
     </button>
     <div class="absolute right-7 top-1/2 -translate-y-1/2 z-30">
       <slot name="actions" />
@@ -53,7 +48,6 @@ import { computed } from 'vue'
 const props = defineProps<{
   active?: boolean
   unread?: number
-  hasUnreadThreadReplies?: boolean
   muted?: boolean
 }>()
 

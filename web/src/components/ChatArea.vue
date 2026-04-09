@@ -182,6 +182,24 @@
           <span>Loading conversation...</span>
         </div>
       </div>
+
+      <Transition name="scroll-btn">
+        <button
+          v-if="!isAtBottom"
+          data-testid="scroll-to-bottom-btn"
+          class="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-full border border-chat-border bg-chat-header/90 px-4 py-2.5 text-sm font-medium text-white shadow-xl backdrop-blur hover:bg-chat-header transition-colors"
+          aria-label="Scroll to latest message"
+          @click="handleScrollDownBtn"
+        >
+          <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+          </svg>
+          <span
+            v-if="unreadWhileScrolledAway > 0"
+            class="rounded-full bg-accent px-2 py-1 text-xs font-semibold leading-none"
+          >{{ unreadWhileScrolledAway }}</span>
+        </button>
+      </Transition>
     </div>
 
     <!-- Message input -->
@@ -316,6 +334,9 @@ const TOP_PRELOAD_REARM_GAP_PX = 72
 const BOTTOM_STICK_THRESHOLD_PX = 72
 const DEBUG_CHAT_COMPOSER_SCROLL = import.meta.env.DEV
 const topPreloadArmed = ref(true)
+const isAtBottom = ref(true)
+const unreadWhileScrolledAway = ref(0)
+let previousLastMessageId = ''
 
 interface ScrollAnchor {
   messageId: string
@@ -1021,11 +1042,20 @@ async function preloadOlderHistory() {
   }
 }
 
+function handleScrollDownBtn() {
+  scrollToBottom()
+  unreadWhileScrolledAway.value = 0
+}
+
 function handleScroll() {
   const el = scrollEl.value
   if (!el) return
   const nearBottom = isNearBottom()
   composerBottomStickArmed.value = nearBottom
+  isAtBottom.value = nearBottom
+  if (nearBottom) {
+    unreadWhileScrolledAway.value = 0
+  }
   if (!hasPendingSwitchAutoScroll() && switchFollowConversationId.value && !nearBottom) {
     stopSwitchFollowWindow('user-scrolled-away')
   }
@@ -1091,6 +1121,12 @@ watch(() => {
   return `${chatStore.activeChannelId}|${list.length}|${last?.id ?? ''}`
 }, async () => {
   const shouldStick = isNearBottom()
+  const list = messages.value
+  const lastId = list[list.length - 1]?.id ?? ''
+  if (!shouldStick && !forceScrollToBottomOnNextRender.value && lastId && lastId !== previousLastMessageId) {
+    unreadWhileScrolledAway.value += 1
+  }
+  previousLastMessageId = lastId
   await nextTick()
   if ((shouldStick || forceScrollToBottomOnNextRender.value) && !loadingOlderHistory.value) {
     scrollToBottom()
@@ -1114,6 +1150,9 @@ watch(() => chatStore.activeChannelId, async (conversationId) => {
   openRenderProbe.value = { conversationId, startedAt }
   activeInlineEditMessageId.value = ''
   composerBottomStickArmed.value = true
+  isAtBottom.value = true
+  unreadWhileScrolledAway.value = 0
+  previousLastMessageId = ''
   pendingSwitchAutoScrollConversationId.value = conversationId
   pendingSwitchAutoScrollAttempts.value = 0
   startSwitchFollowWindow(conversationId, 3200)
@@ -1191,3 +1230,15 @@ onBeforeUnmount(() => {
   stopTypingPresence(true)
 })
 </script>
+
+<style scoped>
+.scroll-btn-enter-active,
+.scroll-btn-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.scroll-btn-enter-from,
+.scroll-btn-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
+}
+</style>

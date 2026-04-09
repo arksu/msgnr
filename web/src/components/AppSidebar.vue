@@ -87,7 +87,6 @@
             :key="ch.id"
             :active="chatStore.activeChannelId === ch.id"
             :unread="ch.unread"
-            :has-unread-thread-replies="ch.hasUnreadThreadReplies"
             :muted="ch.notificationLevel === NotificationLevel.NOTHING"
             @click="openConversation(ch.id)"
           >
@@ -186,7 +185,6 @@
           :key="dm.id"
             :active="chatStore.activeChannelId === dm.id"
             :unread="dm.unread"
-            :has-unread-thread-replies="dm.hasUnreadThreadReplies"
             :muted="dm.notificationLevel === NotificationLevel.NOTHING"
             @click="openConversation(dm.id)"
           >
@@ -518,8 +516,8 @@ const sortedChannels = computed(() =>
 )
 const sortedDirectMessages = computed(() =>
   [...chatStore.directMessages].sort((a, b) => {
-    const aUnread = a.unread > 0 || a.hasUnreadThreadReplies === true
-    const bUnread = b.unread > 0 || b.hasUnreadThreadReplies === true
+    const aUnread = a.unread > 0
+    const bUnread = b.unread > 0
     if (aUnread !== bUnread) {
       return aUnread ? -1 : 1
     }

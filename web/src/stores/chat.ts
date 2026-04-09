@@ -423,6 +423,7 @@ export const useChatStore = defineStore('chat', () => {
   const conversationHistoryState = new Map<string, ConversationHistoryState>()
   const conversationInitialLoadingById = ref<Record<string, boolean>>({})
   const threadMessages = ref<Record<string, Message[]>>({})
+  const threadReplayVersionByRoot = ref<Record<string, number>>({})
   const threadSummaries = ref<Record<string, ThreadSummary>>({})
   const activeThreadRootId = ref('')
   const activeThreadConversationId = ref('')
@@ -493,6 +494,10 @@ export const useChatStore = defineStore('chat', () => {
     })
     return list
   })
+  const activeThreadReplayVersion = computed(() => {
+    if (!isThreadPanelOpen.value) return 0
+    return threadReplayVersionByRoot.value[activeThreadRootId.value] ?? 0
+  })
 
   let bootstrapStage: BootstrapStage | null = null
   let bootstrapPresenceOverlay = new Map<string, PresenceEvent>()
@@ -517,6 +522,14 @@ export const useChatStore = defineStore('chat', () => {
     const userId = workspace.value?.selfUserId ?? ''
     if (!userId) return
     saveThreadSummariesForUser(userId, threadSummaries.value)
+  }
+
+  function bumpThreadReplayVersion(rootId: string) {
+    if (!rootId) return
+    threadReplayVersionByRoot.value = {
+      ...threadReplayVersionByRoot.value,
+      [rootId]: (threadReplayVersionByRoot.value[rootId] ?? 0) + 1,
+    }
   }
 
   function upsertThreadSummary(rootId: string, summary: ThreadSummary) {
@@ -997,6 +1010,7 @@ export const useChatStore = defineStore('chat', () => {
 
     messages.value = {}
     threadMessages.value = {}
+    threadReplayVersionByRoot.value = {}
     threadSummaries.value = {}
     conversationInitialLoadingById.value = {}
     activeThreadRootId.value = ''
@@ -1187,6 +1201,10 @@ export const useChatStore = defineStore('chat', () => {
 
   function openThread(rootMessage: Message) {
     if (rootMessage.threadRootMessageId) return
+    if (activeThreadRootId.value && activeThreadRootId.value !== rootMessage.id) {
+      clearThreadReplayResyncTimer(activeThreadRootId.value)
+    }
+    focusedThreadMessageId.value = ''
     activeThreadConversationId.value = rootMessage.channelId
     activeThreadRootId.value = rootMessage.id
     if (!threadMessages.value[rootMessage.id]) threadMessages.value[rootMessage.id] = []
@@ -1592,6 +1610,7 @@ export const useChatStore = defineStore('chat', () => {
     conversationInitialLoadingById.value = {}
     historyLoadTokenByConversation.clear()
     threadMessages.value = {}
+    threadReplayVersionByRoot.value = {}
     threadSummaries.value = loadThreadSummariesForUser(stage.workspace?.selfUserId ?? '')
     activeThreadRootId.value = ''
     activeThreadConversationId.value = ''
@@ -1925,6 +1944,7 @@ export const useChatStore = defineStore('chat', () => {
       lastReplyAt: threadSummaries.value[root]?.lastReplyAt,
       lastReplyUserId: threadSummaries.value[root]?.lastReplyUserId,
     })
+    bumpThreadReplayVersion(root)
   }
 
   function registerWsHandlers() {
@@ -2975,6 +2995,7 @@ export const useChatStore = defineStore('chat', () => {
     activeThreadConversationId,
     activeThreadRootMessage,
     activeThreadReplies,
+    activeThreadReplayVersion,
     focusedMessageId,
     focusedThreadMessageId,
     conversationComposerFocusToken,
@@ -2995,6 +3016,7 @@ export const useChatStore = defineStore('chat', () => {
     cachedBootstrap,
     messages,
     threadMessages,
+    threadReplayVersionByRoot,
     threadSummaries,
     userNames,
     userEmails,

@@ -1758,6 +1758,26 @@ describe('chatStore phase 6 flows', () => {
     expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
   })
 
+  it('clears stale focused thread message when opening a different thread', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSubscribeThread = vi.fn()
+
+    chat.activeThreadConversationId = 'channel-1'
+    chat.activeThreadRootId = 'root-1'
+    chat.focusedThreadMessageId = 'reply-1'
+
+    chat.openThread(buildMessage({
+      id: 'root-2',
+      channelId: 'channel-1',
+      threadSeq: 0n,
+    }))
+
+    expect(chat.focusedThreadMessageId).toBe('')
+    expect(chat.activeThreadRootId).toBe('root-2')
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-2', 0n)
+  })
+
   it('clears unread feed entries for the whole thread when opening a thread', () => {
     const chat = useChatStore()
     const ws = useWsStore()

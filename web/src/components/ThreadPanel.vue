@@ -98,12 +98,16 @@ const ws = useWsStore()
 
 const rootMessage = computed(() => chat.activeThreadRootMessage)
 const replies = computed(() => chat.activeThreadReplies)
+const replayVersion = computed(() => chat.activeThreadReplayVersion)
 const replyCount = computed(() =>
   chat.threadSummaries[rootMessage.value?.id ?? '']?.replyCount
   ?? replies.value.length
 )
 const scrollEl = ref<HTMLElement | null>(null)
 const forceScrollToBottomOnNextRender = ref(false)
+const pendingBottomScroll = ref(false)
+const pendingBottomScrollRootId = ref('')
+const pendingBottomScrollReplayVersion = ref(0)
 const pendingFocusedMessageId = ref('')
 let bottomScrollTimers: ReturnType<typeof setTimeout>[] = []
 let focusScrollTimers: ReturnType<typeof setTimeout>[] = []
@@ -124,14 +128,22 @@ function scrollToBottom() {
 function scrollMessageIntoView(messageId: string) {
   if (!messageId) return
   const el = scrollEl.value
-  if (!el) return
+  if (!el) return false
   const target = el.querySelector<HTMLElement>(`[data-thread-message-id="${messageId}"]`)
-  if (!target) return
+  if (!target) return false
   target.scrollIntoView({ block: 'center' })
+  return true
+}
+
+function clearPendingBottomScroll() {
+  pendingBottomScroll.value = false
+  pendingBottomScrollRootId.value = ''
+  pendingBottomScrollReplayVersion.value = 0
+  clearScheduledTimers(bottomScrollTimers)
 }
 
 function scheduleGuaranteedBottomScroll(immediate = false) {
-  clearScheduledTimers(bottomScrollTimers)
+  clearPendingBottomScroll()
   clearScheduledTimers(focusScrollTimers)
   pendingFocusedMessageId.value = ''
   forceScrollToBottomOnNextRender.value = true
@@ -157,15 +169,43 @@ function scheduleGuaranteedBottomScroll(immediate = false) {
   }, 260))
 }
 
+function scheduleReplayAwareBottomScroll(rootId: string) {
+  clearPendingBottomScroll()
+  clearScheduledTimers(focusScrollTimers)
+  forceScrollToBottomOnNextRender.value = false
+  pendingFocusedMessageId.value = ''
+  pendingBottomScroll.value = true
+  pendingBottomScrollRootId.value = rootId
+  pendingBottomScrollReplayVersion.value = chat.threadReplayVersionByRoot[rootId] ?? 0
+
+  const runScroll = () => {
+    if (pendingBottomScrollRootId.value !== rootId) return
+    scrollToBottom()
+  }
+
+  void nextTick(() => {
+    runScroll()
+    void nextTick(() => {
+      runScroll()
+    })
+  })
+
+  bottomScrollTimers.push(setTimeout(runScroll, 60))
+  bottomScrollTimers.push(setTimeout(runScroll, 140))
+}
+
 function scheduleFocusedMessageScroll(messageId: string) {
   if (!messageId) return
-  clearScheduledTimers(bottomScrollTimers)
+  clearPendingBottomScroll()
   clearScheduledTimers(focusScrollTimers)
   forceScrollToBottomOnNextRender.value = false
   pendingFocusedMessageId.value = messageId
 
   const runScroll = () => {
-    scrollMessageIntoView(messageId)
+    if (scrollMessageIntoView(messageId)) {
+      pendingFocusedMessageId.value = ''
+      clearScheduledTimers(focusScrollTimers)
+    }
   }
 
   void nextTick(() => {
@@ -177,11 +217,6 @@ function scheduleFocusedMessageScroll(messageId: string) {
 
   focusScrollTimers.push(setTimeout(runScroll, 60))
   focusScrollTimers.push(setTimeout(runScroll, 140))
-  focusScrollTimers.push(setTimeout(() => {
-    if (pendingFocusedMessageId.value === messageId) {
-      pendingFocusedMessageId.value = ''
-    }
-  }, 260))
 }
 
 function isNearBottom(thresholdPx = 72): boolean {
@@ -219,7 +254,7 @@ watch(() => rootMessage.value?.id ?? '', (rootId) => {
     scheduleFocusedMessageScroll(chat.focusedThreadMessageId)
     return
   }
-  scheduleGuaranteedBottomScroll()
+  scheduleReplayAwareBottomScroll(rootId)
 }, { immediate: true })
 
 watch(() => {
@@ -229,20 +264,50 @@ watch(() => {
 }, async () => {
   await nextTick()
   if (pendingFocusedMessageId.value) {
-    scrollMessageIntoView(pendingFocusedMessageId.value)
+    if (scrollMessageIntoView(pendingFocusedMessageId.value)) {
+      pendingFocusedMessageId.value = ''
+      clearScheduledTimers(focusScrollTimers)
+      return
+    }
+  }
+  if (pendingBottomScroll.value) {
+    scrollToBottom()
+    if (chat.activeThreadRootId === pendingBottomScrollRootId.value && replies.value.length > 0) {
+      clearPendingBottomScroll()
+    }
     return
   }
   if (!forceScrollToBottomOnNextRender.value) return
   scrollToBottom()
 })
 
-watch(() => chat.focusedThreadMessageId, async (messageId) => {
-  if (!messageId) return
+watch(() => replayVersion.value, async () => {
+  await nextTick()
+  if (pendingFocusedMessageId.value) {
+    if (scrollMessageIntoView(pendingFocusedMessageId.value)) {
+      pendingFocusedMessageId.value = ''
+      clearScheduledTimers(focusScrollTimers)
+    }
+    return
+  }
+  if (!pendingBottomScroll.value) return
+  if (!chat.activeThreadRootId || pendingBottomScrollRootId.value !== chat.activeThreadRootId) return
+  if (replayVersion.value <= pendingBottomScrollReplayVersion.value) return
+  scrollToBottom()
+  clearPendingBottomScroll()
+})
+
+watch(() => chat.focusedThreadMessageId, (messageId) => {
+  if (!messageId) {
+    pendingFocusedMessageId.value = ''
+    clearScheduledTimers(focusScrollTimers)
+    return
+  }
   scheduleFocusedMessageScroll(messageId)
 })
 
 onBeforeUnmount(() => {
-  clearScheduledTimers(bottomScrollTimers)
+  clearPendingBottomScroll()
   clearScheduledTimers(focusScrollTimers)
 })
 </script>

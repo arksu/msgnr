@@ -93,6 +93,22 @@
         </button>
         <button
           class="p-1.5 rounded transition-colors flex items-center gap-1 text-sm"
+          :class="isConversationPinned ? 'bg-cyan-500/15 text-cyan-200' : 'hover:bg-white/10 text-gray-400 hover:text-white'"
+          :disabled="!conversation"
+          title="Pin conversation"
+          aria-label="Pin conversation"
+          data-testid="pin-conversation-button"
+          @click="pinActiveConversation"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M12 17v5" />
+            <path d="M7 4h10" />
+            <path d="M9 4v5l-3 4h12l-3-4V4" />
+          </svg>
+          <span class="hidden sm:inline">Pin</span>
+        </button>
+        <button
+          class="p-1.5 rounded transition-colors flex items-center gap-1 text-sm"
           :class="isMembersPanelOpen ? 'bg-white/15 text-white' : 'hover:bg-white/10 text-gray-400 hover:text-white'"
           :disabled="!conversation"
           @click="toggleMembersPanel"
@@ -288,6 +304,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useChatStore, type Message } from '@/stores/chat'
+import { pinnedDialogueId, usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
 import { useCallStore } from '@/stores/call'
@@ -301,6 +318,7 @@ import UserAvatar from './UserAvatar.vue'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
 
 const chatStore = useChatStore()
+const pinnedDialogsStore = usePinnedDialogsStore()
 const authStore = useAuthStore()
 const wsStore = useWsStore()
 const callStore = useCallStore()
@@ -345,6 +363,12 @@ const isMembersPanelOpen = ref(false)
 function toggleMembersPanel() { isMembersPanelOpen.value = !isMembersPanelOpen.value }
 function closeMembersPanel() { isMembersPanelOpen.value = false }
 const conversationPrefix = computed(() => conversation.value?.kind === 'dm' ? '@' : '#')
+const isConversationPinned = computed(() => {
+  const conversationId = conversation.value?.id
+  if (!conversationId) return false
+  const kind = conversation.value?.kind === 'dm' ? 'dm' : 'channel'
+  return pinnedDialogsStore.isPinned(pinnedDialogueId(kind, conversationId))
+})
 const canComposeMessage = computed(() => Boolean(conversation.value))
 const activeConversationCall = computed(() => {
   const conversationId = conversation.value?.id
@@ -613,10 +637,17 @@ function threadReplyCount(rootMessageId: string): number {
 
 function openThreadFromMessage(message: Message) {
   chatStore.openThread(message)
+  pinnedDialogsStore.ensureThreadPinned(message.channelId, message.id)
 }
 
 function closeThreadPanel() {
   chatStore.closeThread()
+}
+
+function pinActiveConversation() {
+  const conversationId = conversation.value?.id
+  if (!conversationId) return
+  pinnedDialogsStore.ensureConversationPinned(conversationId)
 }
 
 function handleSend(

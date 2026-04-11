@@ -477,6 +477,50 @@ export const useChatStore = defineStore('chat', () => {
   const activeMessages = computed(() =>
     messages.value[activeChannelId.value] ?? []
   )
+
+  function getConversationById(conversationId: string): ActiveConversation | null {
+    const channel = channels.value.find(c => c.id === conversationId)
+    if (channel) {
+      return {
+        id: channel.id,
+        title: channel.name,
+        kind: channel.kind,
+        visibility: channel.visibility,
+        unread: channel.unread,
+      }
+    }
+    const dm = directMessages.value.find(item => item.id === conversationId)
+    if (!dm) return null
+    return {
+      id: dm.id,
+      title: dm.displayName,
+      kind: 'dm',
+      visibility: 'dm',
+      unread: dm.unread,
+    }
+  }
+
+  function getMessagesForConversation(conversationId: string): Message[] {
+    return messages.value[conversationId] ?? []
+  }
+
+  function getTypingForConversation(conversationId: string): TypingState[] {
+    return typingByConversationId.value[conversationId] ?? []
+  }
+
+  function getThreadRoot(conversationId: string, rootId: string): Message | null {
+    if (!conversationId || !rootId) return null
+    return messages.value[conversationId]?.find(item => item.id === rootId) ?? null
+  }
+
+  function getThreadReplies(rootId: string): Message[] {
+    const list = [...(threadMessages.value[rootId] ?? [])]
+    list.sort((a, b) => {
+      if (a.threadSeq !== b.threadSeq) return Number(a.threadSeq - b.threadSeq)
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    })
+    return list
+  }
   const isThreadPanelOpen = computed(() =>
     activeThreadRootId.value !== '' && activeThreadConversationId.value !== ''
   )
@@ -1218,6 +1262,17 @@ export const useChatStore = defineStore('chat', () => {
     useWsStore().sendSubscribeThread(rootMessage.channelId, rootMessage.id, lastKnownSeq)
   }
 
+  function ensureThreadSubscribed(conversationId: string, rootMessageId: string) {
+    if (!conversationId || !rootMessageId) return
+    if (!threadMessages.value[rootMessageId]) threadMessages.value[rootMessageId] = []
+    const rootMessage = getThreadRoot(conversationId, rootMessageId)
+    if (rootMessage) {
+      void markThreadUnreadAsRead(conversationId, rootMessageId, rootMessage.channelSeq)
+    }
+    const ws = useWsStore()
+    ws.sendSubscribeThread(conversationId, rootMessageId, threadReplayCursor(rootMessageId))
+  }
+
   function closeThread() {
     clearThreadReplayResyncTimer(activeThreadRootId.value)
     activeThreadRootId.value = ''
@@ -1295,6 +1350,150 @@ export const useChatStore = defineStore('chat', () => {
         startSendTimeout(channelId, clientMsgId, true, rootId)
       }
     }
+  }
+
+  function sendMessageToConversation(
+    conversationId: string,
+    body: string,
+    attachmentIds: string[] = [],
+    attachments: MessageAttachment[] = [],
+    entities: MessageEntity[] = [],
+  ) {
+    const text = body.trim()
+    if (!conversationId || (!text && attachmentIds.length === 0)) return
+
+    const ws = useWsStore()
+    if ((ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING') && attachmentIds.length > 0) return
+
+    const authStore = useAuthStore()
+    const senderId = authStore.user?.id ?? workspace.value?.selfUserId ?? ''
+    if (!senderId) return
+    const senderName = (
+      (authStore.user?.displayName?.trim() || '')
+      || (workspace.value?.selfDisplayName?.trim() || '')
+      || (authStore.user?.email?.trim() || '')
+      || senderId.slice(0, 8)
+    )
+    const senderAvatarUrl = (
+      (authStore.user?.avatarUrl?.trim() || '')
+      || (workspace.value?.selfAvatarUrl?.trim() || '')
+      || (resolveAvatarUrl(senderId).trim() || '')
+    )
+
+    const clientMsgId = generateId()
+    const now = new Date().toISOString()
+    const isOffline = ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING'
+
+    addOptimisticMessage({
+      id: clientMsgId,
+      channelId: conversationId,
+      senderId,
+      senderName,
+      senderAvatarUrl,
+      body: text,
+      entities,
+      channelSeq: 0n,
+      threadSeq: 0n,
+      mentionedUserIds: mentionedUserIdsFromEntities(entities),
+      mentionEveryone: false,
+      createdAt: now,
+      reactions: [],
+      myReactions: [],
+      attachments,
+      clientMsgId,
+      sendStatus: isOffline ? 'queued' : 'sending',
+      serverConfirmed: false,
+    })
+
+    if (isOffline) {
+      import('@/composables/useOfflineQueue').then(({ useOfflineQueue }) => {
+        useOfflineQueue().enqueue({ conversationId, body: text, clientMsgId, attachmentIds, entities })
+      })
+      return
+    }
+
+    const sent = entities.length > 0
+      ? ws.sendMessage(conversationId, text, clientMsgId, undefined, attachmentIds, entities)
+      : ws.sendMessage(conversationId, text, clientMsgId, undefined, attachmentIds)
+    if (!sent) {
+      updateSendStatus(conversationId, clientMsgId, 'failed', 'Connection lost')
+      return
+    }
+    startSendTimeout(conversationId, clientMsgId, false)
+  }
+
+  function sendThreadReplyToRoot(
+    conversationId: string,
+    rootMessageId: string,
+    body: string,
+    attachmentIds: string[] = [],
+    attachments: MessageAttachment[] = [],
+    entities: MessageEntity[] = [],
+  ) {
+    const text = body.trim()
+    if (!conversationId || !rootMessageId || (!text && attachmentIds.length === 0)) return
+    const ws = useWsStore()
+    if ((ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING') && attachmentIds.length > 0) return
+
+    const authStore = useAuthStore()
+    const senderId = authStore.user?.id ?? workspace.value?.selfUserId ?? ''
+    if (!senderId) return
+    const senderName = (
+      (authStore.user?.displayName?.trim() || '')
+      || (workspace.value?.selfDisplayName?.trim() || '')
+      || (authStore.user?.email?.trim() || '')
+      || senderId.slice(0, 8)
+    )
+
+    const clientMsgId = generateId()
+    const now = new Date().toISOString()
+    const nextThreadSeq = (threadSummaries.value[rootMessageId]?.lastThreadSeq ?? 0n) + 1n
+    const isOffline = ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING'
+
+    _upsertThreadMessage(rootMessageId, {
+      id: clientMsgId,
+      channelId: conversationId,
+      senderId,
+      senderName,
+      body: text,
+      entities,
+      channelSeq: 0n,
+      threadSeq: nextThreadSeq,
+      threadRootMessageId: rootMessageId,
+      mentionedUserIds: mentionedUserIdsFromEntities(entities),
+      mentionEveryone: false,
+      createdAt: now,
+      reactions: [],
+      myReactions: [],
+      attachments,
+      clientMsgId,
+      sendStatus: isOffline ? 'queued' : 'sending',
+      serverConfirmed: false,
+    })
+
+    const known = threadSummaries.value[rootMessageId]
+    upsertThreadSummary(rootMessageId, {
+      replyCount: Math.max(known?.replyCount ?? 0, Number(nextThreadSeq)),
+      lastThreadSeq: nextThreadSeq,
+      lastReplyAt: now,
+      lastReplyUserId: senderId,
+    })
+
+    if (isOffline) {
+      import('@/composables/useOfflineQueue').then(({ useOfflineQueue }) => {
+        useOfflineQueue().enqueue({ conversationId, body: text, clientMsgId, threadRootMessageId: rootMessageId, attachmentIds, entities })
+      })
+      return
+    }
+
+    const sent = entities.length > 0
+      ? ws.sendMessage(conversationId, text, clientMsgId, rootMessageId, attachmentIds, entities)
+      : ws.sendMessage(conversationId, text, clientMsgId, rootMessageId, attachmentIds)
+    if (!sent) {
+      updateThreadSendStatus(rootMessageId, clientMsgId, 'failed', 'Connection lost')
+      return
+    }
+    startSendTimeout(conversationId, clientMsgId, true, rootMessageId)
   }
 
   function hasUsableSnapshot(): boolean {
@@ -2994,6 +3193,11 @@ export const useChatStore = defineStore('chat', () => {
     activeChannel,
     activeConversation,
     activeMessages,
+    getConversationById,
+    getMessagesForConversation,
+    getTypingForConversation,
+    getThreadRoot,
+    getThreadReplies,
     isThreadPanelOpen,
     activeThreadRootId,
     activeThreadConversationId,
@@ -3041,7 +3245,10 @@ export const useChatStore = defineStore('chat', () => {
     addMessage,
     openThread,
     closeThread,
+    ensureThreadSubscribed,
     sendThreadReply,
+    sendMessageToConversation,
+    sendThreadReplyToRoot,
     startRealtimeFlow,
     setCachedBootstrap,
     startBootstrap,

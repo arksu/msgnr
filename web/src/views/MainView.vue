@@ -138,6 +138,7 @@
         />
       </template>
     </main>
+    <PinnedDialogsHost />
     <div
       v-if="chatStore.toast"
       class="pointer-events-none fixed right-4 bottom-4 z-50 rounded-md border border-red-300/40 bg-red-500/90 px-3 py-2 text-sm text-white shadow-lg"
@@ -333,6 +334,7 @@ import { PresenceStatus } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore, type IncomingMessageNotification, type UnreadFeedItem } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
+import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import { usePushNotifications, pushSupported } from '@/composables/usePushNotifications'
@@ -361,6 +363,7 @@ import { loadSidebarCollapsed, saveSidebarCollapsed } from '@/services/storage/s
 import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ChatArea from '@/components/ChatArea.vue'
+import PinnedDialogsHost from '@/components/PinnedDialogsHost.vue'
 import ConnectionBanner from '@/components/ConnectionBanner.vue'
 import UnreadFeedPane from '@/components/UnreadFeedPane.vue'
 import CallDock from '@/components/CallDock.vue'
@@ -509,6 +512,7 @@ const profileAvatarInput = ref<HTMLInputElement | null>(null)
 const sidebarCollapsed = ref(loadSidebarCollapsed())
 const wsStore = useWsStore()
 const chatStore = useChatStore()
+const pinnedDialogsStore = usePinnedDialogsStore()
 const callStore = useCallStore()
 const authStore = useAuthStore()
 const { logout, isReconnecting, reconnectAttempt, reconnectNow } = useSessionOrchestrator()
@@ -668,6 +672,7 @@ async function openChatTarget(intent: NotificationOpenIntent): Promise<boolean> 
     if (rootMessage) {
       chatStore.focusConversationMessage(rootMessage.id)
       chatStore.openThread(rootMessage)
+      pinnedDialogsStore.ensureThreadPinned(intent.conversationId, rootMessage.id)
       if (intent.messageId) {
         chatStore.focusThreadMessage(intent.messageId)
       }
@@ -1369,6 +1374,12 @@ watch(() => authStore.user, (u) => {
 watch(settingsOpen, (isOpen) => {
   if (isOpen) {
     syncSettingsFormFromUser()
+  }
+}, { immediate: true })
+
+watch(() => authStore.authState, (state) => {
+  if (state === 'ANON') {
+    pinnedDialogsStore.clearAll()
   }
 }, { immediate: true })
 

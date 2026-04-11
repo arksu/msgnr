@@ -105,15 +105,6 @@
         </button>
       </div>
     </header>
-
-    <!-- Reconnect banner -->
-    <ConnectionBanner
-      :is-reconnecting="isReconnecting"
-      :reconnect-attempt="reconnectAttempt"
-      :queue-length="offlineQueue.queue.value.length"
-      @reconnect-now="reconnectNow"
-    />
-
     <!-- Messages list -->
     <div class="relative flex-1 min-h-0">
       <div
@@ -306,16 +297,13 @@ import MessageBubble from './MessageBubble.vue'
 import MessageInput from './MessageInput.vue'
 import ThreadPanel from './ThreadPanel.vue'
 import MembersPanel from './MembersPanel.vue'
-import ConnectionBanner from './ConnectionBanner.vue'
 import UserAvatar from './UserAvatar.vue'
-import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
 
 const chatStore = useChatStore()
 const authStore = useAuthStore()
 const wsStore = useWsStore()
 const callStore = useCallStore()
-const { isReconnecting, reconnectAttempt, reconnectNow } = useSessionOrchestrator()
 const offlineQueue = useOfflineQueue()
 const scrollEl = ref<HTMLElement | null>(null)
 const openRenderProbe = ref<{ conversationId: string; startedAt: number } | null>(null)

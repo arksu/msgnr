@@ -19,6 +19,14 @@ function createDeferred<T>() {
   return { promise, resolve }
 }
 
+function createJwtWithExp(expSecondsFromNow: number) {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const payload = btoa(JSON.stringify({
+    exp: Math.floor(Date.now() / 1000) + expSecondsFromNow,
+  }))
+  return `${header}.${payload}.signature`
+}
+
 function installQueuedRefreshLocks() {
   let locked = false
   const waiters: Array<() => void> = []
@@ -244,7 +252,7 @@ describe('authStore.refresh', () => {
 
     await expect(store.refresh()).rejects.toThrow()
 
-    expect(store.authState).toBe('AUTHENTICATED')
+    expect(store.authState).toBe('AUTH_DEGRADED')
     expect(store.accessToken).toBe('access-old')
     expect(tokenStorage.getRefreshToken()).toBe('refresh-old')
     expect(tokenStorage.getAccessToken()).toBe('access-old')
@@ -261,10 +269,34 @@ describe('authStore.refresh', () => {
 
     await expect(store.refresh()).rejects.toThrow()
 
-    expect(store.authState).toBe('AUTHENTICATED')
+    expect(store.authState).toBe('AUTH_DEGRADED')
     expect(store.accessToken).toBe('access-old')
     expect(tokenStorage.getRefreshToken()).toBe('refresh-old')
     expect(tokenStorage.getAccessToken()).toBe('access-old')
+    expect(store.lastAuthError).toBe('Server is unavailable')
+  })
+
+  it('enters degraded auth state on refresh failure when no usable access token remains', async () => {
+    tokenStorage.setRefreshToken('refresh-old')
+    tokenStorage.setAccessToken(createJwtWithExp(-3600))
+    vi.spyOn(authApi, 'apiRefresh').mockRejectedValue(new authApi.AuthApiError('server error', 503))
+
+    const store = useAuthStore()
+    store.accessToken = createJwtWithExp(-3600)
+    store.user = {
+      id: 'user-1',
+      email: 'alice@example.com',
+      displayName: 'Alice',
+      role: 'member',
+    }
+
+    await expect(store.refresh()).rejects.toThrow()
+
+    expect(store.authState).toBe('AUTH_DEGRADED')
+    expect(store.accessToken).toBeNull()
+    expect(tokenStorage.getAccessToken()).toBeNull()
+    expect(tokenStorage.getRefreshToken()).toBe('refresh-old')
+    expect(store.user?.email).toBe('alice@example.com')
     expect(store.lastAuthError).toBe('Server is unavailable')
   })
 
@@ -313,29 +345,6 @@ describe('authStore.refresh', () => {
     expect(store.authState).toBe('AUTHENTICATED')
     expect(tokenStorage.getRefreshToken()).toBe('refresh-new')
     expect(tokenStorage.getAccessToken()).toBe('access-new')
-  })
-
-  it('retries refresh every 5 seconds while server is unavailable', async () => {
-    vi.useFakeTimers()
-    tokenStorage.setRefreshToken('refresh-old')
-    tokenStorage.setAccessToken('access-old')
-    const refreshSpy = vi.spyOn(authApi, 'apiRefresh')
-      .mockRejectedValueOnce(new authApi.AuthApiError('server error', 503))
-      .mockResolvedValueOnce(mockRefreshResponse)
-
-    const store = useAuthStore()
-    store.accessToken = 'access-old'
-
-    await expect(store.refresh()).rejects.toThrow()
-    expect(store.lastAuthError).toBe('Server is unavailable')
-
-    await vi.advanceTimersByTimeAsync(5000)
-
-    expect(refreshSpy).toHaveBeenCalledTimes(2)
-    expect(store.authState).toBe('AUTHENTICATED')
-    expect(store.lastAuthError).toBeNull()
-
-    vi.useRealTimers()
   })
 
   it('exposes effectiveRole from ws auth hydration after refresh', async () => {

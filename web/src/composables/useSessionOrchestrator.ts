@@ -5,6 +5,7 @@ import { useWsStore, type WsErrorKind } from '@/stores/ws'
 import { resolveWsUrl } from '@/services/runtime/backendEndpoint'
 
 const RECONNECT_INTERVAL_MS = 5_000
+const SESSION_RECOVERY_RETRY_MS = 5_000
 
 // ---------------------------------------------------------------------------
 // All state is module-level so every useSessionOrchestrator() call shares the
@@ -12,12 +13,14 @@ const RECONNECT_INTERVAL_MS = 5_000
 // ---------------------------------------------------------------------------
 const isReconnecting = ref(false)
 const reconnectAttempt = ref(0)
-const startupPhase = ref<'IDLE' | 'RESTORING_SESSION' | 'CONNECTING_WS'>('IDLE')
+const startupPhase = ref<'IDLE' | 'RESTORING_SESSION' | 'WAITING_FOR_SESSION' | 'CONNECTING_WS'>('IDLE')
 const isStartupLoading = computed(() => startupPhase.value !== 'IDLE')
 const startupMessage = computed(() => {
   switch (startupPhase.value) {
     case 'RESTORING_SESSION':
       return 'Restoring session...'
+    case 'WAITING_FOR_SESSION':
+      return 'Waiting for server to restore session...'
     case 'CONNECTING_WS':
       return 'Connecting to server...'
     default:
@@ -30,6 +33,32 @@ let activeAttemptId = 0
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectStopped = false
 let reconnectRefreshAttempted = false
+let sessionRecoveryTimer: ReturnType<typeof setTimeout> | null = null
+let lifecycleRecoveryListenersAttached = false
+let restoreSessionInFlight: Promise<RestoreSessionResult> | null = null
+let lifecycleRecoveryCallback: (() => void) | null = null
+
+export type RestoreSessionResult = 'restored' | 'degraded' | 'unauthenticated'
+
+export function resetSessionOrchestratorStateForTests() {
+  refreshAttempted = false
+  activeAttemptId = 0
+  reconnectStopped = false
+  reconnectRefreshAttempted = false
+  restoreSessionInFlight = null
+  lifecycleRecoveryCallback = null
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (sessionRecoveryTimer) {
+    clearTimeout(sessionRecoveryTimer)
+    sessionRecoveryTimer = null
+  }
+  isReconnecting.value = false
+  reconnectAttempt.value = 0
+  startupPhase.value = 'IDLE'
+}
 
 /**
  * Coordinates the auth <-> WS lifecycle:
@@ -42,12 +71,83 @@ export function useSessionOrchestrator() {
   const auth = useAuthStore()
   const ws = useWsStore()
 
+  function clearSessionRecoveryTimer() {
+    if (sessionRecoveryTimer) {
+      clearTimeout(sessionRecoveryTimer)
+      sessionRecoveryTimer = null
+    }
+  }
+
+  async function recoverDegradedSession(): Promise<boolean> {
+    clearSessionRecoveryTimer()
+    if (reconnectStopped) return false
+    if (!auth.loadPersistedRefreshToken()) return false
+    const shouldShowStartupLoader = startupPhase.value !== 'IDLE'
+
+    try {
+      const newToken = await auth.refresh()
+      if (shouldShowStartupLoader) {
+        startupPhase.value = 'CONNECTING_WS'
+      }
+      const ok = await connectAndAuthenticate(newToken, {
+        resetRecovery: false,
+        preserveReconnectState: true,
+      })
+      if (ok) {
+        startupPhase.value = 'IDLE'
+      } else if (auth.authState === 'AUTH_DEGRADED') {
+        startupPhase.value = shouldShowStartupLoader ? 'WAITING_FOR_SESSION' : 'IDLE'
+        scheduleDegradedSessionRecovery()
+      }
+      return ok
+    } catch {
+      if (auth.authState === 'AUTH_DEGRADED') {
+        startupPhase.value = shouldShowStartupLoader ? 'WAITING_FOR_SESSION' : 'IDLE'
+        scheduleDegradedSessionRecovery()
+      }
+      return false
+    }
+  }
+
+  function scheduleDegradedSessionRecovery(delayMs = SESSION_RECOVERY_RETRY_MS) {
+    if (sessionRecoveryTimer || reconnectStopped) return
+    sessionRecoveryTimer = setTimeout(() => {
+      sessionRecoveryTimer = null
+      void recoverDegradedSession()
+    }, delayMs)
+  }
+
+  function attachLifecycleRecoveryListeners() {
+    if (lifecycleRecoveryListenersAttached) return
+    lifecycleRecoveryListenersAttached = true
+    if (typeof window === 'undefined') return
+
+    const recoverIfNeeded = () => {
+      lifecycleRecoveryCallback?.()
+    }
+
+    window.addEventListener('focus', recoverIfNeeded)
+    window.addEventListener('pageshow', recoverIfNeeded)
+    window.addEventListener('online', recoverIfNeeded)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return
+      recoverIfNeeded()
+    })
+  }
+
+  lifecycleRecoveryCallback = () => {
+    if (auth.authState !== 'AUTH_DEGRADED') return
+    void recoverDegradedSession()
+  }
+  attachLifecycleRecoveryListeners()
+
   function _stopReconnect(permanent = false) {
     console.log('[orchestrator:_stopReconnect] isReconnecting→false, permanent=', permanent)
     if (permanent) reconnectStopped = true
     isReconnecting.value = false
     reconnectAttempt.value = 0
     reconnectRefreshAttempted = false
+    clearSessionRecoveryTimer()
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
@@ -124,11 +224,17 @@ export function useSessionOrchestrator() {
           const ok = await connectAndAuthenticate(newToken, { resetRecovery: false, fromReconnect: true })
           if (ok) {
             _stopReconnect(false)
+          } else if (auth.authState === 'AUTH_DEGRADED') {
+            _stopReconnect(false)
+            scheduleDegradedSessionRecovery()
           } else if (!reconnectStopped) {
             _scheduleReconnect()
           }
         } catch {
-          if (!reconnectStopped) {
+          if (auth.authState === 'AUTH_DEGRADED') {
+            _stopReconnect(false)
+            scheduleDegradedSessionRecovery()
+          } else if (!reconnectStopped) {
             _scheduleReconnect()
           }
         }
@@ -161,10 +267,19 @@ export function useSessionOrchestrator() {
         refreshAttempted = true
         try {
           const newToken = await auth.refresh()
-          await connectAndAuthenticate(newToken, { resetRecovery: false })
+          const ok = await connectAndAuthenticate(newToken, { resetRecovery: false })
+          if (!ok && auth.authState === 'AUTH_DEGRADED') {
+            _stopReconnect(false)
+            scheduleDegradedSessionRecovery()
+          }
         } catch {
-          _stopReconnect(true)
-          await logout()
+          if (auth.authState === 'AUTH_DEGRADED') {
+            _stopReconnect(false)
+            scheduleDegradedSessionRecovery()
+          } else {
+            _stopReconnect(true)
+            await logout()
+          }
         }
       } else {
         _stopReconnect(true)
@@ -194,7 +309,7 @@ export function useSessionOrchestrator() {
    */
   function connectAndAuthenticate(
     accessToken: string,
-    options?: { resetRecovery?: boolean; fromReconnect?: boolean },
+    options?: { resetRecovery?: boolean; fromReconnect?: boolean; preserveReconnectState?: boolean },
   ): Promise<boolean> {
     const attemptId = ++activeAttemptId
     const isForegroundAttempt = !(options?.fromReconnect ?? false)
@@ -210,7 +325,9 @@ export function useSessionOrchestrator() {
     if (!options?.fromReconnect) {
       // Fresh connect — reset reconnect state and attach transport-drop handler
       _stopReconnect(false)
-      reconnectStopped = false
+      if (!options?.preserveReconnectState) {
+        reconnectStopped = false
+      }
       reconnectRefreshAttempted = false
       _attachTransportDropHandler()
     }
@@ -236,6 +353,7 @@ export function useSessionOrchestrator() {
 
       if (success) {
         auth.setSessionRole(ws.authResult?.userRole ?? null)
+        clearSessionRecoveryTimer()
         _stopReconnect(false)
       } else if (_isWsPostAuthState()) {
         // Attempt lost a race with a newer successful auth flow.
@@ -300,34 +418,57 @@ export function useSessionOrchestrator() {
    *
    * Returns true if recovery succeeded.
    */
-  async function tryRestoreSession(): Promise<boolean> {
-    const stored = auth.loadPersistedRefreshToken()
-    if (!stored) return false
-    startupPhase.value = 'RESTORING_SESSION'
-
-    // Try to hydrate UI from IndexedDB cache for instant start.
-    // The user sees cached data while the network request completes.
-    const chatStore = useChatStore()
-    await auth.hydrateUserFromCache()
-    const cacheLoaded = await chatStore.loadCachedState()
-    if (cacheLoaded) {
-      // User has cached data — dismiss the loading overlay early so
-      // the app shell renders immediately. The WS connect + bootstrap
-      // will overwrite the cached state in the background.
-      startupPhase.value = 'IDLE'
+  async function tryRestoreSession(): Promise<RestoreSessionResult> {
+    if (restoreSessionInFlight) {
+      return await restoreSessionInFlight
     }
 
-    try {
-      refreshAttempted = false
-      const newToken = await auth.refresh()
-      return await connectAndAuthenticate(newToken)
-    } catch {
+    const stored = auth.loadPersistedRefreshToken()
+    if (!stored) return 'unauthenticated'
+    restoreSessionInFlight = (async () => {
+      startupPhase.value = 'RESTORING_SESSION'
+
+      // Try to hydrate UI from IndexedDB cache for instant start.
+      // The user sees cached data while the network request completes.
+      const chatStore = useChatStore()
+      await auth.hydrateUserFromCache()
+      const cacheLoaded = await chatStore.loadCachedState()
       if (cacheLoaded) {
-        // Cache was shown but auth failed — clear the cached UI.
-        chatStore.cachedBootstrap = false
+        // User has cached data — dismiss the loading overlay early so
+        // the app shell renders immediately. The WS connect + bootstrap
+        // will overwrite the cached state in the background.
+        startupPhase.value = 'IDLE'
       }
-      startupPhase.value = 'IDLE'
-      return false
+
+      try {
+        refreshAttempted = false
+        const newToken = await auth.refresh()
+        const restored = await connectAndAuthenticate(newToken)
+        if (!restored && auth.authState === 'AUTH_DEGRADED') {
+          startupPhase.value = cacheLoaded ? 'IDLE' : 'WAITING_FOR_SESSION'
+          scheduleDegradedSessionRecovery()
+          return 'degraded'
+        }
+        return restored ? 'restored' : 'unauthenticated'
+      } catch {
+        if (auth.authState === 'AUTH_DEGRADED') {
+          startupPhase.value = cacheLoaded ? 'IDLE' : 'WAITING_FOR_SESSION'
+          scheduleDegradedSessionRecovery()
+          return 'degraded'
+        }
+        if (cacheLoaded) {
+          // Cache was shown but auth failed — clear the cached UI.
+          chatStore.setCachedBootstrap(false)
+        }
+        startupPhase.value = 'IDLE'
+        return 'unauthenticated'
+      }
+    })()
+
+    try {
+      return await restoreSessionInFlight
+    } finally {
+      restoreSessionInFlight = null
     }
   }
 
@@ -353,16 +494,23 @@ export function useSessionOrchestrator() {
   }
 
   function reconnectNow() {
-    if (!isReconnecting.value) return
+    if (auth.authState === 'AUTH_DEGRADED') {
+      void recoverDegradedSession()
+      return
+    }
     // Cancel pending timer and fire immediately
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
+    isReconnecting.value = true
     reconnectAttempt.value += 1
 
     const token = auth.accessToken
-    if (!token) return
+    if (!token) {
+      _scheduleReconnect()
+      return
+    }
     connectAndAuthenticate(token, { resetRecovery: false, fromReconnect: true }).then(async (ok) => {
       if (ok) {
         _stopReconnect(false)

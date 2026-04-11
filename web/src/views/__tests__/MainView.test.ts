@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { NotificationLevel, PresenceStatus } from '@/shared/proto/packets_pb'
@@ -17,6 +17,9 @@ import MainView from '@/views/MainView.vue'
 
 const orchestratorMocks = vi.hoisted(() => ({
   logout: vi.fn<() => Promise<void>>(),
+  reconnectNow: vi.fn<() => void>(),
+  isReconnecting: null as ReturnType<typeof ref<boolean>> | null,
+  reconnectAttempt: null as ReturnType<typeof ref<number>> | null,
 }))
 
 const taskRouteStorageMocks = vi.hoisted(() => ({
@@ -28,6 +31,9 @@ const taskRouteStorageMocks = vi.hoisted(() => ({
 vi.mock('@/composables/useSessionOrchestrator', () => ({
   useSessionOrchestrator: () => ({
     logout: orchestratorMocks.logout,
+    reconnectNow: orchestratorMocks.reconnectNow,
+    isReconnecting: orchestratorMocks.isReconnecting,
+    reconnectAttempt: orchestratorMocks.reconnectAttempt,
   }),
 }))
 
@@ -267,6 +273,9 @@ describe('MainView server unavailable state', () => {
     })
     orchestratorMocks.logout.mockReset()
     orchestratorMocks.logout.mockResolvedValue()
+    orchestratorMocks.reconnectNow.mockReset()
+    orchestratorMocks.isReconnecting = ref(false)
+    orchestratorMocks.reconnectAttempt = ref(0)
     taskRouteStorageMocks.loadLastOpenedTaskPublicId.mockReset()
     taskRouteStorageMocks.loadLastOpenedTaskPublicId.mockReturnValue('')
     taskRouteStorageMocks.saveLastOpenedTaskPublicId.mockReset()
@@ -295,37 +304,37 @@ describe('MainView server unavailable state', () => {
     vi.spyOn(documentsStore, 'loadSidebar').mockResolvedValue()
   })
 
-  it('shows server unavailable alert with spinner and logout button', async () => {
+  it('shows session recovery banner while auth is degraded', async () => {
     const router = createMainRouter()
     router.push('/')
     await router.isReady()
 
     const authStore = useAuthStore()
+    authStore.authState = 'AUTH_DEGRADED'
     authStore.lastAuthError = 'Server is unavailable'
 
     const wrapper = mountAtRoute(router)
 
-    expect(wrapper.text()).toContain('Server is unavailable')
+    expect(wrapper.text()).toContain('Session unavailable')
     expect(wrapper.find('svg.animate-spin').exists()).toBe(true)
-    expect(wrapper.find('[data-testid=\"server-unavailable-logout\"]').text()).toBe('Logout')
+    expect(wrapper.text()).toContain('Retry now')
   })
 
-  it('logs out and navigates to login when logout button is clicked', async () => {
+  it('retries session recovery when the banner action is clicked', async () => {
     const router = createMainRouter()
     router.push('/')
     await router.isReady()
 
     const authStore = useAuthStore()
+    authStore.authState = 'AUTH_DEGRADED'
     authStore.lastAuthError = 'Server is unavailable'
-    const routerPushSpy = vi.spyOn(router, 'push')
 
     const wrapper = mountAtRoute(router)
 
-    await wrapper.find('[data-testid=\"server-unavailable-logout\"]').trigger('click')
+    await wrapper.get('[data-testid="connection-banner-retry"]').trigger('click')
     await nextTick()
 
-    expect(orchestratorMocks.logout).toHaveBeenCalledTimes(1)
-    expect(routerPushSpy).toHaveBeenCalledWith({ name: 'login' })
+    expect(orchestratorMocks.reconnectNow).toHaveBeenCalledTimes(1)
   })
 
   it('applies stored manual away preference when auth completes', async () => {

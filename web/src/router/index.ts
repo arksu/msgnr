@@ -98,15 +98,15 @@ router.beforeEach(async (to) => {
   if (to.meta.public) return true
 
   const auth = useAuthStore()
+  const isSessionAvailable = () => auth.authState === 'AUTHENTICATED' || auth.authState === 'AUTH_DEGRADED'
 
   // Already authenticated in memory
-  if (auth.authState !== 'AUTHENTICATED') {
-    const isAuthenticated = () => auth.authState === 'AUTHENTICATED'
+  if (!isSessionAvailable()) {
     // Try restoring from persisted refresh token
     if (auth.loadPersistedRefreshToken()) {
       const orchestrator = useSessionOrchestrator()
-      const recovered = await orchestrator.tryRestoreSession()
-      if (!recovered && !isAuthenticated()) {
+      const restoreResult = await orchestrator.tryRestoreSession()
+      if (restoreResult === 'unauthenticated' && !isSessionAvailable()) {
         return { name: 'login' }
       }
     } else {

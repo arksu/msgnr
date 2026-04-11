@@ -2,17 +2,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type TransportDropHandler = (() => void) | null
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve
+  })
+  return { promise, resolve }
+}
+
 const mockState = vi.hoisted(() => ({
   transportDropHandler: null as TransportDropHandler,
 }))
 
 const mockAuthStore = vi.hoisted(() => ({
-  accessToken: 'token-initial',
+  authState: 'ANON' as 'ANON' | 'AUTHENTICATED' | 'AUTH_DEGRADED',
+  lastAuthError: null as string | null,
+  accessToken: 'token-initial' as string | null,
   refresh: vi.fn<() => Promise<string>>(),
   login: vi.fn<() => Promise<void>>(),
   logout: vi.fn<() => Promise<void>>(),
+  hydrateUserFromCache: vi.fn<() => Promise<void>>(),
   setSessionRole: vi.fn<(role: string | null) => void>(),
   loadPersistedRefreshToken: vi.fn<() => string | null>(),
+}))
+
+const mockChatStore = vi.hoisted(() => ({
+  loadCachedState: vi.fn<() => Promise<boolean>>(),
+  cachedBootstrap: false,
+  setCachedBootstrap: vi.fn<(value: boolean) => void>(),
 }))
 
 const mockWsStore = vi.hoisted(() => ({
@@ -44,6 +61,10 @@ vi.mock('@/stores/auth', () => ({
   useAuthStore: () => mockAuthStore,
 }))
 
+vi.mock('@/stores/chat', () => ({
+  useChatStore: () => mockChatStore,
+}))
+
 vi.mock('@/stores/ws', () => ({
   useWsStore: () => mockWsStore,
 }))
@@ -55,11 +76,19 @@ describe('useSessionOrchestrator', () => {
     vi.clearAllMocks()
 
     mockState.transportDropHandler = null
+    mockAuthStore.authState = 'ANON'
+    mockAuthStore.lastAuthError = null
     mockAuthStore.accessToken = 'token-initial'
     mockAuthStore.refresh.mockResolvedValue('token-refreshed')
     mockAuthStore.login.mockResolvedValue()
     mockAuthStore.logout.mockResolvedValue()
+    mockAuthStore.hydrateUserFromCache.mockResolvedValue()
     mockAuthStore.loadPersistedRefreshToken.mockReturnValue('refresh-token')
+    mockChatStore.loadCachedState.mockResolvedValue(false)
+    mockChatStore.cachedBootstrap = false
+    mockChatStore.setCachedBootstrap.mockImplementation((value: boolean) => {
+      mockChatStore.cachedBootstrap = value
+    })
 
     mockWsStore.state = 'DISCONNECTED'
     mockWsStore.serverHello = null
@@ -106,7 +135,8 @@ describe('useSessionOrchestrator', () => {
       mockWsStore.authResult = { userRole: 'member' }
     })
 
-    const { useSessionOrchestrator } = await import('@/composables/useSessionOrchestrator')
+    const { resetSessionOrchestratorStateForTests, useSessionOrchestrator } = await import('@/composables/useSessionOrchestrator')
+    resetSessionOrchestratorStateForTests()
     const orchestrator = useSessionOrchestrator()
 
     const firstConnect = orchestrator.connectAndAuthenticate('token-initial')
@@ -125,5 +155,89 @@ describe('useSessionOrchestrator', () => {
     expect(mockWsStore.connect).toHaveBeenCalledTimes(3)
     expect(orchestrator.isReconnecting.value).toBe(false)
     expect(orchestrator.reconnectAttempt.value).toBe(0)
+  })
+
+  it('returns degraded restore result and retries recovery on focus', async () => {
+    let refreshCalls = 0
+    mockAuthStore.refresh.mockImplementation(async () => {
+      refreshCalls += 1
+      if (refreshCalls === 1) {
+        mockAuthStore.authState = 'AUTH_DEGRADED'
+        mockAuthStore.lastAuthError = 'Server is unavailable'
+        mockAuthStore.accessToken = null
+        throw new Error('offline')
+      }
+
+      mockAuthStore.authState = 'AUTHENTICATED'
+      mockAuthStore.lastAuthError = null
+      mockAuthStore.accessToken = 'token-restored'
+      return 'token-restored'
+    })
+
+    mockWsStore.connect.mockImplementation(() => {
+      mockWsStore.state = 'LIVE_SYNCED'
+      mockWsStore.authResult = { userRole: 'member' }
+    })
+
+    const { resetSessionOrchestratorStateForTests, useSessionOrchestrator } = await import('@/composables/useSessionOrchestrator')
+    resetSessionOrchestratorStateForTests()
+    const orchestrator = useSessionOrchestrator()
+
+    await expect(orchestrator.tryRestoreSession()).resolves.toBe('degraded')
+    expect(orchestrator.isStartupLoading.value).toBe(true)
+    expect(orchestrator.startupMessage.value).toBe('Waiting for server to restore session...')
+
+    window.dispatchEvent(new Event('focus'))
+    await vi.advanceTimersByTimeAsync(250)
+    await Promise.resolve()
+
+    expect(mockAuthStore.refresh).toHaveBeenCalledTimes(2)
+    expect(mockWsStore.connect).toHaveBeenCalledTimes(1)
+    expect(mockAuthStore.authState).toBe('AUTHENTICATED')
+    expect(mockAuthStore.lastAuthError).toBeNull()
+  })
+
+  it('deduplicates concurrent restore attempts', async () => {
+    const restoreGate = createDeferred<string>()
+    mockAuthStore.refresh.mockImplementation(async () => {
+      return await restoreGate.promise
+    })
+    mockWsStore.connect.mockImplementation(() => {
+      mockWsStore.state = 'LIVE_SYNCED'
+      mockWsStore.authResult = { userRole: 'member' }
+    })
+
+    const { resetSessionOrchestratorStateForTests, useSessionOrchestrator } = await import('@/composables/useSessionOrchestrator')
+    resetSessionOrchestratorStateForTests()
+    const orchestrator = useSessionOrchestrator()
+
+    const first = orchestrator.tryRestoreSession()
+    const second = orchestrator.tryRestoreSession()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(mockAuthStore.refresh).toHaveBeenCalledTimes(1)
+
+    restoreGate.resolve('token-restored')
+    await vi.advanceTimersByTimeAsync(100)
+
+    await expect(first).resolves.toBe('restored')
+    await expect(second).resolves.toBe('restored')
+  })
+
+  it('retries immediately when reconnectNow is clicked outside the timer loop', async () => {
+    mockWsStore.connect.mockImplementation(() => {
+      mockWsStore.state = 'LIVE_SYNCED'
+      mockWsStore.authResult = { userRole: 'member' }
+    })
+
+    const { resetSessionOrchestratorStateForTests, useSessionOrchestrator } = await import('@/composables/useSessionOrchestrator')
+    resetSessionOrchestratorStateForTests()
+    const orchestrator = useSessionOrchestrator()
+
+    orchestrator.reconnectNow()
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(mockWsStore.connect).toHaveBeenCalledTimes(1)
   })
 })

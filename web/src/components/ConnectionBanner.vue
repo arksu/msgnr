@@ -8,7 +8,7 @@
     leave-to-class="-translate-y-full opacity-0"
   >
     <div
-      v-if="isReconnecting"
+      v-if="showBanner"
       class="flex items-center gap-3 px-4 py-2 bg-amber-900/60 border-b border-amber-700/50 text-amber-200 text-sm shrink-0 overflow-hidden"
       role="status"
       aria-live="polite"
@@ -32,8 +32,8 @@
 
       <!-- Message -->
       <span class="flex-1 truncate">
-        Disconnected — reconnecting
-        <span v-if="reconnectAttempt > 0" class="text-amber-400/80">
+        {{ statusText }}
+        <span v-if="showReconnectAttempt" class="text-amber-400/80">
           (attempt {{ reconnectAttempt }})
         </span>
         <span v-if="queueLength > 0" class="ml-1 text-amber-300">
@@ -43,21 +43,35 @@
 
       <!-- Reconnect now button -->
       <button
+        data-testid="connection-banner-retry"
         class="shrink-0 rounded border border-amber-500/50 px-2.5 py-0.5 text-xs font-medium text-amber-200 hover:bg-amber-700/40 hover:text-white transition-colors"
         @click="emit('reconnect-now')"
       >
-        Reconnect now
+        Retry now
       </button>
     </div>
   </Transition>
 </template>
 
 <script setup lang="ts">
-defineProps<{
+import { computed } from 'vue'
+
+const props = defineProps<{
   isReconnecting: boolean
   reconnectAttempt: number
   queueLength: number
+  isAuthDegraded?: boolean
 }>()
 
 const emit = defineEmits<{ 'reconnect-now': [] }>()
+
+const showBanner = computed(() => props.isReconnecting || props.isAuthDegraded === true)
+const showReconnectAttempt = computed(() => (
+  props.isAuthDegraded !== true && props.isReconnecting && props.reconnectAttempt > 0
+))
+const statusText = computed(() => (
+  props.isAuthDegraded
+    ? 'Session unavailable - retrying'
+    : 'Disconnected - reconnecting'
+))
 </script>

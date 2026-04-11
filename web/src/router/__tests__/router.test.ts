@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 import * as tokenStorage from '@/services/storage/tokenStorage'
 
 const orchestratorMocks = vi.hoisted(() => ({
-  tryRestoreSession: vi.fn<() => Promise<boolean>>(),
+  tryRestoreSession: vi.fn<() => Promise<'restored' | 'degraded' | 'unauthenticated'>>(),
 }))
 
 vi.mock('@/composables/useSessionOrchestrator', () => ({
@@ -95,14 +95,24 @@ describe('router auth guard', () => {
     orchestratorMocks.tryRestoreSession.mockImplementation(async () => {
       const auth = useAuthStore()
       auth.accessToken = 'access-token'
-      auth.authState = 'AUTHENTICATED'
+      auth.authState = 'AUTH_DEGRADED'
       auth.lastAuthError = 'Server is unavailable'
-      return false
+      return 'degraded'
     })
 
     const { default: router } = await import('@/router')
     await router.push('/')
 
     expect(router.currentRoute.value.name).toBe('main')
+  })
+
+  it('keeps protected route when restore degrades the session', async () => {
+    tokenStorage.setRefreshToken('refresh-token')
+    orchestratorMocks.tryRestoreSession.mockResolvedValue('degraded')
+
+    const { default: router } = await import('@/router')
+    await router.push('/tasks')
+
+    expect(router.currentRoute.value.name).toBe('tasks-list')
   })
 })

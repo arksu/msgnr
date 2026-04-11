@@ -38,6 +38,7 @@ export type AuthState =
   | 'ANON'
   | 'LOGGING_IN'
   | 'AUTHENTICATED'
+  | 'AUTH_DEGRADED'
   | 'REFRESHING'
   | 'LOGGING_OUT'
   | 'AUTH_ERROR'
@@ -51,6 +52,7 @@ export interface AuthUser {
 }
 
 const AUTH_USER_STORAGE_KEY = 'auth.user'
+const ACCESS_TOKEN_EXPIRY_BUFFER_SEC = 30
 
 /**
  * Decode the payload of a JWT without verifying its signature.
@@ -72,6 +74,20 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function isAccessTokenUsable(token: string | null | undefined): boolean {
+  if (!token) return false
+  const payload = decodeJwtPayload(token)
+  const exp = payload.exp
+  if (typeof exp !== 'number' || !Number.isFinite(exp)) {
+    return true
+  }
+
+  // Treat tokens close to expiry as unusable so wake/resume recovery does not
+  // keep the app on a token that will immediately fail downstream requests.
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  return exp > nowSeconds + ACCESS_TOKEN_EXPIRY_BUFFER_SEC
 }
 
 function getErrorStatus(error: unknown): number | null {
@@ -159,7 +175,6 @@ export const useAuthStore = defineStore('auth', () => {
   const sessionRole = ref<string | null>(null)
   const effectiveRole = computed(() => user.value?.role ?? sessionRole.value)
   const needChangePassword = ref<boolean>(false)
-  let refreshRetryTimer: ReturnType<typeof setTimeout> | null = null
 
   function loadPersistedRefreshToken(): string | null {
     return getRefreshToken()
@@ -231,27 +246,33 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       accessToken.value = res.accessToken
+      setAccessToken(res.accessToken)
       // Restore need_change_password from the new JWT payload so a page refresh
       // doesn't bypass the mandatory password change dialog.
       const claims = decodeJwtPayload(res.accessToken)
       needChangePassword.value = claims.need_change_password === true
       authState.value = 'AUTHENTICATED'
-      clearRefreshRetryTimer()
+      lastAuthError.value = null
       return res.accessToken
     } catch (e) {
       if (isServerUnavailableError(e)) {
         const persistedAccessToken = accessToken.value ?? getAccessToken()
-        if (persistedAccessToken) {
+        if (persistedAccessToken && isAccessTokenUsable(persistedAccessToken)) {
           accessToken.value = persistedAccessToken
           setAccessToken(persistedAccessToken)
           // Also restore from any persisted token when the server is temporarily unavailable.
           const fallbackClaims = decodeJwtPayload(persistedAccessToken)
           needChangePassword.value = fallbackClaims.need_change_password === true
-          authState.value = 'AUTHENTICATED'
+          authState.value = 'AUTH_DEGRADED'
           lastAuthError.value = 'Server is unavailable'
-          scheduleRefreshRetry()
           throw e
         }
+
+        accessToken.value = null
+        clearAccessToken()
+        authState.value = 'AUTH_DEGRADED'
+        lastAuthError.value = 'Server is unavailable'
+        throw e
       }
 
       lastAuthError.value = e instanceof AuthApiError ? e.message : 'Refresh failed'
@@ -331,7 +352,6 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clearSession(): void {
-    clearRefreshRetryTimer()
     accessToken.value = null
     user.value = null
     saveUser(null)
@@ -359,27 +379,6 @@ export const useAuthStore = defineStore('auth', () => {
 
   function setNeedChangePassword(val: boolean) {
     needChangePassword.value = val
-  }
-
-  function clearRefreshRetryTimer() {
-    if (refreshRetryTimer) {
-      clearTimeout(refreshRetryTimer)
-      refreshRetryTimer = null
-    }
-  }
-
-  function scheduleRefreshRetry() {
-    if (refreshRetryTimer) return
-    refreshRetryTimer = setTimeout(async () => {
-      refreshRetryTimer = null
-      if (lastAuthError.value !== 'Server is unavailable') return
-      if (!getRefreshToken()) return
-      try {
-        await refresh()
-      } catch (error) {
-        if (isServerUnavailableError(error)) return
-      }
-    }, 5000)
   }
 
   return {

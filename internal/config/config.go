@@ -111,7 +111,7 @@ func Load() (*Config, error) {
 
 	viper.SetDefault("JWT_SECRET", "change-me-in-production")
 	viper.SetDefault("JWT_ACCESS_TOKEN_TTL", 1*time.Hour)
-	viper.SetDefault("JWT_REFRESH_TOKEN_TTL", 7*24*time.Hour)
+	viper.SetDefault("JWT_REFRESH_TOKEN_TTL", 10*365*24*time.Hour)
 
 	viper.SetDefault("LIVEKIT_URL", "ws://localhost:7880")
 	viper.SetDefault("LIVEKIT_API_KEY", "")

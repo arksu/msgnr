@@ -1513,6 +1513,10 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function setCachedBootstrap(value: boolean) {
+    cachedBootstrap.value = value
+  }
+
   function applyBootstrapSnapshot(stage: BootstrapStage) {
     // Bootstrap is the authoritative snapshot — clear any pending optimistic state.
     clearPendingNotificationLevelChange()
@@ -3039,6 +3043,7 @@ export const useChatStore = defineStore('chat', () => {
     closeThread,
     sendThreadReply,
     startRealtimeFlow,
+    setCachedBootstrap,
     startBootstrap,
     handleBootstrapResponse,
     handleSyncSinceResponse,

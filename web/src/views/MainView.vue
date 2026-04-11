@@ -95,25 +95,13 @@
       <AppSidebar @profile="openSettings" @settings="openAudioSettings" />
     </ResizableSidebar>
     <main class="flex-1 min-w-0 min-h-0">
-      <div
-        v-if="showServerUnavailableAlert"
-        class="mx-4 mt-4 flex items-center gap-3 rounded-md border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
-        role="alert"
-      >
-        <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="9" class="opacity-30" stroke="currentColor" stroke-width="3" />
-          <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
-        </svg>
-        <span class="flex-1">Server is unavailable</span>
-        <button
-          type="button"
-          data-testid="server-unavailable-logout"
-          class="rounded border border-amber-200/60 px-2 py-1 text-xs font-semibold text-amber-100 hover:bg-amber-200/20"
-          @click="handleLogout"
-        >
-          Logout
-        </button>
-      </div>
+      <ConnectionBanner
+        :is-reconnecting="isReconnecting"
+        :reconnect-attempt="reconnectAttempt"
+        :queue-length="offlineQueue.queue.value.length"
+        :is-auth-degraded="showSessionRecoveryBanner"
+        @reconnect-now="reconnectNow"
+      />
       <template v-if="appMode === 'chat'">
         <UnreadFeedPane
           v-if="chatStore.chatViewMode === 'unread'"
@@ -373,6 +361,7 @@ import { loadSidebarCollapsed, saveSidebarCollapsed } from '@/services/storage/s
 import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ChatArea from '@/components/ChatArea.vue'
+import ConnectionBanner from '@/components/ConnectionBanner.vue'
 import UnreadFeedPane from '@/components/UnreadFeedPane.vue'
 import CallDock from '@/components/CallDock.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
@@ -522,13 +511,13 @@ const wsStore = useWsStore()
 const chatStore = useChatStore()
 const callStore = useCallStore()
 const authStore = useAuthStore()
-const { logout } = useSessionOrchestrator()
+const { logout, isReconnecting, reconnectAttempt, reconnectNow } = useSessionOrchestrator()
 const offlineQueue = useOfflineQueue()
 const soundEngine = useNotificationSoundEngine()
 const platform = getPlatformOrNull()
 const isDesktopRuntime = isTauriRuntime()
 const { checkExistingSubscription: checkPushSubscription, subscribe: subscribePush } = usePushNotifications()
-const showServerUnavailableAlert = computed(() => authStore.lastAuthError === 'Server is unavailable')
+const showSessionRecoveryBanner = computed(() => authStore.authState === 'AUTH_DEGRADED')
 const handlingIncomingInvite = ref(false)
 const incomingInviteError = ref('')
 const dismissedInviteIds = ref<string[]>([])

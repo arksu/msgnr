@@ -102,6 +102,7 @@ const { logout, connectAndAuthenticate } = useSessionOrchestrator()
 const authStateColor = computed(() => {
   switch (authStore.authState) {
     case 'AUTHENTICATED': return 'green'
+    case 'AUTH_DEGRADED': return 'orange'
     case 'LOGGING_IN': case 'REFRESHING': return 'orange'
     case 'AUTH_ERROR': return 'red'
     default: return 'default'
@@ -153,7 +154,9 @@ async function handleRefresh() {
       connectAndAuthenticate(token)
     }
   } catch {
-    router.push({ name: 'login' })
+    if (authStore.authState !== 'AUTH_DEGRADED') {
+      router.push({ name: 'login' })
+    }
   }
 }
 

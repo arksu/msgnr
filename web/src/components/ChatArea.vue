@@ -223,10 +223,7 @@
     />
     </div>
 
-    <ThreadPanel
-      v-if="isThreadPanelOpen"
-      @close="closeThreadPanel"
-    />
+    <!-- Threads now open in global pinned workspace, not legacy local drawer. -->
 
     <MembersPanel
       v-if="isMembersPanelOpen"
@@ -312,7 +309,6 @@ import { listActiveCallMembers, listConversationMembers } from '@/services/http/
 import { generateId } from '@/services/id'
 import MessageBubble from './MessageBubble.vue'
 import MessageInput from './MessageInput.vue'
-import ThreadPanel from './ThreadPanel.vue'
 import MembersPanel from './MembersPanel.vue'
 import UserAvatar from './UserAvatar.vue'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
@@ -358,7 +354,6 @@ interface ScrollMetrics {
 
 const conversation = computed(() => chatStore.activeConversation)
 const messages = computed(() => chatStore.activeMessages)
-const isThreadPanelOpen = computed(() => chatStore.isThreadPanelOpen)
 const isMembersPanelOpen = ref(false)
 function toggleMembersPanel() { isMembersPanelOpen.value = !isMembersPanelOpen.value }
 function closeMembersPanel() { isMembersPanelOpen.value = false }
@@ -636,17 +631,19 @@ function threadReplyCount(rootMessageId: string): number {
 }
 
 function openThreadFromMessage(message: Message) {
-  chatStore.openThread(message)
+  // Keep main conversation visible. Thread opens only in global pinned workspace.
   pinnedDialogsStore.ensureThreadPinned(message.channelId, message.id)
-}
-
-function closeThreadPanel() {
-  chatStore.closeThread()
 }
 
 function pinActiveConversation() {
   const conversationId = conversation.value?.id
   if (!conversationId) return
+  const kind = conversation.value?.kind === 'dm' ? 'dm' : 'channel'
+  const pinId = pinnedDialogueId(kind, conversationId)
+  if (pinnedDialogsStore.isPinned(pinId)) {
+    pinnedDialogsStore.unpin(pinId)
+    return
+  }
   pinnedDialogsStore.ensureConversationPinned(conversationId)
 }
 

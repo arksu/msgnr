@@ -30,13 +30,13 @@
       />
     </aside>
 
-    <aside class="flex h-full min-h-0 w-[60px] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-l border-chat-border bg-sidebar-bg/90 px-1 py-2">
+    <aside class="flex h-full min-h-0 w-[45px] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-l border-chat-border bg-sidebar-bg/90 px-0.5 py-1">
       <div
         v-for="item in pinned.items"
         :key="item.id"
         tabindex="0"
         role="button"
-        class="group relative mb-2 flex min-h-[132px] w-full flex-col items-center justify-between rounded-xl border px-1 py-2 transition-all"
+        class="group relative mb-1 flex min-h-[124px] w-full flex-col items-center justify-between rounded-lg border px-0.5 py-1 transition-all"
         :class="cardClass(item)"
         :aria-label="`Open pinned ${item.kind}: ${item.title}`"
         :data-testid="`pinned-card-${item.id}`"
@@ -44,7 +44,7 @@
         @keydown.enter.prevent="pinned.activate(item.id)"
         @keydown.space.prevent="pinned.activate(item.id)"
       >
-        <div class="flex h-9 w-9 items-center justify-center rounded-lg ring-1" :class="pinned.itemTypeMeta(item.kind).iconAccentClass">
+        <div class="flex h-8 w-8 items-center justify-center rounded-md ring-1" :class="pinned.itemTypeMeta(item.kind).iconAccentClass">
           <UserAvatar
             v-if="item.kind === 'dm' && item.userId"
             :user-id="item.userId"
@@ -62,7 +62,7 @@
         </div>
 
         <span
-          class="flex-1 overflow-hidden text-ellipsis py-2 text-center text-[11px] font-semibold tracking-wide"
+          class="flex-1 overflow-hidden text-ellipsis py-1 text-center text-[12px] font-semibold tracking-wide"
           :class="item.id === pinned.activeId ? 'font-bold text-white' : 'text-gray-200'"
           style="writing-mode: vertical-lr;"
         >
@@ -71,7 +71,7 @@
 
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+          class="flex h-5 w-5 items-center justify-center rounded text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
           :aria-label="`Unpin ${item.title}`"
           @click.stop="pinned.unpin(item.id)"
         >

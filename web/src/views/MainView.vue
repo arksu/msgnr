@@ -671,11 +671,7 @@ async function openChatTarget(intent: NotificationOpenIntent): Promise<boolean> 
     const rootMessage = (chatStore.messages[intent.conversationId] ?? []).find(message => message.id === intent.threadRootMessageId)
     if (rootMessage) {
       chatStore.focusConversationMessage(rootMessage.id)
-      chatStore.openThread(rootMessage)
       pinnedDialogsStore.ensureThreadPinned(intent.conversationId, rootMessage.id)
-      if (intent.messageId) {
-        chatStore.focusThreadMessage(intent.messageId)
-      }
       return true
     }
   }

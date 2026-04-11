@@ -10,6 +10,7 @@ import { useDocumentsStore } from '@/stores/documents'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
+import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { isUuidTaskRouteValue, taskSlugFromPublicId } from '@/services/taskRoute'
 import * as chatApi from '@/services/http/chatApi'
 import { toNotificationOpenMessage } from '@/services/notificationOpen'
@@ -1047,7 +1048,7 @@ describe('MainView server unavailable state', () => {
     vi.spyOn(chatStore, 'ensureConversationHistory').mockResolvedValue(undefined)
     vi.spyOn(chatStore, 'loadMessageContext').mockResolvedValue('loaded')
     vi.spyOn(chatApi, 'resolveUnreadFeedNotification').mockResolvedValue(undefined)
-    const openThreadSpy = vi.spyOn(chatStore, 'openThread')
+    const pinnedStore = usePinnedDialogsStore()
 
     const wrapper = mountAtRoute(router)
     await flushUi()
@@ -1061,9 +1062,9 @@ describe('MainView server unavailable state', () => {
     expect(chatStore.activeChannelId).toBe('dm-1')
     expect(chatStore.chatViewMode).toBe('conversation')
     expect(chatStore.focusedMessageId).toBe('root-1')
-    expect(chatStore.focusedThreadMessageId).toBe('msg-1')
-    expect(openThreadSpy).toHaveBeenCalled()
-    expect(chatStore.threadComposerFocusToken).toBeGreaterThan(0)
+    expect(chatStore.focusedThreadMessageId).toBe('')
+    expect(pinnedStore.activeId).toBe('thread:dm-1:root-1')
+    expect(pinnedStore.items.map(item => item.id)).toEqual(['thread:dm-1:root-1'])
     expect(chatStore.unreadFeedItems.map(item => item.id)).toEqual(['thread:notif-3'])
     expect(chatStore.unreadFeedTotalCount).toBe(1)
     expect(chatStore.notifications.map(notification => notification.id)).toEqual(['notif-3'])

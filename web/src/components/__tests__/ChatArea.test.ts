@@ -7,6 +7,7 @@ import ChatArea from '@/components/ChatArea.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
+import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useWsStore } from '@/stores/ws'
 import { listActiveCallMembers, listConversationMembers } from '@/services/http/chatApi'
 
@@ -188,6 +189,37 @@ describe('ChatArea', () => {
     })
 
     expect(wrapper.text()).toContain('Bob')
+  })
+
+  it('toggles current conversation pin from header button', async () => {
+    const chatStore = useChatStore()
+    const pinnedStore = usePinnedDialogsStore()
+
+    chatStore.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      presence: 'online',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'dm-1'
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="pin-conversation-button"]').trigger('click')
+    expect(pinnedStore.items.map(item => item.id)).toEqual(['dm:dm-1'])
+
+    await wrapper.get('[data-testid="pin-conversation-button"]').trigger('click')
+    expect(pinnedStore.items).toEqual([])
+    expect(pinnedStore.activeId).toBeNull()
   })
 
   it('passes derived thread reply count after refresh when thread summary is not loaded yet', () => {
@@ -683,11 +715,9 @@ describe('ChatArea', () => {
     expect(el.scrollTop).toBe(1700)
   })
 
-  it('opens thread panel from message bubble and subscribes to thread', async () => {
+  it('pins thread from message bubble without opening legacy thread panel', async () => {
     const chatStore = useChatStore()
-    const wsStore = useWsStore()
-    wsStore.state = 'LIVE_SYNCED'
-    wsStore.sendSubscribeThread = vi.fn()
+    const pinnedStore = usePinnedDialogsStore()
 
     chatStore.channels = [{
       id: 'channel-1',
@@ -729,82 +759,13 @@ describe('ChatArea', () => {
 
     await wrapper.get('[data-testid="open-thread"]').trigger('click')
 
-    expect(wsStore.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
-    expect(chatStore.isThreadPanelOpen).toBe(true)
+    expect(pinnedStore.activeId).toBe('thread:channel-1:root-1')
+    expect(pinnedStore.items.map(item => item.id)).toEqual(['thread:channel-1:root-1'])
+    expect(chatStore.isThreadPanelOpen).toBe(false)
   })
 
-  it('sends thread reply from panel with thread root id', async () => {
-    const authStore = useAuthStore()
+  it('does not render legacy thread panel replies inside main chat area', async () => {
     const chatStore = useChatStore()
-    const wsStore = useWsStore()
-    wsStore.state = 'LIVE_SYNCED'
-    wsStore.sendMessage = vi.fn()
-    wsStore.sendSubscribeThread = vi.fn()
-
-    authStore.user = {
-      id: 'user-1',
-      displayName: 'Ada',
-      email: 'ada@example.com',
-      role: 'member',
-    }
-    chatStore.channels = [{
-      id: 'channel-1',
-      name: 'general',
-      kind: 'channel',
-      visibility: 'public',
-      unread: 0,
-      notificationLevel: NotificationLevel.ALL,
-    }]
-    chatStore.activeChannelId = 'channel-1'
-    chatStore.messages = {
-      'channel-1': [{
-        id: 'root-1',
-        channelId: 'channel-1',
-        senderId: 'user-2',
-        senderName: 'Bob',
-        body: 'root',
-        channelSeq: 1n,
-        threadSeq: 0n,
-        mentionedUserIds: [],
-        mentionEveryone: false,
-        createdAt: '2026-03-06T00:00:00Z',
-        reactions: [],
-        myReactions: [],
-      }],
-    }
-
-    chatStore.openThread(chatStore.messages['channel-1'][0])
-    await nextTick()
-
-    const wrapper = mount(ChatArea, {
-      global: {
-        stubs: {
-          MessageBubble: true,
-          MessageInput: {
-            props: ['channelName'],
-            template: `
-              <button
-                data-testid="emit-send"
-                @click="$emit('send', { body: 'thread reply', attachmentIds: [], attachments: [] })"
-              >
-                {{ channelName }}
-              </button>
-            `,
-          },
-        },
-      },
-    })
-
-    const sendButtons = wrapper.findAll('[data-testid="emit-send"]')
-    await sendButtons[1]?.trigger('click')
-
-    expect(wsStore.sendMessage).toHaveBeenCalledWith('channel-1', 'thread reply', expect.any(String), 'root-1', [])
-  })
-
-  it('renders thread replies in ascending thread_seq order inside thread panel', async () => {
-    const chatStore = useChatStore()
-    const wsStore = useWsStore()
-    wsStore.state = 'LIVE_SYNCED'
 
     chatStore.channels = [{
       id: 'channel-1',
@@ -881,12 +842,8 @@ describe('ChatArea', () => {
     })
 
     const bubbleText = wrapper.findAll('.bubble').map(item => item.text())
-    const replyOneIndex = bubbleText.findIndex(text => text.includes('reply 1|1'))
-    const replyTwoIndex = bubbleText.findIndex(text => text.includes('reply 2|2'))
 
-    expect(replyOneIndex).toBeGreaterThan(-1)
-    expect(replyTwoIndex).toBeGreaterThan(-1)
-    expect(replyOneIndex).toBeLessThan(replyTwoIndex)
+    expect(bubbleText).toEqual(['root|0'])
   })
 
   it('renders member avatars in the channel call invite dialog', async () => {

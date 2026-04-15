@@ -34,6 +34,20 @@ func seedUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool) uuid.UUID {
 	return id
 }
 
+func seedUserProfile(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email, displayName, avatarURL string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, avatar_url, role)
+		 VALUES ($1, 'x', $2, $3, 'admin') RETURNING id`,
+		email,
+		displayName,
+		avatarURL,
+	).Scan(&id)
+	require.NoError(t, err)
+	return id
+}
+
 // =========================================================
 // Templates
 // =========================================================
@@ -2881,6 +2895,153 @@ func TestIntegration_Subtask_SubtaskCardReturnsEmptySubtasksList(t *testing.T) {
 	// A subtask card must never return subtasks (one-level limit).
 	assert.NotNil(t, resp.Subtasks)
 	assert.Empty(t, resp.Subtasks)
+}
+
+func TestIntegration_Subtask_AssigneeUserIncludedInParentCard(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	assignee := seedUserProfile(t, ctx, pool, "assignee@example.com", "Assignee User", "/api/public/avatars/avatars/u-2/assignee.png")
+	tpl := seedTemplate(t, ctx, svc, "ASU", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	role := "assignee"
+
+	field, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tpl.ID,
+		Code:       "owner",
+		Name:       "Owner",
+		Type:       "user",
+		SortOrder:  1,
+		FieldRole:  &role,
+	})
+	require.NoError(t, err)
+
+	parent := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Parent")
+	_, err = svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:   tpl.ID,
+		ParentTaskID: uuidPtr(parent.ID),
+		Title:        "Assigned child",
+		StatusID:     status.ID,
+		ActorID:      actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: field.ID, ValueUserID: &assignee},
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.GetTask(ctx, parent.ID)
+	require.NoError(t, err)
+	require.Len(t, resp.Subtasks, 1)
+	require.Len(t, resp.Subtasks[0].Assignees, 1)
+	assert.Equal(t, assignee, resp.Subtasks[0].Assignees[0].ID)
+	assert.Equal(t, "Assignee User", resp.Subtasks[0].Assignees[0].DisplayName)
+	assert.Equal(t, "assignee@example.com", resp.Subtasks[0].Assignees[0].Email)
+	assert.Equal(t, "/api/public/avatars/avatars/u-2/assignee.png", resp.Subtasks[0].Assignees[0].AvatarURL)
+}
+
+func TestIntegration_Subtask_AssigneeUsersIncludedInStoredOrder(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	first := seedUserProfile(t, ctx, pool, "first@example.com", "First User", "")
+	second := seedUserProfile(t, ctx, pool, "second@example.com", "Second User", "")
+	third := seedUserProfile(t, ctx, pool, "third@example.com", "Third User", "")
+	tpl := seedTemplate(t, ctx, svc, "ASM", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	role := "assignee"
+
+	field, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tpl.ID,
+		Code:       "owners",
+		Name:       "Owners",
+		Type:       "users",
+		SortOrder:  1,
+		FieldRole:  &role,
+	})
+	require.NoError(t, err)
+
+	parent := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Parent")
+	assigneesJSON := json.RawMessage(fmt.Sprintf(`["%s","%s","%s"]`, second, third, first))
+	_, err = svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:   tpl.ID,
+		ParentTaskID: uuidPtr(parent.ID),
+		Title:        "Multi-assigned child",
+		StatusID:     status.ID,
+		ActorID:      actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: field.ID, ValueJSON: assigneesJSON},
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.GetTask(ctx, parent.ID)
+	require.NoError(t, err)
+	require.Len(t, resp.Subtasks, 1)
+	require.Len(t, resp.Subtasks[0].Assignees, 3)
+	assert.Equal(t, second, resp.Subtasks[0].Assignees[0].ID)
+	assert.Equal(t, third, resp.Subtasks[0].Assignees[1].ID)
+	assert.Equal(t, first, resp.Subtasks[0].Assignees[2].ID)
+}
+
+func TestIntegration_Subtask_AssigneesEmptyWhenTemplateHasNoAssigneeField(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "ASN", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	parent := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Parent")
+	_, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:   tpl.ID,
+		ParentTaskID: uuidPtr(parent.ID),
+		Title:        "Plain child",
+		StatusID:     status.ID,
+		ActorID:      actor,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.GetTask(ctx, parent.ID)
+	require.NoError(t, err)
+	require.Len(t, resp.Subtasks, 1)
+	assert.Empty(t, resp.Subtasks[0].Assignees)
+}
+
+func TestIntegration_Subtask_AssigneesEmptyWhenAssigneeFieldValueMissing(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "ASE", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	role := "assignee"
+
+	_, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tpl.ID,
+		Code:       "owner",
+		Name:       "Owner",
+		Type:       "user",
+		SortOrder:  1,
+		FieldRole:  &role,
+	})
+	require.NoError(t, err)
+
+	parent := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Parent")
+	_, err = svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:   tpl.ID,
+		ParentTaskID: uuidPtr(parent.ID),
+		Title:        "Unassigned child",
+		StatusID:     status.ID,
+		ActorID:      actor,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.GetTask(ctx, parent.ID)
+	require.NoError(t, err)
+	require.Len(t, resp.Subtasks, 1)
+	assert.Empty(t, resp.Subtasks[0].Assignees)
 }
 
 // =========================================================

@@ -2,7 +2,7 @@ import { reactive, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskCard from '@/components/tasks/TaskCard.vue'
-import type { TaskDescriptionHistoryItem } from '@/services/http/tasksApi'
+import type { Task, TaskDescriptionHistoryItem } from '@/services/http/tasksApi'
 
 const platformMocks = vi.hoisted(() => ({
   getPlatformOrNull: vi.fn(),
@@ -10,7 +10,7 @@ const platformMocks = vi.hoisted(() => ({
   exportTaskToPdfBlob: vi.fn(),
 }))
 
-const selectedTask = {
+const selectedTask: Task = {
   id: 'task-1',
   public_id: 'TASK-1',
   template_id: 'tpl-1',
@@ -359,6 +359,214 @@ describe('TaskCard', () => {
       status_id: 'st-1',
       description: '- one\\n- two',
     }))
+  })
+
+  it('renders a single subtask assignee avatar and username in the right-side assignee list', async () => {
+    tasksStoreMock.selectedTask = {
+      ...selectedTask,
+      subtasks: [
+        {
+          id: 'sub-1',
+          public_id: 'TASK-2',
+          template_id: 'tpl-1',
+          template_snapshot_prefix: 'TASK',
+          sequence_number: 2,
+          title: 'Assigned child',
+          description: null,
+          status_id: 'st-1',
+          parent_task_id: 'task-1',
+          created_by: 'u-1',
+          updated_by: 'u-1',
+          created_at: '2026-03-10T12:05:00Z',
+          updated_at: '2026-03-10T12:05:00Z',
+          assignees: [
+            {
+              id: 'u-2',
+              display_name: 'Updater User',
+              email: 'updater@example.com',
+              avatar_url: '/api/public/avatars/avatars/u-2/updater.png',
+            },
+          ],
+        },
+      ],
+    }
+
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: true,
+          UserAvatar: {
+            props: ['userId', 'displayName', 'avatarUrl', 'size'],
+            template: '<div class="user-avatar-stub" :data-user-id="userId" :data-display-name="displayName" :data-avatar-url="avatarUrl" :data-size="size" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    const assigneeBlock = wrapper.get('[data-testid="subtask-assignee-sub-1"]')
+    const avatars = assigneeBlock.findAll('.user-avatar-stub')
+    expect(avatars).toHaveLength(1)
+    expect(avatars[0].attributes('data-user-id')).toBe('u-2')
+    expect(avatars[0].attributes('data-display-name')).toBe('Updater User')
+    expect(avatars[0].attributes('data-avatar-url')).toBe('/api/public/avatars/avatars/u-2/updater.png')
+    expect(avatars[0].attributes('data-size')).toBe('xs')
+    expect(assigneeBlock.text()).toContain('Updater User')
+  })
+
+  it('falls back to assignee email for avatar label and username when display name is empty', async () => {
+    tasksStoreMock.selectedTask = {
+      ...selectedTask,
+      subtasks: [
+        {
+          id: 'sub-2',
+          public_id: 'TASK-3',
+          template_id: 'tpl-1',
+          template_snapshot_prefix: 'TASK',
+          sequence_number: 3,
+          title: 'Assigned child',
+          description: null,
+          status_id: 'st-1',
+          parent_task_id: 'task-1',
+          created_by: 'u-1',
+          updated_by: 'u-1',
+          created_at: '2026-03-10T12:06:00Z',
+          updated_at: '2026-03-10T12:06:00Z',
+          assignees: [
+            {
+              id: 'u-3',
+              display_name: '',
+              email: 'fallback@example.com',
+              avatar_url: '',
+            },
+          ],
+        },
+      ],
+    }
+
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: true,
+          UserAvatar: {
+            props: ['userId', 'displayName', 'avatarUrl', 'size'],
+            template: '<div class="user-avatar-stub" :data-display-name="displayName" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    const assigneeBlock = wrapper.get('[data-testid="subtask-assignee-sub-2"]')
+    expect(assigneeBlock.text()).toContain('fallback@example.com')
+    expect(assigneeBlock.get('.user-avatar-stub').attributes('data-display-name')).toBe('fallback@example.com')
+  })
+
+  it('renders multiple assignee avatar-and-username pairs with comma separators and overflow marker', async () => {
+    tasksStoreMock.selectedTask = {
+      ...selectedTask,
+      subtasks: [
+        {
+          id: 'sub-3',
+          public_id: 'TASK-4',
+          template_id: 'tpl-1',
+          template_snapshot_prefix: 'TASK',
+          sequence_number: 4,
+          title: 'Multi-assigned child',
+          description: null,
+          status_id: 'st-1',
+          parent_task_id: 'task-1',
+          created_by: 'u-1',
+          updated_by: 'u-1',
+          created_at: '2026-03-10T12:07:00Z',
+          updated_at: '2026-03-10T12:07:00Z',
+          assignees: [
+            { id: 'u-1', display_name: 'Creator User', email: 'creator@example.com', avatar_url: '' },
+            { id: 'u-2', display_name: 'Updater User', email: 'updater@example.com', avatar_url: '' },
+            { id: 'u-3', display_name: '', email: 'third@example.com', avatar_url: '' },
+            { id: 'u-4', display_name: 'Fourth User', email: 'fourth@example.com', avatar_url: '' },
+          ],
+        },
+      ],
+    }
+
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: true,
+          UserAvatar: {
+            props: ['userId', 'displayName'],
+            template: '<div class="user-avatar-stub" :data-user-id="userId" :data-display-name="displayName" />',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    const assigneeBlock = wrapper.get('[data-testid="subtask-assignee-sub-3"]')
+    const avatars = assigneeBlock.findAll('.user-avatar-stub')
+    expect(avatars).toHaveLength(3)
+    expect(avatars[0].attributes('data-user-id')).toBe('u-1')
+    expect(avatars[1].attributes('data-user-id')).toBe('u-2')
+    expect(avatars[2].attributes('data-user-id')).toBe('u-3')
+    expect(wrapper.get('[data-testid="subtask-assignee-overflow-sub-3"]').text()).toBe('...')
+    expect(assigneeBlock.text()).toContain('Creator User')
+    expect(assigneeBlock.text()).toContain('Updater User')
+    expect(assigneeBlock.text()).toContain('third@example.com')
+    expect(assigneeBlock.text()).toContain(',')
+    expect(assigneeBlock.text()).toContain('...')
+  })
+
+  it('hides the subtask assignee block when no assignee is attached', async () => {
+    tasksStoreMock.selectedTask = {
+      ...selectedTask,
+      subtasks: [
+        {
+          id: 'sub-4',
+          public_id: 'TASK-5',
+          template_id: 'tpl-1',
+          template_snapshot_prefix: 'TASK',
+          sequence_number: 5,
+          title: 'Unassigned child',
+          description: null,
+          status_id: 'st-1',
+          parent_task_id: 'task-1',
+          created_by: 'u-1',
+          updated_by: 'u-1',
+          created_at: '2026-03-10T12:08:00Z',
+          updated_at: '2026-03-10T12:08:00Z',
+          assignees: [],
+        },
+      ],
+    }
+
+    const wrapper = mount(TaskCard, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskFieldInput: true,
+          TaskAttachments: true,
+          TaskComments: true,
+          TaskDescriptionEditor: true,
+          UserAvatar: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="subtask-assignee-sub-4"]').exists()).toBe(false)
   })
 
   it('renders creator and updater metadata in the footer', async () => {

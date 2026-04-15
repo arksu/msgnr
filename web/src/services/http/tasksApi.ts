@@ -380,6 +380,30 @@ export interface TaskFieldValue {
   updated_at: string
 }
 
+export interface TaskAssigneeSummary {
+  id: string
+  display_name: string
+  email: string
+  avatar_url: string
+}
+
+export interface TaskSubtaskSummary {
+  id: string
+  public_id: string
+  template_id: string
+  template_snapshot_prefix: string
+  sequence_number: number
+  title: string
+  description: string | null
+  status_id: string
+  parent_task_id: string | null
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+  assignees: TaskAssigneeSummary[]
+}
+
 export interface Task {
   id: string
   public_id: string
@@ -396,7 +420,7 @@ export interface Task {
   created_at: string
   updated_at: string
   field_values: TaskFieldValue[]
-  subtasks: Task[]
+  subtasks: TaskSubtaskSummary[]
 }
 
 export interface TaskFieldValueInput {

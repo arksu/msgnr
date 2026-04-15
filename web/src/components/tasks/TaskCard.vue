@@ -175,7 +175,32 @@
             <span class="font-mono text-public_id border border-public_id/20 px-1.5 py-0.5 rounded shrink-0">
               {{ sub.public_id }}
             </span>
-            <span class="flex-1 text-sm text-gray-200 truncate">{{ sub.title }}</span>
+            <span class="flex-1 min-w-0 text-sm text-gray-200 truncate">{{ sub.title }}</span>
+            <div
+              v-if="sub.assignees.length"
+              :data-testid="`subtask-assignee-${sub.id}`"
+              class="flex min-w-0 max-w-[45%] items-center justify-end gap-1 shrink text-xs text-gray-400"
+            >
+              <template v-for="(assignee, index) in visibleSubtaskAssignees(sub)" :key="assignee.id">
+                <span v-if="index > 0" class="shrink-0">,</span>
+                <span class="flex min-w-0 shrink items-center gap-1">
+                  <UserAvatar
+                    :user-id="assignee.id"
+                    :display-name="subtaskAssigneeLabel(assignee)"
+                    :avatar-url="assignee.avatar_url"
+                    size="xs"
+                  />
+                  <span class="min-w-0 truncate">{{ subtaskAssigneeLabel(assignee) }}</span>
+                </span>
+              </template>
+              <span
+                v-if="hasSubtaskAssigneeOverflow(sub)"
+                :data-testid="`subtask-assignee-overflow-${sub.id}`"
+                class="shrink-0"
+              >
+                ...
+              </span>
+            </div>
             <span class="text-xs text-gray-500 group-hover:text-gray-300 transition-colors shrink-0">
               {{ tasksStore.statusById(sub.status_id)?.name ?? '' }}
             </span>
@@ -504,9 +529,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   TasksApiConflictError,
+  type TaskAssigneeSummary,
   type TaskDescriptionHistoryItem,
   type TaskFieldDefinition,
   type TaskFieldValue,
+  type TaskSubtaskSummary,
   type TaskTitleConflictResponse,
 } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
@@ -1162,6 +1189,18 @@ function userSummaryFor(userId: string): { id: string; displayName: string; avat
     displayName: user?.display_name?.trim() || userId || 'Unknown user',
     avatarUrl: user?.avatar_url ?? '',
   }
+}
+
+function subtaskAssigneeLabel(assignee: TaskAssigneeSummary): string {
+  return assignee.display_name.trim() || assignee.email.trim() || assignee.id
+}
+
+function visibleSubtaskAssignees(subtask: TaskSubtaskSummary): TaskAssigneeSummary[] {
+  return subtask.assignees.slice(0, 3)
+}
+
+function hasSubtaskAssigneeOverflow(subtask: TaskSubtaskSummary): boolean {
+  return subtask.assignees.length > 3
 }
 
 async function loadDescriptionHistory(taskID: string) {

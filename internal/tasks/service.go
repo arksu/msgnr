@@ -233,14 +233,26 @@ type FieldValueRow struct {
 	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
+type TaskAssigneeSummary struct {
+	ID          uuid.UUID `json:"id"`
+	DisplayName string    `json:"display_name"`
+	Email       string    `json:"email"`
+	AvatarURL   string    `json:"avatar_url"`
+}
+
+type TaskSubtaskSummary struct {
+	TaskRow
+	Assignees []TaskAssigneeSummary `json:"assignees"`
+}
+
 // TaskResponse combines a task with its custom field values and subtasks.
 // Subtasks is only populated for top-level tasks (ParentTaskID == nil).
 // ParentPublicID is only populated for subtasks (ParentTaskID != nil).
 type TaskResponse struct {
 	TaskRow
-	FieldValues    []FieldValueRow `json:"field_values"`
-	Subtasks       []TaskRow       `json:"subtasks"`
-	ParentPublicID *string         `json:"parent_public_id,omitempty"`
+	FieldValues    []FieldValueRow      `json:"field_values"`
+	Subtasks       []TaskSubtaskSummary `json:"subtasks"`
+	ParentPublicID *string              `json:"parent_public_id,omitempty"`
 }
 
 // TaskDescriptionHistoryEditor is a public editor snapshot in task history.
@@ -1822,7 +1834,7 @@ func (s *Service) GetTask(ctx context.Context, id uuid.UUID) (TaskResponse, erro
 		return TaskResponse{}, fmt.Errorf("tasks: list field values: %w", err)
 	}
 
-	resp := TaskResponse{TaskRow: task, FieldValues: mapFieldValues(fvRows), Subtasks: []TaskRow{}}
+	resp := TaskResponse{TaskRow: task, FieldValues: mapFieldValues(fvRows), Subtasks: []TaskSubtaskSummary{}}
 
 	if task.ParentTaskID == nil {
 		resp.Subtasks, err = s.GetSubtasks(ctx, id)
@@ -1871,16 +1883,201 @@ func (s *Service) GetTaskDescription(ctx context.Context, id uuid.UUID) (*string
 }
 
 // GetSubtasks returns all direct children of parentID ordered by creation time.
-func (s *Service) GetSubtasks(ctx context.Context, parentID uuid.UUID) ([]TaskRow, error) {
+func (s *Service) GetSubtasks(ctx context.Context, parentID uuid.UUID) ([]TaskSubtaskSummary, error) {
 	qrows, err := s.q.TaskSubtaskList(ctx, uuid.NullUUID{UUID: parentID, Valid: true})
 	if err != nil {
 		return nil, fmt.Errorf("tasks: get subtasks: %w", err)
 	}
-	out := make([]TaskRow, 0, len(qrows))
+	assigneesByTaskID, err := s.loadSubtaskAssignees(ctx, qrows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TaskSubtaskSummary, 0, len(qrows))
 	for _, r := range qrows {
-		out = append(out, mapTask(r))
+		out = append(out, TaskSubtaskSummary{
+			TaskRow:   mapTask(r),
+			Assignees: assigneesByTaskID[r.ID],
+		})
 	}
 	return out, nil
+}
+
+func (s *Service) loadSubtaskAssignees(ctx context.Context, subtasks []queries.Task) (map[uuid.UUID][]TaskAssigneeSummary, error) {
+	assigneesByTaskID := make(map[uuid.UUID][]TaskAssigneeSummary, len(subtasks))
+	if len(subtasks) == 0 {
+		return assigneesByTaskID, nil
+	}
+
+	taskIDs := make([]uuid.UUID, 0, len(subtasks))
+	templateIDSet := make(map[uuid.UUID]struct{}, len(subtasks))
+	templateIDByTaskID := make(map[uuid.UUID]uuid.UUID, len(subtasks))
+	for _, subtask := range subtasks {
+		taskIDs = append(taskIDs, subtask.ID)
+		assigneesByTaskID[subtask.ID] = []TaskAssigneeSummary{}
+		templateIDSet[subtask.TemplateID] = struct{}{}
+		templateIDByTaskID[subtask.ID] = subtask.TemplateID
+	}
+
+	templateIDs := make([]uuid.UUID, 0, len(templateIDSet))
+	for id := range templateIDSet {
+		templateIDs = append(templateIDs, id)
+	}
+
+	type assigneeFieldDef struct {
+		ID         uuid.UUID
+		TemplateID uuid.UUID
+		Type       string
+	}
+
+	fieldRows, err := s.pool.Query(ctx, `
+		SELECT id, template_id, type
+		FROM task_field_definition
+		WHERE deleted_at IS NULL
+		  AND field_role = 'assignee'
+		  AND template_id = ANY($1::uuid[])
+	`, uuidSliceToStrings(templateIDs))
+	if err != nil {
+		return nil, fmt.Errorf("tasks: list subtask assignee fields: %w", err)
+	}
+	defer fieldRows.Close()
+
+	fieldDefsByTemplateID := make(map[uuid.UUID]assigneeFieldDef, len(templateIDs))
+	fieldIDs := make([]uuid.UUID, 0, len(templateIDs))
+	for fieldRows.Next() {
+		var row assigneeFieldDef
+		if err := fieldRows.Scan(&row.ID, &row.TemplateID, &row.Type); err != nil {
+			return nil, fmt.Errorf("tasks: scan subtask assignee field: %w", err)
+		}
+		fieldDefsByTemplateID[row.TemplateID] = row
+		fieldIDs = append(fieldIDs, row.ID)
+	}
+	if err := fieldRows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate subtask assignee fields: %w", err)
+	}
+	if len(fieldIDs) == 0 {
+		return assigneesByTaskID, nil
+	}
+
+	type assigneeValueRow struct {
+		TaskID            uuid.UUID
+		FieldDefinitionID uuid.UUID
+		ValueUserID       string
+		ValueJSON         string
+	}
+
+	valueRows, err := s.pool.Query(ctx, `
+		SELECT task_id,
+		       field_definition_id,
+		       COALESCE(value_user_id::text, ''),
+		       COALESCE(value_json::text, '[]')
+		FROM task_field_value
+		WHERE task_id = ANY($1::uuid[])
+		  AND field_definition_id = ANY($2::uuid[])
+	`, uuidSliceToStrings(taskIDs), uuidSliceToStrings(fieldIDs))
+	if err != nil {
+		return nil, fmt.Errorf("tasks: list subtask assignee values: %w", err)
+	}
+	defer valueRows.Close()
+
+	userIDSet := make(map[uuid.UUID]struct{})
+	userIDsByTaskID := make(map[uuid.UUID][]uuid.UUID, len(subtasks))
+
+	for valueRows.Next() {
+		var row assigneeValueRow
+		if err := valueRows.Scan(&row.TaskID, &row.FieldDefinitionID, &row.ValueUserID, &row.ValueJSON); err != nil {
+			return nil, fmt.Errorf("tasks: scan subtask assignee value: %w", err)
+		}
+
+		templateID, ok := templateIDByTaskID[row.TaskID]
+		if !ok {
+			continue
+		}
+		fieldDef, found := fieldDefsByTemplateID[templateID]
+		if !found || fieldDef.ID != row.FieldDefinitionID {
+			continue
+		}
+
+		switch fieldDef.Type {
+		case "user":
+			if strings.TrimSpace(row.ValueUserID) == "" {
+				continue
+			}
+			userID, err := uuid.Parse(row.ValueUserID)
+			if err != nil {
+				return nil, fmt.Errorf("tasks: parse subtask assignee user id: %w", err)
+			}
+			userIDsByTaskID[row.TaskID] = append(userIDsByTaskID[row.TaskID], userID)
+			userIDSet[userID] = struct{}{}
+		case "users":
+			var rawIDs []string
+			if err := json.Unmarshal([]byte(row.ValueJSON), &rawIDs); err != nil {
+				return nil, fmt.Errorf("tasks: decode subtask assignee users: %w", err)
+			}
+			for _, rawID := range rawIDs {
+				if strings.TrimSpace(rawID) == "" {
+					continue
+				}
+				userID, err := uuid.Parse(rawID)
+				if err != nil {
+					return nil, fmt.Errorf("tasks: parse subtask assignee user id: %w", err)
+				}
+				userIDsByTaskID[row.TaskID] = append(userIDsByTaskID[row.TaskID], userID)
+				userIDSet[userID] = struct{}{}
+			}
+		}
+	}
+	if err := valueRows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate subtask assignee values: %w", err)
+	}
+
+	if len(userIDSet) == 0 {
+		return assigneesByTaskID, nil
+	}
+
+	userIDs := make([]uuid.UUID, 0, len(userIDSet))
+	for id := range userIDSet {
+		userIDs = append(userIDs, id)
+	}
+
+	userRows, err := s.pool.Query(ctx, `
+		SELECT id, display_name, email, avatar_url
+		FROM users
+		WHERE id = ANY($1::uuid[])
+	`, uuidSliceToStrings(userIDs))
+	if err != nil {
+		return nil, fmt.Errorf("tasks: list subtask assignee users: %w", err)
+	}
+	defer userRows.Close()
+
+	usersByID := make(map[uuid.UUID]TaskAssigneeSummary, len(userIDs))
+	for userRows.Next() {
+		var user TaskAssigneeSummary
+		if err := userRows.Scan(&user.ID, &user.DisplayName, &user.Email, &user.AvatarURL); err != nil {
+			return nil, fmt.Errorf("tasks: scan subtask assignee user: %w", err)
+		}
+		usersByID[user.ID] = user
+	}
+	if err := userRows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate subtask assignee users: %w", err)
+	}
+
+	for _, subtask := range subtasks {
+		userIDsForTask := userIDsByTaskID[subtask.ID]
+		if len(userIDsForTask) == 0 {
+			continue
+		}
+		assignees := make([]TaskAssigneeSummary, 0, len(userIDsForTask))
+		for _, userID := range userIDsForTask {
+			user, ok := usersByID[userID]
+			if !ok {
+				continue
+			}
+			assignees = append(assignees, user)
+		}
+		assigneesByTaskID[subtask.ID] = assignees
+	}
+
+	return assigneesByTaskID, nil
 }
 
 // UpdateTask updates a task's system fields and replaces all field values

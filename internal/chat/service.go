@@ -4193,10 +4193,6 @@ func (s *Service) threadNotificationRecipientsTx(ctx context.Context, tx pgx.Tx,
 			SELECT participant.sender_id AS candidate_id
 			  FROM messages participant
 			 WHERE participant.thread_root_id = $1
-			UNION
-			SELECT tr.user_id AS candidate_id
-			  FROM thread_reads tr
-			 WHERE tr.root_message_id = $1
 		  ) candidates
 		  JOIN messages root ON root.id = $1
 		  JOIN channel_members cm

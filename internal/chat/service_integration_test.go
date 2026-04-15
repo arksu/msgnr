@@ -1737,7 +1737,7 @@ func TestIntegration_SendMessage_ThreadRepliesNotifyOnlyThreadMembers(t *testing
 	}
 }
 
-func TestIntegration_SendMessage_ThreadRepliesNotifySubscribedReaders(t *testing.T) {
+func TestIntegration_SendMessage_ThreadRepliesDoNotNotifyReadOnlyOpeners(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 
@@ -1792,7 +1792,7 @@ func TestIntegration_SendMessage_ThreadRepliesNotifySubscribedReaders(t *testing
 	require.NoError(t, err)
 
 	threadNotifications := filterDirectDeliveriesByType(reply.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
-	require.Len(t, threadNotifications, 2)
+	require.Len(t, threadNotifications, 1)
 
 	notificationRecipients := make([]string, 0, len(threadNotifications))
 	for _, delivery := range threadNotifications {
@@ -1800,7 +1800,7 @@ func TestIntegration_SendMessage_ThreadRepliesNotifySubscribedReaders(t *testing
 		require.NotNil(t, delivery.Event.GetNotificationAdded())
 		assert.Equal(t, packetspb.NotificationType_NOTIFICATION_TYPE_THREAD_REPLY, delivery.Event.GetNotificationAdded().GetNotification().GetType())
 	}
-	assert.ElementsMatch(t, []string{rootAuthorID.String(), threadReaderID.String()}, notificationRecipients)
+	assert.ElementsMatch(t, []string{rootAuthorID.String()}, notificationRecipients)
 
 	readCounterDeliveries := filterDirectDeliveriesByType(reply.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)
 	var readerCounter *packetspb.UnreadCounter
@@ -1817,6 +1817,71 @@ func TestIntegration_SendMessage_ThreadRepliesNotifySubscribedReaders(t *testing
 	assert.True(t, readerCounter.HasUnreadThreadReplies)
 	require.NotNil(t, bystanderCounter)
 	assert.False(t, bystanderCounter.HasUnreadThreadReplies)
+}
+
+func TestIntegration_SendMessage_ThreadRepliesNotifyPriorReplyAuthors(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	rootAuthorID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	createMember := func(name string) uuid.UUID {
+		var userID uuid.UUID
+		err := pool.QueryRow(ctx,
+			`INSERT INTO users (email, password_hash, display_name, role)
+			 VALUES ($1, 'x', $2, 'member')
+			 RETURNING id`,
+			strings.ToLower(name)+"_"+uuid.New().String()+"@example.com",
+			name,
+		).Scan(&userID)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, channelID, userID)
+		require.NoError(t, err)
+		return userID
+	}
+
+	firstReplierID := createMember("FirstReplier")
+	secondReplierID := createMember("SecondReplier")
+
+	root, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    rootAuthorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "root",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            firstReplierID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "first reply",
+		ThreadRootMessageID: root.MessageID,
+	})
+	require.NoError(t, err)
+
+	reply, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            secondReplierID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "second reply",
+		ThreadRootMessageID: root.MessageID,
+	})
+	require.NoError(t, err)
+
+	threadNotifications := filterDirectDeliveriesByType(reply.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
+	require.Len(t, threadNotifications, 2)
+
+	notificationRecipients := make([]string, 0, len(threadNotifications))
+	for _, delivery := range threadNotifications {
+		notificationRecipients = append(notificationRecipients, delivery.UserID)
+		require.NotNil(t, delivery.Event.GetNotificationAdded())
+		assert.Equal(t, packetspb.NotificationType_NOTIFICATION_TYPE_THREAD_REPLY, delivery.Event.GetNotificationAdded().GetNotification().GetType())
+	}
+	assert.ElementsMatch(t, []string{rootAuthorID.String(), firstReplierID.String()}, notificationRecipients)
 }
 
 func TestIntegration_ListRecentMessages_ReturnsConversationHistory(t *testing.T) {

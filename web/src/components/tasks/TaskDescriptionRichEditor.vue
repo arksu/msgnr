@@ -940,15 +940,24 @@ function maybeSeedCollabEditorFromDraft(reason: string) {
   }
 }
 
+function normalizeMarkdownForSyncComparison(markdown: string): string {
+  // Markdown <-> ProseMirror round-trips can normalize trailing whitespace/newlines.
+  return markdown.replace(/\r\n/g, '\n').trimEnd()
+}
+
 function syncCollabEditorFromDraftIfNeeded(reason: string) {
   if (!collabEnabled.value || !editor.value) return
   const currentMarkdown = tiptapJsonToMarkdown(editor.value.getJSON())
+  const normalizedCurrent = normalizeMarkdownForSyncComparison(currentMarkdown)
+  const normalizedDraft = normalizeMarkdownForSyncComparison(markdownDraft.value)
   descLog('syncCollabEditorFromDraftIfNeeded', {
     reason,
     current: markdownSignature(currentMarkdown),
     draft: markdownSignature(markdownDraft.value),
+    normalizedCurrent: markdownSignature(normalizedCurrent),
+    normalizedDraft: markdownSignature(normalizedDraft),
   })
-  if (currentMarkdown === markdownDraft.value) return
+  if (normalizedCurrent === normalizedDraft) return
   setEditorContentFromMarkdown(markdownDraft.value, false, reason)
 }
 

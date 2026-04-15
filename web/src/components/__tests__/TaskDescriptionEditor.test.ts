@@ -2,12 +2,26 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, nextTick, ref, watch } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as Y from 'yjs'
+import { createPinia, setActivePinia } from 'pinia'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
-import { uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
+import TaskDescriptionRichEditor from '@/components/tasks/TaskDescriptionRichEditor.vue'
+import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
+import { createOrOpenDm } from '@/services/http/chatApi'
+import { tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
+import { resetDescriptionMentionCacheForTests } from '@/utils/descriptionMentions'
 
 vi.mock('@/services/http/attachmentOwnersApi', () => ({
   uploadOwnedAttachment: vi.fn(),
   fetchOwnedAttachmentBlob: vi.fn(),
+}))
+
+vi.mock('@/services/http/chatApi', () => ({
+  createOrOpenDm: vi.fn(),
+}))
+
+vi.mock('@/services/http/tasksApi', () => ({
+  tasksListUsers: vi.fn(),
+  tasksListTasks: vi.fn(),
 }))
 
 describe('TaskDescriptionEditor', () => {
@@ -22,8 +36,75 @@ describe('TaskDescriptionEditor', () => {
     throw new Error('rendered editor did not mount')
   }
 
+  async function waitForRenderedEditorText(wrapper: ReturnType<typeof mount>, expected: string) {
+    for (let i = 0; i < 20; i += 1) {
+      await flushPromises()
+      await nextTick()
+      const editor = wrapper.find('[data-testid="task-description-editor-content"] .ProseMirror')
+      if (editor.exists() && editor.text().includes(expected)) {
+        return
+      }
+    }
+    throw new Error(`rendered editor did not contain ${JSON.stringify(expected)}`)
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
+    setActivePinia(createPinia())
+    resetDescriptionMentionCacheForTests()
+    Object.defineProperty(globalThis.Node.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [],
+    })
+    Object.defineProperty(globalThis.Node.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }),
+    })
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [],
+    })
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }),
+    })
+    if (typeof globalThis.Range !== 'undefined') {
+      Object.defineProperty(globalThis.Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: () => [],
+      })
+      Object.defineProperty(globalThis.Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+        }),
+      })
+    }
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:editor')
     globalThis.URL.revokeObjectURL = vi.fn()
     window.open = vi.fn(() => ({
@@ -33,6 +114,18 @@ describe('TaskDescriptionEditor', () => {
       focus: vi.fn(),
       close: vi.fn(),
     } as unknown as Window))
+    vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    vi.mocked(createOrOpenDm).mockResolvedValue({
+      conversation_id: 'dm-1',
+      user_id: 'user-1',
+      display_name: 'Alice Example',
+      email: 'alice@example.com',
+      avatar_url: 'https://example.com/alice.png',
+      kind: 'dm',
+      visibility: 'dm',
+    })
+    vi.mocked(tasksListUsers).mockResolvedValue([])
+    vi.mocked(tasksListTasks).mockResolvedValue({ groups: [], grand_total: 0 })
   })
 
   it('uploads dropped files from the markdown tab and inserts tokens at the cursor', async () => {
@@ -168,6 +261,10 @@ describe('TaskDescriptionEditor', () => {
           type: String,
           required: true,
         },
+        collabDoc: {
+          type: Object,
+          default: null,
+        },
         forceLocalSyncToken: {
           type: Number,
           default: 0,
@@ -181,6 +278,16 @@ describe('TaskDescriptionEditor', () => {
           (next, prev) => {
             if (next === prev) return
             renderedValue.value = props.modelValue
+            const collabDoc = props.collabDoc as Y.Doc | null
+            if (!collabDoc) return
+            const fragment = collabDoc.getXmlFragment('task_description')
+            collabDoc.transact(() => {
+              fragment.delete(0, fragment.length)
+              if (props.modelValue.trim() === '') return
+              const text = new Y.XmlText()
+              text.insert(0, props.modelValue)
+              fragment.insert(0, [text])
+            }, 'test-stub-sync')
           },
         )
 
@@ -217,5 +324,51 @@ describe('TaskDescriptionEditor', () => {
 
     expect(wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror').text()).toContain('## Edited')
     expect(wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror').text()).toContain('Body')
+    expect(collabDoc.getXmlFragment('task_description').length).toBeGreaterThan(0)
+  })
+
+  it('syncs markdown-tab edits through the real rich editor into the Yjs collab doc', async () => {
+    const collabDoc = new Y.Doc()
+    const collabFragment = collabDoc.getXmlFragment('task_description')
+
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '**Old** text',
+        defaultTab: 'rendered',
+        collabDoc,
+      },
+      attachTo: document.body,
+      global: {
+        stubs: {
+          TaskDescriptionRichEditor,
+        },
+      },
+    })
+    await waitForRenderedEditor(wrapper)
+    await waitForRenderedEditorText(wrapper, 'Old')
+
+    const initialCollabText = String(collabFragment)
+    let updateCount = 0
+    collabDoc.on('update', () => {
+      updateCount += 1
+    })
+
+    await wrapper.get('[data-testid="task-description-tab-markdown"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-description-markdown-input"]').setValue('## Edited\n\nBody')
+    await flushPromises()
+
+    updateCount = 0
+    await wrapper.get('[data-testid="task-description-tab-rendered"]').trigger('click')
+    await flushPromises()
+
+    await waitForRenderedEditorText(wrapper, 'Edited')
+    await waitForRenderedEditorText(wrapper, 'Body')
+
+    expect(updateCount).toBeGreaterThan(0)
+    expect(String(collabFragment)).toContain('Edited')
+    expect(String(collabFragment)).toContain('Body')
+    expect(String(collabFragment)).not.toBe(initialCollabText)
   })
 })

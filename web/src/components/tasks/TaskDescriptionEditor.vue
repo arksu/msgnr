@@ -58,7 +58,7 @@
         :placeholder="placeholder"
         :disabled="!editable"
         data-testid="task-description-markdown-input"
-        @blur="emit('blur')"
+        @blur="onMarkdownBlur"
         @input="onMarkdownInput"
         @paste="onMarkdownPaste"
         @dragover="onMarkdownDragOver"
@@ -78,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Doc as YDoc } from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
@@ -86,6 +86,7 @@ import { uploadOwnedAttachment, type OwnedAttachmentUpload } from '@/services/ht
 import { buildAttachmentMarkdown, type AttachmentOwnerKind } from '@/utils/attachmentMarkdown'
 
 type DescriptionTab = 'rendered' | 'markdown'
+const MARKDOWN_DRAFT_SYNC_DEBOUNCE_MS = 300
 
 const TaskDescriptionRichEditor = defineAsyncComponent(() => import('./TaskDescriptionRichEditor.vue'))
 
@@ -131,8 +132,9 @@ const markdownInputRef = ref<HTMLTextAreaElement | null>(null)
 const attachmentNotice = ref('')
 const attachmentNoticeIsError = ref(false)
 const editable = computed(() => !!props.editable)
-const markdownToRenderedSyncToken = ref(0)
-const combinedForceLocalSyncToken = computed(() => props.forceLocalSyncToken + markdownToRenderedSyncToken.value)
+const markdownDraftSyncToken = ref(0)
+const combinedForceLocalSyncToken = computed(() => props.forceLocalSyncToken + markdownDraftSyncToken.value)
+let markdownDraftSyncTimer: ReturnType<typeof setTimeout> | null = null
 
 function setAttachmentNotice(message: string, isError = false) {
   attachmentNotice.value = message
@@ -151,13 +153,40 @@ function resizeMarkdownTextarea() {
   el.style.height = `${el.scrollHeight}px`
 }
 
-function syncRenderedEditorFromMarkdown() {
-  markdownToRenderedSyncToken.value += 1
+function clearMarkdownDraftSyncTimer() {
+  if (!markdownDraftSyncTimer) return
+  clearTimeout(markdownDraftSyncTimer)
+  markdownDraftSyncTimer = null
+}
+
+function bumpMarkdownDraftSyncToken() {
+  if (!props.collabDoc) return
+  markdownDraftSyncToken.value += 1
+}
+
+function flushMarkdownDraftSync() {
+  if (!markdownDraftSyncTimer) return
+  clearMarkdownDraftSyncTimer()
+  bumpMarkdownDraftSyncToken()
+}
+
+function scheduleMarkdownDraftSync() {
+  if (!props.collabDoc) return
+  clearMarkdownDraftSyncTimer()
+  markdownDraftSyncTimer = setTimeout(() => {
+    markdownDraftSyncTimer = null
+    bumpMarkdownDraftSyncToken()
+  }, MARKDOWN_DRAFT_SYNC_DEBOUNCE_MS)
 }
 
 function onMarkdownInput() {
   resizeMarkdownTextarea()
-  syncRenderedEditorFromMarkdown()
+  scheduleMarkdownDraftSync()
+}
+
+function onMarkdownBlur() {
+  flushMarkdownDraftSync()
+  emit('blur')
 }
 
 function attachmentsEnabledForUpload(): boolean {
@@ -202,7 +231,7 @@ function insertMarkdownAtCursor(value: string) {
   const input = markdownInputRef.value
   if (!input) {
     markdownDraft.value = [markdownDraft.value, value].filter(Boolean).join('\n\n')
-    syncRenderedEditorFromMarkdown()
+    bumpMarkdownDraftSyncToken()
     emit('update:modelValue', markdownDraft.value)
     return
   }
@@ -214,7 +243,7 @@ function insertMarkdownAtCursor(value: string) {
   const needsTrailingBreak = after.length > 0 && !after.startsWith('\n')
   const inserted = `${needsLeadingBreak ? '\n\n' : ''}${value}${needsTrailingBreak ? '\n\n' : ''}`
   markdownDraft.value = `${before}${inserted}${after}`
-  syncRenderedEditorFromMarkdown()
+  bumpMarkdownDraftSyncToken()
   emit('update:modelValue', markdownDraft.value)
   nextTick(() => {
     const caret = before.length + inserted.length
@@ -249,6 +278,9 @@ async function onMarkdownDrop(event: DragEvent) {
 }
 
 function switchTab(nextTab: DescriptionTab) {
+  if (nextTab === 'rendered') {
+    flushMarkdownDraftSync()
+  }
   tab.value = nextTab
   if (nextTab === 'markdown') {
     nextTick(() => {
@@ -302,4 +334,8 @@ watch(
   },
   { immediate: true },
 )
+
+onBeforeUnmount(() => {
+  flushMarkdownDraftSync()
+})
 </script>

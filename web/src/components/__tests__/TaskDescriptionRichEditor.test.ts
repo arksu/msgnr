@@ -116,6 +116,7 @@ describe('TaskDescriptionRichEditor', () => {
         return
       }
     }
+    throw new Error('rich editor did not mount')
   }
 
   async function waitForEditorText(wrapper: ReturnType<typeof mount>, expected: string) {
@@ -313,6 +314,7 @@ describe('TaskDescriptionRichEditor', () => {
     await flushPromises()
 
     expect(updateCount).toBeGreaterThan(0)
+    expect(collabDoc.getXmlFragment('task_description').length).toBeGreaterThan(0)
     await waitForEditorText(wrapper, 'New')
     await waitForEditorText(wrapper, 'Body')
 

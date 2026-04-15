@@ -125,7 +125,7 @@
             type="button"
             class="px-4 py-2 rounded text-sm text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
             :disabled="submitting"
-            @click="close"
+            @click="cancel"
           >
             Cancel
           </button>
@@ -148,6 +148,11 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useTasksStore } from '@/stores/tasks'
 import type { TaskFieldDefinition } from '@/services/http/tasksApi'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
+import {
+  clearTaskCreateDraft,
+  loadTaskCreateDraft,
+  saveTaskCreateDraft,
+} from '@/services/storage/taskCreateDraftStorage'
 import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 
@@ -157,6 +162,7 @@ const selectedTemplateId = ref<string>('')
 const submitting = ref(false)
 const submitError = ref('')
 const showValidation = ref(false)
+const hydratingDraft = ref(false)
 
 const form = reactive({
   title: '',
@@ -246,6 +252,12 @@ function close() {
   tasksStore.closeCreateDialog()
 }
 
+function cancel() {
+  if (submitting.value) return
+  clearTaskCreateDraft()
+  tasksStore.closeCreateDialog()
+}
+
 function reset() {
   form.title = ''
   form.description = ''
@@ -269,6 +281,7 @@ async function submit() {
       status_id: form.statusId,
       field_values: buildFieldValues(activeFields.value, customValues, tasksStore.enumVersionFor),
     })
+    clearTaskCreateDraft()
     tasksStore.closeCreateDialog()
   } catch (e) {
     submitError.value = e instanceof Error ? e.message : 'Failed to create task'
@@ -280,18 +293,39 @@ async function submit() {
 // Initialise when dialog opens; reset when it closes
 watch(() => tasksStore.createDialogOpen, async (open) => {
   if (!open) {
+    hydratingDraft.value = false
     reset()
     return
   }
-  await tasksStore.loadConfig()
-  // Set defaults after config is loaded
-  selectedTemplateId.value = tasksStore.activeTemplates[0]?.id ?? ''
-  form.statusId = tasksStore.activeStatuses[0]?.id ?? ''
-  if (selectedTemplateId.value) {
-    await tasksStore.loadFieldsFor(selectedTemplateId.value)
-    preloadSupportingData()
+  hydratingDraft.value = true
+  try {
+    await tasksStore.loadConfig()
+    // Set defaults after config is loaded
+    selectedTemplateId.value = tasksStore.activeTemplates[0]?.id ?? ''
+    form.statusId = tasksStore.activeStatuses[0]?.id ?? ''
+    if (selectedTemplateId.value) {
+      await tasksStore.loadFieldsFor(selectedTemplateId.value)
+      preloadSupportingData()
+    }
+    const draft = loadTaskCreateDraft()
+    form.title = draft.title
+    form.description = draft.description
+  } finally {
+    hydratingDraft.value = false
   }
 })
+
+watch(
+  [() => form.title, () => form.description],
+  () => {
+    if (!tasksStore.createDialogOpen || hydratingDraft.value) return
+    saveTaskCreateDraft({
+      title: form.title,
+      description: form.description,
+    })
+  },
+  { flush: 'sync' },
+)
 </script>
 
 <style scoped>

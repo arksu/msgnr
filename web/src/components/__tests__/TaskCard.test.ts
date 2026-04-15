@@ -3,6 +3,10 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskCard from '@/components/tasks/TaskCard.vue'
 import type { Task, TaskDescriptionHistoryItem } from '@/services/http/tasksApi'
+import {
+  loadSubtaskCreateDraft,
+  saveSubtaskCreateDraft,
+} from '@/services/storage/taskCreateDraftStorage'
 
 const platformMocks = vi.hoisted(() => ({
   getPlatformOrNull: vi.fn(),
@@ -29,6 +33,54 @@ const selectedTask: Task = {
   subtasks: [],
 }
 
+const baseTemplates = [
+  {
+    id: 'tpl-1',
+    prefix: 'TASK',
+    sort_order: 1,
+    deleted_at: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    created_by: 'u-1',
+    updated_by: 'u-1',
+  },
+  {
+    id: 'tpl-2',
+    prefix: 'BUG',
+    sort_order: 2,
+    deleted_at: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    created_by: 'u-1',
+    updated_by: 'u-1',
+  },
+]
+
+const baseStatuses = [
+  {
+    id: 'st-1',
+    code: 'open',
+    name: 'Open',
+    sort_order: 1,
+    deleted_at: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    created_by: 'u-1',
+    updated_by: 'u-1',
+  },
+  {
+    id: 'st-2',
+    code: 'todo',
+    name: 'Todo',
+    sort_order: 2,
+    deleted_at: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    created_by: 'u-1',
+    updated_by: 'u-1',
+  },
+]
+
 const tasksStoreMock = reactive({
   selectedTask,
   taskLoading: false,
@@ -47,31 +99,8 @@ const tasksStoreMock = reactive({
       avatar_url: '/api/public/avatars/avatars/u-2/updater.png',
     },
   ],
-  activeTemplates: [
-    {
-      id: 'tpl-1',
-      prefix: 'TASK',
-      sort_order: 1,
-      deleted_at: null,
-      created_at: '2026-01-01T00:00:00Z',
-      updated_at: '2026-01-01T00:00:00Z',
-      created_by: 'u-1',
-      updated_by: 'u-1',
-    },
-  ],
-  activeStatuses: [
-    {
-      id: 'st-1',
-      code: 'open',
-      name: 'Open',
-      sort_order: 1,
-      deleted_at: null,
-      created_at: '2026-01-01T00:00:00Z',
-      updated_at: '2026-01-01T00:00:00Z',
-      created_by: 'u-1',
-      updated_by: 'u-1',
-    },
-  ],
+  activeTemplates: [...baseTemplates],
+  activeStatuses: [...baseStatuses],
   allStatuses: vi.fn(() => [
     {
       id: 'st-1',
@@ -145,8 +174,28 @@ vi.mock('@/composables/useTaskDescriptionCollab', () => ({
   }),
 }))
 
+function mountTaskCard() {
+  return mount(TaskCard, {
+    props: { templateFilter: null },
+    global: {
+      stubs: {
+        TaskFieldInput: true,
+        UserAvatar: true,
+        TaskAttachments: true,
+        TaskComments: true,
+        TaskDescriptionEditor: {
+          props: ['modelValue'],
+          emits: ['update:modelValue', 'blur'],
+          template: '<textarea data-testid="description-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" @blur="$emit(\'blur\')" />',
+        },
+      },
+    },
+  })
+}
+
 describe('TaskCard', () => {
   beforeEach(() => {
+    localStorage.clear()
     vi.clearAllMocks()
     const platform = {
       files: {
@@ -156,7 +205,10 @@ describe('TaskCard', () => {
     platformMocks.getPlatformOrNull.mockReturnValue(platform)
     platformMocks.initPlatform.mockResolvedValue(platform)
     platformMocks.exportTaskToPdfBlob.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }))
+    tasksStoreMock.activeTemplates = [...baseTemplates]
+    tasksStoreMock.activeStatuses = [...baseStatuses]
     tasksStoreMock.listTaskDescriptionHistory = vi.fn(async (): Promise<TaskDescriptionHistoryItem[]> => [])
+    tasksStoreMock.createSubtask.mockImplementation(async () => ({}))
     tasksStoreMock.selectedTask = {
       ...selectedTask,
       description: '**old** description',
@@ -359,6 +411,119 @@ describe('TaskCard', () => {
       status_id: 'st-1',
       description: '- one\\n- two',
     }))
+  })
+
+  it('restores saved subtask title and description on reopen without restoring template or status', async () => {
+    saveSubtaskCreateDraft({
+      title: 'Recovered subtask',
+      description: 'Recovered subtask description',
+    })
+    const wrapper = mountTaskCard()
+    await flushPromises()
+
+    const addSubtaskButton = wrapper.findAll('button').find(button => button.text() === '+ Add subtask')
+    expect(addSubtaskButton).toBeTruthy()
+    await addSubtaskButton!.trigger('click')
+    await flushPromises()
+
+    expect((wrapper.get('input[placeholder="Subtask title"]').element as HTMLInputElement).value).toBe('Recovered subtask')
+    expect((wrapper.get('[data-testid="description-stub"]').element as HTMLTextAreaElement).value).toBe('Recovered subtask description')
+    expect((wrapper.findAll('select')[1].element as HTMLSelectElement).value).toBe('st-1')
+
+    const templateButton = wrapper.findAll('button').find(button => button.text() === 'TASK')
+    const secondTemplateButton = wrapper.findAll('button').find(button => button.text() === 'BUG')
+    expect(templateButton?.classes()).toContain('bg-accent')
+    expect(secondTemplateButton?.classes()).not.toContain('bg-accent')
+  })
+
+  it('saves subtask draft when title and description change', async () => {
+    const wrapper = mountTaskCard()
+    await flushPromises()
+
+    const addSubtaskButton = wrapper.findAll('button').find(button => button.text() === '+ Add subtask')
+    expect(addSubtaskButton).toBeTruthy()
+    await addSubtaskButton!.trigger('click')
+    await flushPromises()
+
+    await wrapper.get('input[placeholder="Subtask title"]').setValue('Draft subtask')
+    await wrapper.get('[data-testid="description-stub"]').setValue('Draft subtask description')
+    await flushPromises()
+
+    expect(loadSubtaskCreateDraft()).toEqual({
+      title: 'Draft subtask',
+      description: 'Draft subtask description',
+    })
+  })
+
+  it('clears the subtask draft on create', async () => {
+    saveSubtaskCreateDraft({
+      title: 'Old subtask',
+      description: 'Old subtask description',
+    })
+    const wrapper = mountTaskCard()
+    await flushPromises()
+
+    const addSubtaskButton = wrapper.findAll('button').find(button => button.text() === '+ Add subtask')
+    expect(addSubtaskButton).toBeTruthy()
+    await addSubtaskButton!.trigger('click')
+    await flushPromises()
+
+    const createButton = wrapper.findAll('button').find(button => button.text() === 'Create subtask')
+    expect(createButton).toBeTruthy()
+    await createButton!.trigger('click')
+    await flushPromises()
+
+    expect(loadSubtaskCreateDraft()).toEqual({
+      title: '',
+      description: '',
+    })
+  })
+
+  it('clears the subtask draft on cancel', async () => {
+    const wrapper = mountTaskCard()
+    await flushPromises()
+
+    const addSubtaskButton = wrapper.findAll('button').find(button => button.text() === '+ Add subtask')
+    expect(addSubtaskButton).toBeTruthy()
+    await addSubtaskButton!.trigger('click')
+    await flushPromises()
+
+    await wrapper.get('input[placeholder="Subtask title"]').setValue('Cancel subtask')
+    await wrapper.get('[data-testid="description-stub"]').setValue('Cancel subtask description')
+    await flushPromises()
+
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'Cancel')
+    expect(cancelButton).toBeTruthy()
+    await cancelButton!.trigger('click')
+    await flushPromises()
+
+    expect(loadSubtaskCreateDraft()).toEqual({
+      title: '',
+      description: '',
+    })
+  })
+
+  it('keeps the subtask draft when create fails', async () => {
+    tasksStoreMock.createSubtask.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = mountTaskCard()
+    await flushPromises()
+
+    const addSubtaskButton = wrapper.findAll('button').find(button => button.text() === '+ Add subtask')
+    expect(addSubtaskButton).toBeTruthy()
+    await addSubtaskButton!.trigger('click')
+    await flushPromises()
+
+    await wrapper.get('input[placeholder="Subtask title"]').setValue('Retry subtask')
+    await wrapper.get('[data-testid="description-stub"]').setValue('Retry subtask description')
+    const createButton = wrapper.findAll('button').find(button => button.text() === 'Create subtask')
+    expect(createButton).toBeTruthy()
+    await createButton!.trigger('click')
+    await flushPromises()
+
+    expect(loadSubtaskCreateDraft()).toEqual({
+      title: 'Retry subtask',
+      description: 'Retry subtask description',
+    })
   })
 
   it('renders a single subtask assignee avatar and username in the right-side assignee list', async () => {

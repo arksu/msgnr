@@ -544,6 +544,11 @@ import { useTaskDescriptionCollab, type TaskDescriptionCollabUser } from '@/comp
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
 import { getPlatformOrNull, initPlatform } from '@/platform'
 import { exportTaskToPdfBlob } from '@/services/taskPdfExport'
+import {
+  clearSubtaskCreateDraft,
+  loadSubtaskCreateDraft,
+  saveSubtaskCreateDraft,
+} from '@/services/storage/taskCreateDraftStorage'
 import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
@@ -1120,8 +1125,9 @@ async function openSubtaskForm() {
   // Ensure config is loaded so templates/statuses are available
   await tasksStore.loadConfig()
   subtaskForm.templateId = tasksStore.activeTemplates[0]?.id ?? ''
-  subtaskForm.title = ''
-  subtaskForm.description = ''
+  const draft = loadSubtaskCreateDraft()
+  subtaskForm.title = draft.title
+  subtaskForm.description = draft.description
   subtaskForm.statusId = tasksStore.activeStatuses[0]?.id ?? ''
   Object.keys(subtaskCustomValues).forEach(k => delete subtaskCustomValues[k])
   subtaskError.value = ''
@@ -1134,6 +1140,7 @@ async function openSubtaskForm() {
 }
 
 function cancelSubtaskForm() {
+  clearSubtaskCreateDraft()
   showSubtaskForm.value = false
   subtaskError.value = ''
   showSubtaskValidation.value = false
@@ -1169,6 +1176,7 @@ async function submitSubtask() {
       status_id: subtaskForm.statusId,
       field_values: buildFieldValues(subtaskFields.value, subtaskCustomValues, tasksStore.enumVersionFor),
     })
+    clearSubtaskCreateDraft()
     showSubtaskForm.value = false
     showSubtaskValidation.value = false
   } catch (e) {
@@ -1337,6 +1345,18 @@ watch(() => task.value?.id, (_nextTaskID, prevTaskID) => {
     void startTitleEdit()
   }
 }, { immediate: true })
+
+watch(
+  [showSubtaskForm, () => subtaskForm.title, () => subtaskForm.description],
+  ([open]) => {
+    if (!open) return
+    saveSubtaskCreateDraft({
+      title: subtaskForm.title,
+      description: subtaskForm.description,
+    })
+  },
+  { flush: 'sync' },
+)
 
 watch(() => descriptionCollab.serverMarkdown.value, (next) => {
   if (next === null) return

@@ -66,4 +66,22 @@ describe('ResizableSidebar', () => {
     expect((wrapper.get('[data-testid="resizable-sidebar"]').element as HTMLElement).style.width).toBe('320px')
     expect(localStorage.getItem('msgnr:sidebar-width:test:v1')).toBe('320')
   })
+
+  it('keeps text selection enabled inside the sidebar while the resize handle stays non-selectable', async () => {
+    const wrapper = mount(ResizableSidebar, {
+      props: {
+        storageKey: 'msgnr:sidebar-width:test:v1',
+        defaultWidth: 240,
+        minWidth: 220,
+        maxWidth: 520,
+      },
+      slots: {
+        default: '<aside data-testid="sidebar-stub">selectable text</aside>',
+      },
+    })
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="resizable-sidebar"]').classes()).not.toContain('select-none')
+    expect(wrapper.get('[data-testid="resizable-sidebar-handle"]').classes()).toContain('select-none')
+  })
 })

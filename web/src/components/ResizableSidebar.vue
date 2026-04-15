@@ -1,6 +1,6 @@
 <template>
   <div
-    class="relative h-full shrink-0 select-none"
+    class="relative h-full shrink-0"
     :style="{ width: `${sidebarWidth}px` }"
     data-testid="resizable-sidebar"
   >
@@ -8,7 +8,7 @@
       <slot />
     </div>
     <div
-      class="group absolute inset-y-0 z-20 flex w-2 cursor-col-resize touch-none items-stretch justify-center"
+      class="group absolute inset-y-0 z-20 flex w-2 cursor-col-resize touch-none select-none items-stretch justify-center"
       :class="[
         handleSide === 'left' ? 'left-0' : 'right-0',
         isResizing ? 'bg-accent/15' : 'hover:bg-accent/10',

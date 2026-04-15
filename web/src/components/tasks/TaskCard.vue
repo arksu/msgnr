@@ -179,11 +179,11 @@
             <div
               v-if="sub.assignees.length"
               :data-testid="`subtask-assignee-${sub.id}`"
-              class="flex min-w-0 max-w-[45%] items-center justify-end gap-1 shrink text-xs text-gray-400"
+              class="flex min-w-0 max-w-[45%] items-center justify-end gap-2 shrink text-sm text-gray-300"
             >
               <template v-for="(assignee, index) in visibleSubtaskAssignees(sub)" :key="assignee.id">
                 <span v-if="index > 0" class="shrink-0">,</span>
-                <span class="flex min-w-0 shrink items-center gap-1">
+                <span class="flex min-w-0 shrink items-center gap-2">
                   <UserAvatar
                     :user-id="assignee.id"
                     :display-name="subtaskAssigneeLabel(assignee)"

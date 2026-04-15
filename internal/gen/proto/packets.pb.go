@@ -2402,6 +2402,7 @@ type MessageEvent struct {
 	Attachments      []*MessageAttachment   `protobuf:"bytes,12,rep,name=attachments,proto3" json:"attachments,omitempty"`
 	EditedAt         *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=edited_at,json=editedAt,proto3" json:"edited_at,omitempty"`
 	Entities         []*MessageEntity       `protobuf:"bytes,14,rep,name=entities,proto3" json:"entities,omitempty"`
+	MyReactions      []string               `protobuf:"bytes,15,rep,name=my_reactions,json=myReactions,proto3" json:"my_reactions,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -2530,6 +2531,13 @@ func (x *MessageEvent) GetEditedAt() *timestamppb.Timestamp {
 func (x *MessageEvent) GetEntities() []*MessageEntity {
 	if x != nil {
 		return x.Entities
+	}
+	return nil
+}
+
+func (x *MessageEvent) GetMyReactions() []string {
+	if x != nil {
+		return x.MyReactions
 	}
 	return nil
 }
@@ -7015,7 +7023,7 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x05label\x18\x03 \x01(\tR\x05label\x12\x12\n" +
 	"\x04href\x18\x04 \x01(\tR\x04href\x12\x14\n" +
 	"\x05start\x18\x05 \x01(\x05R\x05start\x12\x10\n" +
-	"\x03end\x18\x06 \x01(\x05R\x03end\"\xfe\x04\n" +
+	"\x03end\x18\x06 \x01(\x05R\x03end\"\xa1\x05\n" +
 	"\fMessageEvent\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1d\n" +
 	"\n" +
@@ -7035,7 +7043,8 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\treactions\x18\v \x03(\v2\x1d.packets.v1.ReactionAggregateR\treactions\x12?\n" +
 	"\vattachments\x18\f \x03(\v2\x1d.packets.v1.MessageAttachmentR\vattachments\x127\n" +
 	"\tedited_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\beditedAt\x125\n" +
-	"\bentities\x18\x0e \x03(\v2\x19.packets.v1.MessageEntityR\bentities\"\x8f\x01\n" +
+	"\bentities\x18\x0e \x03(\v2\x19.packets.v1.MessageEntityR\bentities\x12!\n" +
+	"\fmy_reactions\x18\x0f \x03(\tR\vmyReactions\"\x8f\x01\n" +
 	"\x11MessageAttachment\x12#\n" +
 	"\rattachment_id\x18\x01 \x01(\tR\fattachmentId\x12\x1b\n" +
 	"\tfile_name\x18\x02 \x01(\tR\bfileName\x12\x1b\n" +

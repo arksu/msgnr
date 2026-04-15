@@ -1,34 +1,44 @@
 <template>
-  <template v-if="pinned.hasItems && activeItem">
-    <aside class="flex h-full min-h-0 w-[360px] max-w-[42vw] shrink-0 flex-col border-l border-chat-border bg-chat-header">
-      <header class="flex items-center gap-3 border-b border-chat-border px-4 py-3">
-        <div class="min-w-0 flex-1">
-          <div class="truncate text-sm font-semibold text-white">
-            {{ headerTitle }}
+  <template v-if="pinned.hasItems">
+    <ResizableSidebar
+      v-if="activeItem"
+      storage-key="msgnr:sidebar-width:pinned:v1"
+      :default-width="360"
+      :min-width="0"
+      :max-width="1400"
+      handle-side="left"
+      resize-title="Resize pinned panel"
+    >
+      <aside class="flex h-full min-h-0 w-full flex-col border-l border-chat-border bg-chat-header">
+        <header class="flex items-center gap-3 border-b border-chat-border px-4 py-3">
+          <div class="min-w-0 flex-1">
+            <div class="truncate text-sm font-semibold text-white">
+              {{ headerTitle }}
+            </div>
           </div>
-        </div>
-        <button
-          class="flex h-7 w-7 items-center justify-center rounded text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
-          :aria-label="`Unpin ${activeItem.title}`"
-          @click="pinned.unpinActive()"
-        >
-          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M18 6L6 18M6 6l12 12"/>
-          </svg>
-        </button>
-      </header>
+          <button
+            class="flex h-7 w-7 items-center justify-center rounded text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+            aria-label="Close pinned panel"
+            @click="pinned.deactivate()"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </header>
 
-      <ConversationWorkspace
-        v-if="activeItem.kind === 'dm' || activeItem.kind === 'channel'"
-        :conversation-id="activeItem.conversationId"
-        @open-thread="openPinnedThread"
-      />
-      <ThreadWorkspace
-        v-else-if="activeItem.threadRootMessageId"
-        :conversation-id="activeItem.conversationId"
-        :root-message-id="activeItem.threadRootMessageId"
-      />
-    </aside>
+        <ConversationWorkspace
+          v-if="activeItem.kind === 'dm' || activeItem.kind === 'channel'"
+          :conversation-id="activeItem.conversationId"
+          @open-thread="openPinnedThread"
+        />
+        <ThreadWorkspace
+          v-else-if="activeItem.threadRootMessageId"
+          :conversation-id="activeItem.conversationId"
+          :root-message-id="activeItem.threadRootMessageId"
+        />
+      </aside>
+    </ResizableSidebar>
 
     <aside class="flex h-full min-h-0 w-[45px] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-l border-chat-border bg-sidebar-bg/90 px-0.5 py-1">
       <div
@@ -89,6 +99,7 @@ import { computed } from 'vue'
 import ConversationWorkspace from '@/components/ConversationWorkspace.vue'
 import ThreadWorkspace from '@/components/ThreadWorkspace.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import { usePinnedDialogsStore, type PinnedDialogue } from '@/stores/pinnedDialogs'
 import type { Message } from '@/stores/chat'
 

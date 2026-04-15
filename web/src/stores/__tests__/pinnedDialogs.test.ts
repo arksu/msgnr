@@ -148,4 +148,24 @@ describe('pinnedDialogs store', () => {
     expect(pinned.items).toEqual([])
     expect(pinned.activeId).toBeNull()
   })
+
+  it('deactivate hides active panel without unpinning items', () => {
+    const chat = useChatStore()
+    const pinned = usePinnedDialogsStore()
+
+    chat.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-1',
+      displayName: 'Alice Ford',
+      presence: 'online',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+
+    pinned.ensureConversationPinned('dm-1')
+    pinned.deactivate()
+
+    expect(pinned.items.map(item => item.id)).toEqual(['dm:dm-1'])
+    expect(pinned.activeId).toBeNull()
+  })
 })

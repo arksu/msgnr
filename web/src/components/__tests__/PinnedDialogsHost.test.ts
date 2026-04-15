@@ -133,7 +133,7 @@ describe('PinnedDialogsHost', () => {
     expect(pinned.activeId).toBe('thread:channel-1:root-1')
   })
 
-  it('header close unpins active item', async () => {
+  it('header close hides panel but keeps item pinned', async () => {
     const chat = useChatStore()
     const pinned = usePinnedDialogsStore()
 
@@ -149,9 +149,11 @@ describe('PinnedDialogsHost', () => {
     pinned.ensureConversationPinned('dm-1')
 
     const wrapper = mount(PinnedDialogsHost)
-    await wrapper.get('button[aria-label="Unpin Alice Ford"]').trigger('click')
+    await wrapper.get('button[aria-label="Close pinned panel"]').trigger('click')
 
-    expect(pinned.items).toEqual([])
+    expect(pinned.items.map(item => item.id)).toEqual(['dm:dm-1'])
+    expect(wrapper.find('[data-testid="conversation-workspace"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pinned-card-dm:dm-1"]').exists()).toBe(true)
     expect(pinned.activeId).toBeNull()
   })
 })

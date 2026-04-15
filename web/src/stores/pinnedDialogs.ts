@@ -59,6 +59,10 @@ export const usePinnedDialogsStore = defineStore('pinnedDialogs', () => {
     activeId.value = id
   }
 
+  function deactivate() {
+    activeId.value = null
+  }
+
   function normalizeConversationPinned(conversationId: string): PinnedDialogue | null {
     const dm = chatStore.directMessages.find(item => item.id === conversationId)
     if (dm) {
@@ -143,6 +147,7 @@ export const usePinnedDialogsStore = defineStore('pinnedDialogs', () => {
     itemTypeMeta,
     isPinned,
     activate,
+    deactivate,
     ensureConversationPinned,
     ensureThreadPinned,
     unpin,

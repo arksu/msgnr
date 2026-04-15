@@ -71,6 +71,28 @@ func seedChannelForUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, u
 	return channelID
 }
 
+func createMemberInChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID uuid.UUID, name string) uuid.UUID {
+	t.Helper()
+
+	var userID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role)
+		 VALUES ($1, 'x', $2, 'member')
+		 RETURNING id`,
+		strings.ToLower(name)+"_"+uuid.New().String()+"@example.com",
+		name,
+	).Scan(&userID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+		channelID, userID,
+	)
+	require.NoError(t, err)
+
+	return userID
+}
+
 func setChannelMemberNotificationLevel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID, userID uuid.UUID, level int16) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `
@@ -1517,6 +1539,75 @@ func TestIntegration_SubscribeThread_ReplayIncludesEntities(t *testing.T) {
 	assert.Equal(t, userID.String(), resp.Replay[0].GetEntities()[0].GetTargetId())
 	assert.Equal(t, "@Test User", resp.Replay[0].GetEntities()[0].GetLabel())
 	assert.Equal(t, []string{userID.String()}, resp.Replay[0].GetMentionedUserIds())
+}
+
+func TestIntegration_SubscribeThread_ReplayIncludesReactionsAndMyReactions(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	userID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	root, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    userID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "root",
+	})
+	require.NoError(t, err)
+
+	replyAuthorID := createMemberInChannel(t, ctx, pool, channelID, "Replier")
+
+	reply, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            replyAuthorID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "reply with emoji",
+		ThreadRootMessageID: root.MessageID,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.AddReaction(ctx, chat.ReactionParams{
+		ChannelID:  channelID,
+		MessageID:  reply.MessageID,
+		UserID:     userID,
+		Emoji:      ":+1:",
+		ClientOpID: uuid.New().String(),
+	})
+	require.NoError(t, err)
+	_, err = svc.AddReaction(ctx, chat.ReactionParams{
+		ChannelID:  channelID,
+		MessageID:  reply.MessageID,
+		UserID:     replyAuthorID,
+		Emoji:      ":+1:",
+		ClientOpID: uuid.New().String(),
+	})
+	require.NoError(t, err)
+	_, err = svc.AddReaction(ctx, chat.ReactionParams{
+		ChannelID:  channelID,
+		MessageID:  reply.MessageID,
+		UserID:     replyAuthorID,
+		Emoji:      "🔥",
+		ClientOpID: uuid.New().String(),
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.SubscribeThread(ctx, chat.SubscribeThreadParams{
+		ChannelID:           channelID,
+		ThreadRootMessageID: root.MessageID,
+		RequesterID:         userID,
+		LastThreadSeq:       0,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Replay, 1)
+	assert.Equal(t, []string{":+1:"}, resp.Replay[0].GetMyReactions())
+	assert.Len(t, resp.Replay[0].GetReactions(), 2)
+	assert.Equal(t, ":+1:", resp.Replay[0].GetReactions()[0].GetEmoji())
+	assert.Equal(t, int32(2), resp.Replay[0].GetReactions()[0].GetCount())
+	assert.Equal(t, "🔥", resp.Replay[0].GetReactions()[1].GetEmoji())
+	assert.Equal(t, int32(1), resp.Replay[0].GetReactions()[1].GetCount())
 }
 
 func TestIntegration_ThreadReplies_DoNotIncreaseUnreadMessages_AndSubscribeClearsThreadUnread(t *testing.T) {

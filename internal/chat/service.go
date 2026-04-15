@@ -173,6 +173,17 @@ type ReactionAggregate struct {
 	Count int32  `json:"count"`
 }
 
+type messageReactionCountRow struct {
+	MessageID uuid.UUID
+	Emoji     string
+	Count     int32
+}
+
+type messageUserReactionRow struct {
+	MessageID uuid.UUID
+	Emoji     string
+}
+
 type MessageAttachment struct {
 	ID             uuid.UUID `json:"id"`
 	ConversationID uuid.UUID `json:"conversation_id"`
@@ -896,6 +907,74 @@ func normalizeJSONValue(v any) ([]byte, error) {
 	}
 }
 
+func (s *Service) loadReactionAggregatesByMessageIDsTx(ctx context.Context, q queryer, messageIDs []uuid.UUID) (map[uuid.UUID][]ReactionAggregate, error) {
+	result := make(map[uuid.UUID][]ReactionAggregate, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := q.Query(ctx, `
+		SELECT message_id, emoji, count
+		  FROM reaction_counts
+		 WHERE message_id = ANY($1::uuid[])
+		 ORDER BY message_id ASC, emoji ASC`,
+		messageIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query reaction counts: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var row messageReactionCountRow
+		if err := rows.Scan(&row.MessageID, &row.Emoji, &row.Count); err != nil {
+			return nil, fmt.Errorf("scan reaction counts: %w", err)
+		}
+		result[row.MessageID] = append(result[row.MessageID], ReactionAggregate{
+			Emoji: row.Emoji,
+			Count: row.Count,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reaction counts: %w", err)
+	}
+
+	return result, nil
+}
+
+func (s *Service) loadUserReactionsByMessageIDsTx(ctx context.Context, q queryer, messageIDs []uuid.UUID, userID uuid.UUID) (map[uuid.UUID][]string, error) {
+	result := make(map[uuid.UUID][]string, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := q.Query(ctx, `
+		SELECT message_id, emoji
+		  FROM reactions
+		 WHERE message_id = ANY($1::uuid[])
+		   AND user_id = $2
+		 ORDER BY message_id ASC, emoji ASC`,
+		messageIDs, userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query user reactions: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var row messageUserReactionRow
+		if err := rows.Scan(&row.MessageID, &row.Emoji); err != nil {
+			return nil, fmt.Errorf("scan user reactions: %w", err)
+		}
+		result[row.MessageID] = append(result[row.MessageID], row.Emoji)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user reactions: %w", err)
+	}
+
+	return result, nil
+}
+
 func (s *Service) loadMessageEntitiesByMessageIDs(ctx context.Context, q queryer, messageIDs []uuid.UUID) (map[string][]MessageEntity, error) {
 	result := make(map[string][]MessageEntity, len(messageIDs))
 	if len(messageIDs) == 0 {
@@ -1037,6 +1116,20 @@ func toProtoMessageEntities(entities []MessageEntity) []*packetspb.MessageEntity
 			Href:     entity.Href,
 			Start:    entity.Start,
 			End:      entity.End,
+		})
+	}
+	return result
+}
+
+func toProtoReactionAggregates(items []ReactionAggregate) []*packetspb.ReactionAggregate {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]*packetspb.ReactionAggregate, 0, len(items))
+	for _, item := range items {
+		result = append(result, &packetspb.ReactionAggregate{
+			Emoji: item.Emoji,
+			Count: item.Count,
 		})
 	}
 	return result
@@ -2644,6 +2737,14 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 	if err != nil {
 		return SubscribeThreadResult{}, fmt.Errorf("chat.SubscribeThread load entities: %w", err)
 	}
+	reactionsByMessageID, err := s.loadReactionAggregatesByMessageIDsTx(ctx, tx, messageIDs)
+	if err != nil {
+		return SubscribeThreadResult{}, fmt.Errorf("chat.SubscribeThread load reactions: %w", err)
+	}
+	myReactionsByMessageID, err := s.loadUserReactionsByMessageIDsTx(ctx, tx, messageIDs, p.RequesterID)
+	if err != nil {
+		return SubscribeThreadResult{}, fmt.Errorf("chat.SubscribeThread load my reactions: %w", err)
+	}
 
 	replay := make([]*packetspb.MessageEvent, 0, len(msgs))
 	for _, m := range msgs {
@@ -2662,8 +2763,10 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 			CreatedAt:        timestamppb.New(m.CreatedAt),
 			ThreadSeq:        m.ThreadSeq,
 			MentionedUserIds: mentionedUserIDStrings,
+			Reactions:        toProtoReactionAggregates(reactionsByMessageID[m.ID]),
 			Entities:         toProtoMessageEntities(entities),
 			Attachments:      toProtoMessageAttachments(attachmentsByMessageID[m.ID]),
+			MyReactions:      myReactionsByMessageID[m.ID],
 		}
 		if m.EditedAt.Valid {
 			evt.EditedAt = timestamppb.New(m.EditedAt.Time)

@@ -297,6 +297,7 @@ message MessageEvent {
   repeated MessageAttachment attachments = 12;
   google.protobuf.Timestamp edited_at = 13;
   repeated MessageEntity entities = 14;
+  repeated string my_reactions = 15;
 }
 
 message MessageAttachment {

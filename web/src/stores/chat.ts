@@ -3067,8 +3067,11 @@ export const useChatStore = defineStore('chat', () => {
       editedAt: evt.editedAt
         ? new Date(Number(evt.editedAt.seconds) * 1000).toISOString()
         : undefined,
-      reactions: [],
-      myReactions: [],
+      reactions: (evt.reactions ?? []).map(item => ({
+        emoji: item.emoji,
+        count: item.count,
+      })),
+      myReactions: [...(evt.myReactions ?? [])],
       attachments: (evt.attachments ?? []).map(item => ({
         id: item.attachmentId,
         fileName: item.fileName,

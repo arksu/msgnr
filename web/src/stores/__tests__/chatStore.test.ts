@@ -32,6 +32,7 @@ import {
   EventType,
   NotificationType,
   NotificationLevel,
+  ReactionAggregateSchema,
 } from '@/shared/proto/packets_pb'
 
 const chatApiMocks = vi.hoisted(() => ({
@@ -1693,6 +1694,39 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.threadSummaries['root-1'].replyCount).toBe(10)
     expect(chat.threadSummaries['root-1'].lastThreadSeq).toBe(10n)
     expect(chat.threadMessages['root-1'].every(message => message.serverConfirmed === true)).toBe(true)
+  })
+
+  it('hydrates thread replay reactions and myReactions', () => {
+    const chat = useChatStore()
+
+    chat.handleSubscribeThreadResponse(create(SubscribeThreadResponseSchema, {
+      conversationId: 'channel-1',
+      threadRootMessageId: 'root-1',
+      currentThreadSeq: 1n,
+      replyCount: 1,
+      replay: [
+        create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-1',
+          senderId: 'user-2',
+          body: 'reply 1',
+          channelSeq: 20n,
+          threadRootMessageId: 'root-1',
+          threadSeq: 1n,
+          reactions: [
+            create(ReactionAggregateSchema, { emoji: ':+1:', count: 2 }),
+            create(ReactionAggregateSchema, { emoji: '🔥', count: 1 }),
+          ],
+          myReactions: [':+1:'],
+        }),
+      ],
+    }))
+
+    expect(chat.threadMessages['root-1'][0].reactions).toEqual([
+      { emoji: ':+1:', count: 2 },
+      { emoji: '🔥', count: 1 },
+    ])
+    expect(chat.threadMessages['root-1'][0].myReactions).toEqual([':+1:'])
   })
 
   it('subscribes from zero when only summary exists but thread replay cache is empty', () => {

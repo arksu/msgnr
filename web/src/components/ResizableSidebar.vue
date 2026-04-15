@@ -8,8 +8,11 @@
       <slot />
     </div>
     <div
-      class="group absolute inset-y-0 right-0 z-20 flex w-2 cursor-col-resize touch-none items-stretch justify-center"
-      :class="isResizing ? 'bg-accent/15' : 'hover:bg-accent/10'"
+      class="group absolute inset-y-0 z-20 flex w-2 cursor-col-resize touch-none items-stretch justify-center"
+      :class="[
+        handleSide === 'left' ? 'left-0' : 'right-0',
+        isResizing ? 'bg-accent/15' : 'hover:bg-accent/10',
+      ]"
       :aria-label="resizeTitle"
       :aria-orientation="'vertical'"
       :aria-valuemin="minWidth"
@@ -38,10 +41,12 @@ const props = withDefaults(defineProps<{
   minWidth?: number
   maxWidth?: number
   resizeTitle?: string
+  handleSide?: 'left' | 'right'
 }>(), {
   minWidth: 220,
   maxWidth: 520,
   resizeTitle: 'Resize sidebar',
+  handleSide: 'right',
 })
 
 const sidebarWidth = ref(clampWidth(loadSidebarWidth(props.storageKey, props.defaultWidth)))
@@ -66,7 +71,8 @@ function updateBodyDragState(active: boolean) {
 
 function handlePointerMove(event: PointerEvent) {
   if (!isResizing.value || event.pointerId !== activePointerId) return
-  sidebarWidth.value = clampWidth(widthStart + (event.clientX - pointerStartX))
+  const deltaX = event.clientX - pointerStartX
+  sidebarWidth.value = clampWidth(props.handleSide === 'left' ? widthStart - deltaX : widthStart + deltaX)
 }
 
 function stopResize(event?: PointerEvent) {

@@ -38,7 +38,7 @@
         :collab-provider="collabProvider"
         :collab-field="collabField"
         :allow-local-draft-seed="allowLocalDraftSeed"
-        :force-local-sync-token="forceLocalSyncToken"
+        :force-local-sync-token="combinedForceLocalSyncToken"
         :owner-kind="ownerKind"
         :owner-id="ownerId"
         :collab-user="collabUser"
@@ -59,7 +59,7 @@
         :disabled="!editable"
         data-testid="task-description-markdown-input"
         @blur="emit('blur')"
-        @input="resizeMarkdownTextarea"
+        @input="onMarkdownInput"
         @paste="onMarkdownPaste"
         @dragover="onMarkdownDragOver"
         @drop="onMarkdownDrop"
@@ -131,6 +131,8 @@ const markdownInputRef = ref<HTMLTextAreaElement | null>(null)
 const attachmentNotice = ref('')
 const attachmentNoticeIsError = ref(false)
 const editable = computed(() => !!props.editable)
+const markdownToRenderedSyncToken = ref(0)
+const combinedForceLocalSyncToken = computed(() => props.forceLocalSyncToken + markdownToRenderedSyncToken.value)
 
 function setAttachmentNotice(message: string, isError = false) {
   attachmentNotice.value = message
@@ -147,6 +149,15 @@ function resizeMarkdownTextarea() {
   if (!el || tab.value !== 'markdown') return
   el.style.height = '0px'
   el.style.height = `${el.scrollHeight}px`
+}
+
+function syncRenderedEditorFromMarkdown() {
+  markdownToRenderedSyncToken.value += 1
+}
+
+function onMarkdownInput() {
+  resizeMarkdownTextarea()
+  syncRenderedEditorFromMarkdown()
 }
 
 function attachmentsEnabledForUpload(): boolean {
@@ -191,6 +202,7 @@ function insertMarkdownAtCursor(value: string) {
   const input = markdownInputRef.value
   if (!input) {
     markdownDraft.value = [markdownDraft.value, value].filter(Boolean).join('\n\n')
+    syncRenderedEditorFromMarkdown()
     emit('update:modelValue', markdownDraft.value)
     return
   }
@@ -202,6 +214,7 @@ function insertMarkdownAtCursor(value: string) {
   const needsTrailingBreak = after.length > 0 && !after.startsWith('\n')
   const inserted = `${needsLeadingBreak ? '\n\n' : ''}${value}${needsTrailingBreak ? '\n\n' : ''}`
   markdownDraft.value = `${before}${inserted}${after}`
+  syncRenderedEditorFromMarkdown()
   emit('update:modelValue', markdownDraft.value)
   nextTick(() => {
     const caret = before.length + inserted.length

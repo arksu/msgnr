@@ -286,6 +286,45 @@ describe('TaskDescriptionRichEditor', () => {
     expect(getEditor(wrapper).isEditable).toBe(true)
   })
 
+  it('forces markdown draft into the collab doc only when the editor content differs', async () => {
+    const collabDoc = new Y.Doc()
+    collabDoc.getXmlFragment('task_description')
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '**Old** text',
+        collabDoc,
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    await waitForEditorText(wrapper, 'Old')
+
+    let updateCount = 0
+    collabDoc.on('update', () => {
+      updateCount += 1
+    })
+
+    await wrapper.setProps({
+      modelValue: '## New\n\nBody',
+      forceLocalSyncToken: 1,
+    })
+    await flushPromises()
+
+    expect(updateCount).toBeGreaterThan(0)
+    await waitForEditorText(wrapper, 'New')
+    await waitForEditorText(wrapper, 'Body')
+
+    updateCount = 0
+    await wrapper.setProps({
+      forceLocalSyncToken: 2,
+    })
+    await flushPromises()
+
+    expect(updateCount).toBe(0)
+  })
+
   it('uploads image files from the rendered editor and serializes them back to markdown tokens', async () => {
     vi.mocked(uploadOwnedAttachment).mockResolvedValue({
       id: 'att-image',

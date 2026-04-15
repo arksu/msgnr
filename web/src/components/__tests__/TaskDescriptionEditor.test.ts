@@ -1,5 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, nextTick, ref, watch } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as Y from 'yjs'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 import { uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
 
@@ -9,6 +11,17 @@ vi.mock('@/services/http/attachmentOwnersApi', () => ({
 }))
 
 describe('TaskDescriptionEditor', () => {
+  async function waitForRenderedEditor(wrapper: ReturnType<typeof mount>) {
+    for (let i = 0; i < 10; i += 1) {
+      await flushPromises()
+      await nextTick()
+      if (wrapper.find('[data-testid="task-description-editor-content"] .ProseMirror').exists()) {
+        return
+      }
+    }
+    throw new Error('rendered editor did not mount')
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:editor')
@@ -143,5 +156,66 @@ describe('TaskDescriptionEditor', () => {
 
     expect(uploadOwnedAttachment).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="task-description-attachment-note"]').text()).toContain('available after save')
+  })
+
+  it('syncs markdown-tab edits into the collab-backed rendered editor', async () => {
+    const collabDoc = new Y.Doc()
+    collabDoc.getXmlFragment('task_description')
+    const richEditorStub = defineComponent({
+      name: 'TaskDescriptionRichEditor',
+      props: {
+        modelValue: {
+          type: String,
+          required: true,
+        },
+        forceLocalSyncToken: {
+          type: Number,
+          default: 0,
+        },
+      },
+      setup(props) {
+        const renderedValue = ref(props.modelValue)
+
+        watch(
+          () => props.forceLocalSyncToken,
+          (next, prev) => {
+            if (next === prev) return
+            renderedValue.value = props.modelValue
+          },
+        )
+
+        return {
+          renderedValue,
+        }
+      },
+      template: '<div data-testid="task-description-editor-content"><div class="ProseMirror">{{ renderedValue }}</div></div>',
+    })
+
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '**Old** text',
+        defaultTab: 'rendered',
+        collabDoc,
+      },
+      attachTo: document.body,
+      global: {
+        stubs: {
+          TaskDescriptionRichEditor: richEditorStub,
+        },
+      },
+    })
+    await waitForRenderedEditor(wrapper)
+
+    await wrapper.get('[data-testid="task-description-tab-markdown"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-description-markdown-input"]').setValue('## Edited\n\nBody')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-description-tab-rendered"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror').text()).toContain('## Edited')
+    expect(wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror').text()).toContain('Body')
   })
 })

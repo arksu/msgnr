@@ -940,6 +940,18 @@ function maybeSeedCollabEditorFromDraft(reason: string) {
   }
 }
 
+function syncCollabEditorFromDraftIfNeeded(reason: string) {
+  if (!collabEnabled.value || !editor.value) return
+  const currentMarkdown = tiptapJsonToMarkdown(editor.value.getJSON())
+  descLog('syncCollabEditorFromDraftIfNeeded', {
+    reason,
+    current: markdownSignature(currentMarkdown),
+    draft: markdownSignature(markdownDraft.value),
+  })
+  if (currentMarkdown === markdownDraft.value) return
+  setEditorContentFromMarkdown(markdownDraft.value, false, reason)
+}
+
 function toggleLink() {
   if (!editor.value || !editable.value) return
   const previous = String(editor.value.getAttributes('link').href ?? '')
@@ -1027,7 +1039,7 @@ watch(
   () => props.forceLocalSyncToken,
   (next, prev) => {
     if (!collabEnabled.value || next === prev) return
-    setEditorContentFromMarkdown(markdownDraft.value, false, 'watch-forceLocalSyncToken')
+    syncCollabEditorFromDraftIfNeeded('watch-forceLocalSyncToken')
   },
 )
 
@@ -1050,6 +1062,9 @@ watch(editor, (next) => {
     descLog('watch:editor', { collab: true, skip: true })
     syncEditorContentEmpty('watch-editor:collab')
     maybeSeedCollabEditorFromDraft('watch-editor-collab-initial-seed')
+    if (props.forceLocalSyncToken > 0) {
+      syncCollabEditorFromDraftIfNeeded('watch-editor-forceLocalSyncToken')
+    }
     return
   }
   syncEditorContentEmpty('watch-editor:non-collab')

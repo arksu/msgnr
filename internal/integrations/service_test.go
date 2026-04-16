@@ -14,8 +14,10 @@ import (
 func TestMapIntegrationTaskResponse(t *testing.T) {
 	fieldID := uuid.New()
 	userID := uuid.New()
+	statusID := uuid.New()
 	now := time.Now().UTC().Round(time.Second)
 	description := "Task description"
+	publicID := "INT-42"
 	valueText := "hello"
 	valueDate := "2026-03-25"
 	valueNumber := "42"
@@ -25,8 +27,10 @@ func TestMapIntegrationTaskResponse(t *testing.T) {
 
 	resp := mapIntegrationTaskResponse(tasks.TaskResponse{
 		TaskRow: tasks.TaskRow{
+			PublicID:    publicID,
 			Title:       "Task title",
 			Description: &description,
+			StatusID:    statusID,
 		},
 		FieldValues: []tasks.FieldValueRow{{
 			FieldDefinitionID: fieldID,
@@ -39,6 +43,10 @@ func TestMapIntegrationTaskResponse(t *testing.T) {
 			EnumDictionaryID:  &enumID,
 			EnumVersion:       &enumVersion,
 		}},
+	}, integrationTaskStatusDTO{
+		ID:   statusID,
+		Code: "open",
+		Name: "Open",
 	}, []tasks.FieldRow{{
 		ID:       fieldID,
 		Code:     "summary",
@@ -47,11 +55,17 @@ func TestMapIntegrationTaskResponse(t *testing.T) {
 		Required: true,
 	}})
 
+	if resp.PublicID != publicID {
+		t.Fatalf("expected public_id to map")
+	}
 	if resp.Title != "Task title" {
 		t.Fatalf("expected title to map")
 	}
 	if resp.Description == nil || *resp.Description != description {
 		t.Fatalf("expected description to map")
+	}
+	if resp.Status.ID != statusID || resp.Status.Code != "open" || resp.Status.Name != "Open" {
+		t.Fatalf("expected status to map, got %+v", resp.Status)
 	}
 	if len(resp.Fields) != 1 {
 		t.Fatalf("expected one field, got %d", len(resp.Fields))

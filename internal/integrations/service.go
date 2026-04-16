@@ -32,9 +32,17 @@ type Service struct {
 }
 
 type integrationTaskResponseDTO struct {
+	PublicID    string                            `json:"public_id"`
 	Title       string                            `json:"title"`
 	Description *string                           `json:"description"`
+	Status      integrationTaskStatusDTO          `json:"status"`
 	Fields      []integrationTaskFieldResponseDTO `json:"fields"`
+}
+
+type integrationTaskStatusDTO struct {
+	ID   uuid.UUID `json:"id"`
+	Code string    `json:"code"`
+	Name string    `json:"name"`
 }
 
 type integrationTaskFieldResponseDTO struct {
@@ -135,7 +143,11 @@ func (s *Service) GetTask(ctx context.Context, publicID string) (integrationTask
 		return integrationTaskResponseDTO{}, err
 	}
 	fieldsByTemplateID := make(map[uuid.UUID][]tasks.FieldRow, 1)
-	return s.mapIntegrationTask(ctx, taskRow, fieldsByTemplateID)
+	statusesByID, err := s.loadIntegrationStatuses(ctx)
+	if err != nil {
+		return integrationTaskResponseDTO{}, err
+	}
+	return s.mapIntegrationTask(ctx, taskRow, fieldsByTemplateID, statusesByID)
 }
 
 func (s *Service) FindTasksByEnumValue(ctx context.Context, enumCode, enumValue string) ([]integrationTaskResponseDTO, error) {
@@ -146,8 +158,12 @@ func (s *Service) FindTasksByEnumValue(ctx context.Context, enumCode, enumValue 
 
 	resp := make([]integrationTaskResponseDTO, 0, len(taskRows))
 	fieldsByTemplateID := make(map[uuid.UUID][]tasks.FieldRow)
+	statusesByID, err := s.loadIntegrationStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for _, taskRow := range taskRows {
-		item, err := s.mapIntegrationTask(ctx, taskRow, fieldsByTemplateID)
+		item, err := s.mapIntegrationTask(ctx, taskRow, fieldsByTemplateID, statusesByID)
 		if err != nil {
 			return nil, err
 		}
@@ -182,6 +198,7 @@ func (s *Service) mapIntegrationTask(
 	ctx context.Context,
 	taskRow tasks.TaskResponse,
 	fieldsByTemplateID map[uuid.UUID][]tasks.FieldRow,
+	statusesByID map[uuid.UUID]integrationTaskStatusDTO,
 ) (integrationTaskResponseDTO, error) {
 	fields, ok := fieldsByTemplateID[taskRow.TemplateID]
 	if !ok {
@@ -192,18 +209,44 @@ func (s *Service) mapIntegrationTask(
 		}
 		fieldsByTemplateID[taskRow.TemplateID] = fields
 	}
-	return mapIntegrationTaskResponse(taskRow, fields), nil
+	status, ok := statusesByID[taskRow.StatusID]
+	if !ok {
+		return integrationTaskResponseDTO{}, fmt.Errorf("integrations: status %s not found for task %s", taskRow.StatusID, taskRow.ID)
+	}
+	return mapIntegrationTaskResponse(taskRow, status, fields), nil
 }
 
-func mapIntegrationTaskResponse(taskRow tasks.TaskResponse, fields []tasks.FieldRow) integrationTaskResponseDTO {
+func (s *Service) loadIntegrationStatuses(ctx context.Context) (map[uuid.UUID]integrationTaskStatusDTO, error) {
+	rows, err := s.tasks.ListStatuses(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("integrations: list statuses: %w", err)
+	}
+	statusesByID := make(map[uuid.UUID]integrationTaskStatusDTO, len(rows))
+	for _, row := range rows {
+		statusesByID[row.ID] = integrationTaskStatusDTO{
+			ID:   row.ID,
+			Code: row.Code,
+			Name: row.Name,
+		}
+	}
+	return statusesByID, nil
+}
+
+func mapIntegrationTaskResponse(
+	taskRow tasks.TaskResponse,
+	status integrationTaskStatusDTO,
+	fields []tasks.FieldRow,
+) integrationTaskResponseDTO {
 	valuesByFieldID := make(map[uuid.UUID]tasks.FieldValueRow, len(taskRow.FieldValues))
 	for _, value := range taskRow.FieldValues {
 		valuesByFieldID[value.FieldDefinitionID] = value
 	}
 
 	resp := integrationTaskResponseDTO{
+		PublicID:    taskRow.PublicID,
 		Title:       taskRow.Title,
 		Description: taskRow.Description,
+		Status:      status,
 		Fields:      make([]integrationTaskFieldResponseDTO, 0, len(fields)),
 	}
 	for _, field := range fields {

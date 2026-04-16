@@ -60,8 +60,14 @@ Response:
 
 ```json
 {
+  "public_id": "INT-123",
   "title": "Integration task",
   "description": "Task description",
+  "status": {
+    "id": "3bf6d6b7-6823-4908-aee1-c2913aa7a3f4",
+    "code": "open",
+    "name": "Open"
+  },
   "fields": [
     {
       "id": "0f9a3d8f-0c1b-4b8d-a1d4-cbeff4ed8cb0",
@@ -120,8 +126,14 @@ Response:
 ```json
 [
   {
+    "public_id": "INT-123",
     "title": "Integration task",
     "description": "Task description",
+    "status": {
+      "id": "3bf6d6b7-6823-4908-aee1-c2913aa7a3f4",
+      "code": "open",
+      "name": "Open"
+    },
     "fields": [
       {
         "id": "0f9a3d8f-0c1b-4b8d-a1d4-cbeff4ed8cb0",
@@ -258,8 +270,14 @@ Errors are returned as JSON:
 
 ```json
 {
+  "public_id": "string",
   "title": "string",
   "description": "string|null",
+  "status": {
+    "id": "uuid",
+    "code": "string",
+    "name": "string"
+  },
   "fields": [
     {
       "id": "uuid",

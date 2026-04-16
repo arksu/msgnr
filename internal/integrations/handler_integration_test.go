@@ -259,15 +259,30 @@ func setTaskUpdatedAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tas
 
 func strPtr(s string) *string { return &s }
 
+func assertIntegrationTaskSummary(t *testing.T, resp integrationTaskResponseDTO, task tasks.TaskResponse, status tasks.StatusRow) {
+	t.Helper()
+	if resp.PublicID != task.PublicID {
+		t.Fatalf("expected public_id %q, got %q", task.PublicID, resp.PublicID)
+	}
+	if resp.Status.ID != status.ID || resp.Status.Code != status.Code || resp.Status.Name != status.Name {
+		t.Fatalf("expected status %+v, got %+v", status, resp.Status)
+	}
+}
+
 func TestHandler_GetTaskByPublicID(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 	mux := newMux(pool)
+	taskSvc := tasks.NewService(pool, nil)
 
 	actorID := seedUser(t, ctx, pool, "admin", "active")
 	botID := seedUser(t, ctx, pool, "bot", "active")
 	seedToken(t, ctx, pool, botID, "task-token", false)
 	taskRow := seedTask(t, ctx, pool, actorID)
+	status, err := taskSvc.GetStatus(ctx, taskRow.StatusID)
+	if err != nil {
+		t.Fatalf("get status: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/integrations/tasks/"+taskRow.PublicID, nil)
 	req.Header.Set("Authorization", "Bearer task-token")
@@ -282,6 +297,7 @@ func TestHandler_GetTaskByPublicID(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+	assertIntegrationTaskSummary(t, resp, taskRow, status)
 	if resp.Title != taskRow.Title {
 		t.Fatalf("expected title %q, got %q", taskRow.Title, resp.Title)
 	}
@@ -294,6 +310,53 @@ func TestHandler_GetTaskByPublicID(t *testing.T) {
 	if resp.Fields[0].Code != "summary" || resp.Fields[0].ValueText == nil || *resp.Fields[0].ValueText != "Field value" {
 		t.Fatalf("expected field metadata and value to map, got %+v", resp.Fields[0])
 	}
+}
+
+func TestHandler_GetTaskByPublicID_IncludesDeletedStatus(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	mux := newMux(pool)
+	taskSvc := tasks.NewService(pool, nil)
+
+	actorID := seedUser(t, ctx, pool, "admin", "active")
+	botID := seedUser(t, ctx, pool, "bot", "active")
+	seedToken(t, ctx, pool, botID, "task-token", false)
+
+	template := seedTemplateRow(t, ctx, taskSvc, actorID, "INTD")
+	status := seedStatusRow(t, ctx, taskSvc, actorID, "done", "Done")
+	field, err := taskSvc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: template.ID,
+		Code:       "summary",
+		Name:       "Summary",
+		Type:       "text",
+		Required:   true,
+		SortOrder:  1,
+	})
+	if err != nil {
+		t.Fatalf("create field: %v", err)
+	}
+	taskRow := seedLookupTask(t, ctx, taskSvc, actorID, template.ID, status.ID, "Deleted status task", []tasks.FieldValueInput{{
+		FieldDefinitionID: field.ID,
+		ValueText:         strPtr("Still readable"),
+	}})
+	if _, err := taskSvc.SoftDeleteStatus(ctx, status.ID); err != nil {
+		t.Fatalf("soft delete status: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/integrations/tasks/"+taskRow.PublicID, nil)
+	req.Header.Set("Authorization", "Bearer task-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp integrationTaskResponseDTO
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	assertIntegrationTaskSummary(t, resp, taskRow, status)
 }
 
 func TestHandler_GetTaskByPublicIDNotFound(t *testing.T) {
@@ -362,6 +425,7 @@ func TestHandler_FindTasksByEnumValue_SingleEnumByCode(t *testing.T) {
 	if len(resp) != 1 {
 		t.Fatalf("expected one task, got %d", len(resp))
 	}
+	assertIntegrationTaskSummary(t, resp[0], match, status)
 	if resp[0].Title != match.Title {
 		t.Fatalf("expected matched title %q, got %q", match.Title, resp[0].Title)
 	}
@@ -416,6 +480,7 @@ func TestHandler_FindTasksByEnumValue_MultiEnumByNameCaseInsensitive(t *testing.
 	if len(resp) != 1 || resp[0].Title != match.Title {
 		t.Fatalf("expected one multi-enum match, got %+v", resp)
 	}
+	assertIntegrationTaskSummary(t, resp[0], match, status)
 	if string(resp[0].Fields[0].ValueJSON) != string(rawValue) {
 		t.Fatalf("expected raw multi-enum value_json, got %s", string(resp[0].Fields[0].ValueJSON))
 	}
@@ -489,6 +554,8 @@ func TestHandler_FindTasksByEnumValue_DuplicateNameDedupesAndOrders(t *testing.T
 	if len(resp) != 2 {
 		t.Fatalf("expected two deduped matches, got %d: %s", len(resp), rec.Body.String())
 	}
+	assertIntegrationTaskSummary(t, resp[0], newest, status)
+	assertIntegrationTaskSummary(t, resp[1], deduped, status)
 	if resp[0].Title != newest.Title || resp[1].Title != deduped.Title {
 		t.Fatalf("expected updated_at desc ordering, got %+v", resp)
 	}
@@ -609,6 +676,7 @@ func TestHandler_FindTasksByEnumValue_HistoricalVersionLookup(t *testing.T) {
 	if len(resp) != 1 || resp[0].Title != match.Title {
 		t.Fatalf("expected historical version match, got %+v", resp)
 	}
+	assertIntegrationTaskSummary(t, resp[0], match, status)
 }
 
 func TestHandler_FindTasksByEnumValue_InvalidPath(t *testing.T) {

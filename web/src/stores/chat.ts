@@ -309,6 +309,41 @@ function mentionedUserIdsFromPayload(
   return [...(fallbackMentionedUserIds ?? [])]
 }
 
+function decodeNotificationEscapeToken(token: string): string {
+  switch (token) {
+    case 'b':
+      return '\b'
+    case 'f':
+      return '\f'
+    case 'n':
+      return '\n'
+    case 'r':
+      return '\r'
+    case 't':
+      return '\t'
+    case '"':
+      return '"'
+    case '\'':
+      return '\''
+    case '/':
+      return '/'
+    case '\\':
+      return '\\'
+    default:
+      return token
+  }
+}
+
+function decodeNotificationText(input: string | undefined | null): string {
+  if (!input) return ''
+
+  return input
+    .replace(/\\\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\\\(["\\/'])/g, (_match, token: string) => decodeNotificationEscapeToken(token))
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\(["\\/bfnrt'])/g, (_match, token: string) => decodeNotificationEscapeToken(token))
+}
+
 function unreadFeedItemFromHttp(item: HttpUnreadFeedItem): UnreadFeedItem {
   return {
     id: item.id,
@@ -317,12 +352,12 @@ function unreadFeedItemFromHttp(item: HttpUnreadFeedItem): UnreadFeedItem {
     conversationId: item.conversation_id,
     conversationKind: item.conversation_kind,
     conversationVisibility: item.conversation_visibility,
-    conversationTitle: item.conversation_title,
+    conversationTitle: decodeNotificationText(item.conversation_title),
     messageId: item.message_id || undefined,
     threadRootMessageId: item.thread_root_message_id || undefined,
     senderId: item.sender_id || undefined,
-    senderName: item.sender_name,
-    body: item.body,
+    senderName: decodeNotificationText(item.sender_name),
+    body: decodeNotificationText(item.body),
     createdAt: item.created_at,
   }
 }
@@ -2457,6 +2492,8 @@ export const useChatStore = defineStore('chat', () => {
 
   function applyNotificationAdded(evt: NotificationAddedEvent) {
     if (!evt.notification) return
+    const senderName = decodeNotificationText(evt.notification.title) || 'Msgnr'
+    const body = decodeNotificationText(evt.notification.body)
     notifications.value = [
       notificationSummaryToItem(evt.notification),
       ...notifications.value.filter(item => item.id !== evt.notification?.notificationId),
@@ -2470,8 +2507,8 @@ export const useChatStore = defineStore('chat', () => {
         reason: evt.notification.type === NotificationType.MENTION ? 'mention' : 'notification',
         conversationId: evt.notification.conversationId,
         senderId: '',
-        senderName: evt.notification.title || 'Msgnr',
-        body: evt.notification.body,
+        senderName,
+        body,
         attachmentCount: 0,
       })
     }
@@ -2492,8 +2529,8 @@ export const useChatStore = defineStore('chat', () => {
       messageId: evt.messageId,
       threadRootMessageId: evt.threadRootMessageId || undefined,
       senderId: evt.senderId,
-      senderName: evt.senderName,
-      body: evt.body,
+      senderName: decodeNotificationText(evt.senderName),
+      body: decodeNotificationText(evt.body),
       attachmentCount: evt.attachmentCount,
     })
   }
@@ -3309,8 +3346,8 @@ function notificationSummaryToItem(summary: NotificationSummary): NotificationIt
   return {
     id: summary.notificationId,
     type: summary.type.toString(),
-    title: summary.title,
-    body: summary.body,
+    title: decodeNotificationText(summary.title),
+    body: decodeNotificationText(summary.body),
     conversationId: summary.conversationId,
     isRead: summary.isRead,
     createdAt: summary.createdAt

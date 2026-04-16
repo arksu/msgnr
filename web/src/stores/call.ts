@@ -230,6 +230,7 @@ const EMPTY_CALL_AUTO_CLOSE_MS = 5000
 const CALL_DEBUG_STORAGE_KEY = 'debug.calls'
 const SCREEN_ANNOTATION_TOPIC = 'screen-annotation.v1'
 const SCREEN_ANNOTATION_OVERLAY_LABEL = 'annotation_overlay'
+const SCREEN_ANNOTATION_MONITOR_POLL_MS = 500
 
 export interface ScreenAnnotationPoint {
   x: number
@@ -269,6 +270,11 @@ export interface ScreenAnnotationEvent extends ScreenAnnotationSegmentV1 {
 
 type ScreenAnnotationPacketV1 = ScreenAnnotationSessionState | ScreenAnnotationSegmentV1
 type ScreenAnnotationListener = (event: ScreenAnnotationEvent) => void
+type LocalShareCaptureContext = {
+  shareType: ScreenAnnotationShareType
+  shareLabel: string
+  overlayTargetKey: string
+}
 
 function isLoopbackHost(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1'
@@ -381,6 +387,45 @@ function normalizeSharerPlatform(value: unknown): ScreenAnnotationSharerPlatform
   if (normalized === 'tauri') return 'tauri'
   if (normalized === 'pwa') return 'pwa'
   return 'unknown'
+}
+
+function parseDisplayIndex(shareLabel: string): number | null {
+  let digits = ''
+  for (const ch of shareLabel) {
+    if (/\d/.test(ch)) {
+      digits += ch
+      continue
+    }
+    if (digits) break
+  }
+  if (!digits) return null
+  const parsed = Number.parseInt(digits, 10)
+  if (!Number.isInteger(parsed) || parsed <= 0) return null
+  return parsed - 1
+}
+
+function normalizeOverlayKeyToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function resolveMonitorOverlayTargetKey(shareLabel: string): string {
+  const displayIndex = parseDisplayIndex(shareLabel)
+  if (displayIndex !== null) {
+    return `monitor:${displayIndex}`
+  }
+  const normalized = normalizeOverlayKeyToken(shareLabel)
+  return normalized ? `monitor:${normalized}` : ''
+}
+
+function overlayLabelForTargetKey(targetKey: string): string {
+  const normalized = normalizeOverlayKeyToken(targetKey.replace(/:/g, '-'))
+  return normalized
+    ? `${SCREEN_ANNOTATION_OVERLAY_LABEL}_${normalized}`
+    : SCREEN_ANNOTATION_OVERLAY_LABEL
 }
 
 function decodeScreenAnnotationPacket(payload: Uint8Array): ScreenAnnotationPacketV1 | null {
@@ -512,10 +557,15 @@ export const useCallStore = defineStore('call', () => {
   let pendingInviteMembersRequestId = ''
   let remoteAudioStatsTimer: ReturnType<typeof setInterval> | null = null
   let emptyCallAutoCloseTimer: ReturnType<typeof setTimeout> | null = null
+  let annotationMonitorPollTimer: ReturnType<typeof setInterval> | null = null
+  let annotationMonitorPollInFlight = false
   let audioProcessingCleanup: (() => void) | null = null
   let knownRemoteParticipantSids = new Set<string>()
   let suppressParticipantChangeSounds = false
   let localScreenShareUsedInSession = false
+  let currentNativeOverlayTargetKey = ''
+  let lastResolvedNativeOverlayTargetKey = ''
+  const activeNativeOverlayLabels = new Set<string>()
 
   const activeConversationTitle = computed(() => {
     const channel = chatStore.channels.find(item => item.id === activeConversationId.value)
@@ -571,11 +621,11 @@ export const useCallStore = defineStore('call', () => {
     return Boolean(identity && identity === session.sharerIdentity)
   }
 
-  async function showNativeAnnotationOverlay(shareLabel: string): Promise<void> {
+  async function showNativeAnnotationOverlay(overlayLabel: string, shareLabel: string): Promise<void> {
     if (localRuntimePlatform() !== 'tauri') return
     try {
       await platform?.system.invokeNative?.('annotation_overlay_show', {
-        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+        overlayLabel,
         shareLabel,
       })
     } catch (err) {
@@ -583,38 +633,135 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
-  async function hideNativeAnnotationOverlay(): Promise<void> {
+  async function hideNativeAnnotationOverlay(overlayLabel: string): Promise<void> {
     if (localRuntimePlatform() !== 'tauri') return
     try {
       await platform?.system.invokeNative?.('annotation_overlay_hide', {
-        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+        overlayLabel,
       })
     } catch (err) {
       callDebug('annotation overlay hide failed', { error: toErrorMessage(err) })
     }
   }
 
-  async function clearNativeAnnotationOverlay(): Promise<void> {
+  async function clearNativeAnnotationOverlay(overlayLabel: string): Promise<void> {
     if (localRuntimePlatform() !== 'tauri') return
     try {
       await platform?.system.invokeNative?.('annotation_overlay_clear', {
-        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+        overlayLabel,
       })
     } catch (err) {
       callDebug('annotation overlay clear failed', { error: toErrorMessage(err) })
     }
   }
 
-  async function pushNativeAnnotationOverlaySegment(segment: ScreenAnnotationEvent): Promise<void> {
+  async function pushNativeAnnotationOverlaySegment(
+    overlayLabel: string,
+    segment: ScreenAnnotationEvent,
+  ): Promise<void> {
     if (localRuntimePlatform() !== 'tauri') return
     try {
       await platform?.system.invokeNative?.('annotation_overlay_push_segment', {
-        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+        overlayLabel,
         segmentJson: JSON.stringify(segment),
       })
     } catch (err) {
       callDebug('annotation overlay segment push failed', { error: toErrorMessage(err) })
     }
+  }
+
+  async function clearAndHideAllNativeAnnotationOverlays(): Promise<void> {
+    const overlayLabels = Array.from(activeNativeOverlayLabels)
+    activeNativeOverlayLabels.clear()
+    await Promise.all(overlayLabels.map(async (overlayLabel) => {
+      await clearNativeAnnotationOverlay(overlayLabel)
+      await hideNativeAnnotationOverlay(overlayLabel)
+    }))
+  }
+
+  async function ensureNativeAnnotationOverlayVisible(targetKey: string, shareLabel: string): Promise<void> {
+    if (!targetKey) return
+    const overlayLabel = overlayLabelForTargetKey(targetKey)
+    activeNativeOverlayLabels.add(overlayLabel)
+    await showNativeAnnotationOverlay(overlayLabel, shareLabel)
+  }
+
+  function resolveCurrentLocalAnnotationRoutingTarget(): { targetKey: string; shareLabel: string } | null {
+    const current = room.value
+    const session = annotationSessionState.value
+    if (!current || !session?.active || !isLocalSharerSession(session)) return null
+
+    const capture = resolveLocalShareCaptureContext(current)
+    if (capture.shareType === 'window' || capture.shareType === 'browser') {
+      currentNativeOverlayTargetKey = ''
+      lastResolvedNativeOverlayTargetKey = ''
+      return null
+    }
+
+    const sessionTargetKey = session.shareType === 'monitor'
+      ? resolveMonitorOverlayTargetKey(session.shareLabel)
+      : ''
+    const targetKey = capture.overlayTargetKey || lastResolvedNativeOverlayTargetKey || sessionTargetKey
+    if (!targetKey) return null
+
+    currentNativeOverlayTargetKey = targetKey
+    lastResolvedNativeOverlayTargetKey = targetKey
+    return {
+      targetKey,
+      shareLabel: capture.shareLabel || session.shareLabel,
+    }
+  }
+
+  async function syncLocalSharerAnnotationTarget(reason: string): Promise<void> {
+    const current = room.value
+    const session = annotationSessionState.value
+    if (!current || !session?.active || !isLocalSharerSession(session)) return
+
+    const capture = resolveLocalShareCaptureContext(current)
+    const routingTarget = resolveCurrentLocalAnnotationRoutingTarget()
+    if (routingTarget) {
+      await ensureNativeAnnotationOverlayVisible(routingTarget.targetKey, routingTarget.shareLabel)
+    }
+
+    const shareTypeKnown = capture.shareType === 'monitor'
+      || capture.shareType === 'window'
+      || capture.shareType === 'browser'
+    if (!shareTypeKnown) return
+    if (capture.shareType === session.shareType && capture.shareLabel === session.shareLabel) return
+
+    callDebug('annotation share target changed', {
+      reason,
+      prevShareType: session.shareType,
+      prevShareLabel: session.shareLabel,
+      nextShareType: capture.shareType,
+      nextShareLabel: capture.shareLabel,
+      targetKey: routingTarget?.targetKey ?? null,
+    })
+    await publishLocalAnnotationSessionUpdate(true, capture.shareType, capture.shareLabel)
+  }
+
+  function stopLocalAnnotationMonitorPolling() {
+    if (annotationMonitorPollTimer) {
+      clearInterval(annotationMonitorPollTimer)
+      annotationMonitorPollTimer = null
+    }
+    annotationMonitorPollInFlight = false
+  }
+
+  function runLocalAnnotationMonitorPoll(reason: string) {
+    if (annotationMonitorPollInFlight) return
+    annotationMonitorPollInFlight = true
+    void syncLocalSharerAnnotationTarget(reason).finally(() => {
+      annotationMonitorPollInFlight = false
+    })
+  }
+
+  function startLocalAnnotationMonitorPolling() {
+    if (annotationMonitorPollTimer) return
+    annotationMonitorPollTimer = setInterval(() => {
+      runLocalAnnotationMonitorPoll('interval')
+    }, SCREEN_ANNOTATION_MONITOR_POLL_MS)
+    runLocalAnnotationMonitorPoll('start')
   }
 
   function syncNativeOverlayWithSession(nextSession: ScreenAnnotationSessionState | null) {
@@ -628,12 +775,14 @@ export const useCallStore = defineStore('call', () => {
           : 'os-overlay'
 
     if (!isSharer || nextMode !== 'os-overlay') {
-      void hideNativeAnnotationOverlay()
+      stopLocalAnnotationMonitorPolling()
+      currentNativeOverlayTargetKey = ''
+      lastResolvedNativeOverlayTargetKey = ''
+      void clearAndHideAllNativeAnnotationOverlays()
       return
     }
 
-    void showNativeAnnotationOverlay(nextSession?.shareLabel ?? '')
-    void clearNativeAnnotationOverlay()
+    startLocalAnnotationMonitorPolling()
   }
 
   function setAnnotationSession(nextSession: ScreenAnnotationSessionState | null) {
@@ -750,14 +899,18 @@ export const useCallStore = defineStore('call', () => {
     })
   }
 
-  function resolveLocalShareCaptureContext(current: Room): { shareType: ScreenAnnotationShareType; shareLabel: string } {
-    const publication = current.localParticipant.getTrackPublication(Track.Source.ScreenShare)
+  function resolveLocalShareCaptureContext(current: Room): LocalShareCaptureContext {
+    const getTrackPublication = current.localParticipant?.getTrackPublication
+    if (typeof getTrackPublication !== 'function') {
+      return { shareType: 'unknown', shareLabel: '', overlayTargetKey: '' }
+    }
+    const publication = getTrackPublication.call(current.localParticipant, Track.Source.ScreenShare)
     const trackLike = publication?.track as {
       mediaStreamTrack?: MediaStreamTrack | null
     } | null
     const mediaTrack = trackLike?.mediaStreamTrack ?? null
     if (!mediaTrack) {
-      return { shareType: 'unknown', shareLabel: '' }
+      return { shareType: 'unknown', shareLabel: '', overlayTargetKey: '' }
     }
     const label = mediaTrack.label || ''
     let shareType: ScreenAnnotationShareType = 'unknown'
@@ -780,7 +933,11 @@ export const useCallStore = defineStore('call', () => {
         shareType = 'browser'
       }
     }
-    return { shareType, shareLabel: label }
+    return {
+      shareType,
+      shareLabel: label,
+      overlayTargetKey: shareType === 'monitor' ? resolveMonitorOverlayTargetKey(label) : '',
+    }
   }
 
   async function publishLocalAnnotationSessionUpdate(active: boolean, shareType: ScreenAnnotationShareType, shareLabel: string) {
@@ -818,7 +975,11 @@ export const useCallStore = defineStore('call', () => {
     }
     emitScreenAnnotation(event)
     if (isLocalSharerSession(annotationSessionState.value) && annotationSessionMode.value === 'os-overlay') {
-      void pushNativeAnnotationOverlaySegment(event)
+      const routingTarget = resolveCurrentLocalAnnotationRoutingTarget()
+      if (routingTarget) {
+        void ensureNativeAnnotationOverlayVisible(routingTarget.targetKey, routingTarget.shareLabel)
+        void pushNativeAnnotationOverlaySegment(overlayLabelForTargetKey(routingTarget.targetKey), event)
+      }
     }
     return true
   }

@@ -1160,6 +1160,51 @@ describe('chatStore phase 6 flows', () => {
     off()
   })
 
+  it('decodes escaped text for durable notifications', () => {
+    const chat = useChatStore()
+    chat.setClientActive(false)
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-notif-decode-1',
+      eventType: EventType.NOTIFICATION_ADDED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'notificationAdded',
+        value: create(NotificationAddedEventSchema, {
+          userId: 'user-1',
+          notification: create(NotificationSummarySchema, {
+            notificationId: 'notification-decode-1',
+            type: NotificationType.MENTION,
+            title: 'Mention \\/ \\"Boss\\" \\u263A',
+            body: 'Line 1\\nLine 2\\/done\\\\folder',
+            conversationId: 'channel-1',
+            isRead: false,
+          }),
+        }),
+      },
+    }))
+
+    expect(chat.notifications[0]).toMatchObject({
+      title: 'Mention / "Boss" ☺',
+      body: 'Line 1\nLine 2/done\\folder',
+    })
+    expect(onIncoming).toHaveBeenCalledWith({
+      reason: 'mention',
+      conversationId: 'channel-1',
+      senderId: '',
+      senderName: 'Mention / "Boss" ☺',
+      body: 'Line 1\nLine 2/done\\folder',
+      attachmentCount: 0,
+    })
+
+    off()
+  })
+
   it('tracks active calls from call_state_changed ACTIVE and ENDED events', () => {
     const chat = useChatStore()
     chat.bootstrapped = true
@@ -1359,6 +1404,63 @@ describe('chatStore phase 6 flows', () => {
       body: 'hello',
       attachmentCount: 0,
     })
+    off()
+  })
+
+  it('decodes escaped text for backend-routed message_alert notifications', () => {
+    const chat = useChatStore()
+    chat.setClientActive(false)
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-msg-alert-decode-1',
+      eventType: EventType.MESSAGE_ALERT,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageAlert',
+        value: create(MessageAlertEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-alert-decode-1',
+          senderId: 'user-2',
+          senderName: 'Bob\\/"Builder\\"',
+          body: 'Status\\nDone \\/ \\u2705',
+          threadRootMessageId: '',
+          attachmentCount: 0,
+        }),
+      },
+    }))
+
+    expect(onIncoming).toHaveBeenCalledWith({
+      reason: 'message_alert',
+      conversationId: 'channel-1',
+      messageId: 'message-alert-decode-1',
+      threadRootMessageId: undefined,
+      senderId: 'user-2',
+      senderName: 'Bob/"Builder"',
+      body: 'Status\nDone / ✅',
+      attachmentCount: 0,
+    })
+
     off()
   })
 
@@ -1567,6 +1669,47 @@ describe('chatStore phase 6 flows', () => {
     }))
 
     expect(onTaskStatusChanged).not.toHaveBeenCalled()
+  })
+
+  it('decodes escaped text in unread feed notification items', async () => {
+    const chat = useChatStore()
+    chat.bootstrapped = true
+    chatApiMocks.listUnreadFeed.mockResolvedValue({
+      total_count: 1,
+      items: [{
+        id: 'unread-1',
+        kind: 'mention',
+        notification_id: 'notif-1',
+        conversation_id: 'channel-1',
+        conversation_kind: 'channel',
+        conversation_visibility: 'public',
+        conversation_title: 'team\\/ops',
+        message_id: 'message-1',
+        thread_root_message_id: '',
+        sender_id: 'user-2',
+        sender_name: 'Bob\\u0020Builder',
+        body: 'Escaped\\nmessage \\/ done',
+        created_at: '2026-03-06T00:00:00Z',
+      }],
+    })
+
+    await chat.refreshUnreadFeed()
+
+    expect(chat.unreadFeedItems).toEqual([{
+      id: 'unread-1',
+      kind: 'mention',
+      notificationId: 'notif-1',
+      conversationId: 'channel-1',
+      conversationKind: 'channel',
+      conversationVisibility: 'public',
+      conversationTitle: 'team/ops',
+      messageId: 'message-1',
+      threadRootMessageId: undefined,
+      senderId: 'user-2',
+      senderName: 'Bob Builder',
+      body: 'Escaped\nmessage / done',
+      createdAt: '2026-03-06T00:00:00Z',
+    }])
   })
 
   it('marks active direct message as read for self-authored messages', () => {

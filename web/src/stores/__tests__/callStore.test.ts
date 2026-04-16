@@ -6,6 +6,21 @@ import { useCallStore } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
 import { loadAudioPrefs, saveAudioPrefs } from '@/services/storage/audioPrefsStorage'
 
+const platformMocks = vi.hoisted(() => ({
+  getPlatformOrNull: vi.fn(),
+  getRuntimePlatformType: vi.fn(),
+  isTauriRuntime: vi.fn(),
+}))
+
+vi.mock('@/platform', () => ({
+  getPlatformOrNull: platformMocks.getPlatformOrNull,
+}))
+
+vi.mock('@/platform/runtime', () => ({
+  getRuntimePlatformType: platformMocks.getRuntimePlatformType,
+  isTauriRuntime: platformMocks.isTauriRuntime,
+}))
+
 vi.mock('@/services/sound', () => ({
   useNotificationSoundEngine: () => ({
     playIncomingMessage: vi.fn(),
@@ -13,6 +28,15 @@ vi.mock('@/services/sound', () => ({
     stopCallInviteRing: vi.fn(),
   }),
 }))
+
+beforeEach(() => {
+  platformMocks.getPlatformOrNull.mockReset()
+  platformMocks.getPlatformOrNull.mockReturnValue(null)
+  platformMocks.getRuntimePlatformType.mockReset()
+  platformMocks.getRuntimePlatformType.mockReturnValue('pwa')
+  platformMocks.isTauriRuntime.mockReset()
+  platformMocks.isTauriRuntime.mockReturnValue(false)
+})
 
 describe('callStore syncWithActiveCalls', () => {
   beforeEach(() => {
@@ -201,6 +225,89 @@ describe('callStore screen annotations', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
   })
+
+  function createTauriPlatform() {
+    const invokeNative = vi.fn().mockResolvedValue(undefined)
+    platformMocks.getPlatformOrNull.mockReturnValue({
+      type: 'tauri',
+      system: {
+        invokeNative,
+      },
+    })
+    platformMocks.getRuntimePlatformType.mockReturnValue('tauri')
+    platformMocks.isTauriRuntime.mockReturnValue(true)
+    return { invokeNative }
+  }
+
+  function createLocalSharerRoom(options?: {
+    shareLabel?: string
+    shareType?: 'monitor' | 'window' | 'browser'
+  }) {
+    let shareLabel = options?.shareLabel ?? 'Display 1'
+    let shareType = options?.shareType ?? 'monitor'
+    const mediaStreamTrack = {
+      get label() {
+        return shareLabel
+      },
+      getSettings: vi.fn(() => ({
+        displaySurface: shareType,
+      })),
+    }
+    const screenPublication = {
+      track: {
+        mediaStreamTrack,
+      },
+      isMuted: false,
+    }
+    const publishData = vi.fn().mockResolvedValue(undefined)
+    const localParticipant = {
+      identity: 'user-a',
+      publishData,
+      getTrackPublication: vi.fn((source: Track.Source) => (
+        source === Track.Source.ScreenShare ? screenPublication : undefined
+      )),
+      setScreenShareEnabled: vi.fn().mockResolvedValue(undefined),
+      setCameraEnabled: vi.fn().mockResolvedValue(undefined),
+      setMicrophoneEnabled: vi.fn().mockResolvedValue(undefined),
+      unpublishTrack: vi.fn().mockResolvedValue(undefined),
+      videoTrackPublications: new Map(),
+      audioTrackPublications: new Map(),
+    }
+
+    return {
+      publishData,
+      room: {
+        name: 'room-annotation',
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        localParticipant,
+        remoteParticipants: new Map(),
+      },
+      setShareLabel(next: string) {
+        shareLabel = next
+      },
+      setShareType(next: 'monitor' | 'window' | 'browser') {
+        shareType = next
+      },
+    }
+  }
+
+  async function flushAsync() {
+    await Promise.resolve()
+    await Promise.resolve()
+  }
+
+  function buildInactiveSessionPacket() {
+    return new TextEncoder().encode(JSON.stringify({
+      version: 1,
+      kind: 'session',
+      active: false,
+      sharerIdentity: 'user-a',
+      sharerPlatform: 'tauri',
+      shareType: 'unknown',
+      shareLabel: '',
+      sentAtMs: Date.now(),
+    }))
+  }
 
   it('allows non-sharer publish when sharer session supports annotation', async () => {
     const callStore = useCallStore()
@@ -437,6 +544,157 @@ describe('callStore screen annotations', () => {
     }])
 
     unsubscribe()
+  })
+
+  it('republishes local session metadata when the shared monitor label changes', async () => {
+    vi.useFakeTimers()
+    try {
+      const { invokeNative } = createTauriPlatform()
+      const localShare = createLocalSharerRoom({ shareLabel: 'Display 1', shareType: 'monitor' })
+      const callStore = useCallStore()
+
+      callStore.room = localShare.room as never
+      callStore.screenShareEnabled = true
+      callStore.ingestScreenAnnotationPacket(
+        new TextEncoder().encode(JSON.stringify({
+          version: 1,
+          kind: 'session',
+          active: true,
+          sharerIdentity: 'user-a',
+          sharerPlatform: 'tauri',
+          shareType: 'monitor',
+          shareLabel: 'Display 1',
+          sentAtMs: Date.now(),
+        })),
+        'user-a',
+      )
+      await flushAsync()
+
+      localShare.publishData.mockClear()
+      invokeNative.mockClear()
+      localShare.setShareLabel('Display 2')
+
+      await vi.advanceTimersByTimeAsync(600)
+      await flushAsync()
+
+      expect(localShare.publishData).toHaveBeenCalledTimes(1)
+      const payload = JSON.parse(new TextDecoder().decode(localShare.publishData.mock.calls[0][0]))
+      expect(payload).toEqual(expect.objectContaining({
+        kind: 'session',
+        shareType: 'monitor',
+        shareLabel: 'Display 2',
+      }))
+      expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_show', expect.objectContaining({
+        overlayLabel: 'annotation_overlay_monitor-1',
+        shareLabel: 'Display 2',
+      }))
+
+      callStore.ingestScreenAnnotationPacket(buildInactiveSessionPacket(), 'user-a')
+      await flushAsync()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('routes incoming sharer-side overlay segments to the current active monitor', async () => {
+    const { invokeNative } = createTauriPlatform()
+    const localShare = createLocalSharerRoom({ shareLabel: 'Display 2', shareType: 'monitor' })
+    const callStore = useCallStore()
+
+    callStore.room = localShare.room as never
+    callStore.screenShareEnabled = true
+    callStore.ingestScreenAnnotationPacket(
+      new TextEncoder().encode(JSON.stringify({
+        version: 1,
+        kind: 'session',
+        active: true,
+        sharerIdentity: 'user-a',
+        sharerPlatform: 'tauri',
+        shareType: 'monitor',
+        shareLabel: 'Display 1',
+        sentAtMs: Date.now(),
+      })),
+      'user-a',
+    )
+    await flushAsync()
+
+    invokeNative.mockClear()
+    const accepted = callStore.ingestScreenAnnotationPacket(
+      new TextEncoder().encode(JSON.stringify({
+        version: 1,
+        kind: 'segment',
+        shareTrackSid: 'stale-track-sid',
+        senderIdentity: 'user-b',
+        strokeId: 'stroke-2',
+        seq: 0,
+        from: { x: 0.1, y: 0.1 },
+        to: { x: 0.5, y: 0.5 },
+        sentAtMs: Date.now(),
+      })),
+      'user-b',
+    )
+    await flushAsync()
+
+    expect(accepted).toBe(true)
+    expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_show', expect.objectContaining({
+      overlayLabel: 'annotation_overlay_monitor-1',
+      shareLabel: 'Display 2',
+    }))
+    expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_push_segment', expect.objectContaining({
+      overlayLabel: 'annotation_overlay_monitor-1',
+    }))
+
+    callStore.ingestScreenAnnotationPacket(buildInactiveSessionPacket(), 'user-a')
+    await flushAsync()
+  })
+
+  it('keeps prior monitor overlays during switches and clears all tracked overlays when the session stops', async () => {
+    vi.useFakeTimers()
+    try {
+      const { invokeNative } = createTauriPlatform()
+      const localShare = createLocalSharerRoom({ shareLabel: 'Display 1', shareType: 'monitor' })
+      const callStore = useCallStore()
+
+      callStore.room = localShare.room as never
+      callStore.screenShareEnabled = true
+      callStore.ingestScreenAnnotationPacket(
+        new TextEncoder().encode(JSON.stringify({
+          version: 1,
+          kind: 'session',
+          active: true,
+          sharerIdentity: 'user-a',
+          sharerPlatform: 'tauri',
+          shareType: 'monitor',
+          shareLabel: 'Display 1',
+          sentAtMs: Date.now(),
+        })),
+        'user-a',
+      )
+      await flushAsync()
+
+      invokeNative.mockClear()
+      localShare.setShareLabel('Display 2')
+      await vi.advanceTimersByTimeAsync(600)
+      await flushAsync()
+
+      expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_show', expect.objectContaining({
+        overlayLabel: 'annotation_overlay_monitor-1',
+        shareLabel: 'Display 2',
+      }))
+      expect(invokeNative).not.toHaveBeenCalledWith('annotation_overlay_clear', expect.anything())
+      expect(invokeNative).not.toHaveBeenCalledWith('annotation_overlay_hide', expect.anything())
+
+      invokeNative.mockClear()
+      callStore.ingestScreenAnnotationPacket(buildInactiveSessionPacket(), 'user-a')
+      await flushAsync()
+
+      expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_clear', { overlayLabel: 'annotation_overlay_monitor-0' })
+      expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_hide', { overlayLabel: 'annotation_overlay_monitor-0' })
+      expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_clear', { overlayLabel: 'annotation_overlay_monitor-1' })
+      expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_hide', { overlayLabel: 'annotation_overlay_monitor-1' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

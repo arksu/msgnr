@@ -95,6 +95,72 @@ Common responses:
 - `404 {"error":"task not found"}`
 - `400 {"error":"invalid task id"}` for an empty or malformed path segment
 
+### Find Tasks By Enum Value
+
+`GET /api/integrations/tasks/by-enum/{enum_code}/value/{enum_value}`
+
+Example:
+
+```bash
+curl \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
+  http://localhost:8080/api/integrations/tasks/by-enum/priority/value/high
+```
+
+Example with a URL-encoded enum item name:
+
+```bash
+curl \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
+  http://localhost:8080/api/integrations/tasks/by-enum/labels/value/Back%20End
+```
+
+Response:
+
+```json
+[
+  {
+    "title": "Integration task",
+    "description": "Task description",
+    "fields": [
+      {
+        "id": "0f9a3d8f-0c1b-4b8d-a1d4-cbeff4ed8cb0",
+        "code": "priority",
+        "name": "Priority",
+        "type": "enum",
+        "required": false,
+        "value_text": "high",
+        "value_number": null,
+        "value_user_id": null,
+        "value_date": null,
+        "value_datetime": null,
+        "value_json": null,
+        "enum_dictionary_id": "8f95ab87-18c0-45d0-a5a6-f2c472b1ea11",
+        "enum_version": 2
+      }
+    ]
+  }
+]
+```
+
+Rules:
+
+- `enum_code` is matched exactly against the enum dictionary code after trimming.
+- `enum_value` is matched case-insensitively and exactly against either `value_code` or `value_name`.
+- If multiple enum items share the same matching `value_name`, tasks for all matching item codes are returned.
+- Both `enum` and `multi_enum` task fields are searched.
+- Historical dictionary versions are included, so tasks using older enum versions remain discoverable after later enum changes.
+- Results are capped at 200 items and ordered by task `updated_at` descending, then task `id` descending.
+- `enum_value` must be URL-encoded by the caller when it contains spaces or other reserved path characters.
+
+Common responses:
+
+- `200 []` when the enum code does not exist
+- `200 []` when the enum value does not exist in that enum
+- `200 []` when no active template field uses that enum
+- `200 []` when the enum exists but no task matches
+- `400 {"error":"invalid enum lookup path"}` for malformed or empty path segments
+
 ### Create Document
 
 `POST /api/integrations/documents`

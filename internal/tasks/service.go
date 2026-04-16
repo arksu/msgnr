@@ -56,6 +56,7 @@ func (e *TaskTitleConflictError) Unwrap() error {
 const prefixMaxLen = 32
 const maxCommentAttachments = 5
 const defaultTaskDescriptionHistoryLimit = 20
+const defaultEnumTaskLookupLimit = 200
 
 var (
 	rePrefixValid    = regexp.MustCompile(`^[A-Z]+$`)
@@ -1869,6 +1870,127 @@ func (s *Service) GetTaskByPublicID(ctx context.Context, publicID string) (TaskR
 	return s.GetTask(ctx, id)
 }
 
+// FindTasksByEnumValue resolves the enum dictionary by code, matches the
+// provided enum value against any historical dictionary version by exact
+// case-insensitive code or name, and returns matching task snapshots ordered by
+// task.updated_at DESC, task.id DESC.
+//
+// Missing dictionary, missing enum items, or no matching tasks all return an
+// empty slice with no error. Subtasks and ParentPublicID are intentionally not
+// hydrated because the integrations enum lookup only needs title, description,
+// template_id, and field values.
+func (s *Service) FindTasksByEnumValue(ctx context.Context, enumCode, enumValue string, limit int) ([]TaskResponse, error) {
+	enumCode = strings.TrimSpace(enumCode)
+	enumValue = strings.TrimSpace(enumValue)
+	if enumCode == "" || enumValue == "" {
+		return nil, fmt.Errorf("%w: enum_code and enum_value are required", ErrBadRequest)
+	}
+	if limit < 1 {
+		limit = defaultEnumTaskLookupLimit
+	}
+
+	var dictID uuid.UUID
+	// Match the stored code exactly after Go-side trimming so the unique index on
+	// enum_dictionary.code stays usable. If legacy rows ever carry surrounding
+	// spaces, they will need a data cleanup rather than a slower btrim(code) scan.
+	if err := s.pool.QueryRow(ctx,
+		`SELECT id
+		   FROM enum_dictionary
+		  WHERE code = $1`,
+		enumCode,
+	).Scan(&dictID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return []TaskResponse{}, nil
+		}
+		return nil, fmt.Errorf("tasks: find enum dictionary by code: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT evi.value_code
+		  FROM enum_dictionary_version_item evi
+		  JOIN enum_dictionary_version edv
+		    ON edv.id = evi.dictionary_version_id
+		 WHERE edv.dictionary_id = $1
+		   AND (
+		     lower(btrim(evi.value_code)) = lower($2)
+		     OR lower(btrim(evi.value_name)) = lower($2)
+		   )
+	`, dictID, enumValue)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: find matching enum codes: %w", err)
+	}
+	defer rows.Close()
+
+	var matchedCodes []string
+	for rows.Next() {
+		var valueCode string
+		if err := rows.Scan(&valueCode); err != nil {
+			return nil, fmt.Errorf("tasks: scan matching enum code: %w", err)
+		}
+		matchedCodes = append(matchedCodes, valueCode)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate matching enum codes: %w", err)
+	}
+	if len(matchedCodes) == 0 {
+		return []TaskResponse{}, nil
+	}
+
+	taskRows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT DISTINCT %s
+		  FROM task t
+		  JOIN task_field_value tfv
+		    ON tfv.task_id = t.id
+		  JOIN task_field_definition tfd
+		    ON tfd.id = tfv.field_definition_id
+		 WHERE tfd.deleted_at IS NULL
+		   AND tfd.enum_dictionary_id = $1
+		   AND tfd.type IN ('enum', 'multi_enum')
+		   AND (
+		     (tfd.type = 'enum' AND tfv.value_text = ANY($2::text[]))
+		     OR
+		     (tfd.type = 'multi_enum' AND COALESCE(tfv.value_json, '[]'::jsonb) ?| $2::text[])
+		   )
+		 ORDER BY t.updated_at DESC, t.id DESC
+		 LIMIT $3`, taskSelectColumns), dictID, matchedCodes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: find tasks by enum value: %w", err)
+	}
+	defer taskRows.Close()
+
+	var tasksByEnum []TaskRow
+	var taskIDs []uuid.UUID
+	for taskRows.Next() {
+		task, err := scanOneTask(taskRows)
+		if err != nil {
+			return nil, fmt.Errorf("tasks: scan task by enum value: %w", err)
+		}
+		tasksByEnum = append(tasksByEnum, task)
+		taskIDs = append(taskIDs, task.ID)
+	}
+	if err := taskRows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate tasks by enum value: %w", err)
+	}
+	if len(tasksByEnum) == 0 {
+		return []TaskResponse{}, nil
+	}
+
+	fieldValuesByTaskID, err := s.listTaskFieldValuesByTaskIDs(ctx, taskIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]TaskResponse, 0, len(tasksByEnum))
+	for _, task := range tasksByEnum {
+		out = append(out, TaskResponse{
+			TaskRow:     task,
+			FieldValues: fieldValuesByTaskID[task.ID],
+			Subtasks:    []TaskSubtaskSummary{},
+		})
+	}
+	return out, nil
+}
+
 // GetTaskDescription fetches only a task description field.
 func (s *Service) GetTaskDescription(ctx context.Context, id uuid.UUID) (*string, error) {
 	row, err := s.q.TaskGet(ctx, id)
@@ -2712,6 +2834,49 @@ func (s *Service) getTaskFieldValue(ctx context.Context, taskID, fieldDefinition
 		return queries.TaskFieldValue{}, false, fmt.Errorf("tasks: get task field value: %w", err)
 	}
 	return row, true, nil
+}
+
+func (s *Service) listTaskFieldValuesByTaskIDs(ctx context.Context, taskIDs []uuid.UUID) (map[uuid.UUID][]FieldValueRow, error) {
+	valuesByTaskID := make(map[uuid.UUID][]FieldValueRow, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return valuesByTaskID, nil
+	}
+	for _, taskID := range taskIDs {
+		valuesByTaskID[taskID] = []FieldValueRow{}
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, task_id, field_definition_id,
+		       value_text, value_number, value_user_id,
+		       value_date, value_datetime, value_json,
+		       enum_dictionary_id, enum_version,
+		       created_at, updated_at
+		  FROM task_field_value
+		 WHERE task_id = ANY($1::uuid[])
+		 ORDER BY task_id ASC, field_definition_id ASC
+	`, uuidSliceToStrings(taskIDs))
+	if err != nil {
+		return nil, fmt.Errorf("tasks: list field values by task ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var row queries.TaskFieldValue
+		if err := rows.Scan(
+			&row.ID, &row.TaskID, &row.FieldDefinitionID,
+			&row.ValueText, &row.ValueNumber, &row.ValueUserID,
+			&row.ValueDate, &row.ValueDatetime, &row.ValueJson,
+			&row.EnumDictionaryID, &row.EnumVersion,
+			&row.CreatedAt, &row.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("tasks: scan field value by task ids: %w", err)
+		}
+		valuesByTaskID[row.TaskID] = append(valuesByTaskID[row.TaskID], mapFieldValue(row))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tasks: iterate field values by task ids: %w", err)
+	}
+	return valuesByTaskID, nil
 }
 
 // scanner is the minimal interface shared by pgx.Row and pgx.Rows.

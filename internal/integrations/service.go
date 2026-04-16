@@ -22,6 +22,8 @@ import (
 
 var ErrUnauthorized = errors.New("unauthorized")
 
+const enumLookupResultLimit = 200
+
 type Service struct {
 	pool      *pgxpool.Pool
 	tasks     *tasks.Service
@@ -132,11 +134,26 @@ func (s *Service) GetTask(ctx context.Context, publicID string) (integrationTask
 	if err != nil {
 		return integrationTaskResponseDTO{}, err
 	}
-	fields, err := s.tasks.ListFields(ctx, taskRow.TemplateID, false)
+	fieldsByTemplateID := make(map[uuid.UUID][]tasks.FieldRow, 1)
+	return s.mapIntegrationTask(ctx, taskRow, fieldsByTemplateID)
+}
+
+func (s *Service) FindTasksByEnumValue(ctx context.Context, enumCode, enumValue string) ([]integrationTaskResponseDTO, error) {
+	taskRows, err := s.tasks.FindTasksByEnumValue(ctx, enumCode, enumValue, enumLookupResultLimit)
 	if err != nil {
-		return integrationTaskResponseDTO{}, fmt.Errorf("integrations: list task fields: %w", err)
+		return nil, err
 	}
-	return mapIntegrationTaskResponse(taskRow, fields), nil
+
+	resp := make([]integrationTaskResponseDTO, 0, len(taskRows))
+	fieldsByTemplateID := make(map[uuid.UUID][]tasks.FieldRow)
+	for _, taskRow := range taskRows {
+		item, err := s.mapIntegrationTask(ctx, taskRow, fieldsByTemplateID)
+		if err != nil {
+			return nil, err
+		}
+		resp = append(resp, item)
+	}
+	return resp, nil
 }
 
 func (s *Service) CreateDocument(ctx context.Context, params CreateDocumentParams) (integrationDocumentResponseDTO, error) {
@@ -159,6 +176,23 @@ func (s *Service) GetDocument(ctx context.Context, documentID, actorID uuid.UUID
 		return integrationDocumentResponseDTO{}, err
 	}
 	return mapIntegrationDocumentResponse(row), nil
+}
+
+func (s *Service) mapIntegrationTask(
+	ctx context.Context,
+	taskRow tasks.TaskResponse,
+	fieldsByTemplateID map[uuid.UUID][]tasks.FieldRow,
+) (integrationTaskResponseDTO, error) {
+	fields, ok := fieldsByTemplateID[taskRow.TemplateID]
+	if !ok {
+		var err error
+		fields, err = s.tasks.ListFields(ctx, taskRow.TemplateID, false)
+		if err != nil {
+			return integrationTaskResponseDTO{}, fmt.Errorf("integrations: list task fields: %w", err)
+		}
+		fieldsByTemplateID[taskRow.TemplateID] = fields
+	}
+	return mapIntegrationTaskResponse(taskRow, fields), nil
 }
 
 func mapIntegrationTaskResponse(taskRow tasks.TaskResponse, fields []tasks.FieldRow) integrationTaskResponseDTO {
@@ -203,6 +237,8 @@ func mapIntegrationDocumentResponse(row documents.DocumentResponse) integrationD
 }
 
 func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	// A zero-length raw message represents "no JSON value" in our field-value
+	// mapping; valid stored JSON payloads are always non-empty bytes.
 	if len(value) == 0 {
 		return nil
 	}

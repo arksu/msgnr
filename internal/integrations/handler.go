@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -30,6 +31,9 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	// net/http.ServeMux picks the longest matching pattern, so this more
+	// specific prefix wins over the generic /api/integrations/tasks/ item route.
+	mux.HandleFunc("/api/integrations/tasks/by-enum/", h.requireAuth(h.tasksByEnumValue))
 	mux.HandleFunc("/api/integrations/tasks/", h.requireAuth(h.taskItem))
 	mux.HandleFunc("/api/integrations/documents", h.requireAuth(h.documentsCollection))
 	mux.HandleFunc("/api/integrations/documents/", h.requireAuth(h.documentItem))
@@ -48,6 +52,42 @@ func (h *Handler) taskItem(w http.ResponseWriter, r *http.Request, _ auth.Princi
 	}
 
 	resp, err := h.svc.GetTask(r.Context(), publicID)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) tasksByEnumValue(w http.ResponseWriter, r *http.Request, _ auth.Principal) {
+	if r.Method != http.MethodGet {
+		httputil.MethodNotAllowed(w)
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, "/api/integrations/tasks/by-enum/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || parts[1] != "value" {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid enum lookup path"))
+		return
+	}
+
+	enumCode, err := url.PathUnescape(parts[0])
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid enum code"))
+		return
+	}
+	enumValue, err := url.PathUnescape(parts[2])
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid enum value"))
+		return
+	}
+	if strings.TrimSpace(enumCode) == "" || strings.TrimSpace(enumValue) == "" {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid enum lookup path"))
+		return
+	}
+
+	resp, err := h.svc.FindTasksByEnumValue(r.Context(), enumCode, enumValue)
 	if err != nil {
 		h.serviceError(w, err)
 		return

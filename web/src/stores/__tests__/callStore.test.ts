@@ -696,6 +696,55 @@ describe('callStore screen annotations', () => {
       vi.useRealTimers()
     }
   })
+
+  it('clears native overlays when the sharer switches from monitor to window sharing', async () => {
+    vi.useFakeTimers()
+    try {
+      const { invokeNative } = createTauriPlatform()
+      const localShare = createLocalSharerRoom({ shareLabel: 'Display 1', shareType: 'monitor' })
+      const callStore = useCallStore()
+
+      callStore.room = localShare.room as never
+      callStore.screenShareEnabled = true
+      callStore.ingestScreenAnnotationPacket(
+        new TextEncoder().encode(JSON.stringify({
+          version: 1,
+          kind: 'session',
+          active: true,
+          sharerIdentity: 'user-a',
+          sharerPlatform: 'tauri',
+          shareType: 'monitor',
+          shareLabel: 'Display 1',
+          sentAtMs: Date.now(),
+        })),
+        'user-a',
+      )
+      await flushAsync()
+
+      invokeNative.mockClear()
+      localShare.setShareType('window')
+      localShare.setShareLabel('Code Window')
+
+      await vi.advanceTimersByTimeAsync(600)
+      await flushAsync()
+
+      expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_clear', { overlayLabel: 'annotation_overlay_monitor-0' })
+      expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_hide', { overlayLabel: 'annotation_overlay_monitor-0' })
+      expect(localShare.publishData).toHaveBeenCalled()
+      const lastPublishCall = localShare.publishData.mock.calls[localShare.publishData.mock.calls.length - 1]
+      const payload = JSON.parse(new TextDecoder().decode(lastPublishCall?.[0]))
+      expect(payload).toEqual(expect.objectContaining({
+        kind: 'session',
+        shareType: 'window',
+        shareLabel: 'Code Window',
+      }))
+
+      callStore.ingestScreenAnnotationPacket(buildInactiveSessionPacket(), 'user-a')
+      await flushAsync()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('callStore remote screen share receive toggle', () => {

@@ -14,6 +14,7 @@ import (
 
 	"msgnr/internal/config"
 	"msgnr/internal/events"
+	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/testdb"
 )
 
@@ -553,6 +554,65 @@ func TestIntegration_InviteCallMembers_AllowsDMParticipantToInviteOutsiders(t *t
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{targetID}, result.InvitedUserIDs)
 	assert.Empty(t, result.SkippedUserIDs)
+}
+
+func TestIntegration_AcceptInvite_AppendsActiveCallStateDelivery(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	memberPeerID := seedCallUser(t, ctx, pool, "Member Peer")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	dmID := seedCallDMConversation(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, dmID, ownerID)
+	seedMember(t, ctx, pool, dmID, memberPeerID)
+	callID, _ := seedActiveCall(t, ctx, pool, dmID, ownerID)
+	seedParticipant(t, ctx, pool, callID, ownerID)
+	inviteID := seedPendingInviteWithNotification(t, ctx, pool, callID, dmID, ownerID, inviteeID)
+
+	result, err := svc.AcceptInvite(ctx, InviteActionParams{
+		InviteID: inviteID,
+		ActorID:  inviteeID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, packetspb.InviteState_INVITE_STATE_ACCEPTED, result.ResultingState)
+	assert.True(t, result.Applied)
+
+	var acceptedState string
+	err = pool.QueryRow(ctx, `SELECT state FROM call_invites WHERE id = $1`, inviteID).Scan(&acceptedState)
+	require.NoError(t, err)
+	assert.Equal(t, "accepted", acceptedState)
+
+	var participantActive bool
+	err = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM call_participants
+			WHERE call_id = $1
+			  AND user_id = $2
+			  AND left_at IS NULL
+		)`, callID, inviteeID).Scan(&participantActive)
+	require.NoError(t, err)
+	assert.True(t, participantActive)
+
+	var sawActiveCallState bool
+	for _, delivery := range result.DirectDeliveries {
+		if delivery.UserID != inviteeID.String() || delivery.Event == nil {
+			continue
+		}
+		callState := delivery.Event.GetCallStateChanged()
+		if callState == nil {
+			continue
+		}
+		sawActiveCallState = true
+		assert.Equal(t, callID.String(), callState.GetCallId())
+		assert.Equal(t, dmID.String(), callState.GetConversationId())
+		assert.Equal(t, packetspb.CallStatus_CALL_STATUS_ACTIVE, callState.GetStatus())
+	}
+	assert.True(t, sawActiveCallState, "accept invite should deliver active call state to invitee")
 }
 
 func TestIntegration_InviteCallMembers_FailsWhenNoActiveCall(t *testing.T) {

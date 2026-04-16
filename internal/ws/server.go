@@ -620,14 +620,14 @@ func (s *Server) startEventFanout(
 			}
 
 			cacheReady := state.cacheReady()
-			shouldFallback := !cacheReady || evt.GetConversationUpserted() != nil
+			shouldFallback := !cacheReady || evt.GetConversationUpserted() != nil || evt.GetCallStateChanged() != nil
 			if result == "conversation_cache_miss" && shouldFallback && s.authorizeEvent != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 				allowed = s.authorizeEvent(ctx, principal, evt)
 				timeoutErr := ctx.Err()
 				cancel()
 				if allowed {
-					if conversationID := evt.GetConversationId(); conversationID != "" {
+					if conversationID := evt.GetConversationId(); conversationID != "" && evt.GetCallStateChanged() == nil {
 						state.allowConversation(conversationID)
 					}
 					label := "allowed_fallback_cache_miss"

@@ -767,8 +767,30 @@ func (s *Service) CanReceiveEvent(ctx context.Context, principal Principal, evt 
 		ChannelID: channelID,
 		UserID:    principal.UserID,
 	})
+	if err == nil {
+		return true
+	}
+
+	callStateChanged := evt.GetCallStateChanged()
+	if callStateChanged == nil || s.db == nil {
+		return false
+	}
+
+	callID, err := uuid.Parse(callStateChanged.GetCallId())
 	if err != nil {
 		return false
 	}
-	return true
+
+	var isParticipant bool
+	if err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM call_participants cp
+			WHERE cp.call_id = $1
+			  AND cp.user_id = $2
+			  AND cp.left_at IS NULL
+		)`, callID, principal.UserID).Scan(&isParticipant); err != nil {
+		return false
+	}
+	return isParticipant
 }

@@ -260,14 +260,27 @@ SELECT
   c.id,
   c.channel_id,
   c.status,
-  COUNT(cp.user_id)::int AS participant_count
+  COUNT(DISTINCT cp.user_id)::int AS participant_count
 FROM calls c
-JOIN channel_members cm ON cm.channel_id = c.channel_id
 LEFT JOIN call_participants cp ON cp.call_id = c.id
   AND cp.left_at IS NULL
-WHERE cm.user_id = @user_id
-  AND cm.is_archived = false
-  AND c.status = 'active'
+WHERE c.status = 'active'
+  AND (
+    EXISTS (
+      SELECT 1
+      FROM channel_members cm
+      WHERE cm.channel_id = c.channel_id
+        AND cm.user_id = @user_id
+        AND cm.is_archived = false
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM call_participants self_cp
+      WHERE self_cp.call_id = c.id
+        AND self_cp.user_id = @user_id
+        AND self_cp.left_at IS NULL
+    )
+  )
 GROUP BY c.id, c.channel_id, c.status
 ORDER BY c.started_at DESC;
 

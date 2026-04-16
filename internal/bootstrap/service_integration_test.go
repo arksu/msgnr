@@ -66,6 +66,47 @@ func seedBootstrapChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	return channelID
 }
 
+func seedBootstrapDMConversation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, creatorID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var conversationID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO channels (kind, visibility, name, created_by, last_activity_at)
+		 VALUES ('dm', 'dm', '', $1, now())
+		 RETURNING id`,
+		creatorID,
+	).Scan(&conversationID)
+	require.NoError(t, err)
+	return conversationID
+}
+
+func seedBootstrapMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, conversationID, userID uuid.UUID) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`, conversationID, userID)
+	require.NoError(t, err)
+}
+
+func seedBootstrapActiveCall(t *testing.T, ctx context.Context, pool *pgxpool.Pool, conversationID, creatorID uuid.UUID) uuid.UUID {
+	t.Helper()
+	callID := uuid.New()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO calls (id, channel_id, status, livekit_room, created_by, started_at)
+		VALUES ($1, $2, 'active', $3, $4, now())`,
+		callID, conversationID, "call-"+callID.String(), creatorID,
+	)
+	require.NoError(t, err)
+	return callID
+}
+
+func seedBootstrapCallParticipant(t *testing.T, ctx context.Context, pool *pgxpool.Pool, callID, userID uuid.UUID) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO call_participants (call_id, user_id, joined_at, left_at)
+		VALUES ($1, $2, now(), NULL)`,
+		callID, userID,
+	)
+	require.NoError(t, err)
+}
+
 func appendMessageEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *events.Store, channelID uuid.UUID, body string, occurredAt time.Time) int64 {
 	t.Helper()
 	tx, err := pool.Begin(ctx)
@@ -372,4 +413,41 @@ func TestIntegration_Bootstrap_DmTitleFallsBackToPeerEmail(t *testing.T) {
 	assert.Equal(t, packetspb.ConversationType_CONVERSATION_TYPE_DM, resp.GetConversations()[0].GetConversationType())
 	assert.Equal(t, peerEmail, resp.GetConversations()[0].GetTitle())
 	assert.Equal(t, peerUserID.String(), resp.GetConversations()[0].GetTopic())
+}
+
+func TestIntegration_Bootstrap_ActiveCallsIncludeParticipantOnlyUser(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	cfg := &config.Config{
+		BootstrapDefaultPageSize: 10,
+		BootstrapMaxPageSize:     10,
+		BootstrapSessionTTL:      5 * time.Minute,
+	}
+	bootstrapSvc := bootstrap.NewService(pool, cfg)
+
+	seedBootstrapWorkspace(t, ctx, pool)
+	ownerID := seedBootstrapUserWithIdentity(t, ctx, pool, "Owner", "owner_"+uuid.NewString()+"@example.com")
+	dmPeerID := seedBootstrapUserWithIdentity(t, ctx, pool, "DM Peer", "peer_"+uuid.NewString()+"@example.com")
+	outsiderID := seedBootstrapUserWithIdentity(t, ctx, pool, "Outsider", "outsider_"+uuid.NewString()+"@example.com")
+
+	dmID := seedBootstrapDMConversation(t, ctx, pool, ownerID)
+	seedBootstrapMember(t, ctx, pool, dmID, ownerID)
+	seedBootstrapMember(t, ctx, pool, dmID, dmPeerID)
+
+	callID := seedBootstrapActiveCall(t, ctx, pool, dmID, ownerID)
+	seedBootstrapCallParticipant(t, ctx, pool, callID, ownerID)
+	seedBootstrapCallParticipant(t, ctx, pool, callID, outsiderID)
+
+	principal := auth.Principal{UserID: outsiderID, SessionID: uuid.New(), Role: "member"}
+	resp, err := bootstrapSvc.Bootstrap(ctx, principal, &packetspb.BootstrapRequest{
+		ClientInstanceId: "client-outsider-active-call",
+		PageSizeHint:     10,
+	})
+	require.NoError(t, err)
+	require.Empty(t, resp.GetConversations())
+	require.Len(t, resp.GetActiveCalls(), 1)
+	assert.Equal(t, callID.String(), resp.GetActiveCalls()[0].GetCallId())
+	assert.Equal(t, dmID.String(), resp.GetActiveCalls()[0].GetConversationId())
+	assert.Equal(t, int32(2), resp.GetActiveCalls()[0].GetParticipantCount())
 }

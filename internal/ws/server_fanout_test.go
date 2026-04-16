@@ -223,6 +223,72 @@ func TestFanout_CallStateChangedDeliveredOnlyToAuthorizedMembers(t *testing.T) {
 	}
 }
 
+func TestFanout_CallStateChangedFallbackDoesNotGrantConversationCache(t *testing.T) {
+	bus := events.NewBus(zap.NewNop())
+	srv := newTestServer(bus)
+	srv.authSvc = auth.NewService(nil, nil, nil, nil, 0, nil)
+
+	participantID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	targetConversation := "00000000-0000-0000-0000-0000000000bb"
+
+	srv.authorizeEvent = func(_ context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool {
+		if principal.UserID != participantID {
+			return false
+		}
+		return evt.GetConversationId() == targetConversation
+	}
+
+	_, serverConn := pipeConn(t)
+	outbound := make(chan outboundMsg, srv.config.WsOutboundQueueMax+4)
+	state := newSessionState(nil, true, nil)
+
+	unsubscribe, done := srv.startEventFanout(
+		serverConn,
+		testPrincipalWithUser(participantID.String(), "00000000-0000-0000-0000-00000000000c"),
+		outbound,
+		srv.config.WsOutboundQueueMax,
+		state,
+	)
+	defer func() {
+		unsubscribe()
+		<-done
+	}()
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:       8,
+		EventType:      packetspb.EventType_EVENT_TYPE_CALL_STATE_CHANGED,
+		ConversationId: targetConversation,
+		Payload: &packetspb.ServerEvent_CallStateChanged{
+			CallStateChanged: &packetspb.CallStateChangedEvent{
+				CallId:         "call-1",
+				ConversationId: targetConversation,
+				Status:         packetspb.CallStatus_CALL_STATUS_ACTIVE,
+			},
+		},
+	})
+
+	select {
+	case msg := <-outbound:
+		require.NotNil(t, msg.env)
+		require.NotNil(t, msg.env.GetServerEvent())
+		require.NotNil(t, msg.env.GetServerEvent().GetCallStateChanged())
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fallback-authorized call_state_changed event")
+	}
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:       9,
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+		ConversationId: targetConversation,
+	})
+
+	select {
+	case msg := <-outbound:
+		t.Fatalf("message event unexpectedly delivered after call_state_changed fallback: %#v", msg.env)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestFanout_ConversationCacheAllowsOrdinaryMessageWithoutFallback(t *testing.T) {
 	bus := events.NewBus(zap.NewNop())
 	srv := newTestServer(bus)

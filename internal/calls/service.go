@@ -456,6 +456,10 @@ func (s *Service) AcceptInvite(ctx context.Context, p InviteActionParams) (Invit
 		UserID: invite.InviteeID.String(),
 		Event:  s.buildCallInviteCancelledEvent(invite.ID.String(), packetspb.InviteCancelReason_INVITE_CANCEL_REASON_CANCELLED, p.ActorID),
 	})
+	directDeliveries = append(directDeliveries, DirectDelivery{
+		UserID: invite.InviteeID.String(),
+		Event:  s.buildCallStateChangedEnvelope(invite.CallID, invite.ChannelID, packetspb.CallStatus_CALL_STATUS_ACTIVE),
+	})
 
 	if err := tx.Commit(ctx); err != nil {
 		return InviteActionResult{}, fmt.Errorf("calls.AcceptInvite commit: %w", err)

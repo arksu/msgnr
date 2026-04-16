@@ -21,6 +21,8 @@ import {
   type SetNotificationLevelResponse,
   type TaskDescriptionCollabSubscribeResponse,
   type TaskDescriptionCollabMessage,
+  type DocumentContentCollabSubscribeResponse,
+  type DocumentContentCollabMessage,
   MessageEntitySchema,
   FeatureCapability,
   ErrorCode,
@@ -49,6 +51,8 @@ export type CallInviteActionAckHandler = (ack: CallInviteActionAck) => void
 export type SetNotificationLevelResponseHandler = (resp: SetNotificationLevelResponse) => void
 export type TaskDescriptionCollabSubscribeResponseHandler = (resp: TaskDescriptionCollabSubscribeResponse) => void
 export type TaskDescriptionCollabMessageHandler = (msg: TaskDescriptionCollabMessage) => void
+export type DocumentContentCollabSubscribeResponseHandler = (resp: DocumentContentCollabSubscribeResponse) => void
+export type DocumentContentCollabMessageHandler = (msg: DocumentContentCollabMessage) => void
 export type ProtocolErrorHandler = (err: { requestId: string; code: ErrorCode; message: string; retryAfterMs: number }) => void
 
 export type WsState =
@@ -149,6 +153,8 @@ export const useWsStore = defineStore('ws', () => {
   let onSetNotificationLevelResponseCallback: SetNotificationLevelResponseHandler | null = null
   let onTaskDescriptionCollabSubscribeResponseCallback: TaskDescriptionCollabSubscribeResponseHandler | null = null
   let onTaskDescriptionCollabMessageCallback: TaskDescriptionCollabMessageHandler | null = null
+  let onDocumentContentCollabSubscribeResponseCallback: DocumentContentCollabSubscribeResponseHandler | null = null
+  let onDocumentContentCollabMessageCallback: DocumentContentCollabMessageHandler | null = null
   let onProtocolErrorCallback: ProtocolErrorHandler | null = null
   let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null
 
@@ -289,6 +295,14 @@ export const useWsStore = defineStore('ws', () => {
     onTaskDescriptionCollabMessageCallback = cb
   }
 
+  function onDocumentContentCollabSubscribeResponse(cb: DocumentContentCollabSubscribeResponseHandler) {
+    onDocumentContentCollabSubscribeResponseCallback = cb
+  }
+
+  function onDocumentContentCollabMessage(cb: DocumentContentCollabMessageHandler) {
+    onDocumentContentCollabMessageCallback = cb
+  }
+
   function onProtocolError(cb: ProtocolErrorHandler) {
     onProtocolErrorCallback = cb
   }
@@ -418,6 +432,8 @@ export const useWsStore = defineStore('ws', () => {
     onSetNotificationLevelResponseCallback = null
     onTaskDescriptionCollabSubscribeResponseCallback = null
     onTaskDescriptionCollabMessageCallback = null
+    onDocumentContentCollabSubscribeResponseCallback = null
+    onDocumentContentCollabMessageCallback = null
     onProtocolErrorCallback = null
   }
 
@@ -712,6 +728,50 @@ export const useWsStore = defineStore('ws', () => {
     }))
   }
 
+  function sendDocumentContentCollabSubscribe(documentId: string): string {
+    const requestId = generateId()
+    sendEnvelope(create(EnvelopeSchema, {
+      requestId,
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'documentContentCollabSubscribeRequest',
+        value: { documentId },
+      },
+    }))
+    return requestId
+  }
+
+  function sendDocumentContentCollabUnsubscribe(documentId: string): string {
+    const requestId = generateId()
+    sendEnvelope(create(EnvelopeSchema, {
+      requestId,
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'documentContentCollabUnsubscribeRequest',
+        value: { documentId },
+      },
+    }))
+    return requestId
+  }
+
+  function sendDocumentContentCollabMessage(
+    documentId: string,
+    kind: TaskDescriptionCollabMessageKind,
+    payload: Uint8Array,
+  ): boolean {
+    return sendEnvelope(create(EnvelopeSchema, {
+      requestId: generateId(),
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload: {
+        case: 'documentContentCollabMessage',
+        value: { documentId, kind, payload },
+      },
+    }))
+  }
+
   function sendCreateCall(conversationId: string, conversationType: ConversationType, inviteeUserIds: string[] = []) {
     sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
@@ -928,6 +988,14 @@ export const useWsStore = defineStore('ws', () => {
         onTaskDescriptionCollabMessageCallback?.(envelope.payload.value)
         break
 
+      case 'documentContentCollabSubscribeResponse':
+        onDocumentContentCollabSubscribeResponseCallback?.(envelope.payload.value)
+        break
+
+      case 'documentContentCollabMessage':
+        onDocumentContentCollabMessageCallback?.(envelope.payload.value)
+        break
+
       case 'error': {
         const err = envelope.payload.value
         onProtocolErrorCallback?.({
@@ -999,6 +1067,9 @@ export const useWsStore = defineStore('ws', () => {
     sendTaskDescriptionCollabSubscribe,
     sendTaskDescriptionCollabUnsubscribe,
     sendTaskDescriptionCollabMessage,
+    sendDocumentContentCollabSubscribe,
+    sendDocumentContentCollabUnsubscribe,
+    sendDocumentContentCollabMessage,
     sendCreateCall,
     sendInviteCallMembers,
     sendJoinCallToken,
@@ -1030,6 +1101,8 @@ export const useWsStore = defineStore('ws', () => {
     onSetNotificationLevelResponse,
     onTaskDescriptionCollabSubscribeResponse,
     onTaskDescriptionCollabMessage,
+    onDocumentContentCollabSubscribeResponse,
+    onDocumentContentCollabMessage,
     onProtocolError,
   }
 })

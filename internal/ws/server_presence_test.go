@@ -18,13 +18,13 @@ import (
 
 func newPresenceTestServer(pool *pgxpool.Pool) *Server {
 	return &Server{
-		db:                       &database.DB{Pool: pool},
-		log:                      zap.NewNop(),
-		sessionsByUser:           make(map[string]map[chan outboundMsg]*sessionState),
-		taskCollabRooms:          make(map[string]*taskCollabRoom),
-		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
-		presenceLeaseTTL:         defaultPresenceLeaseTTL,
-		presenceSweepInterval:    defaultPresenceSweepInt,
+		db:                    &database.DB{Pool: pool},
+		log:                   zap.NewNop(),
+		sessionsByUser:        make(map[string]map[chan outboundMsg]*sessionState),
+		collabRooms:           make(map[string]*collabRoom),
+		collabRoomsBySession:  make(map[chan outboundMsg]map[string]struct{}),
+		presenceLeaseTTL:      defaultPresenceLeaseTTL,
+		presenceSweepInterval: defaultPresenceSweepInt,
 	}
 }
 

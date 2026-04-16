@@ -3,6 +3,7 @@
 package documents
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -97,5 +98,41 @@ func TestHandler_SearchDocumentsBlankQuery(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandler_DocumentContentItem(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := NewService(pool, nil)
+	h := NewHandler(svc, nil, zap.NewNop(), 50)
+
+	ownerID := seedHandlerUser(t, ctx, pool, "Owner")
+
+	teamspace, err := svc.CreateTeamspace(ctx, CreateTeamspaceParams{
+		Name:    "Handler content",
+		ActorID: ownerID,
+	}, "member")
+	if err != nil {
+		t.Fatalf("create teamspace: %v", err)
+	}
+
+	initialContent := "first"
+	doc, err := svc.CreateDocument(ctx, CreateDocumentParams{
+		TeamspaceID:     teamspace.ID,
+		Title:           "Spec",
+		ContentMarkdown: &initialContent,
+		ActorID:         ownerID,
+	})
+	if err != nil {
+		t.Fatalf("create document: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/documents/"+doc.ID.String()+"/content", bytes.NewBufferString(`{"content_markdown":"second","force_snapshot":true}`))
+	rec := httptest.NewRecorder()
+	h.documentContentItem(rec, req, auth.Principal{UserID: ownerID, Role: "member"}, doc.ID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }

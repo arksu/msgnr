@@ -24,6 +24,7 @@ import (
 	"msgnr/internal/chat"
 	"msgnr/internal/config"
 	"msgnr/internal/database"
+	"msgnr/internal/documents"
 	"msgnr/internal/events"
 	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/logger"
@@ -49,6 +50,13 @@ const (
 	taskCollabSyncFrameTypeStateVector taskCollabSyncFrameType = 2
 	taskCollabSyncFrameTypeStateUpdate taskCollabSyncFrameType = 3
 	taskCollabSyncFrameTypeFullState   taskCollabSyncFrameType = 4
+)
+
+type collabEntityKind string
+
+const (
+	collabEntityTask     collabEntityKind = "task"
+	collabEntityDocument collabEntityKind = "document"
 )
 
 func markdownSignatureForLog(input string) string {
@@ -94,7 +102,7 @@ type sessionState struct {
 	disconnect              func(reason string)
 }
 
-type taskCollabRoom struct {
+type collabRoom struct {
 	subscribers map[chan outboundMsg]struct{}
 	snapshot    []byte
 }
@@ -205,27 +213,28 @@ type PushNotifier interface {
 // Server handles WebSocket connections and wires each authenticated session
 // to the event Bus for async server-push delivery.
 type Server struct {
-	db                       *database.DB
-	config                   *config.Config
-	authSvc                  *auth.Service
-	bootstrapSvc             *bootstrap.Service
-	callSvc                  *calls.Service
-	chatSvc                  *chat.Service
-	tasksSvc                 *tasks.Service
-	syncSvc                  *syncsvc.Service
-	bus                      *events.Bus
-	authorizeEvent           func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool
-	log                      *zap.Logger
-	sessionMu                sync.RWMutex
-	sessionsByUser           map[string]map[chan outboundMsg]*sessionState
-	typingMu                 sync.Mutex
-	typingExpiry             map[string]time.Time
-	taskCollabMu             sync.RWMutex
-	taskCollabRooms          map[string]*taskCollabRoom
-	taskCollabTasksBySession map[chan outboundMsg]map[string]struct{}
-	pushNotifier             PushNotifier // optional; nil means push disabled
-	presenceLeaseTTL         time.Duration
-	presenceSweepInterval    time.Duration
+	db                    *database.DB
+	config                *config.Config
+	authSvc               *auth.Service
+	bootstrapSvc          *bootstrap.Service
+	callSvc               *calls.Service
+	chatSvc               *chat.Service
+	tasksSvc              *tasks.Service
+	documentsSvc          *documents.Service
+	syncSvc               *syncsvc.Service
+	bus                   *events.Bus
+	authorizeEvent        func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool
+	log                   *zap.Logger
+	sessionMu             sync.RWMutex
+	sessionsByUser        map[string]map[chan outboundMsg]*sessionState
+	typingMu              sync.Mutex
+	typingExpiry          map[string]time.Time
+	collabMu              sync.RWMutex
+	collabRooms           map[string]*collabRoom
+	collabRoomsBySession  map[chan outboundMsg]map[string]struct{}
+	pushNotifier          PushNotifier // optional; nil means push disabled
+	presenceLeaseTTL      time.Duration
+	presenceSweepInterval time.Duration
 }
 
 // NewServer creates a Server. bus may be nil during tests that don't exercise
@@ -244,13 +253,13 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, boots
 		authorizeEvent: func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool {
 			return authSvc.CanReceiveEvent(ctx, principal, evt)
 		},
-		log:                      logger.Logger,
-		sessionsByUser:           make(map[string]map[chan outboundMsg]*sessionState),
-		typingExpiry:             make(map[string]time.Time),
-		taskCollabRooms:          make(map[string]*taskCollabRoom),
-		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
-		presenceLeaseTTL:         defaultPresenceLeaseTTL,
-		presenceSweepInterval:    defaultPresenceSweepInt,
+		log:                   logger.Logger,
+		sessionsByUser:        make(map[string]map[chan outboundMsg]*sessionState),
+		typingExpiry:          make(map[string]time.Time),
+		collabRooms:           make(map[string]*collabRoom),
+		collabRoomsBySession:  make(map[chan outboundMsg]map[string]struct{}),
+		presenceLeaseTTL:      defaultPresenceLeaseTTL,
+		presenceSweepInterval: defaultPresenceSweepInt,
 	}
 	srv.startPresenceLeaseSweeper()
 	return srv
@@ -365,7 +374,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if unregisterSession != nil {
 			unregisterSession()
 		}
-		s.removeTaskCollabSession(outboundCh)
+		s.removeCollabSession(outboundCh)
 		if authComplete {
 			presenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if err := s.removePresenceLease(presenceCtx, presenceConnectionID); err != nil {
@@ -821,6 +830,11 @@ func (s *Server) SetTasksService(tasksSvc *tasks.Service) {
 	s.tasksSvc = tasksSvc
 }
 
+// SetDocumentsService configures the document service used by document-content collab.
+func (s *Server) SetDocumentsService(documentsSvc *documents.Service) {
+	s.documentsSvc = documentsSvc
+}
+
 // HasActiveSessions returns true if the given user has at least one
 // authenticated WebSocket session connected right now.
 func (s *Server) HasActiveSessions(userID string) bool {
@@ -914,74 +928,81 @@ func isKnownTaskCollabSyncFrameType(frameType taskCollabSyncFrameType) bool {
 	}
 }
 
-func (s *Server) joinTaskCollabRoom(taskID string, session chan outboundMsg) ([]byte, int32) {
-	s.taskCollabMu.Lock()
-	defer s.taskCollabMu.Unlock()
+func collabRoomKey(kind collabEntityKind, entityID string) string {
+	return string(kind) + ":" + entityID
+}
 
-	room := s.taskCollabRooms[taskID]
+func (s *Server) joinCollabRoom(kind collabEntityKind, entityID string, session chan outboundMsg) ([]byte, int32) {
+	roomKey := collabRoomKey(kind, entityID)
+	s.collabMu.Lock()
+	defer s.collabMu.Unlock()
+
+	room := s.collabRooms[roomKey]
 	if room == nil {
-		room = &taskCollabRoom{
+		room = &collabRoom{
 			subscribers: make(map[chan outboundMsg]struct{}),
 		}
-		s.taskCollabRooms[taskID] = room
+		s.collabRooms[roomKey] = room
 	}
 	room.subscribers[session] = struct{}{}
 
-	if s.taskCollabTasksBySession[session] == nil {
-		s.taskCollabTasksBySession[session] = make(map[string]struct{})
+	if s.collabRoomsBySession[session] == nil {
+		s.collabRoomsBySession[session] = make(map[string]struct{})
 	}
-	s.taskCollabTasksBySession[session][taskID] = struct{}{}
+	s.collabRoomsBySession[session][roomKey] = struct{}{}
 
 	return cloneTaskCollabBytes(room.snapshot), int32(len(room.subscribers))
 }
 
-func (s *Server) leaveTaskCollabRoom(taskID string, session chan outboundMsg) {
-	s.taskCollabMu.Lock()
-	defer s.taskCollabMu.Unlock()
+func (s *Server) leaveCollabRoom(kind collabEntityKind, entityID string, session chan outboundMsg) {
+	roomKey := collabRoomKey(kind, entityID)
+	s.collabMu.Lock()
+	defer s.collabMu.Unlock()
 
-	room := s.taskCollabRooms[taskID]
+	room := s.collabRooms[roomKey]
 	if room != nil {
 		delete(room.subscribers, session)
 		if len(room.subscribers) == 0 {
-			delete(s.taskCollabRooms, taskID)
+			delete(s.collabRooms, roomKey)
 		}
 	}
 
-	taskSet := s.taskCollabTasksBySession[session]
-	if taskSet != nil {
-		delete(taskSet, taskID)
-		if len(taskSet) == 0 {
-			delete(s.taskCollabTasksBySession, session)
+	roomSet := s.collabRoomsBySession[session]
+	if roomSet != nil {
+		delete(roomSet, roomKey)
+		if len(roomSet) == 0 {
+			delete(s.collabRoomsBySession, session)
 		}
 	}
 }
 
-func (s *Server) removeTaskCollabSession(session chan outboundMsg) {
-	s.taskCollabMu.Lock()
-	defer s.taskCollabMu.Unlock()
+func (s *Server) removeCollabSession(session chan outboundMsg) {
+	s.collabMu.Lock()
+	defer s.collabMu.Unlock()
 
-	taskSet := s.taskCollabTasksBySession[session]
-	if taskSet == nil {
+	roomSet := s.collabRoomsBySession[session]
+	if roomSet == nil {
 		return
 	}
 
-	for taskID := range taskSet {
-		room := s.taskCollabRooms[taskID]
+	for roomKey := range roomSet {
+		room := s.collabRooms[roomKey]
 		if room == nil {
 			continue
 		}
 		delete(room.subscribers, session)
 		if len(room.subscribers) == 0 {
-			delete(s.taskCollabRooms, taskID)
+			delete(s.collabRooms, roomKey)
 		}
 	}
-	delete(s.taskCollabTasksBySession, session)
+	delete(s.collabRoomsBySession, session)
 }
 
-func (s *Server) isTaskCollabSubscribed(taskID string, session chan outboundMsg) bool {
-	s.taskCollabMu.RLock()
-	defer s.taskCollabMu.RUnlock()
-	room := s.taskCollabRooms[taskID]
+func (s *Server) isCollabSubscribed(kind collabEntityKind, entityID string, session chan outboundMsg) bool {
+	roomKey := collabRoomKey(kind, entityID)
+	s.collabMu.RLock()
+	defer s.collabMu.RUnlock()
+	room := s.collabRooms[roomKey]
 	if room == nil {
 		return false
 	}
@@ -989,11 +1010,12 @@ func (s *Server) isTaskCollabSubscribed(taskID string, session chan outboundMsg)
 	return ok
 }
 
-func (s *Server) taskCollabRecipients(taskID string, exclude chan outboundMsg) []chan outboundMsg {
-	s.taskCollabMu.RLock()
-	defer s.taskCollabMu.RUnlock()
+func (s *Server) collabRecipients(kind collabEntityKind, entityID string, exclude chan outboundMsg) []chan outboundMsg {
+	roomKey := collabRoomKey(kind, entityID)
+	s.collabMu.RLock()
+	defer s.collabMu.RUnlock()
 
-	room := s.taskCollabRooms[taskID]
+	room := s.collabRooms[roomKey]
 	if room == nil {
 		return nil
 	}
@@ -1007,21 +1029,23 @@ func (s *Server) taskCollabRecipients(taskID string, exclude chan outboundMsg) [
 	return out
 }
 
-func (s *Server) taskCollabSubscriberCount(taskID string) int {
-	s.taskCollabMu.RLock()
-	defer s.taskCollabMu.RUnlock()
-	room := s.taskCollabRooms[taskID]
+func (s *Server) collabSubscriberCount(kind collabEntityKind, entityID string) int {
+	roomKey := collabRoomKey(kind, entityID)
+	s.collabMu.RLock()
+	defer s.collabMu.RUnlock()
+	room := s.collabRooms[roomKey]
 	if room == nil {
 		return 0
 	}
 	return len(room.subscribers)
 }
 
-func (s *Server) setTaskCollabRoomSnapshot(taskID string, session chan outboundMsg, snapshot []byte) bool {
-	s.taskCollabMu.Lock()
-	defer s.taskCollabMu.Unlock()
+func (s *Server) setCollabRoomSnapshot(kind collabEntityKind, entityID string, session chan outboundMsg, snapshot []byte) bool {
+	roomKey := collabRoomKey(kind, entityID)
+	s.collabMu.Lock()
+	defer s.collabMu.Unlock()
 
-	room := s.taskCollabRooms[taskID]
+	room := s.collabRooms[roomKey]
 	if room == nil {
 		return false
 	}
@@ -1032,10 +1056,56 @@ func (s *Server) setTaskCollabRoomSnapshot(taskID string, session chan outboundM
 	return true
 }
 
+func (s *Server) joinTaskCollabRoom(taskID string, session chan outboundMsg) ([]byte, int32) {
+	return s.joinCollabRoom(collabEntityTask, taskID, session)
+}
+
+func (s *Server) leaveTaskCollabRoom(taskID string, session chan outboundMsg) {
+	s.leaveCollabRoom(collabEntityTask, taskID, session)
+}
+
+func (s *Server) removeTaskCollabSession(session chan outboundMsg) {
+	s.removeCollabSession(session)
+}
+
+func (s *Server) isTaskCollabSubscribed(taskID string, session chan outboundMsg) bool {
+	return s.isCollabSubscribed(collabEntityTask, taskID, session)
+}
+
+func (s *Server) taskCollabRecipients(taskID string, exclude chan outboundMsg) []chan outboundMsg {
+	return s.collabRecipients(collabEntityTask, taskID, exclude)
+}
+
+func (s *Server) taskCollabSubscriberCount(taskID string) int {
+	return s.collabSubscriberCount(collabEntityTask, taskID)
+}
+
+func (s *Server) setTaskCollabRoomSnapshot(taskID string, session chan outboundMsg, snapshot []byte) bool {
+	return s.setCollabRoomSnapshot(collabEntityTask, taskID, session, snapshot)
+}
+
+func (s *Server) documentCollabSubscriberCount(documentID string) int {
+	return s.collabSubscriberCount(collabEntityDocument, documentID)
+}
+
+func (s *Server) setDocumentCollabRoomSnapshot(documentID string, session chan outboundMsg, snapshot []byte) bool {
+	return s.setCollabRoomSnapshot(collabEntityDocument, documentID, session, snapshot)
+}
+
 func (s *Server) taskCollabSubscribeResponse(taskID string, session chan outboundMsg, persistedMarkdown string) *packetspb.TaskDescriptionCollabSubscribeResponse {
 	roomSnapshot, subscriberCount := s.joinTaskCollabRoom(taskID, session)
 	return &packetspb.TaskDescriptionCollabSubscribeResponse{
 		TaskId:            taskID,
+		PersistedMarkdown: persistedMarkdown,
+		SubscriberCount:   subscriberCount,
+		RoomSnapshot:      roomSnapshot,
+	}
+}
+
+func (s *Server) documentCollabSubscribeResponse(documentID string, session chan outboundMsg, persistedMarkdown string) *packetspb.DocumentContentCollabSubscribeResponse {
+	roomSnapshot, subscriberCount := s.joinCollabRoom(collabEntityDocument, documentID, session)
+	return &packetspb.DocumentContentCollabSubscribeResponse{
+		DocumentId:        documentID,
 		PersistedMarkdown: persistedMarkdown,
 		SubscriberCount:   subscriberCount,
 		RoomSnapshot:      roomSnapshot,
@@ -2512,6 +2582,137 @@ func (s *Server) handleDomainPayload(
 		recipients := s.taskCollabRecipients(taskIDText, outboundCh)
 		s.log.Info("ws task collab relay",
 			zap.String("task_id", taskIDText),
+			zap.String("user_id", principal.UserID.String()),
+			zap.String("session_id", principal.SessionID.String()),
+			zap.String("kind", req.GetKind().String()),
+			zap.Int("payload_bytes", len(req.GetPayload())),
+			zap.Int("recipients", len(recipients)),
+		)
+		for _, recipient := range recipients {
+			select {
+			case recipient <- outboundMsg{env: outEnv}:
+			default:
+			}
+		}
+
+	case *packetspb.Envelope_DocumentContentCollabSubscribeRequest:
+		req := p.DocumentContentCollabSubscribeRequest
+		if req == nil || s.documentsSvc == nil {
+			badReq("document_content_collab_subscribe_request: missing payload")
+			return
+		}
+		documentID, err := uuid.Parse(req.GetDocumentId())
+		if err != nil {
+			badReq("document_content_collab_subscribe_request: invalid document_id")
+			return
+		}
+		content, err := s.documentsSvc.GetDocumentContent(ctx, documentID, principal.UserID)
+		if err != nil {
+			if errors.Is(err, documents.ErrNotFound) || errors.Is(err, documents.ErrForbidden) {
+				forbidden("document not found")
+				return
+			}
+			s.log.Error("ws: DocumentContentCollabSubscribe error", zap.Error(err), zap.String("user_id", principal.UserID.String()))
+			badReq("document_content_collab_subscribe_request: internal error")
+			return
+		}
+		subscribeResp := s.documentCollabSubscribeResponse(documentID.String(), outboundCh, "")
+		persistedMarkdown := ""
+		if content != nil {
+			persistedMarkdown = *content
+		}
+		subscribeResp.PersistedMarkdown = persistedMarkdown
+		s.log.Info("ws document collab subscribe",
+			zap.String("document_id", documentID.String()),
+			zap.String("user_id", principal.UserID.String()),
+			zap.String("session_id", principal.SessionID.String()),
+			zap.String("persisted_sig", markdownSignatureForLog(persistedMarkdown)),
+			zap.Int32("subscribers", subscribeResp.GetSubscriberCount()),
+			zap.Int("room_snapshot_bytes", len(subscribeResp.GetRoomSnapshot())),
+		)
+		enqueue(&packetspb.Envelope{
+			RequestId:       reqID,
+			TraceId:         traceID,
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_DocumentContentCollabSubscribeResponse{
+				DocumentContentCollabSubscribeResponse: subscribeResp,
+			},
+		})
+
+	case *packetspb.Envelope_DocumentContentCollabUnsubscribeRequest:
+		req := p.DocumentContentCollabUnsubscribeRequest
+		if req == nil {
+			badReq("document_content_collab_unsubscribe_request: missing payload")
+			return
+		}
+		documentID, err := uuid.Parse(req.GetDocumentId())
+		if err != nil {
+			badReq("document_content_collab_unsubscribe_request: invalid document_id")
+			return
+		}
+		s.leaveCollabRoom(collabEntityDocument, documentID.String(), outboundCh)
+		s.log.Info("ws document collab unsubscribe",
+			zap.String("document_id", documentID.String()),
+			zap.String("user_id", principal.UserID.String()),
+			zap.String("session_id", principal.SessionID.String()),
+			zap.Int("subscribers", s.documentCollabSubscriberCount(documentID.String())),
+		)
+
+	case *packetspb.Envelope_DocumentContentCollabMessage:
+		req := p.DocumentContentCollabMessage
+		if req == nil {
+			badReq("document_content_collab_message: missing payload")
+			return
+		}
+		documentID, err := uuid.Parse(req.GetDocumentId())
+		if err != nil {
+			badReq("document_content_collab_message: invalid document_id")
+			return
+		}
+		if req.GetKind() != packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC &&
+			req.GetKind() != packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS {
+			badReq("document_content_collab_message: invalid kind")
+			return
+		}
+		if req.GetKind() == packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC {
+			frameType, framePayload, framed := decodeTaskCollabSyncFrame(req.GetPayload())
+			if framed && !isKnownTaskCollabSyncFrameType(frameType) {
+				badReq("document_content_collab_message: invalid sync frame")
+				return
+			}
+			if framed && frameType == taskCollabSyncFrameTypeFullState {
+				documentIDText := documentID.String()
+				if !s.setDocumentCollabRoomSnapshot(documentIDText, outboundCh, framePayload) {
+					forbidden("not subscribed to document")
+					return
+				}
+				s.log.Info("ws document collab snapshot cache",
+					zap.String("document_id", documentIDText),
+					zap.String("user_id", principal.UserID.String()),
+					zap.String("session_id", principal.SessionID.String()),
+					zap.Int("snapshot_bytes", len(framePayload)),
+				)
+				return
+			}
+		}
+		documentIDText := documentID.String()
+		if !s.isCollabSubscribed(collabEntityDocument, documentIDText, outboundCh) {
+			forbidden("not subscribed to document")
+			return
+		}
+		outEnv := &packetspb.Envelope{
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_DocumentContentCollabMessage{
+				DocumentContentCollabMessage: &packetspb.DocumentContentCollabMessage{
+					DocumentId: documentIDText,
+					Kind:       req.GetKind(),
+					Payload:    req.GetPayload(),
+				},
+			},
+		}
+		recipients := s.collabRecipients(collabEntityDocument, documentIDText, outboundCh)
+		s.log.Info("ws document collab relay",
+			zap.String("document_id", documentIDText),
 			zap.String("user_id", principal.UserID.String()),
 			zap.String("session_id", principal.SessionID.String()),
 			zap.String("kind", req.GetKind().String()),

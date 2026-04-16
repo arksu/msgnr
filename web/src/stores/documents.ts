@@ -9,9 +9,10 @@ import {
   documentsJoinTeamspace,
   documentsListDocumentHistory,
   documentsListSidebar,
-  documentsSearchDocuments,
   documentsListTeamspaces,
+  documentsSearchDocuments,
   documentsUpdateDocument,
+  documentsUpdateDocumentContent,
   documentsUpdateTeamspace,
   type CreateDocumentPayload,
   type DocumentHistoryItem,
@@ -20,6 +21,7 @@ import {
   type SidebarTeamspace,
   type Teamspace,
   type UpsertTeamspacePayload,
+  type UpdateDocumentContentPayload,
   type UpdateDocumentPayload,
 } from '@/services/http/documentsApi'
 import { tasksListUsers, type TaskUser } from '@/services/http/tasksApi'
@@ -36,6 +38,7 @@ export const useDocumentsStore = defineStore('documents', () => {
   const selectedDocument = ref<DocumentItem | null>(null)
   const documentLoading = ref(false)
   const documentError = ref<string | null>(null)
+  const selectedDocumentContentRequestKey = ref('')
 
   const users = ref<TaskUser[]>([])
   const usersLoaded = ref(false)
@@ -113,6 +116,7 @@ export const useDocumentsStore = defineStore('documents', () => {
 
   function clearSelectedDocument() {
     selectedDocumentRequestKey.value = ''
+    selectedDocumentContentRequestKey.value = ''
     selectedDocument.value = null
     documentLoading.value = false
     documentError.value = null
@@ -225,6 +229,16 @@ export const useDocumentsStore = defineStore('documents', () => {
     return row
   }
 
+  async function updateDocumentContent(id: string, payload: UpdateDocumentContentPayload) {
+    const requestKey = `${Date.now()}:${id}`
+    selectedDocumentContentRequestKey.value = requestKey
+    const row = await documentsUpdateDocumentContent(id, payload)
+    if (selectedDocumentContentRequestKey.value === requestKey && selectedDocument.value?.id === id) {
+      selectedDocument.value = row
+    }
+    return row
+  }
+
   async function deleteDocument(id: string) {
     await documentsDeleteDocument(id)
     if (selectedDocument.value?.id === id) {
@@ -269,6 +283,7 @@ export const useDocumentsStore = defineStore('documents', () => {
     joinTeamspace,
     createDocument,
     updateDocument,
+    updateDocumentContent,
     deleteDocument,
     loadDocumentHistory,
   }

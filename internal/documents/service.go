@@ -190,6 +190,12 @@ type UpdateDocumentParams struct {
 	ActorID         uuid.UUID
 }
 
+type UpdateDocumentContentParams struct {
+	ContentMarkdown *string
+	ActorID         uuid.UUID
+	ForceSnapshot   bool
+}
+
 type UploadAttachmentParams struct {
 	DocumentID uuid.UUID
 	ActorID    uuid.UUID
@@ -656,6 +662,35 @@ func (s *Service) GetDocument(ctx context.Context, documentID, userID uuid.UUID)
 	return resp, nil
 }
 
+func (s *Service) GetDocumentContent(ctx context.Context, documentID, userID uuid.UUID) (*string, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT d.content_markdown
+		   FROM document d
+		   JOIN teamspace t
+		     ON t.id = d.teamspace_id
+		    AND t.deleted_at IS NULL
+		   JOIN teamspace_member tm
+		     ON tm.teamspace_id = d.teamspace_id
+		    AND tm.user_id = $2
+		  WHERE d.id = $1
+		    AND d.archived_at IS NULL`,
+		documentID, userID,
+	)
+
+	var content sql.NullString
+	if err := row.Scan(&content); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, s.documentAccessError(ctx, documentID, userID)
+		}
+		return nil, fmt.Errorf("documents: get document content: %w", err)
+	}
+	if !content.Valid {
+		return nil, nil
+	}
+	value := content.String
+	return &value, nil
+}
+
 func (s *Service) SearchDocuments(ctx context.Context, userID uuid.UUID, query string) ([]DocumentSearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -784,6 +819,62 @@ func (s *Service) UpdateDocument(ctx context.Context, documentID uuid.UUID, para
 
 	if err := tx.Commit(ctx); err != nil {
 		return DocumentResponse{}, fmt.Errorf("documents: commit update document tx: %w", err)
+	}
+
+	return s.GetDocument(ctx, documentID, params.ActorID)
+}
+
+func (s *Service) UpdateDocumentContent(ctx context.Context, documentID uuid.UUID, params UpdateDocumentContentParams) (DocumentResponse, error) {
+	var (
+		currentTitle   string
+		currentContent sql.NullString
+	)
+	if err := s.pool.QueryRow(ctx,
+		`SELECT d.title, d.content_markdown
+		   FROM document d
+		   JOIN teamspace t
+		     ON t.id = d.teamspace_id
+		    AND t.deleted_at IS NULL
+		   JOIN teamspace_member tm
+		     ON tm.teamspace_id = d.teamspace_id
+		    AND tm.user_id = $2
+		  WHERE d.id = $1
+		    AND d.archived_at IS NULL`,
+		documentID, params.ActorID,
+	).Scan(&currentTitle, &currentContent); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DocumentResponse{}, s.documentAccessError(ctx, documentID, params.ActorID)
+		}
+		return DocumentResponse{}, fmt.Errorf("documents: load document content for update: %w", err)
+	}
+
+	if nullStringEqual(params.ContentMarkdown, currentContent) {
+		return s.GetDocument(ctx, documentID, params.ActorID)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DocumentResponse{}, fmt.Errorf("documents: begin update document content tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE document
+		    SET content_markdown = $2,
+		        updated_by = $3,
+		        updated_at = now()
+		  WHERE id = $1`,
+		documentID, nullString(params.ContentMarkdown), params.ActorID,
+	); err != nil {
+		return DocumentResponse{}, classifyMutationError("update document content", err)
+	}
+
+	if err := s.maybeCreateDocumentSnapshotInTx(ctx, tx, documentID, currentTitle, params.ContentMarkdown, params.ActorID); err != nil {
+		return DocumentResponse{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return DocumentResponse{}, fmt.Errorf("documents: commit update document content tx: %w", err)
 	}
 
 	return s.GetDocument(ctx, documentID, params.ActorID)

@@ -31,9 +31,9 @@ func newTestServer(bus *events.Bus) *Server {
 		authorizeEvent: func(_ context.Context, _ auth.Principal, _ *packetspb.ServerEvent) bool {
 			return true
 		},
-		sessionsByUser:           make(map[string]map[chan outboundMsg]*sessionState),
-		taskCollabRooms:          make(map[string]*taskCollabRoom),
-		taskCollabTasksBySession: make(map[chan outboundMsg]map[string]struct{}),
+		sessionsByUser:       make(map[string]map[chan outboundMsg]*sessionState),
+		collabRooms:          make(map[string]*collabRoom),
+		collabRoomsBySession: make(map[chan outboundMsg]map[string]struct{}),
 	}
 }
 
@@ -431,15 +431,19 @@ func TestTaskCollabCleanupRemovesSessionFromAllRooms(t *testing.T) {
 
 	srv.joinTaskCollabRoom("task-1", ch)
 	srv.joinTaskCollabRoom("task-2", ch)
+	srv.joinCollabRoom(collabEntityDocument, "doc-1", ch)
 	assert.True(t, srv.isTaskCollabSubscribed("task-1", ch))
 	assert.True(t, srv.isTaskCollabSubscribed("task-2", ch))
+	assert.True(t, srv.isCollabSubscribed(collabEntityDocument, "doc-1", ch))
 
 	srv.removeTaskCollabSession(ch)
 
 	assert.False(t, srv.isTaskCollabSubscribed("task-1", ch))
 	assert.False(t, srv.isTaskCollabSubscribed("task-2", ch))
-	assert.Nil(t, srv.taskCollabRooms["task-1"])
-	assert.Nil(t, srv.taskCollabRooms["task-2"])
+	assert.False(t, srv.isCollabSubscribed(collabEntityDocument, "doc-1", ch))
+	assert.Nil(t, srv.collabRooms[collabRoomKey(collabEntityTask, "task-1")])
+	assert.Nil(t, srv.collabRooms[collabRoomKey(collabEntityTask, "task-2")])
+	assert.Nil(t, srv.collabRooms[collabRoomKey(collabEntityDocument, "doc-1")])
 }
 
 func TestTaskCollabSubscribeResponseIncludesSubscriberCount(t *testing.T) {
@@ -476,7 +480,22 @@ func TestSetTaskCollabRoomSnapshotDoesNotCreateGhostRoom(t *testing.T) {
 	ok := srv.setTaskCollabRoomSnapshot("task-1", ch, []byte{9, 8, 7})
 
 	assert.False(t, ok)
-	assert.Nil(t, srv.taskCollabRooms["task-1"])
+	assert.Nil(t, srv.collabRooms[collabRoomKey(collabEntityTask, "task-1")])
+}
+
+func TestDocumentCollabSubscribeResponseIncludesRoomSnapshot(t *testing.T) {
+	srv := newTestServer(nil)
+	ch := make(chan outboundMsg, 1)
+
+	srv.joinCollabRoom(collabEntityDocument, "doc-1", ch)
+	ok := srv.setDocumentCollabRoomSnapshot("doc-1", ch, []byte{4, 5, 6})
+
+	assert.True(t, ok)
+	resp := srv.documentCollabSubscribeResponse("doc-1", ch, "markdown")
+
+	assert.Equal(t, []byte{4, 5, 6}, resp.GetRoomSnapshot())
+	assert.Equal(t, int32(1), resp.GetSubscriberCount())
+	assert.Equal(t, "markdown", resp.GetPersistedMarkdown())
 }
 
 func TestSendTaskStatusChangedBroadcastsToActiveSessions(t *testing.T) {

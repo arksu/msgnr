@@ -145,6 +145,39 @@ function makeTaskDescriptionCollabMessageEnvelope(): ArrayBuffer {
   return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
 }
 
+function makeDocumentContentCollabSubscribeResponseEnvelope(roomSnapshot: Uint8Array = new Uint8Array()): ArrayBuffer {
+  const env = create(EnvelopeSchema, {
+    requestId: '8',
+    protocolVersion: 1,
+    payload: {
+      case: 'documentContentCollabSubscribeResponse',
+      value: {
+        documentId: 'doc-1',
+        persistedMarkdown: '## persisted doc',
+        subscriberCount: 2,
+        roomSnapshot,
+      },
+    },
+  })
+  return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
+}
+
+function makeDocumentContentCollabMessageEnvelope(): ArrayBuffer {
+  const env = create(EnvelopeSchema, {
+    requestId: '9',
+    protocolVersion: 1,
+    payload: {
+      case: 'documentContentCollabMessage',
+      value: {
+        documentId: 'doc-1',
+        kind: TaskDescriptionCollabMessageKind.SYNC,
+        payload: new Uint8Array([4, 5, 6]),
+      },
+    },
+  })
+  return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
+}
+
 let mockSocket: MockWebSocket
 let groupCollapsedSpy: ReturnType<typeof vi.spyOn>
 let consoleLogSpy: ReturnType<typeof vi.spyOn>
@@ -534,6 +567,49 @@ describe('wsStore state machine', () => {
     expect(onSubscribe).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 'task-1',
       roomSnapshot,
+    }))
+  })
+
+  it('sends document collab subscribe and collab message envelopes', () => {
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+
+    store.sendDocumentContentCollabSubscribe('doc-1')
+    store.sendDocumentContentCollabMessage('doc-1', TaskDescriptionCollabMessageKind.SYNC, new Uint8Array([7, 7]))
+
+    const secondLast = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 2])
+    const last = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
+    expect(secondLast.payload.case).toBe('documentContentCollabSubscribeRequest')
+    expect(secondLast.payload.value).toEqual(expect.objectContaining({ documentId: 'doc-1' }))
+    expect(last.payload.case).toBe('documentContentCollabMessage')
+    expect(last.payload.value).toEqual(expect.objectContaining({
+      documentId: 'doc-1',
+      kind: TaskDescriptionCollabMessageKind.SYNC,
+    }))
+  })
+
+  it('routes document collab subscribe response and relay message callbacks', () => {
+    const store = useWsStore()
+    const onSubscribe = vi.fn()
+    const onCollab = vi.fn()
+    store.onDocumentContentCollabSubscribeResponse(onSubscribe)
+    store.onDocumentContentCollabMessage(onCollab)
+
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeDocumentContentCollabSubscribeResponseEnvelope())
+    mockSocket.simulateMessage(makeDocumentContentCollabMessageEnvelope())
+
+    expect(onSubscribe).toHaveBeenCalledWith(expect.objectContaining({
+      documentId: 'doc-1',
+      persistedMarkdown: '## persisted doc',
+      subscriberCount: 2,
+      roomSnapshot: expect.any(Uint8Array),
+    }))
+    expect(onCollab).toHaveBeenCalledWith(expect.objectContaining({
+      documentId: 'doc-1',
+      kind: TaskDescriptionCollabMessageKind.SYNC,
     }))
   })
 })

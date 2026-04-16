@@ -198,6 +198,10 @@ message Envelope {
     TaskDescriptionCollabSubscribeResponse task_description_collab_subscribe_response = 62;
     TaskDescriptionCollabUnsubscribeRequest task_description_collab_unsubscribe_request = 63;
     TaskDescriptionCollabMessage task_description_collab_message = 64;
+    DocumentContentCollabSubscribeRequest document_content_collab_subscribe_request = 66;
+    DocumentContentCollabSubscribeResponse document_content_collab_subscribe_response = 67;
+    DocumentContentCollabUnsubscribeRequest document_content_collab_unsubscribe_request = 68;
+    DocumentContentCollabMessage document_content_collab_message = 69;
   }
 }
 
@@ -697,6 +701,27 @@ message TaskDescriptionCollabUnsubscribeRequest {
 
 message TaskDescriptionCollabMessage {
   string task_id = 1;
+  TaskDescriptionCollabMessageKind kind = 2;
+  bytes payload = 3;
+}
+
+message DocumentContentCollabSubscribeRequest {
+  string document_id = 1;
+}
+
+message DocumentContentCollabSubscribeResponse {
+  string document_id = 1;
+  string persisted_markdown = 2;
+  int32 subscriber_count = 3;
+  bytes room_snapshot = 4;
+}
+
+message DocumentContentCollabUnsubscribeRequest {
+  string document_id = 1;
+}
+
+message DocumentContentCollabMessage {
+  string document_id = 1;
   TaskDescriptionCollabMessageKind kind = 2;
   bytes payload = 3;
 }

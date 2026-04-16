@@ -251,6 +251,55 @@ func TestIntegration_DocumentMemberEditAndNonMemberForbidden(t *testing.T) {
 	require.ErrorIs(t, err, documents.ErrForbidden)
 }
 
+func TestIntegration_DocumentContentCollabHelpersRespectMembership(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := documents.NewService(pool, nil)
+
+	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
+	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
+	outsiderID := seedDocumentUser(t, ctx, pool, "Outsider", "member")
+
+	teamspace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:      "Shared docs",
+		MemberIDs: []uuid.UUID{memberID},
+		ActorID:   ownerID,
+	}, "member")
+	require.NoError(t, err)
+
+	doc, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:     teamspace.ID,
+		Title:           "Shared note",
+		ContentMarkdown: ptr("first"),
+		ActorID:         ownerID,
+	})
+	require.NoError(t, err)
+
+	content, err := svc.GetDocumentContent(ctx, doc.ID, memberID)
+	require.NoError(t, err)
+	require.NotNil(t, content)
+	assert.Equal(t, "first", *content)
+
+	updated, err := svc.UpdateDocumentContent(ctx, doc.ID, documents.UpdateDocumentContentParams{
+		ContentMarkdown: ptr("second"),
+		ActorID:         memberID,
+		ForceSnapshot:   true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated.ContentMarkdown)
+	assert.Equal(t, "second", *updated.ContentMarkdown)
+	assert.Equal(t, memberID, updated.UpdatedBy)
+
+	_, err = svc.GetDocumentContent(ctx, doc.ID, outsiderID)
+	require.ErrorIs(t, err, documents.ErrForbidden)
+
+	_, err = svc.UpdateDocumentContent(ctx, doc.ID, documents.UpdateDocumentContentParams{
+		ContentMarkdown: ptr("third"),
+		ActorID:         outsiderID,
+	})
+	require.ErrorIs(t, err, documents.ErrForbidden)
+}
+
 func TestIntegration_SearchDocumentsRejectsBlankQuery(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

@@ -129,6 +129,11 @@ export interface UpdateDocumentPayload {
   content_markdown?: string | null
 }
 
+export interface UpdateDocumentContentPayload {
+  content_markdown: string | null
+  force_snapshot?: boolean
+}
+
 export async function documentsListTeamspaces(): Promise<Teamspace[]> {
   return apiCall(http.get<Teamspace[]>('/api/documents/teamspaces'))
 }
@@ -169,6 +174,10 @@ export async function documentsGetDocument(id: string): Promise<DocumentItem> {
 
 export async function documentsUpdateDocument(id: string, payload: UpdateDocumentPayload): Promise<DocumentItem> {
   return apiCall(http.patch<DocumentItem>(`/api/documents/${id}`, payload))
+}
+
+export async function documentsUpdateDocumentContent(id: string, payload: UpdateDocumentContentPayload): Promise<DocumentItem> {
+  return apiCall(http.patch<DocumentItem>(`/api/documents/${id}/content`, payload))
 }
 
 export async function documentsDeleteDocument(id: string): Promise<void> {

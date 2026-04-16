@@ -229,6 +229,15 @@ func (h *Handler) documentItem(w http.ResponseWriter, r *http.Request, p auth.Pr
 		h.documentAttachmentsRouter(w, r, p, id, suffix)
 		return
 	}
+	if rawID, ok := strings.CutSuffix(rest, "/content"); ok {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid document id"))
+			return
+		}
+		h.documentContentItem(w, r, p, id)
+		return
+	}
 	if rawID, ok := strings.CutSuffix(rest, "/history"); ok {
 		id, err := uuid.Parse(rawID)
 		if err != nil {
@@ -281,6 +290,33 @@ func (h *Handler) documentItem(w http.ResponseWriter, r *http.Request, p auth.Pr
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func (h *Handler) documentContentItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {
+	if r.Method != http.MethodPatch {
+		methodNotAllowed(w)
+		return
+	}
+
+	var req struct {
+		ContentMarkdown *string `json:"content_markdown"`
+		ForceSnapshot   bool    `json:"force_snapshot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+		return
+	}
+
+	row, err := h.svc.UpdateDocumentContent(r.Context(), id, UpdateDocumentContentParams{
+		ContentMarkdown: req.ContentMarkdown,
+		ActorID:         p.UserID,
+		ForceSnapshot:   req.ForceSnapshot,
+	})
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
 }
 
 func (h *Handler) documentHistoryItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {

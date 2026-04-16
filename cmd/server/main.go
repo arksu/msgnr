@@ -171,6 +171,7 @@ func main() {
 	documentsSvc := documents.NewService(db.Pool, storageClient)
 	documentsSvc.SetHistoryLimit(cfg.DocumentHistoryLimit)
 	documentsHandler := documents.NewHandler(documentsSvc, authSvc, log, cfg.AttachmentMaxSizeMB)
+	wsServer.SetDocumentsService(documentsSvc)
 	integrationsSvc := integrations.NewService(db.Pool, tasksSvc, documentsSvc, log)
 	integrationsHandler := integrations.NewHandler(integrationsSvc, log)
 

@@ -84,13 +84,22 @@
 
     <div class="flex-1 overflow-y-auto px-6 py-4">
       <div v-if="saveError" class="mb-3 text-xs text-red-400">{{ saveError }}</div>
+      <div v-if="contentSaveError" class="mb-3 text-xs text-red-400">{{ contentSaveError }}</div>
+      <div v-if="documentContentCollabError" class="mb-3 text-xs text-red-400">{{ documentContentCollabError }}</div>
 
       <TaskDescriptionEditor
+        :key="contentEditorRenderKey"
         v-model="contentDraft"
         owner-kind="document"
         :owner-id="documentItem.id"
         placeholder="Document content"
-        @blur="saveContent"
+        collab-field="document_content"
+        :collab-doc="documentContentDoc"
+        :collab-provider="documentContentProvider"
+        :collab-user="collabUser"
+        :allow-local-draft-seed="documentContentAllowLocalDraftSeed"
+        :force-local-sync-token="contentForceLocalSyncToken"
+        @blur="flushContentNow"
       />
 
       <div class="mt-6 flex gap-6 border-t border-chat-border pt-4 text-xs text-gray-500">
@@ -191,13 +200,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { DocumentHistoryItem, SidebarDocumentNode } from '@/services/http/documentsApi'
-import { useDocumentsStore } from '@/stores/documents'
+import { useDocumentContentCollab, type DocumentContentCollabUser } from '@/composables/useDocumentContentCollab'
 import { getPlatformOrNull, initPlatform } from '@/platform'
 import { exportDocumentToPdfBlob, buildDocumentPdfFileName } from '@/services/taskPdfExport'
+import { useAuthStore } from '@/stores/auth'
+import { useDocumentsStore } from '@/stores/documents'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+
+const DESCRIPTION_AUTOSAVE_DEBOUNCE_MS = 800
+const DESCRIPTION_MAX_FLUSH_MS = 10_000
 
 defineEmits<{
   back: []
@@ -205,14 +219,24 @@ defineEmits<{
 }>()
 
 const documentsStore = useDocumentsStore()
+const authStore = useAuthStore()
+
 const titleEditing = ref(false)
 const titleDraft = ref('')
 const contentDraft = ref('')
 const saveError = ref('')
+const contentSaveError = ref('')
 const exportingPdf = ref(false)
+const contentSaving = ref(false)
+const hydratingContent = ref(false)
+const lastSavedContent = ref<string | null>(null)
+const contentEditorRenderKey = ref(0)
+const contentForceLocalSyncToken = ref(0)
 const titleInputRef = ref<HTMLInputElement | null>(null)
-const autosaveDelayMs = 20_000
-let autosaveTimer: ReturnType<typeof setTimeout> | null = null
+let contentDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let contentMaxFlushTimer: ReturnType<typeof setTimeout> | null = null
+let contentRetryTimer: ReturnType<typeof setTimeout> | null = null
+let contentRetryDelayMs = 1000
 
 const historyModalOpen = ref(false)
 const historyLoading = ref(false)
@@ -224,6 +248,31 @@ const historyApplying = ref(false)
 const historyApplyError = ref('')
 
 const documentItem = computed(() => documentsStore.selectedDocument)
+const collabDocumentId = computed(() => documentItem.value?.id ?? null)
+const collabUser = computed<DocumentContentCollabUser | null>(() => {
+  const user = authStore.user
+  if (!user) return null
+  const palette = ['#60a5fa', '#f97316', '#f43f5e', '#22c55e', '#8b5cf6', '#06b6d4', '#eab308', '#14b8a6']
+  let hash = 0
+  for (let i = 0; i < user.id.length; i += 1) {
+    hash = ((hash << 5) - hash) + user.id.charCodeAt(i)
+    hash |= 0
+  }
+  return {
+    id: user.id,
+    name: user.displayName || user.email,
+    color: palette[Math.abs(hash) % palette.length],
+  }
+})
+const contentCollab = useDocumentContentCollab({
+  documentId: collabDocumentId,
+  user: collabUser,
+})
+const documentContentDoc = computed(() => contentCollab.doc.value)
+const documentContentProvider = computed(() => contentCollab.provider.value)
+const documentContentCollabError = computed(() => contentCollab.subscribeError.value)
+const documentContentAllowLocalDraftSeed = computed(() => contentCollab.allowLocalDraftSeed.value)
+
 const documentBreadcrumbSegments = computed(() => {
   const current = documentsStore.selectedDocument
   if (!current) return []
@@ -242,26 +291,58 @@ const documentBreadcrumbSegments = computed(() => {
 })
 
 watch(
-  () => documentsStore.selectedDocument,
-  (value, previous) => {
-    clearAutosaveTimer()
-    titleDraft.value = value?.title ?? ''
-    contentDraft.value = value?.content_markdown ?? ''
-    if (value?.id !== previous?.id) {
-      titleEditing.value = false
+  () => documentItem.value?.id,
+  (next, prev) => {
+    if (prev) {
+      clearContentTimers()
+      void persistContent(prev, contentDraft.value, true)
     }
+
+    titleDraft.value = documentItem.value?.title ?? ''
+    hydratingContent.value = true
+    contentDraft.value = documentItem.value?.content_markdown ?? ''
+    lastSavedContent.value = documentItem.value?.content_markdown ?? null
+    hydratingContent.value = false
+    titleEditing.value = false
     saveError.value = ''
+    contentSaveError.value = ''
+    contentRetryDelayMs = 1000
+    historyModalOpen.value = false
+    historyLoading.value = false
+    historyError.value = ''
+    historyItems.value = []
+    historyCandidate.value = null
+    historyPreviewDraft.value = ''
+    historyApplying.value = false
+    historyApplyError.value = ''
+    contentEditorRenderKey.value += 1
+    contentForceLocalSyncToken.value = 0
+    exportingPdf.value = false
   },
   { immediate: true },
 )
 
-watch([titleDraft, contentDraft], () => {
-  scheduleAutosave()
+watch(
+  () => documentItem.value?.title,
+  (next) => {
+    if (titleEditing.value) return
+    titleDraft.value = next ?? ''
+  },
+)
+
+watch(() => contentCollab.serverMarkdown.value, (next) => {
+  if (next === null) return
+  hydratingContent.value = true
+  contentDraft.value = next
+  lastSavedContent.value = next
+  hydratingContent.value = false
+  contentCollab.serverMarkdown.value = null
 })
 
-onBeforeUnmount(() => {
-  clearAutosaveTimer()
-})
+watch(contentDraft, () => {
+  if (hydratingContent.value || !documentItem.value) return
+  scheduleContentAutosave()
+}, { flush: 'sync' })
 
 function formatDatetime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -289,103 +370,115 @@ async function startTitleEdit() {
 function cancelTitleEdit() {
   titleEditing.value = false
   titleDraft.value = documentsStore.selectedDocument?.title ?? ''
+  saveError.value = ''
 }
 
-function clearAutosaveTimer() {
-  if (autosaveTimer) {
-    clearTimeout(autosaveTimer)
-    autosaveTimer = null
+function clearContentTimers() {
+  if (contentDebounceTimer) {
+    clearTimeout(contentDebounceTimer)
+    contentDebounceTimer = null
+  }
+  if (contentMaxFlushTimer) {
+    clearTimeout(contentMaxFlushTimer)
+    contentMaxFlushTimer = null
+  }
+  if (contentRetryTimer) {
+    clearTimeout(contentRetryTimer)
+    contentRetryTimer = null
   }
 }
 
-function collectDraftChanges(documentItem: NonNullable<typeof documentsStore.selectedDocument>): {
-  payload: { title?: string; content_markdown?: string }
-  titleInvalid: boolean
-} {
-  const payload: { title?: string; content_markdown?: string } = {}
-  const nextTitle = titleDraft.value.trim()
-  const currentContent = documentItem.content_markdown ?? ''
-  let titleInvalid = false
-
-  if (!nextTitle) {
-    if (titleDraft.value !== documentItem.title) {
-      titleInvalid = true
-    }
-  } else if (nextTitle !== documentItem.title) {
-    payload.title = nextTitle
-  }
-
-  if (contentDraft.value !== currentContent) {
-    payload.content_markdown = contentDraft.value
-  }
-
-  return { payload, titleInvalid }
+function contentMatchesLastSaved(value: string): boolean {
+  return value === (lastSavedContent.value ?? '')
 }
 
-async function persistDraft(options: { closeTitleEditor?: boolean } = {}) {
-  const current = documentsStore.selectedDocument
-  if (!current) return
-  const documentId = current.id
-  const submittedTitleDraft = titleDraft.value
-  const submittedContentDraft = contentDraft.value
-  const { payload, titleInvalid } = collectDraftChanges(current)
-
-  if (titleInvalid) {
-    saveError.value = 'Document title is required'
-  } else {
-    saveError.value = ''
-  }
-
-  if (Object.keys(payload).length === 0) {
-    if (options.closeTitleEditor && !titleInvalid) {
-      titleEditing.value = false
-    }
+async function persistContent(documentId: string, source: string, force = false) {
+  if (contentMatchesLastSaved(source) || contentSaving.value) {
     return
   }
 
+  contentSaving.value = true
   try {
-    const row = await documentsStore.updateDocument(documentId, payload)
-    if (documentsStore.selectedDocument?.id !== documentId) return
-    if (payload.title !== undefined && titleDraft.value === submittedTitleDraft) {
-      titleDraft.value = row.title
+    const row = await documentsStore.updateDocumentContent(documentId, {
+      content_markdown: source,
+      ...(force ? { force_snapshot: true } : {}),
+    })
+    if (documentItem.value?.id === documentId) {
+      lastSavedContent.value = row.content_markdown
+      contentSaveError.value = ''
+      if (contentRetryTimer) {
+        clearTimeout(contentRetryTimer)
+        contentRetryTimer = null
+      }
+      contentRetryDelayMs = 1000
     }
-    if (payload.content_markdown !== undefined && contentDraft.value === submittedContentDraft) {
-      contentDraft.value = row.content_markdown ?? ''
-    }
-    if (options.closeTitleEditor && !titleInvalid) {
-      titleEditing.value = false
-    }
-    saveError.value = titleInvalid ? 'Document title is required' : ''
   } catch (e) {
-    saveError.value = e instanceof Error ? e.message : 'Failed to save document'
+    if (documentItem.value?.id === documentId) {
+      contentSaveError.value = (e instanceof Error ? e.message : 'Failed to save document content') + '. Retrying...'
+      if (!contentRetryTimer) {
+        const retryDocumentId = documentId
+        contentRetryTimer = setTimeout(() => {
+          contentRetryTimer = null
+          void persistContent(retryDocumentId, contentDraft.value, true)
+          contentRetryDelayMs = Math.min(contentRetryDelayMs * 2, 15_000)
+        }, contentRetryDelayMs)
+      }
+    }
+  } finally {
+    contentSaving.value = false
   }
 }
 
-function scheduleAutosave() {
-  const current = documentsStore.selectedDocument
-  if (!current) return
-  const { payload, titleInvalid } = collectDraftChanges(current)
-  if (Object.keys(payload).length === 0 && !titleInvalid) {
-    clearAutosaveTimer()
-    return
+function scheduleContentAutosave() {
+  if (!documentItem.value) return
+  const documentId = documentItem.value.id
+  if (contentDebounceTimer) {
+    clearTimeout(contentDebounceTimer)
   }
-  clearAutosaveTimer()
-  const documentId = current.id
-  autosaveTimer = setTimeout(() => {
-    autosaveTimer = null
-    if (documentsStore.selectedDocument?.id !== documentId) return
-    void persistDraft()
-  }, autosaveDelayMs)
+  contentDebounceTimer = setTimeout(() => {
+    contentDebounceTimer = null
+    void persistContent(documentId, contentDraft.value)
+  }, DESCRIPTION_AUTOSAVE_DEBOUNCE_MS)
+
+  if (!contentMaxFlushTimer) {
+    contentMaxFlushTimer = setTimeout(() => {
+      contentMaxFlushTimer = null
+      if (contentDebounceTimer) {
+        clearTimeout(contentDebounceTimer)
+        contentDebounceTimer = null
+      }
+      void persistContent(documentId, contentDraft.value, true)
+    }, DESCRIPTION_MAX_FLUSH_MS)
+  }
+}
+
+function flushContentNow() {
+  if (!documentItem.value) return
+  clearContentTimers()
+  void persistContent(documentItem.value.id, contentDraft.value, true)
 }
 
 async function saveTitle() {
-  clearAutosaveTimer()
-  await persistDraft({ closeTitleEditor: true })
-}
+  const current = documentItem.value
+  if (!current) return
+  const nextTitle = titleDraft.value.trim()
+  if (nextTitle === '') {
+    saveError.value = 'Document title is required'
+    return
+  }
+  if (nextTitle === current.title) {
+    titleEditing.value = false
+    saveError.value = ''
+    return
+  }
 
-async function saveContent() {
-  clearAutosaveTimer()
-  await persistDraft()
+  saveError.value = ''
+  try {
+    await documentsStore.updateDocument(current.id, { title: nextTitle })
+    titleEditing.value = false
+  } catch (e) {
+    saveError.value = e instanceof Error ? e.message : 'Failed to save document title'
+  }
 }
 
 function exportTitleValue(): string {
@@ -422,7 +515,7 @@ async function exportDocumentPdf() {
 }
 
 async function openHistoryModal() {
-  const current = documentsStore.selectedDocument
+  const current = documentItem.value
   if (!current) return
   historyModalOpen.value = true
   historyLoading.value = true
@@ -431,6 +524,9 @@ async function openHistoryModal() {
   historyCandidate.value = null
   try {
     historyItems.value = await documentsStore.loadDocumentHistory(current.id)
+    if (historyItems.value.length > 0) {
+      selectHistoryItem(historyItems.value[0])
+    }
   } catch (e) {
     historyItems.value = []
     historyError.value = e instanceof Error ? e.message : 'Failed to load history'
@@ -440,6 +536,7 @@ async function openHistoryModal() {
 }
 
 function closeHistoryModal() {
+  if (historyApplying.value) return
   historyModalOpen.value = false
   historyApplyError.value = ''
 }
@@ -450,24 +547,48 @@ function selectHistoryItem(item: DocumentHistoryItem) {
 }
 
 async function applyHistory() {
-  const current = documentsStore.selectedDocument
+  const current = documentItem.value
   const candidate = historyCandidate.value
-  if (!current || !candidate) return
-  clearAutosaveTimer()
+  if (!current || !candidate || historyApplying.value) return
+  clearContentTimers()
   historyApplying.value = true
   historyApplyError.value = ''
   try {
-    const row = await documentsStore.updateDocument(current.id, {
-      title: candidate.title,
+    const row = await documentsStore.updateDocumentContent(current.id, {
       content_markdown: candidate.content_markdown ?? null,
+      force_snapshot: true,
     })
-    titleDraft.value = row.title
+    contentCollab.restart?.()
+    hydratingContent.value = true
     contentDraft.value = row.content_markdown ?? ''
-    closeHistoryModal()
+    lastSavedContent.value = row.content_markdown
+    hydratingContent.value = false
+    contentForceLocalSyncToken.value += 1
+    contentEditorRenderKey.value += 1
+    historyModalOpen.value = false
+    historyApplyError.value = ''
   } catch (e) {
     historyApplyError.value = e instanceof Error ? e.message : 'Failed to restore version'
   } finally {
     historyApplying.value = false
   }
 }
+
+function handleBeforeUnload() {
+  if (!documentItem.value) return
+  clearContentTimers()
+  void persistContent(documentItem.value.id, contentDraft.value, true)
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  clearContentTimers()
+  if (documentItem.value) {
+    void persistContent(documentItem.value.id, contentDraft.value, true)
+  }
+})
 </script>

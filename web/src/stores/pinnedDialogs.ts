@@ -125,7 +125,9 @@ export const usePinnedDialogsStore = defineStore('pinnedDialogs', () => {
     items.value = next
     if (activeId.value !== id) return
 
-    const replacement = next[idx - 1] ?? next[idx] ?? null
+    const replacement = idx > 0
+      ? (next[idx - 1] ?? null)
+      : (next[0] ?? null)
     activeId.value = replacement?.id ?? null
   }
 

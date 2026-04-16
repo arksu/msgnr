@@ -67,6 +67,7 @@ import MessageInput from '@/components/MessageInput.vue'
 const props = defineProps<{
   conversationId: string
   rootMessageId: string
+  mode?: 'main' | 'pinned'
 }>()
 
 const chatStore = useChatStore()
@@ -83,6 +84,7 @@ const replyCount = computed(() => (
   chatStore.threadSummaries[props.rootMessageId]?.replyCount ?? replies.value.length
 ))
 const typingLabel = computed(() => {
+  // Current typing presence is conversation-scoped, not thread-scoped.
   const entries = chatStore.getTypingForConversation(props.conversationId)
     .filter(entry => entry.userId !== chatStore.workspace?.selfUserId)
   if (entries.length === 0) return ''

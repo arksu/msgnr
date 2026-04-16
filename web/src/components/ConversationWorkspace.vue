@@ -53,6 +53,8 @@ import MessageInput from '@/components/MessageInput.vue'
 
 const props = defineProps<{
   conversationId: string
+  mode?: 'main' | 'pinned'
+  showEmbeddedThreadPanel?: boolean
 }>()
 
 const emit = defineEmits<{

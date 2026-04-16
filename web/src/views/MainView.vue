@@ -635,7 +635,7 @@ function hasConversationInSnapshot(conversationId: string): boolean {
 
 function hasRootMessageInConversation(conversationId: string, messageId: string): boolean {
   if (!conversationId || !messageId) return false
-  return (chatStore.messages[conversationId] ?? []).some(message => message.id === messageId)
+  return chatStore.getMessagesForConversation(conversationId).some(message => message.id === messageId)
 }
 
 function rootMessageIdFromIntent(intent: NotificationOpenIntent): string {
@@ -668,8 +668,10 @@ async function openChatTarget(intent: NotificationOpenIntent): Promise<boolean> 
   }
 
   if (intent.threadRootMessageId) {
-    const rootMessage = (chatStore.messages[intent.conversationId] ?? []).find(message => message.id === intent.threadRootMessageId)
+    const rootMessage = chatStore.getMessagesForConversation(intent.conversationId)
+      .find(message => message.id === intent.threadRootMessageId)
     if (rootMessage) {
+      // Product decision: thread notifications open pinned thread workspace only.
       chatStore.focusConversationMessage(rootMessage.id)
       pinnedDialogsStore.ensureThreadPinned(intent.conversationId, rootMessage.id)
       return true

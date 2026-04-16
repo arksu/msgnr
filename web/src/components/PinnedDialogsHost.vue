@@ -9,6 +9,7 @@
       handle-side="left"
       resize-title="Resize pinned panel"
     >
+      <!-- Product decision: header close hides active workspace but keeps pin in strip. -->
       <aside class="flex h-full min-h-0 w-full flex-col border-l border-chat-border bg-chat-header">
         <header class="flex items-center gap-3 border-b border-chat-border px-4 py-3">
           <div class="min-w-0 flex-1">
@@ -74,7 +75,7 @@
         <span
           class="flex-1 overflow-hidden text-ellipsis py-1 text-center text-[12px] font-semibold tracking-wide"
           :class="item.id === pinned.activeId ? 'font-bold text-white' : 'text-gray-200'"
-          style="writing-mode: vertical-lr;"
+          style="writing-mode: vertical-lr; transform: rotate(180deg);"
         >
           {{ item.title }}
         </span>

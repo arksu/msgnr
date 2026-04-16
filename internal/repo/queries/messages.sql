@@ -136,14 +136,6 @@ FROM reaction_counts
 WHERE message_id = @message_id
 ORDER BY emoji ASC;
 
--- name: IsChannelMember :one
-SELECT EXISTS (
-    SELECT 1 FROM channel_members
-    WHERE channel_id = @channel_id
-      AND user_id    = @user_id
-      AND is_archived = false
-) AS is_member;
-
 -- name: ListReactionUsersByMessageEmoji :many
 SELECT r.user_id,
        COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
@@ -153,48 +145,6 @@ JOIN users u ON u.id = r.user_id
 WHERE r.message_id = @message_id
   AND r.emoji = @emoji
 ORDER BY r.created_at DESC, r.user_id;
-
--- name: ListConversationMessagePage :many
-SELECT m.id, m.channel_id, m.sender_id, u.display_name, m.body, m.channel_seq,
-       COALESCE(m.thread_seq, 0) AS thread_seq,
-       m.thread_root_id,
-       COALESCE(ts.reply_count, 0) AS thread_reply_count,
-       m.edited_at,
-       m.created_at,
-       m.mention_everyone,
-       COALESCE((
-         SELECT json_agg(json_build_object('emoji', rc.emoji, 'count', rc.count) ORDER BY rc.emoji)
-           FROM reaction_counts rc
-          WHERE rc.message_id = m.id
-       ), '[]'::json) AS reactions,
-       COALESCE((
-         SELECT json_agg(r.emoji ORDER BY r.emoji)
-           FROM reactions r
-          WHERE r.message_id = m.id
-            AND r.user_id = @requester_id
-       ), '[]'::json) AS my_reactions,
-       COALESCE((
-         SELECT json_agg(json_build_object(
-           'id', ma.id,
-           'conversation_id', ma.conversation_id,
-           'message_id', ma.message_id,
-           'file_name', ma.file_name,
-           'file_size', ma.file_size,
-           'mime_type', ma.mime_type,
-           'uploaded_by', ma.uploaded_by,
-           'created_at', ma.created_at
-         ) ORDER BY ma.created_at, ma.id)
-           FROM message_attachment ma
-          WHERE ma.message_id = m.id
-       ), '[]'::json) AS attachments
-FROM messages m
-JOIN users u ON u.id = m.sender_id
-LEFT JOIN thread_summaries ts ON ts.root_message_id = m.id
-WHERE m.channel_id = @conversation_id
-  AND m.thread_root_id IS NULL
-  AND m.channel_seq < @before_channel_seq
-ORDER BY m.channel_seq DESC
-LIMIT @query_limit;
 
 -- name: ListUserChannels :many
 SELECT c.id, c.kind, c.visibility, c.name, c.topic, c.is_archived,

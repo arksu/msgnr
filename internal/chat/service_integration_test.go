@@ -17,8 +17,10 @@ import (
 	"go.uber.org/zap"
 
 	"msgnr/internal/chat"
+	"msgnr/internal/documents"
 	"msgnr/internal/events"
 	packetspb "msgnr/internal/gen/proto"
+	"msgnr/internal/tasks"
 	"msgnr/internal/testdb"
 )
 
@@ -51,6 +53,31 @@ func seedUserAndChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (
 	return userID, channelID
 }
 
+func seedChatUserWithAttrs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, displayName, role, status string) uuid.UUID {
+	t.Helper()
+
+	if role == "" {
+		role = "member"
+	}
+	if status == "" {
+		status = "active"
+	}
+
+	var userID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name, role, status)
+		 VALUES ($1, 'x', $2, $3, $4)
+		 RETURNING id`,
+		strings.ToLower(strings.ReplaceAll(displayName, " ", "_"))+"_"+uuid.New().String()+"@example.com",
+		displayName,
+		role,
+		status,
+	).Scan(&userID)
+	require.NoError(t, err)
+
+	return userID
+}
+
 func seedChannelForUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, name string) uuid.UUID {
 	t.Helper()
 
@@ -71,26 +98,99 @@ func seedChannelForUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, u
 	return channelID
 }
 
-func createMemberInChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID uuid.UUID, name string) uuid.UUID {
+func addChannelMemberWithAttrs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID uuid.UUID, displayName, role, status string) uuid.UUID {
 	t.Helper()
 
-	var userID uuid.UUID
-	err := pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, display_name, role)
-		 VALUES ($1, 'x', $2, 'member')
-		 RETURNING id`,
-		strings.ToLower(name)+"_"+uuid.New().String()+"@example.com",
-		name,
-	).Scan(&userID)
-	require.NoError(t, err)
+	userID := seedChatUserWithAttrs(t, ctx, pool, displayName, role, status)
 
-	_, err = pool.Exec(ctx,
+	_, err := pool.Exec(ctx,
 		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
 		channelID, userID,
 	)
 	require.NoError(t, err)
 
 	return userID
+}
+
+func createMemberInChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID uuid.UUID, name string) uuid.UUID {
+	t.Helper()
+
+	return addChannelMemberWithAttrs(t, ctx, pool, channelID, name, "member", "active")
+}
+
+func archiveChannelMembership(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID, userID uuid.UUID) {
+	t.Helper()
+
+	_, err := pool.Exec(ctx,
+		`UPDATE channel_members
+		    SET is_archived = true
+		  WHERE channel_id = $1
+		    AND user_id = $2`,
+		channelID, userID,
+	)
+	require.NoError(t, err)
+}
+
+func setMessageCreatedAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, messageID uuid.UUID, createdAt time.Time) {
+	t.Helper()
+
+	_, err := pool.Exec(ctx, `UPDATE messages SET created_at = $2 WHERE id = $1`, messageID, createdAt)
+	require.NoError(t, err)
+}
+
+func setTaskUpdatedAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID, updatedAt time.Time) {
+	t.Helper()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `SET LOCAL msgnr.preserve_task_updated_at = 'on'`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE task SET updated_at = $2 WHERE id = $1`, taskID, updatedAt)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+}
+
+func setDocumentUpdatedAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, documentID uuid.UUID, updatedAt time.Time) {
+	t.Helper()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `SET LOCAL msgnr.preserve_document_updated_at = 'on'`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE document SET updated_at = $2 WHERE id = $1`, documentID, updatedAt)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+}
+
+func seedSearchTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, svc *tasks.Service, templateID, statusID, actorID uuid.UUID, title string, updatedAt time.Time) tasks.TaskResponse {
+	t.Helper()
+
+	row, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: templateID,
+		Title:      title,
+		StatusID:   statusID,
+		ActorID:    actorID,
+	})
+	require.NoError(t, err)
+	setTaskUpdatedAt(t, ctx, pool, row.ID, updatedAt)
+	return row
+}
+
+func seedSearchDocument(t *testing.T, ctx context.Context, pool *pgxpool.Pool, svc *documents.Service, teamspaceID, actorID uuid.UUID, title string, updatedAt time.Time) documents.DocumentResponse {
+	t.Helper()
+
+	row, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID: teamspaceID,
+		Title:       title,
+		ActorID:     actorID,
+	})
+	require.NoError(t, err)
+	setDocumentUpdatedAt(t, ctx, pool, row.ID, updatedAt)
+	return row
 }
 
 func setChannelMemberNotificationLevel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channelID, userID uuid.UUID, level int16) {
@@ -418,43 +518,259 @@ func TestIntegration_Reaction_Idempotent(t *testing.T) {
 	assert.Error(t, err, "reaction_counts row should have been deleted")
 }
 
-func TestIntegration_ListDMCandidates_ExcludesSelfAndBlockedUsers(t *testing.T) {
+func TestIntegration_ListDMCandidates_ExcludesSelfBlockedAndBotUsers(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 
 	store := events.NewStore(pool)
 	svc := chat.NewService(pool, store)
 
-	var selfID uuid.UUID
-	err := pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, display_name, role)
-		 VALUES ($1, 'x', 'Self', 'member')
-		 RETURNING id`,
-		"self_"+uuid.New().String()+"@example.com",
-	).Scan(&selfID)
-	require.NoError(t, err)
-
-	var activeID uuid.UUID
-	err = pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, display_name, role)
-		 VALUES ($1, 'x', 'Active User', 'member')
-		 RETURNING id`,
-		"active_"+uuid.New().String()+"@example.com",
-	).Scan(&activeID)
-	require.NoError(t, err)
-
-	_, err = pool.Exec(ctx,
-		`INSERT INTO users (email, password_hash, display_name, role, status)
-		 VALUES ($1, 'x', 'Blocked User', 'member', 'blocked')`,
-		"blocked_"+uuid.New().String()+"@example.com",
-	)
-	require.NoError(t, err)
+	selfID := seedChatUserWithAttrs(t, ctx, pool, "Self", "member", "active")
+	activeID := seedChatUserWithAttrs(t, ctx, pool, "Active User", "member", "active")
+	seedChatUserWithAttrs(t, ctx, pool, "Blocked User", "member", "blocked")
+	seedChatUserWithAttrs(t, ctx, pool, "Bot User", "bot", "active")
 
 	candidates, err := svc.ListDMCandidates(ctx, selfID)
 	require.NoError(t, err)
 	require.Len(t, candidates, 1)
 	assert.Equal(t, activeID, candidates[0].UserID)
 	assert.Equal(t, "Active User", candidates[0].DisplayName)
+}
+
+func TestIntegration_SearchTagEntities_FilteredQuery_RespectsMembershipOrderingAndLimit(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	taskSvc := tasks.NewService(pool, nil)
+	documentSvc := documents.NewService(pool, nil)
+
+	requesterID, channelID := seedUserAndChannel(t, ctx, pool)
+	outsiderID := seedChatUserWithAttrs(t, ctx, pool, "Outsider", "member", "active")
+
+	for _, name := range []string{
+		"Needle Bravo",
+		"Needle Echo",
+		"Needle Alpha",
+		"Needle Foxtrot",
+		"Needle Charlie",
+		"Needle Delta",
+	} {
+		createMemberInChannel(t, ctx, pool, channelID, name)
+	}
+	createMemberInChannel(t, ctx, pool, channelID, "Other User")
+	addChannelMemberWithAttrs(t, ctx, pool, channelID, "Needle Blocked", "member", "blocked")
+	archivedID := createMemberInChannel(t, ctx, pool, channelID, "Needle Archived")
+	archiveChannelMembership(t, ctx, pool, channelID, archivedID)
+
+	template, err := taskSvc.CreateTemplate(ctx, tasks.CreateTemplateParams{
+		Prefix:    "NDL",
+		SortOrder: 1,
+		ActorID:   requesterID,
+	})
+	require.NoError(t, err)
+	status, err := taskSvc.CreateStatus(ctx, tasks.CreateStatusParams{
+		Code:      "status_" + uuid.NewString()[:8],
+		Name:      "Open",
+		SortOrder: 1,
+		ActorID:   requesterID,
+	})
+	require.NoError(t, err)
+
+	baseTime := time.Date(2026, 1, 2, 15, 0, 0, 0, time.UTC)
+	for i, title := range []string{
+		"Needle Task A",
+		"Needle Task B",
+		"Needle Task C",
+		"Needle Task D",
+		"Needle Task E",
+		"Needle Task F",
+	} {
+		seedSearchTask(t, ctx, pool, taskSvc, template.ID, status.ID, requesterID, title, baseTime.Add(time.Duration(i)*time.Minute))
+	}
+	seedSearchTask(t, ctx, pool, taskSvc, template.ID, status.ID, requesterID, "Other Task", baseTime.Add(10*time.Minute))
+
+	teamspace, err := documentSvc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:    "Visible search space",
+		ActorID: requesterID,
+	}, "member")
+	require.NoError(t, err)
+	for i, title := range []string{
+		"Needle Doc A",
+		"Needle Doc B",
+		"Needle Doc C",
+		"Needle Doc D",
+		"Needle Doc E",
+		"Needle Doc F",
+	} {
+		seedSearchDocument(t, ctx, pool, documentSvc, teamspace.ID, requesterID, title, baseTime.Add(time.Duration(i)*time.Minute))
+	}
+	seedSearchDocument(t, ctx, pool, documentSvc, teamspace.ID, requesterID, "Other Doc", baseTime.Add(10*time.Minute))
+
+	hiddenOwnerID := seedChatUserWithAttrs(t, ctx, pool, "Hidden Owner", "member", "active")
+	hiddenSpace, err := documentSvc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:      "Hidden search space",
+		IsPrivate: true,
+		ActorID:   hiddenOwnerID,
+	}, "member")
+	require.NoError(t, err)
+	hiddenDoc := seedSearchDocument(t, ctx, pool, documentSvc, hiddenSpace.ID, hiddenOwnerID, "Needle Hidden Doc", baseTime.Add(20*time.Minute))
+
+	_, err = svc.SearchTagEntities(ctx, outsiderID, channelID, "needle")
+	require.ErrorIs(t, err, chat.ErrNotMember)
+
+	result, err := svc.SearchTagEntities(ctx, requesterID, channelID, "needle")
+	require.NoError(t, err)
+
+	gotUserNames := make([]string, 0, len(result.Users))
+	for _, row := range result.Users {
+		gotUserNames = append(gotUserNames, row.DisplayName)
+	}
+	assert.Equal(t, []string{
+		"Needle Alpha",
+		"Needle Bravo",
+		"Needle Charlie",
+		"Needle Delta",
+		"Needle Echo",
+	}, gotUserNames)
+
+	gotTaskTitles := make([]string, 0, len(result.Tasks))
+	for _, row := range result.Tasks {
+		gotTaskTitles = append(gotTaskTitles, row.Title)
+	}
+	assert.Equal(t, []string{
+		"Needle Task F",
+		"Needle Task E",
+		"Needle Task D",
+		"Needle Task C",
+		"Needle Task B",
+	}, gotTaskTitles)
+
+	gotDocumentTitles := make([]string, 0, len(result.Documents))
+	for _, row := range result.Documents {
+		gotDocumentTitles = append(gotDocumentTitles, row.Title)
+		assert.NotEqual(t, hiddenDoc.ID, row.DocumentID)
+	}
+	assert.Equal(t, []string{
+		"Needle Doc F",
+		"Needle Doc E",
+		"Needle Doc D",
+		"Needle Doc C",
+		"Needle Doc B",
+	}, gotDocumentTitles)
+}
+
+func TestIntegration_SearchTagEntities_EmptyQuery_UsesRecentOrderingAndLimit(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	taskSvc := tasks.NewService(pool, nil)
+	documentSvc := documents.NewService(pool, nil)
+
+	requesterID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	baseTime := time.Date(2026, 2, 3, 9, 0, 0, 0, time.UTC)
+	for i, name := range []string{
+		"Recent User A",
+		"Recent User B",
+		"Recent User C",
+		"Recent User D",
+		"Recent User E",
+		"Recent User F",
+	} {
+		memberID := createMemberInChannel(t, ctx, pool, channelID, name)
+		msg, err := svc.SendMessage(ctx, chat.SendMessageParams{
+			ChannelID:   channelID,
+			SenderID:    memberID,
+			ClientMsgID: uuid.NewString(),
+			Body:        "hello " + name,
+		})
+		require.NoError(t, err)
+		setMessageCreatedAt(t, ctx, pool, msg.MessageID, baseTime.Add(time.Duration(i)*time.Minute))
+	}
+	createMemberInChannel(t, ctx, pool, channelID, "Recent User NoMessage")
+
+	template, err := taskSvc.CreateTemplate(ctx, tasks.CreateTemplateParams{
+		Prefix:    "RCN",
+		SortOrder: 1,
+		ActorID:   requesterID,
+	})
+	require.NoError(t, err)
+	status, err := taskSvc.CreateStatus(ctx, tasks.CreateStatusParams{
+		Code:      "status_" + uuid.NewString()[:8],
+		Name:      "Open",
+		SortOrder: 1,
+		ActorID:   requesterID,
+	})
+	require.NoError(t, err)
+	for i, title := range []string{
+		"Recent Task A",
+		"Recent Task B",
+		"Recent Task C",
+		"Recent Task D",
+		"Recent Task E",
+		"Recent Task F",
+	} {
+		seedSearchTask(t, ctx, pool, taskSvc, template.ID, status.ID, requesterID, title, baseTime.Add(time.Duration(i)*time.Minute))
+	}
+
+	teamspace, err := documentSvc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:    "Recent search space",
+		ActorID: requesterID,
+	}, "member")
+	require.NoError(t, err)
+	for i, title := range []string{
+		"Recent Doc A",
+		"Recent Doc B",
+		"Recent Doc C",
+		"Recent Doc D",
+		"Recent Doc E",
+		"Recent Doc F",
+	} {
+		seedSearchDocument(t, ctx, pool, documentSvc, teamspace.ID, requesterID, title, baseTime.Add(time.Duration(i)*time.Minute))
+	}
+
+	result, err := svc.SearchTagEntities(ctx, requesterID, channelID, "")
+	require.NoError(t, err)
+
+	gotUserNames := make([]string, 0, len(result.Users))
+	for _, row := range result.Users {
+		gotUserNames = append(gotUserNames, row.DisplayName)
+	}
+	assert.Equal(t, []string{
+		"Recent User F",
+		"Recent User E",
+		"Recent User D",
+		"Recent User C",
+		"Recent User B",
+	}, gotUserNames)
+
+	gotTaskTitles := make([]string, 0, len(result.Tasks))
+	for _, row := range result.Tasks {
+		gotTaskTitles = append(gotTaskTitles, row.Title)
+	}
+	assert.Equal(t, []string{
+		"Recent Task F",
+		"Recent Task E",
+		"Recent Task D",
+		"Recent Task C",
+		"Recent Task B",
+	}, gotTaskTitles)
+
+	gotDocumentTitles := make([]string, 0, len(result.Documents))
+	for _, row := range result.Documents {
+		gotDocumentTitles = append(gotDocumentTitles, row.Title)
+	}
+	assert.Equal(t, []string{
+		"Recent Doc F",
+		"Recent Doc E",
+		"Recent Doc D",
+		"Recent Doc C",
+		"Recent Doc B",
+	}, gotDocumentTitles)
 }
 
 func TestIntegration_CreateOrOpenDirectMessage_ReusesExistingPair(t *testing.T) {
@@ -1130,6 +1446,86 @@ func TestIntegration_InviteToChannel_PrivateRestoresArchivedMembership(t *testin
 	).Scan(&isArchived)
 	require.NoError(t, err)
 	assert.False(t, isArchived)
+}
+
+func TestIntegration_InviteToChannel_RejectsArchivedConversation(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	requesterID := seedChatUserWithAttrs(t, ctx, pool, "Requester", "member", "active")
+	targetID := seedChatUserWithAttrs(t, ctx, pool, "Target", "member", "active")
+
+	var channelID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO channels (kind, visibility, name, created_by, is_archived)
+		 VALUES ('channel', 'private', 'Archived private', $1, true)
+		 RETURNING id`,
+		requesterID,
+	).Scan(&channelID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+		channelID, requesterID,
+	)
+	require.NoError(t, err)
+
+	_, err = svc.InviteToChannel(ctx, requesterID, channelID, targetID)
+	require.ErrorIs(t, err, chat.ErrConversationArchived)
+
+	var membershipCount int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*)
+		   FROM channel_members
+		  WHERE channel_id = $1
+		    AND user_id = $2`,
+		channelID, targetID,
+	).Scan(&membershipCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, membershipCount)
+}
+
+func TestIntegration_InviteToChannel_RejectsUnsupportedConversationTarget(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	requesterID := seedChatUserWithAttrs(t, ctx, pool, "Requester", "member", "active")
+	targetID := seedChatUserWithAttrs(t, ctx, pool, "Target", "member", "active")
+
+	var conversationID uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO channels (kind, visibility, name, created_by)
+		 VALUES ('dm', 'dm', '', $1)
+		 RETURNING id`,
+		requesterID,
+	).Scan(&conversationID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+		conversationID, requesterID,
+	)
+	require.NoError(t, err)
+
+	_, err = svc.InviteToChannel(ctx, requesterID, conversationID, targetID)
+	require.ErrorIs(t, err, chat.ErrInviteUnsupportedTarget)
+
+	var membershipCount int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*)
+		   FROM channel_members
+		  WHERE channel_id = $1
+		    AND user_id = $2`,
+		conversationID, targetID,
+	).Scan(&membershipCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, membershipCount)
 }
 
 func TestIntegration_AddReaction_RejectsChannelMismatch(t *testing.T) {

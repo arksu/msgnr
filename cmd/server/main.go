@@ -83,7 +83,7 @@ func main() {
 	bootstrapSvc := bootstrap.NewService(db.Pool, cfg)
 	syncSvc := syncsvc.NewService(db.Pool, cfg, eventStore, authSvc.CanReceiveEvent)
 
-	wsServer := ws.NewServer(db, cfg, authSvc, bootstrapSvc, callSvc, chatSvc, nil, syncSvc, eventBus)
+	wsServer := ws.NewServer(db, cfg, authSvc, bootstrapSvc, callSvc, chatSvc, syncSvc, eventBus)
 	chatHandler.SetNotifier(wsServer)
 
 	// Push notifications (Web Push / VAPID)

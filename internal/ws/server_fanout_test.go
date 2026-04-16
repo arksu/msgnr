@@ -436,7 +436,7 @@ func TestTaskCollabCleanupRemovesSessionFromAllRooms(t *testing.T) {
 	assert.True(t, srv.isTaskCollabSubscribed("task-2", ch))
 	assert.True(t, srv.isCollabSubscribed(collabEntityDocument, "doc-1", ch))
 
-	srv.removeTaskCollabSession(ch)
+	srv.removeCollabSession(ch)
 
 	assert.False(t, srv.isTaskCollabSubscribed("task-1", ch))
 	assert.False(t, srv.isTaskCollabSubscribed("task-2", ch))

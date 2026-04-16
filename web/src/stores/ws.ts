@@ -31,6 +31,7 @@ import {
   WorkspaceRole,
   NotificationLevel,
   TaskDescriptionCollabMessageKind,
+  DocumentContentCollabMessageKind,
 } from '@/shared/proto/packets_pb'
 import { generateId } from '@/services/id'
 
@@ -758,7 +759,7 @@ export const useWsStore = defineStore('ws', () => {
 
   function sendDocumentContentCollabMessage(
     documentId: string,
-    kind: TaskDescriptionCollabMessageKind,
+    kind: DocumentContentCollabMessageKind,
     payload: Uint8Array,
   ): boolean {
     return sendEnvelope(create(EnvelopeSchema, {

@@ -2,7 +2,7 @@ import { defineComponent, nextTick, ref } from 'vue'
 import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as Y from 'yjs'
-import { TaskDescriptionCollabMessageKind } from '@/shared/proto/packets_pb'
+import { DocumentContentCollabMessageKind } from '@/shared/proto/packets_pb'
 import { useDocumentContentCollab } from '@/composables/useDocumentContentCollab'
 
 const mockState = vi.hoisted(() => ({
@@ -12,7 +12,7 @@ const mockState = vi.hoisted(() => ({
     subscriberCount: number
     roomSnapshot?: Uint8Array
   }) => void) | null,
-  onMessage: null as ((payload: { documentId: string; kind: TaskDescriptionCollabMessageKind; payload: Uint8Array }) => void) | null,
+  onMessage: null as ((payload: { documentId: string; kind: DocumentContentCollabMessageKind; payload: Uint8Array }) => void) | null,
 }))
 
 const mockWsStore = vi.hoisted(() => ({
@@ -30,7 +30,7 @@ const mockWsStore = vi.hoisted(() => ({
     | 'STALE_REBOOTSTRAP',
   sendDocumentContentCollabSubscribe: vi.fn<(documentId: string) => string>(() => 'req-subscribe'),
   sendDocumentContentCollabUnsubscribe: vi.fn<(documentId: string) => string>(() => 'req-unsubscribe'),
-  sendDocumentContentCollabMessage: vi.fn<(documentId: string, kind: TaskDescriptionCollabMessageKind, payload: Uint8Array) => boolean>(() => true),
+  sendDocumentContentCollabMessage: vi.fn<(documentId: string, kind: DocumentContentCollabMessageKind, payload: Uint8Array) => boolean>(() => true),
   onDocumentContentCollabSubscribeResponse: vi.fn<(cb: (payload: {
     documentId: string
     persistedMarkdown: string
@@ -39,7 +39,7 @@ const mockWsStore = vi.hoisted(() => ({
   }) => void) => void>((cb) => {
     mockState.onSubscribeResponse = cb
   }),
-  onDocumentContentCollabMessage: vi.fn<(cb: (payload: { documentId: string; kind: TaskDescriptionCollabMessageKind; payload: Uint8Array }) => void) => void>((cb) => {
+  onDocumentContentCollabMessage: vi.fn<(cb: (payload: { documentId: string; kind: DocumentContentCollabMessageKind; payload: Uint8Array }) => void) => void>((cb) => {
     mockState.onMessage = cb
   }),
 }))
@@ -100,7 +100,7 @@ describe('useDocumentContentCollab', () => {
 
     expect(getCollabState().serverMarkdown.value).toBe('aabb')
     const syncSends = mockWsStore.sendDocumentContentCollabMessage.mock.calls.filter(
-      (call) => call[1] === TaskDescriptionCollabMessageKind.SYNC,
+      (call) => call[1] === DocumentContentCollabMessageKind.SYNC,
     )
     expect(syncSends.length).toBeGreaterThan(0)
     expect((syncSends[0][2] as Uint8Array)[3]).toBe(2)

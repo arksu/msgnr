@@ -1,11 +1,10 @@
 import { onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue'
 import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness'
-import { TaskDescriptionCollabMessageKind } from '@/shared/proto/packets_pb'
 import { useWsStore, type WsState } from '@/stores/ws'
 
-type CollabPayload = {
-  kind: TaskDescriptionCollabMessageKind
+type CollabPayload<Kind extends number> = {
+  kind: Kind
   payload: Uint8Array
 }
 
@@ -23,10 +22,12 @@ export interface RichTextCollabUser {
   color: string
 }
 
-export interface RichTextCollabTransport<SubscribeResponse, Message> {
+export interface RichTextCollabTransport<SubscribeResponse, Message, Kind extends number> {
+  syncKind: Kind
+  awarenessKind: Kind
   sendSubscribe: (entityId: string) => string
   sendUnsubscribe: (entityId: string) => string
-  sendMessage: (entityId: string, kind: TaskDescriptionCollabMessageKind, payload: Uint8Array) => boolean
+  sendMessage: (entityId: string, kind: Kind, payload: Uint8Array) => boolean
   onSubscribeResponse: (cb: (resp: SubscribeResponse) => void) => void
   onMessage: (cb: (msg: Message) => void) => void
   getSubscribeResponseEntityId: (resp: SubscribeResponse) => string
@@ -34,7 +35,7 @@ export interface RichTextCollabTransport<SubscribeResponse, Message> {
   getSubscribeResponseSubscriberCount: (resp: SubscribeResponse) => number
   getSubscribeResponseRoomSnapshot: (resp: SubscribeResponse) => Uint8Array | undefined
   getMessageEntityId: (msg: Message) => string
-  getMessageKind: (msg: Message) => TaskDescriptionCollabMessageKind
+  getMessageKind: (msg: Message) => Kind
   getMessagePayload: (msg: Message) => Uint8Array
 }
 
@@ -132,11 +133,11 @@ function decodeSyncFrame(input: Uint8Array): SyncFrame {
   }
 }
 
-export function useRichTextCollab<SubscribeResponse, Message>(params: {
+export function useRichTextCollab<SubscribeResponse, Message, Kind extends number>(params: {
   entityId: Ref<string | null>
   user: Ref<RichTextCollabUser | null>
   logLabel: string
-  transportFactory: (wsStore: ReturnType<typeof useWsStore>) => RichTextCollabTransport<SubscribeResponse, Message>
+  transportFactory: (wsStore: ReturnType<typeof useWsStore>) => RichTextCollabTransport<SubscribeResponse, Message, Kind>
 }) {
   const wsStore = useWsStore()
   const transport = params.transportFactory(wsStore)
@@ -148,7 +149,7 @@ export function useRichTextCollab<SubscribeResponse, Message>(params: {
   const serverMarkdown = ref<string | null>(null)
   const allowLocalDraftSeed = ref(false)
 
-  const pending: CollabPayload[] = []
+  const pending: CollabPayload<Kind>[] = []
   let awarenessListener: ((payload: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => void) | null = null
   let docListener: ((update: Uint8Array, origin: unknown) => void) | null = null
   let hasLocalEdits = false
@@ -213,7 +214,7 @@ export function useRichTextCollab<SubscribeResponse, Message>(params: {
       wsState: wsStore.state,
     })
     sendOrQueue(entityId, {
-      kind: TaskDescriptionCollabMessageKind.SYNC,
+      kind: transport.syncKind,
       payload: framed,
     })
   }
@@ -295,7 +296,7 @@ export function useRichTextCollab<SubscribeResponse, Message>(params: {
     collabLog(params.logLabel, 'flushPending:done', { entityId, queue: pending.length })
   }
 
-  function sendOrQueue(entityId: string, msg: CollabPayload) {
+  function sendOrQueue(entityId: string, msg: CollabPayload<Kind>) {
     if (!isWsReady(wsStore.state)) {
       collabLog(params.logLabel, 'sendOrQueue:queue:ws-not-ready', { entityId, kind: msg.kind, bytes: msg.payload.length, wsState: wsStore.state })
       pending.push(msg)
@@ -425,7 +426,7 @@ export function useRichTextCollab<SubscribeResponse, Message>(params: {
       })
       refreshRemotePeerPresence('local-awareness-update', entityId)
       sendOrQueue(entityId, {
-        kind: TaskDescriptionCollabMessageKind.AWARENESS,
+        kind: transport.awarenessKind,
         payload,
       })
     }
@@ -500,7 +501,7 @@ export function useRichTextCollab<SubscribeResponse, Message>(params: {
       bytes: payload.length,
       before,
     })
-    if (kind === TaskDescriptionCollabMessageKind.SYNC) {
+    if (kind === transport.syncKind) {
       const frame = decodeSyncFrame(payload)
       collabLog(params.logLabel, 'onCollabMessage:sync-frame', {
         entityId,
@@ -537,7 +538,7 @@ export function useRichTextCollab<SubscribeResponse, Message>(params: {
       }
       return
     }
-    if (kind === TaskDescriptionCollabMessageKind.AWARENESS) {
+    if (kind === transport.awarenessKind) {
       applyAwarenessUpdate(provider.value.awareness, payload, 'remote')
       refreshRemotePeerPresence('remote-awareness-update', entityId)
       collabLog(params.logLabel, 'onCollabMessage:awareness-applied', {

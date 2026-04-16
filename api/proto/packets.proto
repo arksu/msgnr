@@ -120,6 +120,12 @@ enum TaskDescriptionCollabMessageKind {
   TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS = 2;
 }
 
+enum DocumentContentCollabMessageKind {
+  DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_UNSPECIFIED = 0;
+  DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_SYNC = 1;
+  DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_AWARENESS = 2;
+}
+
 enum EventType {
   EVENT_TYPE_UNSPECIFIED = 0;
   EVENT_TYPE_CONVERSATION_UPSERTED = 1;
@@ -722,7 +728,7 @@ message DocumentContentCollabUnsubscribeRequest {
 
 message DocumentContentCollabMessage {
   string document_id = 1;
-  TaskDescriptionCollabMessageKind kind = 2;
+  DocumentContentCollabMessageKind kind = 2;
   bytes payload = 3;
 }
 

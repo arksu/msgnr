@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import {
   type DocumentContentCollabMessage,
   type DocumentContentCollabSubscribeResponse,
+  DocumentContentCollabMessageKind,
 } from '@/shared/proto/packets_pb'
 import { useRichTextCollab, type RichTextCollabUser } from '@/composables/useRichTextCollab'
 
@@ -11,11 +12,13 @@ export function useDocumentContentCollab(params: {
   documentId: Ref<string | null>
   user: Ref<DocumentContentCollabUser | null>
 }) {
-  return useRichTextCollab<DocumentContentCollabSubscribeResponse, DocumentContentCollabMessage>({
+  return useRichTextCollab<DocumentContentCollabSubscribeResponse, DocumentContentCollabMessage, DocumentContentCollabMessageKind>({
     entityId: params.documentId,
     user: params.user,
     logLabel: 'document-content-collab',
     transportFactory: (wsStore) => ({
+      syncKind: DocumentContentCollabMessageKind.SYNC,
+      awarenessKind: DocumentContentCollabMessageKind.AWARENESS,
       sendSubscribe: (documentId) => wsStore.sendDocumentContentCollabSubscribe(documentId),
       sendUnsubscribe: (documentId) => wsStore.sendDocumentContentCollabUnsubscribe(documentId),
       sendMessage: (documentId, kind, payload) => wsStore.sendDocumentContentCollabMessage(documentId, kind, payload),

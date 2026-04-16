@@ -239,7 +239,7 @@ type Server struct {
 
 // NewServer creates a Server. bus may be nil during tests that don't exercise
 // the fanout path.
-func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bootstrapSvc *bootstrap.Service, callSvc *calls.Service, chatSvc *chat.Service, tasksSvc *tasks.Service, syncSvc *syncsvc.Service, bus *events.Bus) *Server {
+func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, bootstrapSvc *bootstrap.Service, callSvc *calls.Service, chatSvc *chat.Service, syncSvc *syncsvc.Service, bus *events.Bus) *Server {
 	srv := &Server{
 		db:           db,
 		config:       cfg,
@@ -247,7 +247,6 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, boots
 		bootstrapSvc: bootstrapSvc,
 		callSvc:      callSvc,
 		chatSvc:      chatSvc,
-		tasksSvc:     tasksSvc,
 		syncSvc:      syncSvc,
 		bus:          bus,
 		authorizeEvent: func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool {
@@ -1062,10 +1061,6 @@ func (s *Server) joinTaskCollabRoom(taskID string, session chan outboundMsg) ([]
 
 func (s *Server) leaveTaskCollabRoom(taskID string, session chan outboundMsg) {
 	s.leaveCollabRoom(collabEntityTask, taskID, session)
-}
-
-func (s *Server) removeTaskCollabSession(session chan outboundMsg) {
-	s.removeCollabSession(session)
 }
 
 func (s *Server) isTaskCollabSubscribed(taskID string, session chan outboundMsg) bool {
@@ -2482,12 +2477,11 @@ func (s *Server) handleDomainPayload(
 			badReq("task_description_collab_subscribe_request: internal error")
 			return
 		}
-		subscribeResp := s.taskCollabSubscribeResponse(taskID.String(), outboundCh, "")
 		persistedMarkdown := ""
 		if description != nil {
 			persistedMarkdown = *description
 		}
-		subscribeResp.PersistedMarkdown = persistedMarkdown
+		subscribeResp := s.taskCollabSubscribeResponse(taskID.String(), outboundCh, persistedMarkdown)
 		s.log.Info("ws task collab subscribe",
 			zap.String("task_id", taskID.String()),
 			zap.String("user_id", principal.UserID.String()),
@@ -2616,12 +2610,11 @@ func (s *Server) handleDomainPayload(
 			badReq("document_content_collab_subscribe_request: internal error")
 			return
 		}
-		subscribeResp := s.documentCollabSubscribeResponse(documentID.String(), outboundCh, "")
 		persistedMarkdown := ""
 		if content != nil {
 			persistedMarkdown = *content
 		}
-		subscribeResp.PersistedMarkdown = persistedMarkdown
+		subscribeResp := s.documentCollabSubscribeResponse(documentID.String(), outboundCh, persistedMarkdown)
 		s.log.Info("ws document collab subscribe",
 			zap.String("document_id", documentID.String()),
 			zap.String("user_id", principal.UserID.String()),
@@ -2669,12 +2662,12 @@ func (s *Server) handleDomainPayload(
 			badReq("document_content_collab_message: invalid document_id")
 			return
 		}
-		if req.GetKind() != packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC &&
-			req.GetKind() != packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_AWARENESS {
+		if req.GetKind() != packetspb.DocumentContentCollabMessageKind_DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_SYNC &&
+			req.GetKind() != packetspb.DocumentContentCollabMessageKind_DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_AWARENESS {
 			badReq("document_content_collab_message: invalid kind")
 			return
 		}
-		if req.GetKind() == packetspb.TaskDescriptionCollabMessageKind_TASK_DESCRIPTION_COLLAB_MESSAGE_KIND_SYNC {
+		if req.GetKind() == packetspb.DocumentContentCollabMessageKind_DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_SYNC {
 			frameType, framePayload, framed := decodeTaskCollabSyncFrame(req.GetPayload())
 			if framed && !isKnownTaskCollabSyncFrameType(frameType) {
 				badReq("document_content_collab_message: invalid sync frame")

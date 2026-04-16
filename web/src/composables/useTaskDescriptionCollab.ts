@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import {
   type TaskDescriptionCollabMessage,
   type TaskDescriptionCollabSubscribeResponse,
+  TaskDescriptionCollabMessageKind,
 } from '@/shared/proto/packets_pb'
 import { useRichTextCollab, type RichTextCollabUser } from '@/composables/useRichTextCollab'
 
@@ -11,11 +12,13 @@ export function useTaskDescriptionCollab(params: {
   taskId: Ref<string | null>
   user: Ref<TaskDescriptionCollabUser | null>
 }) {
-  return useRichTextCollab<TaskDescriptionCollabSubscribeResponse, TaskDescriptionCollabMessage>({
+  return useRichTextCollab<TaskDescriptionCollabSubscribeResponse, TaskDescriptionCollabMessage, TaskDescriptionCollabMessageKind>({
     entityId: params.taskId,
     user: params.user,
     logLabel: 'task-desc-collab',
     transportFactory: (wsStore) => ({
+      syncKind: TaskDescriptionCollabMessageKind.SYNC,
+      awarenessKind: TaskDescriptionCollabMessageKind.AWARENESS,
       sendSubscribe: (taskId) => wsStore.sendTaskDescriptionCollabSubscribe(taskId),
       sendUnsubscribe: (taskId) => wsStore.sendTaskDescriptionCollabUnsubscribe(taskId),
       sendMessage: (taskId, kind, payload) => wsStore.sendTaskDescriptionCollabMessage(taskId, kind, payload),

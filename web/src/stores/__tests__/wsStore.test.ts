@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf'
-import { EnvelopeSchema, ErrorCode, PresenceStatus, ConversationType, TaskDescriptionCollabMessageKind, FeatureCapability } from '@/shared/proto/packets_pb'
+import { EnvelopeSchema, ErrorCode, PresenceStatus, ConversationType, TaskDescriptionCollabMessageKind, DocumentContentCollabMessageKind, FeatureCapability } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
 
 // Minimal WebSocket mock
@@ -170,7 +170,7 @@ function makeDocumentContentCollabMessageEnvelope(): ArrayBuffer {
       case: 'documentContentCollabMessage',
       value: {
         documentId: 'doc-1',
-        kind: TaskDescriptionCollabMessageKind.SYNC,
+        kind: DocumentContentCollabMessageKind.SYNC,
         payload: new Uint8Array([4, 5, 6]),
       },
     },
@@ -576,7 +576,7 @@ describe('wsStore state machine', () => {
     mockSocket.simulateOpen()
 
     store.sendDocumentContentCollabSubscribe('doc-1')
-    store.sendDocumentContentCollabMessage('doc-1', TaskDescriptionCollabMessageKind.SYNC, new Uint8Array([7, 7]))
+    store.sendDocumentContentCollabMessage('doc-1', DocumentContentCollabMessageKind.SYNC, new Uint8Array([7, 7]))
 
     const secondLast = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 2])
     const last = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
@@ -585,7 +585,7 @@ describe('wsStore state machine', () => {
     expect(last.payload.case).toBe('documentContentCollabMessage')
     expect(last.payload.value).toEqual(expect.objectContaining({
       documentId: 'doc-1',
-      kind: TaskDescriptionCollabMessageKind.SYNC,
+      kind: DocumentContentCollabMessageKind.SYNC,
     }))
   })
 
@@ -609,7 +609,7 @@ describe('wsStore state machine', () => {
     }))
     expect(onCollab).toHaveBeenCalledWith(expect.objectContaining({
       documentId: 'doc-1',
-      kind: TaskDescriptionCollabMessageKind.SYNC,
+      kind: DocumentContentCollabMessageKind.SYNC,
     }))
   })
 })

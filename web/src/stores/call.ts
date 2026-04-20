@@ -552,6 +552,11 @@ export const useCallStore = defineStore('call', () => {
   let pendingJoinResolve: ((resp: { livekitUrl: string; livekitToken: string; livekitRoom: string }) => void) | null = null
   let pendingJoinReject: ((error: Error) => void) | null = null
   let pendingJoinTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingJoinRequestId = ''
+  let pendingCreateCallResolve: (() => void) | null = null
+  let pendingCreateCallReject: ((error: Error) => void) | null = null
+  let pendingCreateCallTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingCreateCallRequestId = ''
   let pendingInviteMembersResolve: ((resp: { callId: string; conversationId: string; invitedUserIds: string[]; skippedUserIds: string[] }) => void) | null = null
   let pendingInviteMembersReject: ((error: Error) => void) | null = null
   let pendingInviteMembersTimer: ReturnType<typeof setTimeout> | null = null
@@ -583,6 +588,17 @@ export const useCallStore = defineStore('call', () => {
     }
     pendingJoinResolve = null
     pendingJoinReject = null
+    pendingJoinRequestId = ''
+  }
+
+  function clearPendingCreateCall() {
+    if (pendingCreateCallTimer) {
+      clearTimeout(pendingCreateCallTimer)
+      pendingCreateCallTimer = null
+    }
+    pendingCreateCallResolve = null
+    pendingCreateCallReject = null
+    pendingCreateCallRequestId = ''
   }
 
   function clearPendingInviteMembers() {
@@ -1935,7 +1951,7 @@ export const useCallStore = defineStore('call', () => {
         clearPendingJoin()
         reject(new Error('Timed out waiting for join token'))
       }, JOIN_TOKEN_TIMEOUT_MS)
-      ws.sendJoinCallToken(conversationId, toConversationType(kind, visibility))
+      pendingJoinRequestId = ws.sendJoinCallToken(conversationId, toConversationType(kind, visibility))
     })
     callDebug('join token received', {
       conversationId,
@@ -1944,6 +1960,29 @@ export const useCallStore = defineStore('call', () => {
     })
 
     return response
+  }
+
+  async function requestCreateCall(
+    conversationId: string,
+    kind: 'dm' | 'channel',
+    visibility: 'public' | 'private' | 'dm',
+    inviteeUserIds: string[],
+  ) {
+    const ws = useWsStore()
+    if (pendingCreateCallResolve || pendingCreateCallReject) {
+      throw new Error('create call request already in flight')
+    }
+    callDebug('requesting create call', { conversationId, kind, visibility, inviteeUserIds })
+
+    await new Promise<void>((resolve, reject) => {
+      pendingCreateCallResolve = resolve
+      pendingCreateCallReject = reject
+      pendingCreateCallTimer = setTimeout(() => {
+        clearPendingCreateCall()
+        reject(new Error('Timed out waiting for create call'))
+      }, JOIN_TOKEN_TIMEOUT_MS)
+      pendingCreateCallRequestId = ws.sendCreateCall(conversationId, toConversationType(kind, visibility), inviteeUserIds)
+    })
   }
 
   function resolveActiveConversationType(): { kind: 'dm' | 'channel'; visibility: 'public' | 'private' | 'dm' } | null {
@@ -2033,7 +2072,7 @@ export const useCallStore = defineStore('call', () => {
 
     try {
       if (!currentActive && !joinExistingOnly) {
-        ws.sendCreateCall(conversationId, toConversationType(kind, visibility), inviteeUserIds)
+        await requestCreateCall(conversationId, kind, visibility, inviteeUserIds)
       }
 
       const join = await requestJoinToken(conversationId, kind, visibility)
@@ -2159,6 +2198,7 @@ export const useCallStore = defineStore('call', () => {
     await ensureDisconnected()
     clearAnnotationSession()
     localScreenShareUsedInSession = false
+    clearPendingCreateCall()
     clearPendingInviteMembers()
     clearEmptyCallAutoCloseTimer()
     stopRemoteAudioStatsLoop()
@@ -2448,7 +2488,8 @@ export const useCallStore = defineStore('call', () => {
 
   function registerWsHandlers() {
     const ws = useWsStore()
-    ws.onJoinCallTokenResponse(resp => {
+    ws.onJoinCallTokenResponse((resp, requestId) => {
+      if (pendingJoinRequestId && requestId !== pendingJoinRequestId) return
       callDebug('ws joinCallTokenResponse', {
         room: resp.livekitRoom,
         livekitUrl: resp.livekitUrl,
@@ -2458,11 +2499,40 @@ export const useCallStore = defineStore('call', () => {
       }
       clearPendingJoin()
     })
-    ws.onCreateCallResponse((resp) => {
+    ws.onCreateCallResponse((resp, requestId) => {
+      if (pendingCreateCallRequestId && requestId !== pendingCreateCallRequestId) return
       callDebug('ws createCallResponse', resp)
-      // create response is used implicitly by active_call updates + join token request.
+      if (pendingCreateCallResolve) {
+        pendingCreateCallResolve()
+      }
+      clearPendingCreateCall()
     })
     ws.onProtocolError((err) => {
+      if (pendingCreateCallRequestId && err.requestId === pendingCreateCallRequestId) {
+        if (err.code === ErrorCode.CALL_ALREADY_ACTIVE) {
+          if (pendingCreateCallResolve) {
+            pendingCreateCallResolve()
+          }
+          clearPendingCreateCall()
+          return
+        }
+        const message = err.message || 'Failed to start call'
+        if (pendingCreateCallReject) {
+          pendingCreateCallReject(new Error(message))
+        }
+        clearPendingCreateCall()
+        return
+      }
+      if (pendingJoinRequestId && err.requestId === pendingJoinRequestId) {
+        const message = err.code === ErrorCode.CALL_NOT_ACTIVE
+          ? 'Call is no longer active'
+          : (err.message || 'Failed to join call')
+        if (pendingJoinReject) {
+          pendingJoinReject(new Error(message))
+        }
+        clearPendingJoin()
+        return
+      }
       if (!pendingInviteMembersRequestId) return
       if (err.requestId !== pendingInviteMembersRequestId) return
       const message = err.code === ErrorCode.CALL_NOT_ACTIVE

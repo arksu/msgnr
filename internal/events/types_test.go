@@ -81,6 +81,15 @@ func TestValidateEventTypePayload_Valid(t *testing.T) {
 				},
 			},
 		},
+		{
+			"user_call_presence_changed",
+			&packetspb.ServerEvent{
+				EventType: packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED,
+				Payload: &packetspb.ServerEvent_UserCallPresenceChanged{
+					UserCallPresenceChanged: &packetspb.UserCallPresenceChangedEvent{},
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {

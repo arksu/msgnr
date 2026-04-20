@@ -141,3 +141,23 @@ func TestIntegration_CanReceiveEvent_CallStateChangedDeniesNonParticipant(t *tes
 	}
 	assert.False(t, svc.CanReceiveEvent(ctx, principal, callEvent))
 }
+
+func TestIntegration_CanReceiveEvent_UserCallPresenceChangedAllowsWorkspaceMembers(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	viewerID := seedAuthCallUser(t, ctx, pool, "Viewer")
+	svc := authsvc.NewService(nil, nil, nil, pool, 0, nil)
+	principal := authsvc.Principal{UserID: viewerID, SessionID: uuid.New(), Role: "member"}
+
+	evt := &packetspb.ServerEvent{
+		EventType: packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED,
+		Payload: &packetspb.ServerEvent_UserCallPresenceChanged{
+			UserCallPresenceChanged: &packetspb.UserCallPresenceChangedEvent{
+				UserId:          uuid.NewString(),
+				ActiveCallCount: 1,
+			},
+		},
+	}
+	assert.True(t, svc.CanReceiveEvent(ctx, principal, evt))
+}

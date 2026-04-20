@@ -13,7 +13,9 @@ import {
   UserSummarySchema,
   ConversationSummarySchema,
   UnreadCounterSchema,
+  UserCallPresenceSummarySchema,
   CallStateChangedEventSchema,
+  UserCallPresenceChangedEventSchema,
   CallStatus,
   MessageEventSchema,
   SendMessageAckSchema,
@@ -141,6 +143,41 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.channels[0].unread).toBe(4)
     expect(chat.lastAppliedEventSeq).toBe(8n)
     expect(ws.setLiveSynced).toHaveBeenCalled()
+  })
+
+  it('hydrates workspace user call presence from bootstrap page 0', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.setLiveSynced = vi.fn()
+    ws.sendAck = vi.fn()
+
+    chat.handleBootstrapResponse(create(BootstrapResponseSchema, {
+      snapshotSeq: 9n,
+      userRole: 2,
+      workspace: {
+        workspaceId: 'workspace-1',
+        workspaceName: 'Acme',
+        selfUser: create(UserSummarySchema, { userId: 'user-1', displayName: 'Ada', avatarUrl: '' }),
+        selfRole: 3,
+      },
+      conversations: [],
+      unread: [],
+      activeCalls: [],
+      userCallPresence: [
+        create(UserCallPresenceSummarySchema, { userId: 'user-2', activeCallCount: 2 }),
+      ],
+      pendingInvites: [],
+      notifications: [],
+      hasMore: false,
+      nextPageToken: '',
+      bootstrapSessionId: 'session-user-call-presence',
+      pageIndex: 0,
+      pageSizeEffective: 0,
+      estimatedTotalConversations: 0,
+      presence: [],
+    }))
+
+    expect(chat.userCallPresenceByUserId).toEqual({ 'user-2': 2 })
   })
 
   it('restores last opened conversation from local storage on bootstrap when still accessible', () => {
@@ -1245,6 +1282,42 @@ describe('chatStore phase 6 flows', () => {
     }))
 
     expect(chat.activeCalls).toEqual([])
+  })
+
+  it('tracks workspace user call presence from user_call_presence_changed events', () => {
+    const chat = useChatStore()
+    chat.bootstrapped = true
+    chat.lastAppliedEventSeq = 0n
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-user-call-presence-1',
+      eventType: EventType.USER_CALL_PRESENCE_CHANGED,
+      payload: {
+        case: 'userCallPresenceChanged',
+        value: create(UserCallPresenceChangedEventSchema, {
+          userId: 'user-2',
+          activeCallCount: 2,
+        }),
+      },
+    }))
+
+    expect(chat.userCallPresenceByUserId).toEqual({ 'user-2': 2 })
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 2n,
+      eventId: 'evt-user-call-presence-2',
+      eventType: EventType.USER_CALL_PRESENCE_CHANGED,
+      payload: {
+        case: 'userCallPresenceChanged',
+        value: create(UserCallPresenceChangedEventSchema, {
+          userId: 'user-2',
+          activeCallCount: 0,
+        }),
+      },
+    }))
+
+    expect(chat.userCallPresenceByUserId).toEqual({})
   })
 
   it('defers active-conversation read mark when tab is hidden and leaves unread state to server counters', () => {

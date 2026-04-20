@@ -114,6 +114,28 @@ func seedPendingInviteWithNotification(t *testing.T, ctx context.Context, pool *
 	return inviteID
 }
 
+func listUserCallPresenceEventCounts(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) []int {
+	t.Helper()
+
+	rows, err := pool.Query(ctx, `
+		SELECT COALESCE((payload->>'activeCallCount')::int, 0)
+		  FROM workspace_events
+		 WHERE event_type = 'user_call_presence_changed'
+		   AND payload->>'userId' = $1
+		 ORDER BY event_seq ASC`, userID.String())
+	require.NoError(t, err)
+	defer rows.Close()
+
+	counts := make([]int, 0, 4)
+	for rows.Next() {
+		var count int
+		require.NoError(t, rows.Scan(&count))
+		counts = append(counts, count)
+	}
+	require.NoError(t, rows.Err())
+	return counts
+}
+
 func TestIntegration_HandleWebhook_ParticipantLeftEndsCallWhenRoomBecomesEmpty(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -278,6 +300,26 @@ func TestIntegration_HandleWebhook_EndCallAutoRejectsPendingInvites(t *testing.T
 		   AND event_type = 'notification_resolved'`, channelID.String()).Scan(&resolvedNotificationEvents)
 	require.NoError(t, err)
 	assert.Equal(t, 1, resolvedNotificationEvents)
+}
+
+func TestIntegration_CreateCall_AppendsUserCallPresenceChangedEvent(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	initiatorID := seedCallUser(t, ctx, pool, "Initiator")
+	channelID := seedCallChannel(t, ctx, pool, initiatorID)
+	seedMember(t, ctx, pool, channelID, initiatorID)
+
+	result, err := svc.CreateCall(ctx, CreateCallParams{
+		ConversationID: channelID,
+		InitiatorID:    initiatorID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, packetspb.CallStatus_CALL_STATUS_ACTIVE, result.Status)
+	assert.Equal(t, []int{1}, listUserCallPresenceEventCounts(t, ctx, pool, initiatorID))
 }
 
 func TestIntegration_CreateCall_NewInviteRejectsOlderInviteForSameInvitee(t *testing.T) {
@@ -613,6 +655,7 @@ func TestIntegration_AcceptInvite_AppendsActiveCallStateDelivery(t *testing.T) {
 		assert.Equal(t, packetspb.CallStatus_CALL_STATUS_ACTIVE, callState.GetStatus())
 	}
 	assert.True(t, sawActiveCallState, "accept invite should deliver active call state to invitee")
+	assert.Equal(t, []int{1}, listUserCallPresenceEventCounts(t, ctx, pool, inviteeID))
 }
 
 func TestIntegration_InviteCallMembers_FailsWhenNoActiveCall(t *testing.T) {
@@ -667,6 +710,33 @@ func TestIntegration_JoinCallToken_AllowsNonMemberActiveParticipant(t *testing.T
 	assert.NotEmpty(t, result.LiveKitRoom)
 }
 
+func TestIntegration_JoinCallToken_AppendsUserCallPresenceChangedEvent(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{
+		LiveKitURL:       "ws://localhost:7880",
+		LiveKitAPIKey:    "test-key",
+		LiveKitAPISecret: "test-secret",
+	})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	memberID := seedCallUser(t, ctx, pool, "Member")
+	channelID := seedCallChannel(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, channelID, ownerID)
+	seedMember(t, ctx, pool, channelID, memberID)
+	callID, _ := seedActiveCall(t, ctx, pool, channelID, ownerID)
+	seedParticipant(t, ctx, pool, callID, ownerID)
+
+	_, err := svc.JoinCallToken(ctx, JoinCallTokenParams{
+		ConversationID: channelID,
+		UserID:         memberID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, listUserCallPresenceEventCounts(t, ctx, pool, memberID))
+}
+
 func TestIntegration_JoinCallToken_FailsForNonMemberNonParticipant(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -692,4 +762,40 @@ func TestIntegration_JoinCallToken_FailsForNonMemberNonParticipant(t *testing.T)
 		UserID:         outsiderID,
 	})
 	require.ErrorIs(t, err, ErrNotMember)
+}
+
+func TestIntegration_UserCallPresence_StaysNonZeroUntilLastActiveCallEnds(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{})
+
+	userID := seedCallUser(t, ctx, pool, "Busy User")
+	channelOneID := seedCallChannel(t, ctx, pool, userID)
+	channelTwoID := seedCallChannel(t, ctx, pool, userID)
+	seedMember(t, ctx, pool, channelOneID, userID)
+	seedMember(t, ctx, pool, channelTwoID, userID)
+
+	callOneID, roomOne := seedActiveCall(t, ctx, pool, channelOneID, userID)
+	callTwoID, roomTwo := seedActiveCall(t, ctx, pool, channelTwoID, userID)
+	seedParticipant(t, ctx, pool, callOneID, userID)
+	seedParticipant(t, ctx, pool, callTwoID, userID)
+
+	processed, err := svc.HandleWebhook(ctx, &lkwebhookEvent{
+		Event:               "participant_left",
+		RoomName:            roomOne,
+		ParticipantIdentity: userID.String(),
+	})
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	processed, err = svc.HandleWebhook(ctx, &lkwebhookEvent{
+		Event:    "room_finished",
+		RoomName: roomTwo,
+	})
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	assert.Equal(t, []int{1, 0}, listUserCallPresenceEventCounts(t, ctx, pool, userID))
 }

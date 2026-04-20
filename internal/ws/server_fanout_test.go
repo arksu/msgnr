@@ -289,6 +289,66 @@ func TestFanout_CallStateChangedFallbackDoesNotGrantConversationCache(t *testing
 	}
 }
 
+func TestFanout_UserCallPresenceChangedIsWorkspaceWide(t *testing.T) {
+	bus := events.NewBus(zap.NewNop())
+	srv := newTestServer(bus)
+	srv.authSvc = &auth.Service{}
+
+	memberOneID := uuid.MustParse("00000000-0000-0000-0000-000000000021")
+	memberTwoID := uuid.MustParse("00000000-0000-0000-0000-000000000022")
+
+	_, serverConnOne := pipeConn(t)
+	outboundOne := make(chan outboundMsg, srv.config.WsOutboundQueueMax+2)
+	unsubscribeOne, doneOne := srv.startEventFanout(
+		serverConnOne,
+		testPrincipalWithUser(memberOneID.String(), "00000000-0000-0000-0000-000000000101"),
+		outboundOne,
+		srv.config.WsOutboundQueueMax,
+		newSessionState(nil, true, nil),
+	)
+	defer func() {
+		unsubscribeOne()
+		<-doneOne
+	}()
+
+	_, serverConnTwo := pipeConn(t)
+	outboundTwo := make(chan outboundMsg, srv.config.WsOutboundQueueMax+2)
+	unsubscribeTwo, doneTwo := srv.startEventFanout(
+		serverConnTwo,
+		testPrincipalWithUser(memberTwoID.String(), "00000000-0000-0000-0000-000000000102"),
+		outboundTwo,
+		srv.config.WsOutboundQueueMax,
+		newSessionState(nil, true, nil),
+	)
+	defer func() {
+		unsubscribeTwo()
+		<-doneTwo
+	}()
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:  12,
+		EventType: packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED,
+		Payload: &packetspb.ServerEvent_UserCallPresenceChanged{
+			UserCallPresenceChanged: &packetspb.UserCallPresenceChangedEvent{
+				UserId:          "user-9",
+				ActiveCallCount: 1,
+			},
+		},
+	})
+
+	for _, outbound := range []chan outboundMsg{outboundOne, outboundTwo} {
+		select {
+		case msg := <-outbound:
+			require.NotNil(t, msg.env)
+			require.NotNil(t, msg.env.GetServerEvent())
+			require.NotNil(t, msg.env.GetServerEvent().GetUserCallPresenceChanged())
+			assert.Empty(t, msg.env.GetServerEvent().GetConversationId())
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for workspace-wide user_call_presence_changed event")
+		}
+	}
+}
+
 func TestFanout_ConversationCacheAllowsOrdinaryMessageWithoutFallback(t *testing.T) {
 	bus := events.NewBus(zap.NewNop())
 	srv := newTestServer(bus)

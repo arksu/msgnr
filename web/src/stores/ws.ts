@@ -45,9 +45,9 @@ export type AckResponseHandler = (resp: AckResponse) => void
 export type ReadCursorAckHandler = (ack: ReadCursorAck) => void
 export type PresenceEventHandler = (evt: PresenceEvent) => void
 export type TypingEventHandler = (evt: TypingEvent) => void
-export type CreateCallResponseHandler = (resp: CreateCallResponse) => void
+export type CreateCallResponseHandler = (resp: CreateCallResponse, requestId: string) => void
 export type InviteCallMembersResponseHandler = (resp: InviteCallMembersResponse, requestId: string) => void
-export type JoinCallTokenResponseHandler = (resp: JoinCallTokenResponse) => void
+export type JoinCallTokenResponseHandler = (resp: JoinCallTokenResponse, requestId: string) => void
 export type CallInviteActionAckHandler = (ack: CallInviteActionAck) => void
 export type SetNotificationLevelResponseHandler = (resp: SetNotificationLevelResponse) => void
 export type TaskDescriptionCollabSubscribeResponseHandler = (resp: TaskDescriptionCollabSubscribeResponse) => void
@@ -773,9 +773,10 @@ export const useWsStore = defineStore('ws', () => {
     }))
   }
 
-  function sendCreateCall(conversationId: string, conversationType: ConversationType, inviteeUserIds: string[] = []) {
+  function sendCreateCall(conversationId: string, conversationType: ConversationType, inviteeUserIds: string[] = []): string {
+    const requestId = generateId()
     sendEnvelope(create(EnvelopeSchema, {
-      requestId: generateId(),
+      requestId,
       traceId: generateId(),
       protocolVersion: PROTOCOL_VERSION,
       payload: {
@@ -787,11 +788,13 @@ export const useWsStore = defineStore('ws', () => {
         },
       },
     }))
+    return requestId
   }
 
-  function sendJoinCallToken(conversationId: string, conversationType: ConversationType) {
+  function sendJoinCallToken(conversationId: string, conversationType: ConversationType): string {
+    const requestId = generateId()
     sendEnvelope(create(EnvelopeSchema, {
-      requestId: generateId(),
+      requestId,
       traceId: generateId(),
       protocolVersion: PROTOCOL_VERSION,
       payload: {
@@ -802,6 +805,7 @@ export const useWsStore = defineStore('ws', () => {
         },
       },
     }))
+    return requestId
   }
 
   function sendInviteCallMembers(conversationId: string, conversationType: ConversationType, inviteeUserIds: string[] = []): string {
@@ -962,7 +966,7 @@ export const useWsStore = defineStore('ws', () => {
         break
 
       case 'createCallResponse':
-        onCreateCallResponseCallback?.(envelope.payload.value)
+        onCreateCallResponseCallback?.(envelope.payload.value, envelope.requestId)
         break
 
       case 'inviteCallMembersResponse':
@@ -970,7 +974,7 @@ export const useWsStore = defineStore('ws', () => {
         break
 
       case 'joinCallTokenResponse':
-        onJoinCallTokenResponseCallback?.(envelope.payload.value)
+        onJoinCallTokenResponseCallback?.(envelope.payload.value, envelope.requestId)
         break
 
       case 'callInviteActionAck':

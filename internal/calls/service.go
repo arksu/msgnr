@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -196,7 +197,7 @@ func (s *Service) CreateCall(ctx context.Context, p CreateCallParams) (CreateCal
 		return CreateCallResult{}, fmt.Errorf("calls.CreateCall insert call: %w", err)
 	}
 
-	if err := s.upsertParticipantTx(ctx, tx, callID, p.InitiatorID); err != nil {
+	if err := s.upsertParticipantAndEmitPresenceTx(ctx, tx, callID, p.InitiatorID); err != nil {
 		return CreateCallResult{}, err
 	}
 
@@ -281,7 +282,7 @@ func (s *Service) JoinCallToken(ctx context.Context, p JoinCallTokenParams) (Joi
 		}
 	}
 
-	if err := s.upsertParticipantTx(ctx, tx, activeCall.ID, p.UserID); err != nil {
+	if err := s.upsertParticipantAndEmitPresenceTx(ctx, tx, activeCall.ID, p.UserID); err != nil {
 		return JoinCallTokenResult{}, err
 	}
 
@@ -444,7 +445,7 @@ func (s *Service) AcceptInvite(ctx context.Context, p InviteActionParams) (Invit
 		return InviteActionResult{}, fmt.Errorf("calls.AcceptInvite update invite: %w", err)
 	}
 
-	if err := s.upsertParticipantTx(ctx, tx, invite.CallID, p.ActorID); err != nil {
+	if err := s.upsertParticipantAndEmitPresenceTx(ctx, tx, invite.CallID, p.ActorID); err != nil {
 		return InviteActionResult{}, err
 	}
 
@@ -708,20 +709,23 @@ func (s *Service) HandleWebhook(ctx context.Context, evt *lkwebhookEvent) (bool,
 		if err != nil {
 			return false, nil
 		}
-		call, err := s.findCallByRoom(ctx, evt.RoomName)
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return false, fmt.Errorf("calls.HandleWebhook participant joined begin tx: %w", err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck
+		call, err := s.findCallByRoomTx(ctx, tx, evt.RoomName)
 		if err != nil {
 			return false, err
 		}
 		if call == nil {
 			return false, nil
 		}
-		if _, err := s.pool.Exec(ctx, `
-			INSERT INTO call_participants (call_id, user_id, joined_at, left_at)
-			VALUES ($1, $2, now(), NULL)
-			ON CONFLICT (call_id, user_id) DO UPDATE
-			   SET joined_at = now(),
-			       left_at = NULL`, call.ID, userID); err != nil {
-			return false, fmt.Errorf("calls.HandleWebhook participant joined: %w", err)
+		if err := s.upsertParticipantAndEmitPresenceTx(ctx, tx, call.ID, userID); err != nil {
+			return false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return false, fmt.Errorf("calls.HandleWebhook participant joined commit: %w", err)
 		}
 		s.log.Info("calls webhook participant joined tracked",
 			zap.String("room", evt.RoomName),
@@ -755,13 +759,23 @@ func (s *Service) HandleWebhook(ctx context.Context, evt *lkwebhookEvent) (bool,
 			}
 			return false, nil
 		}
-		if _, err := tx.Exec(ctx, `
+		beforeUserCount, err := s.activeCallCountForUserTx(ctx, tx, userID)
+		if err != nil {
+			return false, err
+		}
+		tag, err := tx.Exec(ctx, `
 			UPDATE call_participants
 			   SET left_at = now()
 			 WHERE call_id = $1
 			   AND user_id = $2
-			   AND left_at IS NULL`, call.ID, userID); err != nil {
+			   AND left_at IS NULL`, call.ID, userID)
+		if err != nil {
 			return false, fmt.Errorf("calls.HandleWebhook participant left: %w", err)
+		}
+		if tag.RowsAffected() > 0 {
+			if err := s.emitUserCallPresenceIfChangedTx(ctx, tx, userID, beforeUserCount); err != nil {
+				return false, err
+			}
 		}
 
 		var activeParticipants int
@@ -776,6 +790,14 @@ func (s *Service) HandleWebhook(ctx context.Context, evt *lkwebhookEvent) (bool,
 		shouldEndCall := activeParticipants == 0 || (evt.HasRoomSnapshot && evt.RoomNumParticipants == 0)
 		callEnded := false
 		if shouldEndCall {
+			remainingParticipantIDs, err := s.listActiveParticipantUserIDsTx(ctx, tx, call.ID)
+			if err != nil {
+				return false, err
+			}
+			beforeRemainingCounts, err := s.activeCallCountsForUsersTx(ctx, tx, remainingParticipantIDs)
+			if err != nil {
+				return false, err
+			}
 			tag, err := tx.Exec(ctx, `
 				UPDATE calls
 				   SET status = 'ended',
@@ -787,6 +809,9 @@ func (s *Service) HandleWebhook(ctx context.Context, evt *lkwebhookEvent) (bool,
 			}
 			if tag.RowsAffected() > 0 {
 				if err := s.appendCallStateChangedTx(ctx, tx, call.ID, call.ChannelID, packetspb.CallStatus_CALL_STATUS_ENDED); err != nil {
+					return false, err
+				}
+				if err := s.emitUserCallPresenceChangesForUsersTx(ctx, tx, beforeRemainingCounts); err != nil {
 					return false, err
 				}
 				if _, err := s.cancelPendingInvitesForEndedCallTx(ctx, tx, call.ID, call.ChannelID); err != nil {
@@ -824,6 +849,14 @@ func (s *Service) HandleWebhook(ctx context.Context, evt *lkwebhookEvent) (bool,
 		defer tx.Rollback(ctx) //nolint:errcheck
 
 		var callID, channelID uuid.UUID
+		participantIDs, err := s.listActiveParticipantUserIDsByRoomTx(ctx, tx, evt.RoomName)
+		if err != nil {
+			return false, err
+		}
+		beforeParticipantCounts, err := s.activeCallCountsForUsersTx(ctx, tx, participantIDs)
+		if err != nil {
+			return false, err
+		}
 		err = tx.QueryRow(ctx, `
 			UPDATE calls
 			   SET status = 'ended',
@@ -842,6 +875,9 @@ func (s *Service) HandleWebhook(ctx context.Context, evt *lkwebhookEvent) (bool,
 		}
 
 		if err := s.appendCallStateChangedTx(ctx, tx, callID, channelID, packetspb.CallStatus_CALL_STATUS_ENDED); err != nil {
+			return false, err
+		}
+		if err := s.emitUserCallPresenceChangesForUsersTx(ctx, tx, beforeParticipantCounts); err != nil {
 			return false, err
 		}
 		if _, err := s.cancelPendingInvitesForEndedCallTx(ctx, tx, callID, channelID); err != nil {
@@ -1106,6 +1142,150 @@ func (s *Service) upsertParticipantTx(ctx context.Context, tx pgx.Tx, callID, us
 	return nil
 }
 
+func (s *Service) upsertParticipantAndEmitPresenceTx(ctx context.Context, tx pgx.Tx, callID, userID uuid.UUID) error {
+	beforeCount, err := s.activeCallCountForUserTx(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	if err := s.upsertParticipantTx(ctx, tx, callID, userID); err != nil {
+		return err
+	}
+	return s.emitUserCallPresenceIfChangedTx(ctx, tx, userID, beforeCount)
+}
+
+func (s *Service) activeCallCountForUserTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (int, error) {
+	counts, err := s.activeCallCountsForUsersTx(ctx, tx, []uuid.UUID{userID})
+	if err != nil {
+		return 0, err
+	}
+	return counts[userID], nil
+}
+
+func (s *Service) activeCallCountsForUsersTx(ctx context.Context, tx pgx.Tx, userIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	counts := make(map[uuid.UUID]int, len(userIDs))
+	if len(userIDs) == 0 {
+		return counts, nil
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT cp.user_id, COUNT(DISTINCT c.id)::int
+		  FROM calls c
+		  JOIN call_participants cp ON cp.call_id = c.id
+		 WHERE c.status = 'active'
+		   AND cp.user_id = ANY($1::uuid[])
+		   AND cp.left_at IS NULL
+		 GROUP BY cp.user_id`, userIDs)
+	if err != nil {
+		return nil, fmt.Errorf("calls.activeCallCountsForUsersTx query: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var userID uuid.UUID
+		var count int
+		if err := rows.Scan(&userID, &count); err != nil {
+			return nil, fmt.Errorf("calls.activeCallCountsForUsersTx scan: %w", err)
+		}
+		counts[userID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("calls.activeCallCountsForUsersTx rows: %w", err)
+	}
+	return counts, nil
+}
+
+func (s *Service) emitUserCallPresenceIfChangedTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, beforeCount int) error {
+	afterCount, err := s.activeCallCountForUserTx(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	if beforeCount == afterCount {
+		return nil
+	}
+	return s.appendUserCallPresenceChangedTx(ctx, tx, userID, afterCount)
+}
+
+func (s *Service) emitUserCallPresenceChangesForUsersTx(ctx context.Context, tx pgx.Tx, beforeCounts map[uuid.UUID]int) error {
+	if len(beforeCounts) == 0 {
+		return nil
+	}
+
+	userIDs := make([]uuid.UUID, 0, len(beforeCounts))
+	for userID := range beforeCounts {
+		userIDs = append(userIDs, userID)
+	}
+	sort.Slice(userIDs, func(i, j int) bool {
+		return userIDs[i].String() < userIDs[j].String()
+	})
+	afterCounts, err := s.activeCallCountsForUsersTx(ctx, tx, userIDs)
+	if err != nil {
+		return err
+	}
+	for _, userID := range userIDs {
+		if beforeCounts[userID] == afterCounts[userID] {
+			continue
+		}
+		if err := s.appendUserCallPresenceChangedTx(ctx, tx, userID, afterCounts[userID]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) listActiveParticipantUserIDsTx(ctx context.Context, tx pgx.Tx, callID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT user_id
+		  FROM call_participants
+		 WHERE call_id = $1
+		   AND left_at IS NULL
+		 ORDER BY user_id ASC`, callID)
+	if err != nil {
+		return nil, fmt.Errorf("calls.listActiveParticipantUserIDsTx query: %w", err)
+	}
+	defer rows.Close()
+
+	userIDs := make([]uuid.UUID, 0, 8)
+	for rows.Next() {
+		var userID uuid.UUID
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("calls.listActiveParticipantUserIDsTx scan: %w", err)
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("calls.listActiveParticipantUserIDsTx rows: %w", err)
+	}
+	return userIDs, nil
+}
+
+func (s *Service) listActiveParticipantUserIDsByRoomTx(ctx context.Context, tx pgx.Tx, roomName string) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT cp.user_id
+		  FROM calls c
+		  JOIN call_participants cp ON cp.call_id = c.id
+		 WHERE c.livekit_room = $1
+		   AND c.status = 'active'
+		   AND cp.left_at IS NULL
+		 ORDER BY cp.user_id ASC`, roomName)
+	if err != nil {
+		return nil, fmt.Errorf("calls.listActiveParticipantUserIDsByRoomTx query: %w", err)
+	}
+	defer rows.Close()
+
+	userIDs := make([]uuid.UUID, 0, 8)
+	for rows.Next() {
+		var userID uuid.UUID
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("calls.listActiveParticipantUserIDsByRoomTx scan: %w", err)
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("calls.listActiveParticipantUserIDsByRoomTx rows: %w", err)
+	}
+	return userIDs, nil
+}
+
 func (s *Service) lookupUserDisplayNameTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (string, error) {
 	var name string
 	if err := tx.QueryRow(ctx, `
@@ -1163,6 +1343,49 @@ func (s *Service) appendCallStateChangedTx(ctx context.Context, tx pgx.Tx, callI
 		return fmt.Errorf("calls.appendCallStateChangedTx notify event: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) appendUserCallPresenceChangedTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, activeCallCount int) error {
+	payload := &packetspb.UserCallPresenceChangedEvent{
+		UserId:          userID.String(),
+		ActiveCallCount: int32(activeCallCount),
+	}
+	payloadJSON, err := protojson.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("calls.appendUserCallPresenceChangedTx marshal payload: %w", err)
+	}
+
+	stored, err := s.eventStore.AppendEventTx(ctx, tx, events.AppendParams{
+		EventID:      uuid.NewString(),
+		EventType:    "user_call_presence_changed",
+		ChannelID:    "",
+		PayloadJSON:  payloadJSON,
+		OccurredAt:   time.Now().UTC(),
+		ProtoPayload: s.buildUserCallPresenceChangedEnvelope(userID, activeCallCount),
+	})
+	if err != nil {
+		if legacyUserCallPresenceConstraintError(err) {
+			s.log.Warn("calls: skipping user_call_presence_changed event because workspace_events schema is outdated",
+				zap.String("user_id", userID.String()),
+				zap.Int("active_call_count", activeCallCount),
+				zap.Error(err),
+			)
+			return nil
+		}
+		return fmt.Errorf("calls.appendUserCallPresenceChangedTx append event: %w", err)
+	}
+	if err := s.eventStore.NotifyEventTx(ctx, tx, stored.Seq); err != nil {
+		return fmt.Errorf("calls.appendUserCallPresenceChangedTx notify event: %w", err)
+	}
+	return nil
+}
+
+func legacyUserCallPresenceConstraintError(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "23514" && pgErr.ConstraintName == "workspace_events_event_type_check"
 }
 
 func (s *Service) appendCallInviteCancelledTx(
@@ -1316,6 +1539,18 @@ func (s *Service) buildCallStateChangedEnvelope(callID, conversationID uuid.UUID
 				CallId:         callID.String(),
 				ConversationId: conversationID.String(),
 				Status:         status,
+			},
+		},
+	}
+}
+
+func (s *Service) buildUserCallPresenceChangedEnvelope(userID uuid.UUID, activeCallCount int) *packetspb.ServerEvent {
+	return &packetspb.ServerEvent{
+		EventType: packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED,
+		Payload: &packetspb.ServerEvent_UserCallPresenceChanged{
+			UserCallPresenceChanged: &packetspb.UserCallPresenceChangedEvent{
+				UserId:          userID.String(),
+				ActiveCallCount: int32(activeCallCount),
 			},
 		},
 	}

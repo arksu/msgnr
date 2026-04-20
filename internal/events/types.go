@@ -30,22 +30,23 @@ type AppendParams struct {
 
 // eventTypeToProto maps DB text values to proto EventType.
 var eventTypeToProto = map[string]packetspb.EventType{
-	"conversation_upserted":  packetspb.EventType_EVENT_TYPE_CONVERSATION_UPSERTED,
-	"conversation_removed":   packetspb.EventType_EVENT_TYPE_CONVERSATION_REMOVED,
-	"membership_changed":     packetspb.EventType_EVENT_TYPE_MEMBERSHIP_CHANGED,
-	"message_created":        packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
-	"message_updated":        packetspb.EventType_EVENT_TYPE_MESSAGE_UPDATED,
-	"message_deleted":        packetspb.EventType_EVENT_TYPE_MESSAGE_DELETED,
-	"read_counter_updated":   packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED,
-	"notification_added":     packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED,
-	"notification_resolved":  packetspb.EventType_EVENT_TYPE_NOTIFICATION_RESOLVED,
-	"call_invite_created":    packetspb.EventType_EVENT_TYPE_CALL_INVITE_CREATED,
-	"call_invite_cancelled":  packetspb.EventType_EVENT_TYPE_CALL_INVITE_CANCELLED,
-	"call_state_changed":     packetspb.EventType_EVENT_TYPE_CALL_STATE_CHANGED,
-	"thread_summary_updated": packetspb.EventType_EVENT_TYPE_THREAD_SUMMARY_UPDATED,
-	"reaction_updated":       packetspb.EventType_EVENT_TYPE_REACTION_UPDATED,
-	"user_identity_updated":  packetspb.EventType_EVENT_TYPE_USER_IDENTITY_UPDATED,
-	"task_status_changed":    packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED,
+	"conversation_upserted":      packetspb.EventType_EVENT_TYPE_CONVERSATION_UPSERTED,
+	"conversation_removed":       packetspb.EventType_EVENT_TYPE_CONVERSATION_REMOVED,
+	"membership_changed":         packetspb.EventType_EVENT_TYPE_MEMBERSHIP_CHANGED,
+	"message_created":            packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+	"message_updated":            packetspb.EventType_EVENT_TYPE_MESSAGE_UPDATED,
+	"message_deleted":            packetspb.EventType_EVENT_TYPE_MESSAGE_DELETED,
+	"read_counter_updated":       packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED,
+	"notification_added":         packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED,
+	"notification_resolved":      packetspb.EventType_EVENT_TYPE_NOTIFICATION_RESOLVED,
+	"call_invite_created":        packetspb.EventType_EVENT_TYPE_CALL_INVITE_CREATED,
+	"call_invite_cancelled":      packetspb.EventType_EVENT_TYPE_CALL_INVITE_CANCELLED,
+	"call_state_changed":         packetspb.EventType_EVENT_TYPE_CALL_STATE_CHANGED,
+	"user_call_presence_changed": packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED,
+	"thread_summary_updated":     packetspb.EventType_EVENT_TYPE_THREAD_SUMMARY_UPDATED,
+	"reaction_updated":           packetspb.EventType_EVENT_TYPE_REACTION_UPDATED,
+	"user_identity_updated":      packetspb.EventType_EVENT_TYPE_USER_IDENTITY_UPDATED,
+	"task_status_changed":        packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED,
 }
 
 // protoToEventType is the reverse of eventTypeToProto.
@@ -136,6 +137,10 @@ func ValidateEventTypePayload(dbText string, evt *packetspb.ServerEvent) error {
 	case packetspb.EventType_EVENT_TYPE_CALL_STATE_CHANGED:
 		if evt.GetCallStateChanged() == nil {
 			return fmt.Errorf("event_type %q requires call_state_changed payload", dbText)
+		}
+	case packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED:
+		if evt.GetUserCallPresenceChanged() == nil {
+			return fmt.Errorf("event_type %q requires user_call_presence_changed payload", dbText)
 		}
 	case packetspb.EventType_EVENT_TYPE_THREAD_SUMMARY_UPDATED:
 		if evt.GetThreadSummaryUpdated() == nil {

@@ -105,6 +105,12 @@ func buildServerEventFromStored(
 			return nil, fmt.Errorf("decode call_state_changed payload: %w", err)
 		}
 		evt.Payload = &packetspb.ServerEvent_CallStateChanged{CallStateChanged: msg}
+	case packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED:
+		msg := &packetspb.UserCallPresenceChangedEvent{}
+		if err := payloadUnmarshalOptions.Unmarshal(payloadJSON, msg); err != nil {
+			return nil, fmt.Errorf("decode user_call_presence_changed payload: %w", err)
+		}
+		evt.Payload = &packetspb.ServerEvent_UserCallPresenceChanged{UserCallPresenceChanged: msg}
 	case packetspb.EventType_EVENT_TYPE_THREAD_SUMMARY_UPDATED:
 		msg := &packetspb.ThreadSummaryUpdatedEvent{}
 		if err := payloadUnmarshalOptions.Unmarshal(payloadJSON, msg); err != nil {

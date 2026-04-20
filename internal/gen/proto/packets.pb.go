@@ -871,7 +871,8 @@ const (
 	EventType_EVENT_TYPE_TASK_STATUS_CHANGED        EventType = 18
 	// Direct-only backend-routed alert for generic new-message notifications.
 	// Not persisted in workspace_events and not included in bootstrap snapshots.
-	EventType_EVENT_TYPE_MESSAGE_ALERT EventType = 19
+	EventType_EVENT_TYPE_MESSAGE_ALERT              EventType = 19
+	EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED EventType = 20
 )
 
 // Enum value maps for EventType.
@@ -897,6 +898,7 @@ var (
 		17: "EVENT_TYPE_MESSAGE_DELETED",
 		18: "EVENT_TYPE_TASK_STATUS_CHANGED",
 		19: "EVENT_TYPE_MESSAGE_ALERT",
+		20: "EVENT_TYPE_USER_CALL_PRESENCE_CHANGED",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":                0,
@@ -919,6 +921,7 @@ var (
 		"EVENT_TYPE_MESSAGE_DELETED":            17,
 		"EVENT_TYPE_TASK_STATUS_CHANGED":        18,
 		"EVENT_TYPE_MESSAGE_ALERT":              19,
+		"EVENT_TYPE_USER_CALL_PRESENCE_CHANGED": 20,
 	}
 )
 
@@ -4511,6 +4514,58 @@ func (x *ActiveCallSummary) GetParticipantCount() int32 {
 	return 0
 }
 
+type UserCallPresenceSummary struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	UserId          string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	ActiveCallCount int32                  `protobuf:"varint,2,opt,name=active_call_count,json=activeCallCount,proto3" json:"active_call_count,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *UserCallPresenceSummary) Reset() {
+	*x = UserCallPresenceSummary{}
+	mi := &file_api_proto_packets_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserCallPresenceSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserCallPresenceSummary) ProtoMessage() {}
+
+func (x *UserCallPresenceSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_packets_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserCallPresenceSummary.ProtoReflect.Descriptor instead.
+func (*UserCallPresenceSummary) Descriptor() ([]byte, []int) {
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *UserCallPresenceSummary) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserCallPresenceSummary) GetActiveCallCount() int32 {
+	if x != nil {
+		return x.ActiveCallCount
+	}
+	return 0
+}
+
 type CallInviteSummary struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	InviteId       string                 `protobuf:"bytes,1,opt,name=invite_id,json=inviteId,proto3" json:"invite_id,omitempty"`
@@ -4526,7 +4581,7 @@ type CallInviteSummary struct {
 
 func (x *CallInviteSummary) Reset() {
 	*x = CallInviteSummary{}
-	mi := &file_api_proto_packets_proto_msgTypes[41]
+	mi := &file_api_proto_packets_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4538,7 +4593,7 @@ func (x *CallInviteSummary) String() string {
 func (*CallInviteSummary) ProtoMessage() {}
 
 func (x *CallInviteSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[41]
+	mi := &file_api_proto_packets_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4551,7 +4606,7 @@ func (x *CallInviteSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallInviteSummary.ProtoReflect.Descriptor instead.
 func (*CallInviteSummary) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{41}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *CallInviteSummary) GetInviteId() string {
@@ -4618,7 +4673,7 @@ type NotificationSummary struct {
 
 func (x *NotificationSummary) Reset() {
 	*x = NotificationSummary{}
-	mi := &file_api_proto_packets_proto_msgTypes[42]
+	mi := &file_api_proto_packets_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4630,7 +4685,7 @@ func (x *NotificationSummary) String() string {
 func (*NotificationSummary) ProtoMessage() {}
 
 func (x *NotificationSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[42]
+	mi := &file_api_proto_packets_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4643,7 +4698,7 @@ func (x *NotificationSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationSummary.ProtoReflect.Descriptor instead.
 func (*NotificationSummary) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{42}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *NotificationSummary) GetNotificationId() string {
@@ -4709,7 +4764,7 @@ type BootstrapRequest struct {
 
 func (x *BootstrapRequest) Reset() {
 	*x = BootstrapRequest{}
-	mi := &file_api_proto_packets_proto_msgTypes[43]
+	mi := &file_api_proto_packets_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4721,7 +4776,7 @@ func (x *BootstrapRequest) String() string {
 func (*BootstrapRequest) ProtoMessage() {}
 
 func (x *BootstrapRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[43]
+	mi := &file_api_proto_packets_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4734,7 +4789,7 @@ func (x *BootstrapRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapRequest.ProtoReflect.Descriptor instead.
 func (*BootstrapRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{43}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *BootstrapRequest) GetClientInstanceId() string {
@@ -4793,15 +4848,16 @@ type BootstrapResponse struct {
 	EstimatedTotalConversations uint32                 `protobuf:"varint,14,opt,name=estimated_total_conversations,json=estimatedTotalConversations,proto3" json:"estimated_total_conversations,omitempty"`
 	// Best-effort presence snapshot for bootstrap hydration.
 	// Scope: only users participating in conversations included in this page.
-	Presence      []*PresenceEvent `protobuf:"bytes,15,rep,name=presence,proto3" json:"presence,omitempty"`
-	UserRole      WorkspaceRole    `protobuf:"varint,16,opt,name=user_role,json=userRole,proto3,enum=packets.v1.WorkspaceRole" json:"user_role,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Presence         []*PresenceEvent           `protobuf:"bytes,15,rep,name=presence,proto3" json:"presence,omitempty"`
+	UserRole         WorkspaceRole              `protobuf:"varint,16,opt,name=user_role,json=userRole,proto3,enum=packets.v1.WorkspaceRole" json:"user_role,omitempty"`
+	UserCallPresence []*UserCallPresenceSummary `protobuf:"bytes,17,rep,name=user_call_presence,json=userCallPresence,proto3" json:"user_call_presence,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *BootstrapResponse) Reset() {
 	*x = BootstrapResponse{}
-	mi := &file_api_proto_packets_proto_msgTypes[44]
+	mi := &file_api_proto_packets_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4813,7 +4869,7 @@ func (x *BootstrapResponse) String() string {
 func (*BootstrapResponse) ProtoMessage() {}
 
 func (x *BootstrapResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[44]
+	mi := &file_api_proto_packets_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4826,7 +4882,7 @@ func (x *BootstrapResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapResponse.ProtoReflect.Descriptor instead.
 func (*BootstrapResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{44}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *BootstrapResponse) GetSnapshotSeq() int64 {
@@ -4941,6 +4997,13 @@ func (x *BootstrapResponse) GetUserRole() WorkspaceRole {
 	return WorkspaceRole_WORKSPACE_ROLE_UNSPECIFIED
 }
 
+func (x *BootstrapResponse) GetUserCallPresence() []*UserCallPresenceSummary {
+	if x != nil {
+		return x.UserCallPresence
+	}
+	return nil
+}
+
 type SyncSinceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Request contiguous server events strictly after this sequence.
@@ -4953,7 +5016,7 @@ type SyncSinceRequest struct {
 
 func (x *SyncSinceRequest) Reset() {
 	*x = SyncSinceRequest{}
-	mi := &file_api_proto_packets_proto_msgTypes[45]
+	mi := &file_api_proto_packets_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4965,7 +5028,7 @@ func (x *SyncSinceRequest) String() string {
 func (*SyncSinceRequest) ProtoMessage() {}
 
 func (x *SyncSinceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[45]
+	mi := &file_api_proto_packets_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4978,7 +5041,7 @@ func (x *SyncSinceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncSinceRequest.ProtoReflect.Descriptor instead.
 func (*SyncSinceRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{45}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *SyncSinceRequest) GetAfterSeq() int64 {
@@ -5020,7 +5083,7 @@ type SyncSinceResponse struct {
 
 func (x *SyncSinceResponse) Reset() {
 	*x = SyncSinceResponse{}
-	mi := &file_api_proto_packets_proto_msgTypes[46]
+	mi := &file_api_proto_packets_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5032,7 +5095,7 @@ func (x *SyncSinceResponse) String() string {
 func (*SyncSinceResponse) ProtoMessage() {}
 
 func (x *SyncSinceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[46]
+	mi := &file_api_proto_packets_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5045,7 +5108,7 @@ func (x *SyncSinceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncSinceResponse.ProtoReflect.Descriptor instead.
 func (*SyncSinceResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{46}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *SyncSinceResponse) GetFromSeq() int64 {
@@ -5114,7 +5177,7 @@ type AckRequest struct {
 
 func (x *AckRequest) Reset() {
 	*x = AckRequest{}
-	mi := &file_api_proto_packets_proto_msgTypes[47]
+	mi := &file_api_proto_packets_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5126,7 +5189,7 @@ func (x *AckRequest) String() string {
 func (*AckRequest) ProtoMessage() {}
 
 func (x *AckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[47]
+	mi := &file_api_proto_packets_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5139,7 +5202,7 @@ func (x *AckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckRequest.ProtoReflect.Descriptor instead.
 func (*AckRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{47}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *AckRequest) GetLastAppliedEventSeq() int64 {
@@ -5159,7 +5222,7 @@ type AckResponse struct {
 
 func (x *AckResponse) Reset() {
 	*x = AckResponse{}
-	mi := &file_api_proto_packets_proto_msgTypes[48]
+	mi := &file_api_proto_packets_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5171,7 +5234,7 @@ func (x *AckResponse) String() string {
 func (*AckResponse) ProtoMessage() {}
 
 func (x *AckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[48]
+	mi := &file_api_proto_packets_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5184,7 +5247,7 @@ func (x *AckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckResponse.ProtoReflect.Descriptor instead.
 func (*AckResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{48}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *AckResponse) GetOk() bool {
@@ -5210,7 +5273,7 @@ type ConversationUpsertedEvent struct {
 
 func (x *ConversationUpsertedEvent) Reset() {
 	*x = ConversationUpsertedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[49]
+	mi := &file_api_proto_packets_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5222,7 +5285,7 @@ func (x *ConversationUpsertedEvent) String() string {
 func (*ConversationUpsertedEvent) ProtoMessage() {}
 
 func (x *ConversationUpsertedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[49]
+	mi := &file_api_proto_packets_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5235,7 +5298,7 @@ func (x *ConversationUpsertedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationUpsertedEvent.ProtoReflect.Descriptor instead.
 func (*ConversationUpsertedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{49}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ConversationUpsertedEvent) GetConversation() *ConversationSummary {
@@ -5255,7 +5318,7 @@ type ConversationRemovedEvent struct {
 
 func (x *ConversationRemovedEvent) Reset() {
 	*x = ConversationRemovedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[50]
+	mi := &file_api_proto_packets_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5267,7 +5330,7 @@ func (x *ConversationRemovedEvent) String() string {
 func (*ConversationRemovedEvent) ProtoMessage() {}
 
 func (x *ConversationRemovedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[50]
+	mi := &file_api_proto_packets_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5280,7 +5343,7 @@ func (x *ConversationRemovedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationRemovedEvent.ProtoReflect.Descriptor instead.
 func (*ConversationRemovedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{50}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *ConversationRemovedEvent) GetConversationId() string {
@@ -5308,7 +5371,7 @@ type MembershipChangedEvent struct {
 
 func (x *MembershipChangedEvent) Reset() {
 	*x = MembershipChangedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[51]
+	mi := &file_api_proto_packets_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5320,7 +5383,7 @@ func (x *MembershipChangedEvent) String() string {
 func (*MembershipChangedEvent) ProtoMessage() {}
 
 func (x *MembershipChangedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[51]
+	mi := &file_api_proto_packets_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5333,7 +5396,7 @@ func (x *MembershipChangedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MembershipChangedEvent.ProtoReflect.Descriptor instead.
 func (*MembershipChangedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{51}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *MembershipChangedEvent) GetConversationId() string {
@@ -5367,7 +5430,7 @@ type ReadCounterUpdatedEvent struct {
 
 func (x *ReadCounterUpdatedEvent) Reset() {
 	*x = ReadCounterUpdatedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[52]
+	mi := &file_api_proto_packets_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5379,7 +5442,7 @@ func (x *ReadCounterUpdatedEvent) String() string {
 func (*ReadCounterUpdatedEvent) ProtoMessage() {}
 
 func (x *ReadCounterUpdatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[52]
+	mi := &file_api_proto_packets_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5392,7 +5455,7 @@ func (x *ReadCounterUpdatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadCounterUpdatedEvent.ProtoReflect.Descriptor instead.
 func (*ReadCounterUpdatedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{52}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ReadCounterUpdatedEvent) GetCounter() *UnreadCounter {
@@ -5419,7 +5482,7 @@ type NotificationAddedEvent struct {
 
 func (x *NotificationAddedEvent) Reset() {
 	*x = NotificationAddedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[53]
+	mi := &file_api_proto_packets_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5431,7 +5494,7 @@ func (x *NotificationAddedEvent) String() string {
 func (*NotificationAddedEvent) ProtoMessage() {}
 
 func (x *NotificationAddedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[53]
+	mi := &file_api_proto_packets_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5444,7 +5507,7 @@ func (x *NotificationAddedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationAddedEvent.ProtoReflect.Descriptor instead.
 func (*NotificationAddedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{53}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *NotificationAddedEvent) GetNotification() *NotificationSummary {
@@ -5471,7 +5534,7 @@ type NotificationResolvedEvent struct {
 
 func (x *NotificationResolvedEvent) Reset() {
 	*x = NotificationResolvedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[54]
+	mi := &file_api_proto_packets_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5483,7 +5546,7 @@ func (x *NotificationResolvedEvent) String() string {
 func (*NotificationResolvedEvent) ProtoMessage() {}
 
 func (x *NotificationResolvedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[54]
+	mi := &file_api_proto_packets_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5496,7 +5559,7 @@ func (x *NotificationResolvedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationResolvedEvent.ProtoReflect.Descriptor instead.
 func (*NotificationResolvedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{54}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *NotificationResolvedEvent) GetNotificationId() string {
@@ -5522,7 +5585,7 @@ type CallInviteCreatedEvent struct {
 
 func (x *CallInviteCreatedEvent) Reset() {
 	*x = CallInviteCreatedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[55]
+	mi := &file_api_proto_packets_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5534,7 +5597,7 @@ func (x *CallInviteCreatedEvent) String() string {
 func (*CallInviteCreatedEvent) ProtoMessage() {}
 
 func (x *CallInviteCreatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[55]
+	mi := &file_api_proto_packets_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5547,7 +5610,7 @@ func (x *CallInviteCreatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallInviteCreatedEvent.ProtoReflect.Descriptor instead.
 func (*CallInviteCreatedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{55}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *CallInviteCreatedEvent) GetInvite() *CallInviteSummary {
@@ -5568,7 +5631,7 @@ type CallInviteCancelledEvent struct {
 
 func (x *CallInviteCancelledEvent) Reset() {
 	*x = CallInviteCancelledEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[56]
+	mi := &file_api_proto_packets_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5580,7 +5643,7 @@ func (x *CallInviteCancelledEvent) String() string {
 func (*CallInviteCancelledEvent) ProtoMessage() {}
 
 func (x *CallInviteCancelledEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[56]
+	mi := &file_api_proto_packets_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5593,7 +5656,7 @@ func (x *CallInviteCancelledEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallInviteCancelledEvent.ProtoReflect.Descriptor instead.
 func (*CallInviteCancelledEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{56}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *CallInviteCancelledEvent) GetInviteId() string {
@@ -5628,7 +5691,7 @@ type CallStateChangedEvent struct {
 
 func (x *CallStateChangedEvent) Reset() {
 	*x = CallStateChangedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[57]
+	mi := &file_api_proto_packets_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5640,7 +5703,7 @@ func (x *CallStateChangedEvent) String() string {
 func (*CallStateChangedEvent) ProtoMessage() {}
 
 func (x *CallStateChangedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[57]
+	mi := &file_api_proto_packets_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5653,7 +5716,7 @@ func (x *CallStateChangedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallStateChangedEvent.ProtoReflect.Descriptor instead.
 func (*CallStateChangedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{57}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *CallStateChangedEvent) GetCallId() string {
@@ -5677,6 +5740,58 @@ func (x *CallStateChangedEvent) GetStatus() CallStatus {
 	return CallStatus_CALL_STATUS_UNSPECIFIED
 }
 
+type UserCallPresenceChangedEvent struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	UserId          string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	ActiveCallCount int32                  `protobuf:"varint,2,opt,name=active_call_count,json=activeCallCount,proto3" json:"active_call_count,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *UserCallPresenceChangedEvent) Reset() {
+	*x = UserCallPresenceChangedEvent{}
+	mi := &file_api_proto_packets_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserCallPresenceChangedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserCallPresenceChangedEvent) ProtoMessage() {}
+
+func (x *UserCallPresenceChangedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_packets_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserCallPresenceChangedEvent.ProtoReflect.Descriptor instead.
+func (*UserCallPresenceChangedEvent) Descriptor() ([]byte, []int) {
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *UserCallPresenceChangedEvent) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserCallPresenceChangedEvent) GetActiveCallCount() int32 {
+	if x != nil {
+		return x.ActiveCallCount
+	}
+	return 0
+}
+
 type ThreadSummaryUpdatedEvent struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
 	ConversationId        string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
@@ -5691,7 +5806,7 @@ type ThreadSummaryUpdatedEvent struct {
 
 func (x *ThreadSummaryUpdatedEvent) Reset() {
 	*x = ThreadSummaryUpdatedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[58]
+	mi := &file_api_proto_packets_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5703,7 +5818,7 @@ func (x *ThreadSummaryUpdatedEvent) String() string {
 func (*ThreadSummaryUpdatedEvent) ProtoMessage() {}
 
 func (x *ThreadSummaryUpdatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[58]
+	mi := &file_api_proto_packets_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5716,7 +5831,7 @@ func (x *ThreadSummaryUpdatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreadSummaryUpdatedEvent.ProtoReflect.Descriptor instead.
 func (*ThreadSummaryUpdatedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{58}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ThreadSummaryUpdatedEvent) GetConversationId() string {
@@ -5773,7 +5888,7 @@ type ReactionUpdatedEvent struct {
 
 func (x *ReactionUpdatedEvent) Reset() {
 	*x = ReactionUpdatedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[59]
+	mi := &file_api_proto_packets_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5785,7 +5900,7 @@ func (x *ReactionUpdatedEvent) String() string {
 func (*ReactionUpdatedEvent) ProtoMessage() {}
 
 func (x *ReactionUpdatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[59]
+	mi := &file_api_proto_packets_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5798,7 +5913,7 @@ func (x *ReactionUpdatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReactionUpdatedEvent.ProtoReflect.Descriptor instead.
 func (*ReactionUpdatedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{59}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ReactionUpdatedEvent) GetConversationId() string {
@@ -5844,7 +5959,7 @@ type MessageUpdatedEvent struct {
 
 func (x *MessageUpdatedEvent) Reset() {
 	*x = MessageUpdatedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[60]
+	mi := &file_api_proto_packets_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5856,7 +5971,7 @@ func (x *MessageUpdatedEvent) String() string {
 func (*MessageUpdatedEvent) ProtoMessage() {}
 
 func (x *MessageUpdatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[60]
+	mi := &file_api_proto_packets_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5869,7 +5984,7 @@ func (x *MessageUpdatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageUpdatedEvent.ProtoReflect.Descriptor instead.
 func (*MessageUpdatedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{60}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *MessageUpdatedEvent) GetConversationId() string {
@@ -5932,7 +6047,7 @@ type MessageDeletedEvent struct {
 
 func (x *MessageDeletedEvent) Reset() {
 	*x = MessageDeletedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[61]
+	mi := &file_api_proto_packets_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5944,7 +6059,7 @@ func (x *MessageDeletedEvent) String() string {
 func (*MessageDeletedEvent) ProtoMessage() {}
 
 func (x *MessageDeletedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[61]
+	mi := &file_api_proto_packets_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5957,7 +6072,7 @@ func (x *MessageDeletedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageDeletedEvent.ProtoReflect.Descriptor instead.
 func (*MessageDeletedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{61}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *MessageDeletedEvent) GetConversationId() string {
@@ -5990,7 +6105,7 @@ type ForcePasswordChangeEvent struct {
 
 func (x *ForcePasswordChangeEvent) Reset() {
 	*x = ForcePasswordChangeEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[62]
+	mi := &file_api_proto_packets_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6002,7 +6117,7 @@ func (x *ForcePasswordChangeEvent) String() string {
 func (*ForcePasswordChangeEvent) ProtoMessage() {}
 
 func (x *ForcePasswordChangeEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[62]
+	mi := &file_api_proto_packets_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6015,7 +6130,7 @@ func (x *ForcePasswordChangeEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForcePasswordChangeEvent.ProtoReflect.Descriptor instead.
 func (*ForcePasswordChangeEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{62}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ForcePasswordChangeEvent) GetUserId() string {
@@ -6036,7 +6151,7 @@ type UserIdentityUpdatedEvent struct {
 
 func (x *UserIdentityUpdatedEvent) Reset() {
 	*x = UserIdentityUpdatedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[63]
+	mi := &file_api_proto_packets_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6048,7 +6163,7 @@ func (x *UserIdentityUpdatedEvent) String() string {
 func (*UserIdentityUpdatedEvent) ProtoMessage() {}
 
 func (x *UserIdentityUpdatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[63]
+	mi := &file_api_proto_packets_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6061,7 +6176,7 @@ func (x *UserIdentityUpdatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserIdentityUpdatedEvent.ProtoReflect.Descriptor instead.
 func (*UserIdentityUpdatedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{63}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *UserIdentityUpdatedEvent) GetUserId() string {
@@ -6095,7 +6210,7 @@ type SetNotificationLevelRequest struct {
 
 func (x *SetNotificationLevelRequest) Reset() {
 	*x = SetNotificationLevelRequest{}
-	mi := &file_api_proto_packets_proto_msgTypes[64]
+	mi := &file_api_proto_packets_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6107,7 +6222,7 @@ func (x *SetNotificationLevelRequest) String() string {
 func (*SetNotificationLevelRequest) ProtoMessage() {}
 
 func (x *SetNotificationLevelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[64]
+	mi := &file_api_proto_packets_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6120,7 +6235,7 @@ func (x *SetNotificationLevelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetNotificationLevelRequest.ProtoReflect.Descriptor instead.
 func (*SetNotificationLevelRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{64}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *SetNotificationLevelRequest) GetConversationId() string {
@@ -6146,7 +6261,7 @@ type SetNotificationLevelResponse struct {
 
 func (x *SetNotificationLevelResponse) Reset() {
 	*x = SetNotificationLevelResponse{}
-	mi := &file_api_proto_packets_proto_msgTypes[65]
+	mi := &file_api_proto_packets_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6158,7 +6273,7 @@ func (x *SetNotificationLevelResponse) String() string {
 func (*SetNotificationLevelResponse) ProtoMessage() {}
 
 func (x *SetNotificationLevelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[65]
+	mi := &file_api_proto_packets_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6171,7 +6286,7 @@ func (x *SetNotificationLevelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetNotificationLevelResponse.ProtoReflect.Descriptor instead.
 func (*SetNotificationLevelResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{65}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *SetNotificationLevelResponse) GetLevel() NotificationLevel {
@@ -6190,7 +6305,7 @@ type TaskDescriptionCollabSubscribeRequest struct {
 
 func (x *TaskDescriptionCollabSubscribeRequest) Reset() {
 	*x = TaskDescriptionCollabSubscribeRequest{}
-	mi := &file_api_proto_packets_proto_msgTypes[66]
+	mi := &file_api_proto_packets_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6202,7 +6317,7 @@ func (x *TaskDescriptionCollabSubscribeRequest) String() string {
 func (*TaskDescriptionCollabSubscribeRequest) ProtoMessage() {}
 
 func (x *TaskDescriptionCollabSubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[66]
+	mi := &file_api_proto_packets_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6215,7 +6330,7 @@ func (x *TaskDescriptionCollabSubscribeRequest) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use TaskDescriptionCollabSubscribeRequest.ProtoReflect.Descriptor instead.
 func (*TaskDescriptionCollabSubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{66}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *TaskDescriptionCollabSubscribeRequest) GetTaskId() string {
@@ -6237,7 +6352,7 @@ type TaskDescriptionCollabSubscribeResponse struct {
 
 func (x *TaskDescriptionCollabSubscribeResponse) Reset() {
 	*x = TaskDescriptionCollabSubscribeResponse{}
-	mi := &file_api_proto_packets_proto_msgTypes[67]
+	mi := &file_api_proto_packets_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6249,7 +6364,7 @@ func (x *TaskDescriptionCollabSubscribeResponse) String() string {
 func (*TaskDescriptionCollabSubscribeResponse) ProtoMessage() {}
 
 func (x *TaskDescriptionCollabSubscribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[67]
+	mi := &file_api_proto_packets_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6262,7 +6377,7 @@ func (x *TaskDescriptionCollabSubscribeResponse) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use TaskDescriptionCollabSubscribeResponse.ProtoReflect.Descriptor instead.
 func (*TaskDescriptionCollabSubscribeResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{67}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *TaskDescriptionCollabSubscribeResponse) GetTaskId() string {
@@ -6302,7 +6417,7 @@ type TaskDescriptionCollabUnsubscribeRequest struct {
 
 func (x *TaskDescriptionCollabUnsubscribeRequest) Reset() {
 	*x = TaskDescriptionCollabUnsubscribeRequest{}
-	mi := &file_api_proto_packets_proto_msgTypes[68]
+	mi := &file_api_proto_packets_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6314,7 +6429,7 @@ func (x *TaskDescriptionCollabUnsubscribeRequest) String() string {
 func (*TaskDescriptionCollabUnsubscribeRequest) ProtoMessage() {}
 
 func (x *TaskDescriptionCollabUnsubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[68]
+	mi := &file_api_proto_packets_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6327,7 +6442,7 @@ func (x *TaskDescriptionCollabUnsubscribeRequest) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use TaskDescriptionCollabUnsubscribeRequest.ProtoReflect.Descriptor instead.
 func (*TaskDescriptionCollabUnsubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{68}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *TaskDescriptionCollabUnsubscribeRequest) GetTaskId() string {
@@ -6348,7 +6463,7 @@ type TaskDescriptionCollabMessage struct {
 
 func (x *TaskDescriptionCollabMessage) Reset() {
 	*x = TaskDescriptionCollabMessage{}
-	mi := &file_api_proto_packets_proto_msgTypes[69]
+	mi := &file_api_proto_packets_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6360,7 +6475,7 @@ func (x *TaskDescriptionCollabMessage) String() string {
 func (*TaskDescriptionCollabMessage) ProtoMessage() {}
 
 func (x *TaskDescriptionCollabMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[69]
+	mi := &file_api_proto_packets_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6373,7 +6488,7 @@ func (x *TaskDescriptionCollabMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskDescriptionCollabMessage.ProtoReflect.Descriptor instead.
 func (*TaskDescriptionCollabMessage) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{69}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *TaskDescriptionCollabMessage) GetTaskId() string {
@@ -6406,7 +6521,7 @@ type DocumentContentCollabSubscribeRequest struct {
 
 func (x *DocumentContentCollabSubscribeRequest) Reset() {
 	*x = DocumentContentCollabSubscribeRequest{}
-	mi := &file_api_proto_packets_proto_msgTypes[70]
+	mi := &file_api_proto_packets_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6418,7 +6533,7 @@ func (x *DocumentContentCollabSubscribeRequest) String() string {
 func (*DocumentContentCollabSubscribeRequest) ProtoMessage() {}
 
 func (x *DocumentContentCollabSubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[70]
+	mi := &file_api_proto_packets_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6431,7 +6546,7 @@ func (x *DocumentContentCollabSubscribeRequest) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use DocumentContentCollabSubscribeRequest.ProtoReflect.Descriptor instead.
 func (*DocumentContentCollabSubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{70}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *DocumentContentCollabSubscribeRequest) GetDocumentId() string {
@@ -6453,7 +6568,7 @@ type DocumentContentCollabSubscribeResponse struct {
 
 func (x *DocumentContentCollabSubscribeResponse) Reset() {
 	*x = DocumentContentCollabSubscribeResponse{}
-	mi := &file_api_proto_packets_proto_msgTypes[71]
+	mi := &file_api_proto_packets_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6465,7 +6580,7 @@ func (x *DocumentContentCollabSubscribeResponse) String() string {
 func (*DocumentContentCollabSubscribeResponse) ProtoMessage() {}
 
 func (x *DocumentContentCollabSubscribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[71]
+	mi := &file_api_proto_packets_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6478,7 +6593,7 @@ func (x *DocumentContentCollabSubscribeResponse) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use DocumentContentCollabSubscribeResponse.ProtoReflect.Descriptor instead.
 func (*DocumentContentCollabSubscribeResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{71}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DocumentContentCollabSubscribeResponse) GetDocumentId() string {
@@ -6518,7 +6633,7 @@ type DocumentContentCollabUnsubscribeRequest struct {
 
 func (x *DocumentContentCollabUnsubscribeRequest) Reset() {
 	*x = DocumentContentCollabUnsubscribeRequest{}
-	mi := &file_api_proto_packets_proto_msgTypes[72]
+	mi := &file_api_proto_packets_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6530,7 +6645,7 @@ func (x *DocumentContentCollabUnsubscribeRequest) String() string {
 func (*DocumentContentCollabUnsubscribeRequest) ProtoMessage() {}
 
 func (x *DocumentContentCollabUnsubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[72]
+	mi := &file_api_proto_packets_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6543,7 +6658,7 @@ func (x *DocumentContentCollabUnsubscribeRequest) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use DocumentContentCollabUnsubscribeRequest.ProtoReflect.Descriptor instead.
 func (*DocumentContentCollabUnsubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{72}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *DocumentContentCollabUnsubscribeRequest) GetDocumentId() string {
@@ -6564,7 +6679,7 @@ type DocumentContentCollabMessage struct {
 
 func (x *DocumentContentCollabMessage) Reset() {
 	*x = DocumentContentCollabMessage{}
-	mi := &file_api_proto_packets_proto_msgTypes[73]
+	mi := &file_api_proto_packets_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6576,7 +6691,7 @@ func (x *DocumentContentCollabMessage) String() string {
 func (*DocumentContentCollabMessage) ProtoMessage() {}
 
 func (x *DocumentContentCollabMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[73]
+	mi := &file_api_proto_packets_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6589,7 +6704,7 @@ func (x *DocumentContentCollabMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DocumentContentCollabMessage.ProtoReflect.Descriptor instead.
 func (*DocumentContentCollabMessage) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{73}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *DocumentContentCollabMessage) GetDocumentId() string {
@@ -6623,7 +6738,7 @@ type NotificationLevelChangedEvent struct {
 
 func (x *NotificationLevelChangedEvent) Reset() {
 	*x = NotificationLevelChangedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[74]
+	mi := &file_api_proto_packets_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6635,7 +6750,7 @@ func (x *NotificationLevelChangedEvent) String() string {
 func (*NotificationLevelChangedEvent) ProtoMessage() {}
 
 func (x *NotificationLevelChangedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[74]
+	mi := &file_api_proto_packets_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6648,7 +6763,7 @@ func (x *NotificationLevelChangedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationLevelChangedEvent.ProtoReflect.Descriptor instead.
 func (*NotificationLevelChangedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{74}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *NotificationLevelChangedEvent) GetConversationId() string {
@@ -6679,7 +6794,7 @@ type TaskStatusChangedEvent struct {
 
 func (x *TaskStatusChangedEvent) Reset() {
 	*x = TaskStatusChangedEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[75]
+	mi := &file_api_proto_packets_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6691,7 +6806,7 @@ func (x *TaskStatusChangedEvent) String() string {
 func (*TaskStatusChangedEvent) ProtoMessage() {}
 
 func (x *TaskStatusChangedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[75]
+	mi := &file_api_proto_packets_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6704,7 +6819,7 @@ func (x *TaskStatusChangedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskStatusChangedEvent.ProtoReflect.Descriptor instead.
 func (*TaskStatusChangedEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{75}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *TaskStatusChangedEvent) GetTaskId() string {
@@ -6764,7 +6879,7 @@ type MessageAlertEvent struct {
 
 func (x *MessageAlertEvent) Reset() {
 	*x = MessageAlertEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[76]
+	mi := &file_api_proto_packets_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6776,7 +6891,7 @@ func (x *MessageAlertEvent) String() string {
 func (*MessageAlertEvent) ProtoMessage() {}
 
 func (x *MessageAlertEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[76]
+	mi := &file_api_proto_packets_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6789,7 +6904,7 @@ func (x *MessageAlertEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageAlertEvent.ProtoReflect.Descriptor instead.
 func (*MessageAlertEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{76}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *MessageAlertEvent) GetConversationId() string {
@@ -6873,6 +6988,7 @@ type ServerEvent struct {
 	//	*ServerEvent_MessageDeleted
 	//	*ServerEvent_TaskStatusChanged
 	//	*ServerEvent_MessageAlert
+	//	*ServerEvent_UserCallPresenceChanged
 	Payload       isServerEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6880,7 +6996,7 @@ type ServerEvent struct {
 
 func (x *ServerEvent) Reset() {
 	*x = ServerEvent{}
-	mi := &file_api_proto_packets_proto_msgTypes[77]
+	mi := &file_api_proto_packets_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6892,7 +7008,7 @@ func (x *ServerEvent) String() string {
 func (*ServerEvent) ProtoMessage() {}
 
 func (x *ServerEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_packets_proto_msgTypes[77]
+	mi := &file_api_proto_packets_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6905,7 +7021,7 @@ func (x *ServerEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerEvent.ProtoReflect.Descriptor instead.
 func (*ServerEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_packets_proto_rawDescGZIP(), []int{77}
+	return file_api_proto_packets_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *ServerEvent) GetEventSeq() int64 {
@@ -7121,6 +7237,15 @@ func (x *ServerEvent) GetMessageAlert() *MessageAlertEvent {
 	return nil
 }
 
+func (x *ServerEvent) GetUserCallPresenceChanged() *UserCallPresenceChangedEvent {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerEvent_UserCallPresenceChanged); ok {
+			return x.UserCallPresenceChanged
+		}
+	}
+	return nil
+}
+
 type isServerEvent_Payload interface {
 	isServerEvent_Payload()
 }
@@ -7201,6 +7326,10 @@ type ServerEvent_MessageAlert struct {
 	MessageAlert *MessageAlertEvent `protobuf:"bytes,28,opt,name=message_alert,json=messageAlert,proto3,oneof"`
 }
 
+type ServerEvent_UserCallPresenceChanged struct {
+	UserCallPresenceChanged *UserCallPresenceChangedEvent `protobuf:"bytes,29,opt,name=user_call_presence_changed,json=userCallPresenceChanged,proto3,oneof"`
+}
+
 func (*ServerEvent_ConversationUpserted) isServerEvent_Payload() {}
 
 func (*ServerEvent_ConversationRemoved) isServerEvent_Payload() {}
@@ -7238,6 +7367,8 @@ func (*ServerEvent_MessageDeleted) isServerEvent_Payload() {}
 func (*ServerEvent_TaskStatusChanged) isServerEvent_Payload() {}
 
 func (*ServerEvent_MessageAlert) isServerEvent_Payload() {}
+
+func (*ServerEvent_UserCallPresenceChanged) isServerEvent_Payload() {}
 
 var File_api_proto_packets_proto protoreflect.FileDescriptor
 
@@ -7515,7 +7646,10 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12.\n" +
 	"\x06status\x18\x03 \x01(\x0e2\x16.packets.v1.CallStatusR\x06status\x12+\n" +
-	"\x11participant_count\x18\x04 \x01(\x05R\x10participantCount\"\xbf\x02\n" +
+	"\x11participant_count\x18\x04 \x01(\x05R\x10participantCount\"^\n" +
+	"\x17UserCallPresenceSummary\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12*\n" +
+	"\x11active_call_count\x18\x02 \x01(\x05R\x0factiveCallCount\"\xbf\x02\n" +
 	"\x11CallInviteSummary\x12\x1b\n" +
 	"\tinvite_id\x18\x01 \x01(\tR\binviteId\x12\x17\n" +
 	"\acall_id\x18\x02 \x01(\tR\x06callId\x12'\n" +
@@ -7541,7 +7675,7 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x0epage_size_hint\x18\x03 \x01(\rR\fpageSizeHint\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\x04 \x01(\tR\tpageToken\x120\n" +
-	"\x14bootstrap_session_id\x18\x05 \x01(\tR\x12bootstrapSessionId\"\x82\a\n" +
+	"\x14bootstrap_session_id\x18\x05 \x01(\tR\x12bootstrapSessionId\"\xd5\a\n" +
 	"\x11BootstrapResponse\x12!\n" +
 	"\fsnapshot_seq\x18\x01 \x01(\x03R\vsnapshotSeq\x12:\n" +
 	"\tworkspace\x18\x02 \x01(\v2\x1c.packets.v1.WorkspaceSummaryR\tworkspace\x12E\n" +
@@ -7560,7 +7694,8 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x13page_size_effective\x18\r \x01(\rR\x11pageSizeEffective\x12B\n" +
 	"\x1destimated_total_conversations\x18\x0e \x01(\rR\x1bestimatedTotalConversations\x125\n" +
 	"\bpresence\x18\x0f \x03(\v2\x19.packets.v1.PresenceEventR\bpresence\x126\n" +
-	"\tuser_role\x18\x10 \x01(\x0e2\x19.packets.v1.WorkspaceRoleR\buserRole\"N\n" +
+	"\tuser_role\x18\x10 \x01(\x0e2\x19.packets.v1.WorkspaceRoleR\buserRole\x12Q\n" +
+	"\x12user_call_presence\x18\x11 \x03(\v2#.packets.v1.UserCallPresenceSummaryR\x10userCallPresence\"N\n" +
 	"\x10SyncSinceRequest\x12\x1b\n" +
 	"\tafter_seq\x18\x01 \x01(\x03R\bafterSeq\x12\x1d\n" +
 	"\n" +
@@ -7608,7 +7743,10 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x15CallStateChangedEvent\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12.\n" +
-	"\x06status\x18\x03 \x01(\x0e2\x16.packets.v1.CallStatusR\x06status\"\xc9\x02\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x16.packets.v1.CallStatusR\x06status\"c\n" +
+	"\x1cUserCallPresenceChangedEvent\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12*\n" +
+	"\x11active_call_count\x18\x02 \x01(\x05R\x0factiveCallCount\"\xc9\x02\n" +
 	"\x19ThreadSummaryUpdatedEvent\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x123\n" +
 	"\x16thread_root_message_id\x18\x02 \x01(\tR\x13threadRootMessageId\x12\x1f\n" +
@@ -7701,7 +7839,7 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\vsender_name\x18\x05 \x01(\tR\n" +
 	"senderName\x12\x12\n" +
 	"\x04body\x18\x06 \x01(\tR\x04body\x12)\n" +
-	"\x10attachment_count\x18\a \x01(\x05R\x0fattachmentCount\"\xd5\x0e\n" +
+	"\x10attachment_count\x18\a \x01(\x05R\x0fattachmentCount\"\xbe\x0f\n" +
 	"\vServerEvent\x12\x1b\n" +
 	"\tevent_seq\x18\x01 \x01(\x03R\beventSeq\x12\x19\n" +
 	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12;\n" +
@@ -7729,7 +7867,8 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x0fmessage_updated\x18\x19 \x01(\v2\x1f.packets.v1.MessageUpdatedEventH\x00R\x0emessageUpdated\x12J\n" +
 	"\x0fmessage_deleted\x18\x1a \x01(\v2\x1f.packets.v1.MessageDeletedEventH\x00R\x0emessageDeleted\x12T\n" +
 	"\x13task_status_changed\x18\x1b \x01(\v2\".packets.v1.TaskStatusChangedEventH\x00R\x11taskStatusChanged\x12D\n" +
-	"\rmessage_alert\x18\x1c \x01(\v2\x1d.packets.v1.MessageAlertEventH\x00R\fmessageAlertB\t\n" +
+	"\rmessage_alert\x18\x1c \x01(\v2\x1d.packets.v1.MessageAlertEventH\x00R\fmessageAlert\x12g\n" +
+	"\x1auser_call_presence_changed\x18\x1d \x01(\v2(.packets.v1.UserCallPresenceChangedEventH\x00R\x17userCallPresenceChangedB\t\n" +
 	"\apayload*\x9c\x01\n" +
 	"\x10ConversationType\x12!\n" +
 	"\x1dCONVERSATION_TYPE_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -7822,7 +7961,7 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	" DocumentContentCollabMessageKind\x124\n" +
 	"0DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_UNSPECIFIED\x10\x00\x12-\n" +
 	")DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_SYNC\x10\x01\x122\n" +
-	".DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_AWARENESS\x10\x02*\xd1\x05\n" +
+	".DOCUMENT_CONTENT_COLLAB_MESSAGE_KIND_AWARENESS\x10\x02*\xfc\x05\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12$\n" +
 	" EVENT_TYPE_CONVERSATION_UPSERTED\x10\x01\x12#\n" +
@@ -7844,7 +7983,8 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x1aEVENT_TYPE_MESSAGE_UPDATED\x10\x10\x12\x1e\n" +
 	"\x1aEVENT_TYPE_MESSAGE_DELETED\x10\x11\x12\"\n" +
 	"\x1eEVENT_TYPE_TASK_STATUS_CHANGED\x10\x12\x12\x1c\n" +
-	"\x18EVENT_TYPE_MESSAGE_ALERT\x10\x13*\x96\x01\n" +
+	"\x18EVENT_TYPE_MESSAGE_ALERT\x10\x13\x12)\n" +
+	"%EVENT_TYPE_USER_CALL_PRESENCE_CHANGED\x10\x14*\x96\x01\n" +
 	"\x11MessageEntityKind\x12#\n" +
 	"\x1fMESSAGE_ENTITY_KIND_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18MESSAGE_ENTITY_KIND_USER\x10\x01\x12\x1c\n" +
@@ -7864,7 +8004,7 @@ func file_api_proto_packets_proto_rawDescGZIP() []byte {
 }
 
 var file_api_proto_packets_proto_enumTypes = make([]protoimpl.EnumInfo, 17)
-var file_api_proto_packets_proto_msgTypes = make([]protoimpl.MessageInfo, 78)
+var file_api_proto_packets_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
 var file_api_proto_packets_proto_goTypes = []any{
 	(ConversationType)(0),                           // 0: packets.v1.ConversationType
 	(CallStatus)(0),                                 // 1: packets.v1.CallStatus
@@ -7924,44 +8064,46 @@ var file_api_proto_packets_proto_goTypes = []any{
 	(*ConversationSummary)(nil),                     // 55: packets.v1.ConversationSummary
 	(*UnreadCounter)(nil),                           // 56: packets.v1.UnreadCounter
 	(*ActiveCallSummary)(nil),                       // 57: packets.v1.ActiveCallSummary
-	(*CallInviteSummary)(nil),                       // 58: packets.v1.CallInviteSummary
-	(*NotificationSummary)(nil),                     // 59: packets.v1.NotificationSummary
-	(*BootstrapRequest)(nil),                        // 60: packets.v1.BootstrapRequest
-	(*BootstrapResponse)(nil),                       // 61: packets.v1.BootstrapResponse
-	(*SyncSinceRequest)(nil),                        // 62: packets.v1.SyncSinceRequest
-	(*SyncSinceResponse)(nil),                       // 63: packets.v1.SyncSinceResponse
-	(*AckRequest)(nil),                              // 64: packets.v1.AckRequest
-	(*AckResponse)(nil),                             // 65: packets.v1.AckResponse
-	(*ConversationUpsertedEvent)(nil),               // 66: packets.v1.ConversationUpsertedEvent
-	(*ConversationRemovedEvent)(nil),                // 67: packets.v1.ConversationRemovedEvent
-	(*MembershipChangedEvent)(nil),                  // 68: packets.v1.MembershipChangedEvent
-	(*ReadCounterUpdatedEvent)(nil),                 // 69: packets.v1.ReadCounterUpdatedEvent
-	(*NotificationAddedEvent)(nil),                  // 70: packets.v1.NotificationAddedEvent
-	(*NotificationResolvedEvent)(nil),               // 71: packets.v1.NotificationResolvedEvent
-	(*CallInviteCreatedEvent)(nil),                  // 72: packets.v1.CallInviteCreatedEvent
-	(*CallInviteCancelledEvent)(nil),                // 73: packets.v1.CallInviteCancelledEvent
-	(*CallStateChangedEvent)(nil),                   // 74: packets.v1.CallStateChangedEvent
-	(*ThreadSummaryUpdatedEvent)(nil),               // 75: packets.v1.ThreadSummaryUpdatedEvent
-	(*ReactionUpdatedEvent)(nil),                    // 76: packets.v1.ReactionUpdatedEvent
-	(*MessageUpdatedEvent)(nil),                     // 77: packets.v1.MessageUpdatedEvent
-	(*MessageDeletedEvent)(nil),                     // 78: packets.v1.MessageDeletedEvent
-	(*ForcePasswordChangeEvent)(nil),                // 79: packets.v1.ForcePasswordChangeEvent
-	(*UserIdentityUpdatedEvent)(nil),                // 80: packets.v1.UserIdentityUpdatedEvent
-	(*SetNotificationLevelRequest)(nil),             // 81: packets.v1.SetNotificationLevelRequest
-	(*SetNotificationLevelResponse)(nil),            // 82: packets.v1.SetNotificationLevelResponse
-	(*TaskDescriptionCollabSubscribeRequest)(nil),   // 83: packets.v1.TaskDescriptionCollabSubscribeRequest
-	(*TaskDescriptionCollabSubscribeResponse)(nil),  // 84: packets.v1.TaskDescriptionCollabSubscribeResponse
-	(*TaskDescriptionCollabUnsubscribeRequest)(nil), // 85: packets.v1.TaskDescriptionCollabUnsubscribeRequest
-	(*TaskDescriptionCollabMessage)(nil),            // 86: packets.v1.TaskDescriptionCollabMessage
-	(*DocumentContentCollabSubscribeRequest)(nil),   // 87: packets.v1.DocumentContentCollabSubscribeRequest
-	(*DocumentContentCollabSubscribeResponse)(nil),  // 88: packets.v1.DocumentContentCollabSubscribeResponse
-	(*DocumentContentCollabUnsubscribeRequest)(nil), // 89: packets.v1.DocumentContentCollabUnsubscribeRequest
-	(*DocumentContentCollabMessage)(nil),            // 90: packets.v1.DocumentContentCollabMessage
-	(*NotificationLevelChangedEvent)(nil),           // 91: packets.v1.NotificationLevelChangedEvent
-	(*TaskStatusChangedEvent)(nil),                  // 92: packets.v1.TaskStatusChangedEvent
-	(*MessageAlertEvent)(nil),                       // 93: packets.v1.MessageAlertEvent
-	(*ServerEvent)(nil),                             // 94: packets.v1.ServerEvent
-	(*timestamppb.Timestamp)(nil),                   // 95: google.protobuf.Timestamp
+	(*UserCallPresenceSummary)(nil),                 // 58: packets.v1.UserCallPresenceSummary
+	(*CallInviteSummary)(nil),                       // 59: packets.v1.CallInviteSummary
+	(*NotificationSummary)(nil),                     // 60: packets.v1.NotificationSummary
+	(*BootstrapRequest)(nil),                        // 61: packets.v1.BootstrapRequest
+	(*BootstrapResponse)(nil),                       // 62: packets.v1.BootstrapResponse
+	(*SyncSinceRequest)(nil),                        // 63: packets.v1.SyncSinceRequest
+	(*SyncSinceResponse)(nil),                       // 64: packets.v1.SyncSinceResponse
+	(*AckRequest)(nil),                              // 65: packets.v1.AckRequest
+	(*AckResponse)(nil),                             // 66: packets.v1.AckResponse
+	(*ConversationUpsertedEvent)(nil),               // 67: packets.v1.ConversationUpsertedEvent
+	(*ConversationRemovedEvent)(nil),                // 68: packets.v1.ConversationRemovedEvent
+	(*MembershipChangedEvent)(nil),                  // 69: packets.v1.MembershipChangedEvent
+	(*ReadCounterUpdatedEvent)(nil),                 // 70: packets.v1.ReadCounterUpdatedEvent
+	(*NotificationAddedEvent)(nil),                  // 71: packets.v1.NotificationAddedEvent
+	(*NotificationResolvedEvent)(nil),               // 72: packets.v1.NotificationResolvedEvent
+	(*CallInviteCreatedEvent)(nil),                  // 73: packets.v1.CallInviteCreatedEvent
+	(*CallInviteCancelledEvent)(nil),                // 74: packets.v1.CallInviteCancelledEvent
+	(*CallStateChangedEvent)(nil),                   // 75: packets.v1.CallStateChangedEvent
+	(*UserCallPresenceChangedEvent)(nil),            // 76: packets.v1.UserCallPresenceChangedEvent
+	(*ThreadSummaryUpdatedEvent)(nil),               // 77: packets.v1.ThreadSummaryUpdatedEvent
+	(*ReactionUpdatedEvent)(nil),                    // 78: packets.v1.ReactionUpdatedEvent
+	(*MessageUpdatedEvent)(nil),                     // 79: packets.v1.MessageUpdatedEvent
+	(*MessageDeletedEvent)(nil),                     // 80: packets.v1.MessageDeletedEvent
+	(*ForcePasswordChangeEvent)(nil),                // 81: packets.v1.ForcePasswordChangeEvent
+	(*UserIdentityUpdatedEvent)(nil),                // 82: packets.v1.UserIdentityUpdatedEvent
+	(*SetNotificationLevelRequest)(nil),             // 83: packets.v1.SetNotificationLevelRequest
+	(*SetNotificationLevelResponse)(nil),            // 84: packets.v1.SetNotificationLevelResponse
+	(*TaskDescriptionCollabSubscribeRequest)(nil),   // 85: packets.v1.TaskDescriptionCollabSubscribeRequest
+	(*TaskDescriptionCollabSubscribeResponse)(nil),  // 86: packets.v1.TaskDescriptionCollabSubscribeResponse
+	(*TaskDescriptionCollabUnsubscribeRequest)(nil), // 87: packets.v1.TaskDescriptionCollabUnsubscribeRequest
+	(*TaskDescriptionCollabMessage)(nil),            // 88: packets.v1.TaskDescriptionCollabMessage
+	(*DocumentContentCollabSubscribeRequest)(nil),   // 89: packets.v1.DocumentContentCollabSubscribeRequest
+	(*DocumentContentCollabSubscribeResponse)(nil),  // 90: packets.v1.DocumentContentCollabSubscribeResponse
+	(*DocumentContentCollabUnsubscribeRequest)(nil), // 91: packets.v1.DocumentContentCollabUnsubscribeRequest
+	(*DocumentContentCollabMessage)(nil),            // 92: packets.v1.DocumentContentCollabMessage
+	(*NotificationLevelChangedEvent)(nil),           // 93: packets.v1.NotificationLevelChangedEvent
+	(*TaskStatusChangedEvent)(nil),                  // 94: packets.v1.TaskStatusChangedEvent
+	(*MessageAlertEvent)(nil),                       // 95: packets.v1.MessageAlertEvent
+	(*ServerEvent)(nil),                             // 96: packets.v1.ServerEvent
+	(*timestamppb.Timestamp)(nil),                   // 97: google.protobuf.Timestamp
 }
 var file_api_proto_packets_proto_depIdxs = []int32{
 	18,  // 0: packets.v1.Envelope.client_hello:type_name -> packets.v1.ClientHello
@@ -7983,13 +8125,13 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	52,  // 16: packets.v1.Envelope.call_invite_action_ack:type_name -> packets.v1.CallInviteActionAck
 	45,  // 17: packets.v1.Envelope.invite_call_members_request:type_name -> packets.v1.InviteCallMembersRequest
 	46,  // 18: packets.v1.Envelope.invite_call_members_response:type_name -> packets.v1.InviteCallMembersResponse
-	60,  // 19: packets.v1.Envelope.bootstrap_request:type_name -> packets.v1.BootstrapRequest
-	61,  // 20: packets.v1.Envelope.bootstrap_response:type_name -> packets.v1.BootstrapResponse
-	62,  // 21: packets.v1.Envelope.sync_since_request:type_name -> packets.v1.SyncSinceRequest
-	63,  // 22: packets.v1.Envelope.sync_since_response:type_name -> packets.v1.SyncSinceResponse
-	94,  // 23: packets.v1.Envelope.server_event:type_name -> packets.v1.ServerEvent
-	64,  // 24: packets.v1.Envelope.ack_request:type_name -> packets.v1.AckRequest
-	65,  // 25: packets.v1.Envelope.ack_response:type_name -> packets.v1.AckResponse
+	61,  // 19: packets.v1.Envelope.bootstrap_request:type_name -> packets.v1.BootstrapRequest
+	62,  // 20: packets.v1.Envelope.bootstrap_response:type_name -> packets.v1.BootstrapResponse
+	63,  // 21: packets.v1.Envelope.sync_since_request:type_name -> packets.v1.SyncSinceRequest
+	64,  // 22: packets.v1.Envelope.sync_since_response:type_name -> packets.v1.SyncSinceResponse
+	96,  // 23: packets.v1.Envelope.server_event:type_name -> packets.v1.ServerEvent
+	65,  // 24: packets.v1.Envelope.ack_request:type_name -> packets.v1.AckRequest
+	66,  // 25: packets.v1.Envelope.ack_response:type_name -> packets.v1.AckResponse
 	30,  // 26: packets.v1.Envelope.subscribe_thread_request:type_name -> packets.v1.SubscribeThreadRequest
 	31,  // 27: packets.v1.Envelope.subscribe_thread_response:type_name -> packets.v1.SubscribeThreadResponse
 	32,  // 28: packets.v1.Envelope.add_reaction_request:type_name -> packets.v1.AddReactionRequest
@@ -8000,17 +8142,17 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	37,  // 33: packets.v1.Envelope.set_presence_request:type_name -> packets.v1.SetPresenceRequest
 	40,  // 34: packets.v1.Envelope.presence_event:type_name -> packets.v1.PresenceEvent
 	38,  // 35: packets.v1.Envelope.presence_heartbeat_request:type_name -> packets.v1.PresenceHeartbeatRequest
-	81,  // 36: packets.v1.Envelope.set_notification_level_request:type_name -> packets.v1.SetNotificationLevelRequest
-	82,  // 37: packets.v1.Envelope.set_notification_level_response:type_name -> packets.v1.SetNotificationLevelResponse
+	83,  // 36: packets.v1.Envelope.set_notification_level_request:type_name -> packets.v1.SetNotificationLevelRequest
+	84,  // 37: packets.v1.Envelope.set_notification_level_response:type_name -> packets.v1.SetNotificationLevelResponse
 	39,  // 38: packets.v1.Envelope.set_client_window_activity_request:type_name -> packets.v1.ClientWindowActivityRequest
-	83,  // 39: packets.v1.Envelope.task_description_collab_subscribe_request:type_name -> packets.v1.TaskDescriptionCollabSubscribeRequest
-	84,  // 40: packets.v1.Envelope.task_description_collab_subscribe_response:type_name -> packets.v1.TaskDescriptionCollabSubscribeResponse
-	85,  // 41: packets.v1.Envelope.task_description_collab_unsubscribe_request:type_name -> packets.v1.TaskDescriptionCollabUnsubscribeRequest
-	86,  // 42: packets.v1.Envelope.task_description_collab_message:type_name -> packets.v1.TaskDescriptionCollabMessage
-	87,  // 43: packets.v1.Envelope.document_content_collab_subscribe_request:type_name -> packets.v1.DocumentContentCollabSubscribeRequest
-	88,  // 44: packets.v1.Envelope.document_content_collab_subscribe_response:type_name -> packets.v1.DocumentContentCollabSubscribeResponse
-	89,  // 45: packets.v1.Envelope.document_content_collab_unsubscribe_request:type_name -> packets.v1.DocumentContentCollabUnsubscribeRequest
-	90,  // 46: packets.v1.Envelope.document_content_collab_message:type_name -> packets.v1.DocumentContentCollabMessage
+	85,  // 39: packets.v1.Envelope.task_description_collab_subscribe_request:type_name -> packets.v1.TaskDescriptionCollabSubscribeRequest
+	86,  // 40: packets.v1.Envelope.task_description_collab_subscribe_response:type_name -> packets.v1.TaskDescriptionCollabSubscribeResponse
+	87,  // 41: packets.v1.Envelope.task_description_collab_unsubscribe_request:type_name -> packets.v1.TaskDescriptionCollabUnsubscribeRequest
+	88,  // 42: packets.v1.Envelope.task_description_collab_message:type_name -> packets.v1.TaskDescriptionCollabMessage
+	89,  // 43: packets.v1.Envelope.document_content_collab_subscribe_request:type_name -> packets.v1.DocumentContentCollabSubscribeRequest
+	90,  // 44: packets.v1.Envelope.document_content_collab_subscribe_response:type_name -> packets.v1.DocumentContentCollabSubscribeResponse
+	91,  // 45: packets.v1.Envelope.document_content_collab_unsubscribe_request:type_name -> packets.v1.DocumentContentCollabUnsubscribeRequest
+	92,  // 46: packets.v1.Envelope.document_content_collab_message:type_name -> packets.v1.DocumentContentCollabMessage
 	12,  // 47: packets.v1.ClientHello.capabilities:type_name -> packets.v1.FeatureCapability
 	23,  // 48: packets.v1.ServerHello.rate_limit_policy:type_name -> packets.v1.RateLimitPolicy
 	12,  // 49: packets.v1.ServerHello.accepted_capabilities:type_name -> packets.v1.FeatureCapability
@@ -8018,18 +8160,18 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	3,   // 51: packets.v1.Error.code:type_name -> packets.v1.ErrorCode
 	0,   // 52: packets.v1.SendMessageRequest.conversation_type:type_name -> packets.v1.ConversationType
 	26,  // 53: packets.v1.SendMessageRequest.entities:type_name -> packets.v1.MessageEntity
-	95,  // 54: packets.v1.SendMessageAck.created_at:type_name -> google.protobuf.Timestamp
+	97,  // 54: packets.v1.SendMessageAck.created_at:type_name -> google.protobuf.Timestamp
 	16,  // 55: packets.v1.MessageEntity.kind:type_name -> packets.v1.MessageEntityKind
-	95,  // 56: packets.v1.MessageEvent.created_at:type_name -> google.protobuf.Timestamp
+	97,  // 56: packets.v1.MessageEvent.created_at:type_name -> google.protobuf.Timestamp
 	29,  // 57: packets.v1.MessageEvent.reactions:type_name -> packets.v1.ReactionAggregate
 	28,  // 58: packets.v1.MessageEvent.attachments:type_name -> packets.v1.MessageAttachment
-	95,  // 59: packets.v1.MessageEvent.edited_at:type_name -> google.protobuf.Timestamp
+	97,  // 59: packets.v1.MessageEvent.edited_at:type_name -> google.protobuf.Timestamp
 	26,  // 60: packets.v1.MessageEvent.entities:type_name -> packets.v1.MessageEntity
 	27,  // 61: packets.v1.SubscribeThreadResponse.replay:type_name -> packets.v1.MessageEvent
-	95,  // 62: packets.v1.TypingEvent.expires_at:type_name -> google.protobuf.Timestamp
+	97,  // 62: packets.v1.TypingEvent.expires_at:type_name -> google.protobuf.Timestamp
 	2,   // 63: packets.v1.SetPresenceRequest.desired_presence:type_name -> packets.v1.PresenceStatus
 	2,   // 64: packets.v1.PresenceEvent.effective_presence:type_name -> packets.v1.PresenceStatus
-	95,  // 65: packets.v1.PresenceEvent.last_active_at:type_name -> google.protobuf.Timestamp
+	97,  // 65: packets.v1.PresenceEvent.last_active_at:type_name -> google.protobuf.Timestamp
 	0,   // 66: packets.v1.CreateCallRequest.conversation_type:type_name -> packets.v1.ConversationType
 	1,   // 67: packets.v1.CreateCallResponse.status:type_name -> packets.v1.CallStatus
 	0,   // 68: packets.v1.InviteCallMembersRequest.conversation_type:type_name -> packets.v1.ConversationType
@@ -8039,68 +8181,70 @@ var file_api_proto_packets_proto_depIdxs = []int32{
 	11,  // 72: packets.v1.WorkspaceSummary.self_role:type_name -> packets.v1.WorkspaceRole
 	0,   // 73: packets.v1.ConversationSummary.conversation_type:type_name -> packets.v1.ConversationType
 	10,  // 74: packets.v1.ConversationSummary.notification_level:type_name -> packets.v1.NotificationLevel
-	95,  // 75: packets.v1.ConversationSummary.last_activity_at:type_name -> google.protobuf.Timestamp
+	97,  // 75: packets.v1.ConversationSummary.last_activity_at:type_name -> google.protobuf.Timestamp
 	2,   // 76: packets.v1.ConversationSummary.presence:type_name -> packets.v1.PresenceStatus
 	1,   // 77: packets.v1.ActiveCallSummary.status:type_name -> packets.v1.CallStatus
-	95,  // 78: packets.v1.CallInviteSummary.created_at:type_name -> google.protobuf.Timestamp
-	95,  // 79: packets.v1.CallInviteSummary.expires_at:type_name -> google.protobuf.Timestamp
+	97,  // 78: packets.v1.CallInviteSummary.created_at:type_name -> google.protobuf.Timestamp
+	97,  // 79: packets.v1.CallInviteSummary.expires_at:type_name -> google.protobuf.Timestamp
 	5,   // 80: packets.v1.CallInviteSummary.state:type_name -> packets.v1.InviteState
 	9,   // 81: packets.v1.NotificationSummary.type:type_name -> packets.v1.NotificationType
-	95,  // 82: packets.v1.NotificationSummary.created_at:type_name -> google.protobuf.Timestamp
+	97,  // 82: packets.v1.NotificationSummary.created_at:type_name -> google.protobuf.Timestamp
 	53,  // 83: packets.v1.BootstrapResponse.workspace:type_name -> packets.v1.WorkspaceSummary
 	55,  // 84: packets.v1.BootstrapResponse.conversations:type_name -> packets.v1.ConversationSummary
 	56,  // 85: packets.v1.BootstrapResponse.unread:type_name -> packets.v1.UnreadCounter
 	57,  // 86: packets.v1.BootstrapResponse.active_calls:type_name -> packets.v1.ActiveCallSummary
-	58,  // 87: packets.v1.BootstrapResponse.pending_invites:type_name -> packets.v1.CallInviteSummary
-	59,  // 88: packets.v1.BootstrapResponse.notifications:type_name -> packets.v1.NotificationSummary
-	95,  // 89: packets.v1.BootstrapResponse.bootstrap_expires_at:type_name -> google.protobuf.Timestamp
+	59,  // 87: packets.v1.BootstrapResponse.pending_invites:type_name -> packets.v1.CallInviteSummary
+	60,  // 88: packets.v1.BootstrapResponse.notifications:type_name -> packets.v1.NotificationSummary
+	97,  // 89: packets.v1.BootstrapResponse.bootstrap_expires_at:type_name -> google.protobuf.Timestamp
 	40,  // 90: packets.v1.BootstrapResponse.presence:type_name -> packets.v1.PresenceEvent
 	11,  // 91: packets.v1.BootstrapResponse.user_role:type_name -> packets.v1.WorkspaceRole
-	94,  // 92: packets.v1.SyncSinceResponse.events:type_name -> packets.v1.ServerEvent
-	4,   // 93: packets.v1.SyncSinceResponse.need_full_bootstrap_reason:type_name -> packets.v1.SyncBootstrapReason
-	55,  // 94: packets.v1.ConversationUpsertedEvent.conversation:type_name -> packets.v1.ConversationSummary
-	8,   // 95: packets.v1.ConversationRemovedEvent.reason:type_name -> packets.v1.ConversationRemovedReason
-	7,   // 96: packets.v1.MembershipChangedEvent.action:type_name -> packets.v1.MembershipAction
-	56,  // 97: packets.v1.ReadCounterUpdatedEvent.counter:type_name -> packets.v1.UnreadCounter
-	59,  // 98: packets.v1.NotificationAddedEvent.notification:type_name -> packets.v1.NotificationSummary
-	58,  // 99: packets.v1.CallInviteCreatedEvent.invite:type_name -> packets.v1.CallInviteSummary
-	6,   // 100: packets.v1.CallInviteCancelledEvent.reason:type_name -> packets.v1.InviteCancelReason
-	1,   // 101: packets.v1.CallStateChangedEvent.status:type_name -> packets.v1.CallStatus
-	95,  // 102: packets.v1.ThreadSummaryUpdatedEvent.last_thread_reply_at:type_name -> google.protobuf.Timestamp
-	95,  // 103: packets.v1.MessageUpdatedEvent.edited_at:type_name -> google.protobuf.Timestamp
-	26,  // 104: packets.v1.MessageUpdatedEvent.entities:type_name -> packets.v1.MessageEntity
-	10,  // 105: packets.v1.SetNotificationLevelRequest.level:type_name -> packets.v1.NotificationLevel
-	10,  // 106: packets.v1.SetNotificationLevelResponse.level:type_name -> packets.v1.NotificationLevel
-	13,  // 107: packets.v1.TaskDescriptionCollabMessage.kind:type_name -> packets.v1.TaskDescriptionCollabMessageKind
-	14,  // 108: packets.v1.DocumentContentCollabMessage.kind:type_name -> packets.v1.DocumentContentCollabMessageKind
-	10,  // 109: packets.v1.NotificationLevelChangedEvent.level:type_name -> packets.v1.NotificationLevel
-	95,  // 110: packets.v1.TaskStatusChangedEvent.updated_at:type_name -> google.protobuf.Timestamp
-	95,  // 111: packets.v1.ServerEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	15,  // 112: packets.v1.ServerEvent.event_type:type_name -> packets.v1.EventType
-	66,  // 113: packets.v1.ServerEvent.conversation_upserted:type_name -> packets.v1.ConversationUpsertedEvent
-	67,  // 114: packets.v1.ServerEvent.conversation_removed:type_name -> packets.v1.ConversationRemovedEvent
-	68,  // 115: packets.v1.ServerEvent.membership_changed:type_name -> packets.v1.MembershipChangedEvent
-	27,  // 116: packets.v1.ServerEvent.message_created:type_name -> packets.v1.MessageEvent
-	69,  // 117: packets.v1.ServerEvent.read_counter_updated:type_name -> packets.v1.ReadCounterUpdatedEvent
-	70,  // 118: packets.v1.ServerEvent.notification_added:type_name -> packets.v1.NotificationAddedEvent
-	71,  // 119: packets.v1.ServerEvent.notification_resolved:type_name -> packets.v1.NotificationResolvedEvent
-	72,  // 120: packets.v1.ServerEvent.call_invite_created:type_name -> packets.v1.CallInviteCreatedEvent
-	73,  // 121: packets.v1.ServerEvent.call_invite_cancelled:type_name -> packets.v1.CallInviteCancelledEvent
-	74,  // 122: packets.v1.ServerEvent.call_state_changed:type_name -> packets.v1.CallStateChangedEvent
-	75,  // 123: packets.v1.ServerEvent.thread_summary_updated:type_name -> packets.v1.ThreadSummaryUpdatedEvent
-	76,  // 124: packets.v1.ServerEvent.reaction_updated:type_name -> packets.v1.ReactionUpdatedEvent
-	79,  // 125: packets.v1.ServerEvent.force_password_change:type_name -> packets.v1.ForcePasswordChangeEvent
-	80,  // 126: packets.v1.ServerEvent.user_identity_updated:type_name -> packets.v1.UserIdentityUpdatedEvent
-	91,  // 127: packets.v1.ServerEvent.notification_level_changed:type_name -> packets.v1.NotificationLevelChangedEvent
-	77,  // 128: packets.v1.ServerEvent.message_updated:type_name -> packets.v1.MessageUpdatedEvent
-	78,  // 129: packets.v1.ServerEvent.message_deleted:type_name -> packets.v1.MessageDeletedEvent
-	92,  // 130: packets.v1.ServerEvent.task_status_changed:type_name -> packets.v1.TaskStatusChangedEvent
-	93,  // 131: packets.v1.ServerEvent.message_alert:type_name -> packets.v1.MessageAlertEvent
-	132, // [132:132] is the sub-list for method output_type
-	132, // [132:132] is the sub-list for method input_type
-	132, // [132:132] is the sub-list for extension type_name
-	132, // [132:132] is the sub-list for extension extendee
-	0,   // [0:132] is the sub-list for field type_name
+	58,  // 92: packets.v1.BootstrapResponse.user_call_presence:type_name -> packets.v1.UserCallPresenceSummary
+	96,  // 93: packets.v1.SyncSinceResponse.events:type_name -> packets.v1.ServerEvent
+	4,   // 94: packets.v1.SyncSinceResponse.need_full_bootstrap_reason:type_name -> packets.v1.SyncBootstrapReason
+	55,  // 95: packets.v1.ConversationUpsertedEvent.conversation:type_name -> packets.v1.ConversationSummary
+	8,   // 96: packets.v1.ConversationRemovedEvent.reason:type_name -> packets.v1.ConversationRemovedReason
+	7,   // 97: packets.v1.MembershipChangedEvent.action:type_name -> packets.v1.MembershipAction
+	56,  // 98: packets.v1.ReadCounterUpdatedEvent.counter:type_name -> packets.v1.UnreadCounter
+	60,  // 99: packets.v1.NotificationAddedEvent.notification:type_name -> packets.v1.NotificationSummary
+	59,  // 100: packets.v1.CallInviteCreatedEvent.invite:type_name -> packets.v1.CallInviteSummary
+	6,   // 101: packets.v1.CallInviteCancelledEvent.reason:type_name -> packets.v1.InviteCancelReason
+	1,   // 102: packets.v1.CallStateChangedEvent.status:type_name -> packets.v1.CallStatus
+	97,  // 103: packets.v1.ThreadSummaryUpdatedEvent.last_thread_reply_at:type_name -> google.protobuf.Timestamp
+	97,  // 104: packets.v1.MessageUpdatedEvent.edited_at:type_name -> google.protobuf.Timestamp
+	26,  // 105: packets.v1.MessageUpdatedEvent.entities:type_name -> packets.v1.MessageEntity
+	10,  // 106: packets.v1.SetNotificationLevelRequest.level:type_name -> packets.v1.NotificationLevel
+	10,  // 107: packets.v1.SetNotificationLevelResponse.level:type_name -> packets.v1.NotificationLevel
+	13,  // 108: packets.v1.TaskDescriptionCollabMessage.kind:type_name -> packets.v1.TaskDescriptionCollabMessageKind
+	14,  // 109: packets.v1.DocumentContentCollabMessage.kind:type_name -> packets.v1.DocumentContentCollabMessageKind
+	10,  // 110: packets.v1.NotificationLevelChangedEvent.level:type_name -> packets.v1.NotificationLevel
+	97,  // 111: packets.v1.TaskStatusChangedEvent.updated_at:type_name -> google.protobuf.Timestamp
+	97,  // 112: packets.v1.ServerEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	15,  // 113: packets.v1.ServerEvent.event_type:type_name -> packets.v1.EventType
+	67,  // 114: packets.v1.ServerEvent.conversation_upserted:type_name -> packets.v1.ConversationUpsertedEvent
+	68,  // 115: packets.v1.ServerEvent.conversation_removed:type_name -> packets.v1.ConversationRemovedEvent
+	69,  // 116: packets.v1.ServerEvent.membership_changed:type_name -> packets.v1.MembershipChangedEvent
+	27,  // 117: packets.v1.ServerEvent.message_created:type_name -> packets.v1.MessageEvent
+	70,  // 118: packets.v1.ServerEvent.read_counter_updated:type_name -> packets.v1.ReadCounterUpdatedEvent
+	71,  // 119: packets.v1.ServerEvent.notification_added:type_name -> packets.v1.NotificationAddedEvent
+	72,  // 120: packets.v1.ServerEvent.notification_resolved:type_name -> packets.v1.NotificationResolvedEvent
+	73,  // 121: packets.v1.ServerEvent.call_invite_created:type_name -> packets.v1.CallInviteCreatedEvent
+	74,  // 122: packets.v1.ServerEvent.call_invite_cancelled:type_name -> packets.v1.CallInviteCancelledEvent
+	75,  // 123: packets.v1.ServerEvent.call_state_changed:type_name -> packets.v1.CallStateChangedEvent
+	77,  // 124: packets.v1.ServerEvent.thread_summary_updated:type_name -> packets.v1.ThreadSummaryUpdatedEvent
+	78,  // 125: packets.v1.ServerEvent.reaction_updated:type_name -> packets.v1.ReactionUpdatedEvent
+	81,  // 126: packets.v1.ServerEvent.force_password_change:type_name -> packets.v1.ForcePasswordChangeEvent
+	82,  // 127: packets.v1.ServerEvent.user_identity_updated:type_name -> packets.v1.UserIdentityUpdatedEvent
+	93,  // 128: packets.v1.ServerEvent.notification_level_changed:type_name -> packets.v1.NotificationLevelChangedEvent
+	79,  // 129: packets.v1.ServerEvent.message_updated:type_name -> packets.v1.MessageUpdatedEvent
+	80,  // 130: packets.v1.ServerEvent.message_deleted:type_name -> packets.v1.MessageDeletedEvent
+	94,  // 131: packets.v1.ServerEvent.task_status_changed:type_name -> packets.v1.TaskStatusChangedEvent
+	95,  // 132: packets.v1.ServerEvent.message_alert:type_name -> packets.v1.MessageAlertEvent
+	76,  // 133: packets.v1.ServerEvent.user_call_presence_changed:type_name -> packets.v1.UserCallPresenceChangedEvent
+	134, // [134:134] is the sub-list for method output_type
+	134, // [134:134] is the sub-list for method input_type
+	134, // [134:134] is the sub-list for extension type_name
+	134, // [134:134] is the sub-list for extension extendee
+	0,   // [0:134] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_packets_proto_init() }
@@ -8157,7 +8301,7 @@ func file_api_proto_packets_proto_init() {
 		(*Envelope_DocumentContentCollabUnsubscribeRequest)(nil),
 		(*Envelope_DocumentContentCollabMessage)(nil),
 	}
-	file_api_proto_packets_proto_msgTypes[77].OneofWrappers = []any{
+	file_api_proto_packets_proto_msgTypes[79].OneofWrappers = []any{
 		(*ServerEvent_ConversationUpserted)(nil),
 		(*ServerEvent_ConversationRemoved)(nil),
 		(*ServerEvent_MembershipChanged)(nil),
@@ -8177,6 +8321,7 @@ func file_api_proto_packets_proto_init() {
 		(*ServerEvent_MessageDeleted)(nil),
 		(*ServerEvent_TaskStatusChanged)(nil),
 		(*ServerEvent_MessageAlert)(nil),
+		(*ServerEvent_UserCallPresenceChanged)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -8184,7 +8329,7 @@ func file_api_proto_packets_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_packets_proto_rawDesc), len(file_api_proto_packets_proto_rawDesc)),
 			NumEnums:      17,
-			NumMessages:   78,
+			NumMessages:   80,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

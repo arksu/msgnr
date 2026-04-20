@@ -731,3 +731,43 @@ func (q *Queries) ListBootstrapUnreadCountersForPage(ctx context.Context, arg Li
 	}
 	return items, nil
 }
+
+const listBootstrapUserCallPresence = `-- name: ListBootstrapUserCallPresence :many
+SELECT
+  cp.user_id,
+  COUNT(DISTINCT c.id)::int AS active_call_count
+FROM calls c
+JOIN call_participants cp ON cp.call_id = c.id
+  AND cp.left_at IS NULL
+WHERE c.status = 'active'
+GROUP BY cp.user_id
+ORDER BY cp.user_id ASC
+`
+
+type ListBootstrapUserCallPresenceRow struct {
+	UserID          uuid.UUID `json:"user_id"`
+	ActiveCallCount int       `json:"active_call_count"`
+}
+
+func (q *Queries) ListBootstrapUserCallPresence(ctx context.Context) ([]ListBootstrapUserCallPresenceRow, error) {
+	rows, err := q.db.QueryContext(ctx, listBootstrapUserCallPresence)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBootstrapUserCallPresenceRow
+	for rows.Next() {
+		var i ListBootstrapUserCallPresenceRow
+		if err := rows.Scan(&i.UserID, &i.ActiveCallCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

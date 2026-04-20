@@ -231,6 +231,44 @@ func TestIntegration_Bootstrap_SelfDmConversationSummary(t *testing.T) {
 	assert.Equal(t, packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE, dm.GetPresence())
 }
 
+func TestIntegration_Bootstrap_FirstPageIncludesWorkspaceUserCallPresence(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	cfg := &config.Config{
+		BootstrapDefaultPageSize: 5,
+		BootstrapMaxPageSize:     5,
+		BootstrapSessionTTL:      5 * time.Minute,
+	}
+	bootstrapSvc := bootstrap.NewService(pool, cfg)
+
+	seedBootstrapWorkspace(t, ctx, pool)
+	viewerID := seedBootstrapUserWithIdentity(t, ctx, pool, "Viewer", "viewer_"+uuid.NewString()+"@example.com")
+	visibleChannelID := seedBootstrapChannel(t, ctx, pool, viewerID, "general", time.Now())
+
+	callerID := seedBootstrapUserWithIdentity(t, ctx, pool, "Caller", "caller_"+uuid.NewString()+"@example.com")
+	dmPeerID := seedBootstrapUserWithIdentity(t, ctx, pool, "DM Peer", "peer_"+uuid.NewString()+"@example.com")
+	dmID := seedBootstrapDMConversation(t, ctx, pool, callerID)
+	seedBootstrapMember(t, ctx, pool, dmID, callerID)
+	seedBootstrapMember(t, ctx, pool, dmID, dmPeerID)
+	callID := seedBootstrapActiveCall(t, ctx, pool, dmID, callerID)
+	seedBootstrapCallParticipant(t, ctx, pool, callID, callerID)
+
+	principal := auth.Principal{UserID: viewerID, SessionID: uuid.New(), Role: "member"}
+	resp, err := bootstrapSvc.Bootstrap(ctx, principal, &packetspb.BootstrapRequest{
+		ClientInstanceId: "client-user-call-presence",
+		PageSizeHint:     5,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetConversations(), 1)
+	assert.Equal(t, visibleChannelID.String(), resp.GetConversations()[0].GetConversationId())
+	assert.Empty(t, resp.GetActiveCalls(), "conversation-scoped active calls remain filtered by membership")
+
+	require.Len(t, resp.GetUserCallPresence(), 1)
+	assert.Equal(t, callerID.String(), resp.GetUserCallPresence()[0].GetUserId())
+	assert.Equal(t, int32(1), resp.GetUserCallPresence()[0].GetActiveCallCount())
+}
+
 func TestIntegration_Bootstrap_ClientMismatchRejected(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

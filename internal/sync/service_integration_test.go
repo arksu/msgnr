@@ -212,6 +212,54 @@ func TestIntegration_SyncSince_EmptyAuthorizedTailStillAdvancesCursor(t *testing
 	assert.Equal(t, int64(0), resp.GetToSeq())
 }
 
+func TestIntegration_SyncSince_IncludesWorkspaceWideUserCallPresenceEvents(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	viewerID := seedSyncUser(t, ctx, pool)
+	_ = seedSyncChannel(t, ctx, pool, viewerID)
+
+	cfg := &config.Config{MaxSyncBatch: 10, SyncEventLimit: 10, SyncRetentionWindow: 72}
+	svc := syncsvc.NewService(pool, cfg, store, func(_ context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool {
+		if evt.GetConversationId() == "" && evt.GetUserCallPresenceChanged() != nil {
+			return principal.UserID == viewerID
+		}
+		return false
+	})
+
+	payload := &packetspb.UserCallPresenceChangedEvent{
+		UserId:          uuid.NewString(),
+		ActiveCallCount: 1,
+	}
+	payloadJSON, err := protojson.Marshal(payload)
+	require.NoError(t, err)
+	appendStoredProtoEvent(t, ctx, pool, store, events.AppendParams{
+		EventID:     uuid.NewString(),
+		EventType:   "user_call_presence_changed",
+		ChannelID:   "",
+		PayloadJSON: payloadJSON,
+		OccurredAt:  time.Now().Add(-1 * time.Minute),
+		ProtoPayload: &packetspb.ServerEvent{
+			EventType: packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED,
+			Payload: &packetspb.ServerEvent_UserCallPresenceChanged{
+				UserCallPresenceChanged: payload,
+			},
+		},
+	})
+
+	resp, err := svc.SyncSince(ctx, auth.Principal{UserID: viewerID}, &packetspb.SyncSinceRequest{
+		AfterSeq:  0,
+		MaxEvents: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetEvents(), 1)
+	assert.Equal(t, int64(1), resp.GetSyncCursor())
+	assert.Empty(t, resp.GetEvents()[0].GetConversationId())
+	require.NotNil(t, resp.GetEvents()[0].GetUserCallPresenceChanged())
+	assert.Equal(t, int32(1), resp.GetEvents()[0].GetUserCallPresenceChanged().GetActiveCallCount())
+}
+
 func TestIntegration_SyncSince_GapTooLarge(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

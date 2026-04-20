@@ -297,3 +297,14 @@ FROM call_invites ci
 WHERE ci.invitee_id = @user_id
   AND ci.state = 'created'
 ORDER BY ci.created_at DESC;
+
+-- name: ListBootstrapUserCallPresence :many
+SELECT
+  cp.user_id,
+  COUNT(DISTINCT c.id)::int AS active_call_count
+FROM calls c
+JOIN call_participants cp ON cp.call_id = c.id
+  AND cp.left_at IS NULL
+WHERE c.status = 'active'
+GROUP BY cp.user_id
+ORDER BY cp.user_id ASC;

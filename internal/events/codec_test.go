@@ -93,3 +93,26 @@ func TestBuildServerEventFromStored_DecodesTaskStatusChanged(t *testing.T) {
 	assert.Equal(t, "task-1", evt.GetTaskStatusChanged().GetTaskId())
 	assert.Equal(t, "BUG-1", evt.GetTaskStatusChanged().GetPublicId())
 }
+
+func TestBuildServerEventFromStored_DecodesUserCallPresenceChanged(t *testing.T) {
+	occurredAt := time.Unix(1700003000, 0).UTC()
+	payload := []byte(`{
+		"userId":"user-7",
+		"activeCallCount":2
+	}`)
+
+	evt, err := buildServerEventFromStored(
+		"user_call_presence_changed",
+		"55555555-5555-5555-5555-555555555555",
+		"",
+		occurredAt,
+		payload,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	assert.Equal(t, packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED, evt.GetEventType())
+	require.NotNil(t, evt.GetUserCallPresenceChanged())
+	assert.Equal(t, "user-7", evt.GetUserCallPresenceChanged().GetUserId())
+	assert.Equal(t, int32(2), evt.GetUserCallPresenceChanged().GetActiveCallCount())
+	assert.Empty(t, evt.GetConversationId())
+}

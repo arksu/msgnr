@@ -638,7 +638,7 @@ describe('AppSidebar', () => {
     expect(wrapper.find('[data-testid="active-call-icon-channel-channel-1"]').exists()).toBe(true)
   })
 
-  it('shows and hides active call icon for a DM conversation from activeCalls updates', async () => {
+  it('shows and hides active call icon for a DM conversation from user call presence updates', async () => {
     const authStore = useAuthStore()
     const chatStore = useChatStore()
     authStore.sessionRole = 'member'
@@ -652,9 +652,7 @@ describe('AppSidebar', () => {
     chatStore.directMessages = [
       { id: 'dm-1', userId: 'user-2', displayName: 'Bob', presence: 'online', unread: 0, notificationLevel: NotificationLevel.ALL },
     ]
-    chatStore.activeCalls = [
-      { id: 'call-1', conversationId: 'dm-1', status: '1', participantCount: 2 },
-    ]
+    chatStore.userCallPresenceByUserId = { 'user-2': 1 }
 
     const router = createRouter({
       history: createMemoryHistory(),
@@ -680,7 +678,7 @@ describe('AppSidebar', () => {
 
     expect(wrapper.find('[data-testid="active-call-icon-dm-dm-1"]').exists()).toBe(true)
 
-    chatStore.activeCalls = []
+    chatStore.userCallPresenceByUserId = {}
     await flushAll()
     expect(wrapper.find('[data-testid="active-call-icon-dm-dm-1"]').exists()).toBe(false)
   })
@@ -832,5 +830,57 @@ describe('AppSidebar', () => {
     expect(chatApiMocks.leaveConversation).toHaveBeenCalledWith('channel-1')
     expect(chatStore.channels).toEqual([])
     expect(chatStore.activeChannelId).toBe('')
+  })
+
+  it('uses workspace user call presence for DM icons and keeps channel icons conversation-scoped', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    authStore.sessionRole = 'member'
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chatStore.channels = [
+      { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', unread: 0, notificationLevel: NotificationLevel.ALL },
+    ]
+    chatStore.directMessages = [
+      { id: 'dm-1', userId: 'user-2', displayName: 'Bob', avatarUrl: '', presence: 'offline', unread: 0, notificationLevel: NotificationLevel.ALL },
+    ]
+    chatStore.activeCalls = [
+      { id: 'call-1', conversationId: 'channel-1', status: String(1), participantCount: 1 },
+    ]
+    chatStore.userCallPresenceByUserId = {
+      'user-2': 1,
+    }
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            template: '<button class="sidebar-item" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-testid="active-call-icon-channel-channel-1"]').exists()).toBe(true)
+    const dmIcon = wrapper.find('[data-testid="active-call-icon-dm-dm-1"]')
+    expect(dmIcon.exists()).toBe(true)
+    expect(dmIcon.attributes('title')).toBe('In a call')
   })
 })

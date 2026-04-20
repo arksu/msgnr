@@ -10,6 +10,7 @@ declare module 'vue' {
     AppSidebar: typeof import('./src/components/AppSidebar.vue')['default']
     AttachmentMarkdownContent: typeof import('./src/components/AttachmentMarkdownContent.vue')['default']
     CallDock: typeof import('./src/components/CallDock.vue')['default']
+    CallPresenceIcon: typeof import('./src/components/CallPresenceIcon.vue')['default']
     ChatArea: typeof import('./src/components/ChatArea.vue')['default']
     ConnectionBanner: typeof import('./src/components/ConnectionBanner.vue')['default']
     ConversationWorkspace: typeof import('./src/components/ConversationWorkspace.vue')['default']

@@ -36,6 +36,7 @@ import type {
   CallInviteSummary,
   PresenceEvent,
   MessageAlertEvent,
+  UserCallPresenceChangedEvent,
 } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
 import { useAuthStore } from '@/stores/auth'
@@ -272,6 +273,7 @@ interface BootstrapStage {
   conversations: ConversationSummary[]
   notifications: NotificationSummary[]
   activeCalls: ActiveCallSummary[]
+  userCallPresence: Map<string, number>
   pendingInvites: CallInviteSummary[]
   unread: Map<string, { unreadMessages: number; unreadMentions: number; hasUnreadThreadReplies: boolean }>
   presence: Map<string, PresenceEvent>
@@ -447,6 +449,7 @@ export const useChatStore = defineStore('chat', () => {
   const workspace = ref<WorkspaceShell | null>(null)
   const notifications = ref<NotificationItem[]>([])
   const activeCalls = ref<ActiveCallItem[]>([])
+  const userCallPresenceByUserId = ref<Record<string, number>>({})
   const pendingInvites = ref<PendingInviteItem[]>([])
   const presenceByUserId = ref<Record<string, PresenceEvent>>({})
   const typingByConversationId = ref<Record<string, TypingState[]>>({})
@@ -1592,6 +1595,7 @@ export const useChatStore = defineStore('chat', () => {
         conversations: [],
         notifications: [],
         activeCalls: [],
+        userCallPresence: new Map(),
         pendingInvites: [],
         unread: new Map(),
         presence: new Map(),
@@ -1618,6 +1622,7 @@ export const useChatStore = defineStore('chat', () => {
     if (resp.pageIndex === 0) {
       bootstrapStage.notifications = resp.notifications.slice()
       bootstrapStage.activeCalls = resp.activeCalls.slice()
+      bootstrapStage.userCallPresence = new Map(resp.userCallPresence.map(item => [item.userId, item.activeCallCount]))
       bootstrapStage.pendingInvites = resp.pendingInvites.slice()
     }
 
@@ -1831,6 +1836,7 @@ export const useChatStore = defineStore('chat', () => {
     })
     notifications.value = stage.notifications.map(notificationSummaryToItem)
     activeCalls.value = stage.activeCalls.map(activeCallSummaryToItem)
+    userCallPresenceByUserId.value = Object.fromEntries(stage.userCallPresence.entries())
     pendingInvites.value = stage.pendingInvites.map(callInviteSummaryToItem)
     // Preserve cached messages for the active conversation so the user
     // doesn't see a flash of empty content while ensureConversationHistory
@@ -2388,6 +2394,9 @@ export const useChatStore = defineStore('chat', () => {
       case 'callStateChanged':
         applyCallStateChanged(evt.payload.value)
         break
+      case 'userCallPresenceChanged':
+        applyUserCallPresenceChanged(evt.payload.value)
+        break
       case 'callInviteCreated':
         applyInviteCreated(evt.payload.value)
         break
@@ -2614,6 +2623,14 @@ export const useChatStore = defineStore('chat', () => {
         participantCount: 0,
       })
     }
+  }
+
+  function applyUserCallPresenceChanged(evt: UserCallPresenceChangedEvent) {
+    if (evt.activeCallCount > 0) {
+      userCallPresenceByUserId.value[evt.userId] = evt.activeCallCount
+      return
+    }
+    delete userCallPresenceByUserId.value[evt.userId]
   }
 
   function applyInviteCreated(evt: CallInviteCreatedEvent) {
@@ -3257,6 +3274,7 @@ export const useChatStore = defineStore('chat', () => {
     workspace,
     notifications,
     activeCalls,
+    userCallPresenceByUserId,
     pendingInvites,
     presenceByUserId,
     typingByConversationId,

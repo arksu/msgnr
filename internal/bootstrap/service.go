@@ -323,6 +323,18 @@ func (s *Service) fillFirstPageFields(ctx context.Context, userID uuid.UUID, res
 		})
 	}
 
+	userCallPresence, err := s.q.ListBootstrapUserCallPresence(ctx)
+	if err != nil {
+		return fmt.Errorf("bootstrap user call presence: %w", err)
+	}
+	resp.UserCallPresence = make([]*packetspb.UserCallPresenceSummary, 0, len(userCallPresence))
+	for _, row := range userCallPresence {
+		resp.UserCallPresence = append(resp.UserCallPresence, &packetspb.UserCallPresenceSummary{
+			UserId:          row.UserID.String(),
+			ActiveCallCount: int32(row.ActiveCallCount),
+		})
+	}
+
 	notifications, err := s.q.ListBootstrapNotifications(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("bootstrap notifications: %w", err)

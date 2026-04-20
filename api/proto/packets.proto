@@ -149,6 +149,7 @@ enum EventType {
   // Direct-only backend-routed alert for generic new-message notifications.
   // Not persisted in workspace_events and not included in bootstrap snapshots.
   EVENT_TYPE_MESSAGE_ALERT = 19;
+  EVENT_TYPE_USER_CALL_PRESENCE_CHANGED = 20;
 }
 
 message Envelope {
@@ -503,6 +504,11 @@ message ActiveCallSummary {
   int32 participant_count = 4;
 }
 
+message UserCallPresenceSummary {
+  string user_id = 1;
+  int32 active_call_count = 2;
+}
+
 message CallInviteSummary {
   string invite_id = 1;
   string call_id = 2;
@@ -554,6 +560,7 @@ message BootstrapResponse {
   // Scope: only users participating in conversations included in this page.
   repeated PresenceEvent presence = 15;
   WorkspaceRole user_role = 16;
+  repeated UserCallPresenceSummary user_call_presence = 17;
 }
 
 message SyncSinceRequest {
@@ -637,6 +644,11 @@ message CallStateChangedEvent {
   string call_id = 1;
   string conversation_id = 2;
   CallStatus status = 3;
+}
+
+message UserCallPresenceChangedEvent {
+  string user_id = 1;
+  int32 active_call_count = 2;
 }
 
 message ThreadSummaryUpdatedEvent {
@@ -787,5 +799,6 @@ message ServerEvent {
     MessageDeletedEvent message_deleted = 26;
     TaskStatusChangedEvent task_status_changed = 27;
     MessageAlertEvent message_alert = 28;
+    UserCallPresenceChangedEvent user_call_presence_changed = 29;
   }
 }

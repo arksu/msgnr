@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { Track } from 'livekit-client'
-import { NotificationLevel } from '@/shared/proto/packets_pb'
+import { ErrorCode, NotificationLevel } from '@/shared/proto/packets_pb'
 import { useCallStore } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
+import { useWsStore } from '@/stores/ws'
 import { loadAudioPrefs, saveAudioPrefs } from '@/services/storage/audioPrefsStorage'
 
 const platformMocks = vi.hoisted(() => ({
@@ -154,6 +155,176 @@ describe('callStore leaveCall media cleanup', () => {
     expect(micTrackStop).toHaveBeenCalledTimes(1)
     expect(micMediaTrackStop).toHaveBeenCalledTimes(1)
     expect(room.disconnect).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('callStore join token error handling', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('rejects immediately on join_call_token protocol errors instead of timing out', async () => {
+    const callStore = useCallStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+
+    chatStore.activeCalls = []
+    chatStore.channels = []
+    chatStore.directMessages = []
+
+    const joinResponseHandler = {
+      current: null as null | ((resp: { livekitUrl: string; livekitToken: string; livekitRoom: string }, requestId: string) => void),
+    }
+    const protocolErrorHandler = {
+      current: null as null | ((err: { requestId: string; code: ErrorCode; message: string; retryAfterMs?: number }) => void),
+    }
+
+    wsStore.onJoinCallTokenResponse = vi.fn((cb) => {
+      joinResponseHandler.current = cb as typeof joinResponseHandler.current
+    }) as typeof wsStore.onJoinCallTokenResponse
+    wsStore.onCreateCallResponse = vi.fn() as typeof wsStore.onCreateCallResponse
+    wsStore.onProtocolError = vi.fn((cb) => {
+      protocolErrorHandler.current = cb as typeof protocolErrorHandler.current
+    }) as typeof wsStore.onProtocolError
+    wsStore.onInviteCallMembersResponse = vi.fn() as typeof wsStore.onInviteCallMembersResponse
+    wsStore.onCallInviteActionAck = vi.fn() as typeof wsStore.onCallInviteActionAck
+    wsStore.sendJoinCallToken = vi.fn(() => 'join-req-1') as typeof wsStore.sendJoinCallToken
+
+    callStore.registerWsHandlers()
+    expect(joinResponseHandler.current).not.toBeNull()
+    expect(protocolErrorHandler.current).not.toBeNull()
+    if (!protocolErrorHandler.current) {
+      throw new Error('expected protocolErrorHandler to be registered')
+    }
+
+    const joinPromise = callStore.startOrJoinCall({
+      conversationId: 'dm-1',
+      kind: 'dm',
+      visibility: 'dm',
+      joinExistingOnly: true,
+    })
+
+    protocolErrorHandler.current({
+      requestId: 'join-req-1',
+      code: ErrorCode.CALL_NOT_ACTIVE,
+      message: 'join_call_token_request: call is not active',
+    })
+
+    await expect(joinPromise).rejects.toThrow('Call is no longer active')
+    expect(callStore.errorMessage).toBe('Call is no longer active')
+  })
+
+  it('waits for create_call success before requesting join token', async () => {
+    const callStore = useCallStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+
+    chatStore.activeCalls = []
+    chatStore.channels = []
+    chatStore.directMessages = []
+
+    const createCallHandler = {
+      current: null as null | ((resp: { callId: string; conversationId: string; status: number }, requestId: string) => void),
+    }
+    const joinResponseHandler = {
+      current: null as null | ((resp: { livekitUrl: string; livekitToken: string; livekitRoom: string }, requestId: string) => void),
+    }
+    const protocolErrorHandler = {
+      current: null as null | ((err: { requestId: string; code: ErrorCode; message: string; retryAfterMs?: number }) => void),
+    }
+
+    wsStore.onCreateCallResponse = vi.fn((cb) => {
+      createCallHandler.current = cb as typeof createCallHandler.current
+    }) as typeof wsStore.onCreateCallResponse
+    wsStore.onJoinCallTokenResponse = vi.fn((cb) => {
+      joinResponseHandler.current = cb as typeof joinResponseHandler.current
+    }) as typeof wsStore.onJoinCallTokenResponse
+    wsStore.onProtocolError = vi.fn((cb) => {
+      protocolErrorHandler.current = cb as typeof protocolErrorHandler.current
+    }) as typeof wsStore.onProtocolError
+    wsStore.onInviteCallMembersResponse = vi.fn() as typeof wsStore.onInviteCallMembersResponse
+    wsStore.onCallInviteActionAck = vi.fn() as typeof wsStore.onCallInviteActionAck
+    wsStore.sendCreateCall = vi.fn(() => 'create-req-1') as typeof wsStore.sendCreateCall
+    wsStore.sendJoinCallToken = vi.fn(() => 'join-req-1') as typeof wsStore.sendJoinCallToken
+
+    callStore.registerWsHandlers()
+    expect(createCallHandler.current).not.toBeNull()
+    expect(joinResponseHandler.current).not.toBeNull()
+    expect(protocolErrorHandler.current).not.toBeNull()
+    if (!createCallHandler.current || !joinResponseHandler.current || !protocolErrorHandler.current) {
+      throw new Error('expected call handlers to be registered')
+    }
+
+    const startPromise = callStore.startOrJoinCall({
+      conversationId: 'dm-1',
+      kind: 'dm',
+      visibility: 'dm',
+    })
+
+    expect(wsStore.sendCreateCall).toHaveBeenCalledTimes(1)
+    expect(wsStore.sendJoinCallToken).not.toHaveBeenCalled()
+
+    createCallHandler.current({
+      callId: 'call-1',
+      conversationId: 'dm-1',
+      status: 1,
+    }, 'create-req-1')
+
+    await vi.waitFor(() => {
+      expect(wsStore.sendJoinCallToken).toHaveBeenCalledTimes(1)
+    })
+    protocolErrorHandler.current({
+      requestId: 'join-req-1',
+      code: ErrorCode.CALL_NOT_ACTIVE,
+      message: 'join_call_token_request: call is not active',
+    })
+
+    await expect(startPromise).rejects.toThrow('Call is no longer active')
+  })
+
+  it('surfaces create_call errors without sending join token', async () => {
+    const callStore = useCallStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+
+    chatStore.activeCalls = []
+    chatStore.channels = []
+    chatStore.directMessages = []
+
+    const protocolErrorHandler = {
+      current: null as null | ((err: { requestId: string; code: ErrorCode; message: string; retryAfterMs?: number }) => void),
+    }
+
+    wsStore.onJoinCallTokenResponse = vi.fn() as typeof wsStore.onJoinCallTokenResponse
+    wsStore.onCreateCallResponse = vi.fn() as typeof wsStore.onCreateCallResponse
+    wsStore.onProtocolError = vi.fn((cb) => {
+      protocolErrorHandler.current = cb as typeof protocolErrorHandler.current
+    }) as typeof wsStore.onProtocolError
+    wsStore.onInviteCallMembersResponse = vi.fn() as typeof wsStore.onInviteCallMembersResponse
+    wsStore.onCallInviteActionAck = vi.fn() as typeof wsStore.onCallInviteActionAck
+    wsStore.sendCreateCall = vi.fn(() => 'create-req-2') as typeof wsStore.sendCreateCall
+    wsStore.sendJoinCallToken = vi.fn(() => 'join-req-2') as typeof wsStore.sendJoinCallToken
+
+    callStore.registerWsHandlers()
+    expect(protocolErrorHandler.current).not.toBeNull()
+    if (!protocolErrorHandler.current) {
+      throw new Error('expected protocolErrorHandler to be registered')
+    }
+
+    const startPromise = callStore.startOrJoinCall({
+      conversationId: 'dm-1',
+      kind: 'dm',
+      visibility: 'dm',
+    })
+
+    protocolErrorHandler.current({
+      requestId: 'create-req-2',
+      code: ErrorCode.BAD_REQUEST,
+      message: 'create_call_request: internal error',
+    })
+
+    await expect(startPromise).rejects.toThrow('create_call_request: internal error')
+    expect(wsStore.sendJoinCallToken).not.toHaveBeenCalled()
   })
 })
 

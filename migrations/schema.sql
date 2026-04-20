@@ -551,6 +551,7 @@ CREATE TABLE IF NOT EXISTS workspace_events (
                 'call_invite_created',
                 'call_invite_cancelled',
                 'call_state_changed',
+                'user_call_presence_changed',
                 'thread_summary_updated',
                 'reaction_updated',
                 'user_identity_updated',

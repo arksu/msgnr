@@ -213,6 +213,7 @@
     <MessageInput
       :channel-name="conversation?.title ?? 'conversation'"
       :conversation-id="chatStore.activeChannelId"
+      :draft-scope="conversationDraftScope"
       :disabled="!canComposeMessage"
       :typing-label="typingLabel"
       :online="wsStore.state !== 'DISCONNECTED' && wsStore.state !== 'CONNECTING'"
@@ -300,6 +301,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import type { ChatDraftScope } from '@/services/storage/chatDraftStorage'
 import { useChatStore, type Message } from '@/stores/chat'
 import { pinnedDialogueId, usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useAuthStore } from '@/stores/auth'
@@ -353,6 +355,13 @@ interface ScrollMetrics {
 }
 
 const conversation = computed(() => chatStore.activeConversation)
+const conversationDraftScope = computed<ChatDraftScope | null>(() => {
+  if (!chatStore.activeChannelId) return null
+  return {
+    kind: 'conversation',
+    conversationId: chatStore.activeChannelId,
+  }
+})
 const messages = computed(() => chatStore.activeMessages)
 const isMembersPanelOpen = ref(false)
 function toggleMembersPanel() { isMembersPanelOpen.value = !isMembersPanelOpen.value }

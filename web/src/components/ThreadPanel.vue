@@ -75,6 +75,7 @@
     <MessageInput
       :channel-name="rootMessage?.senderName ?? 'thread'"
       :conversation-id="chat.activeThreadConversationId"
+      :draft-scope="threadDraftScope"
       :disabled="!chat.activeThreadConversationId"
       :online="ws.state !== 'DISCONNECTED' && ws.state !== 'CONNECTING'"
       :focus-token="chat.threadComposerFocusToken"
@@ -86,6 +87,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import type { ChatDraftScope } from '@/services/storage/chatDraftStorage'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from './MessageBubble.vue'
@@ -99,6 +101,14 @@ const ws = useWsStore()
 const rootMessage = computed(() => chat.activeThreadRootMessage)
 const replies = computed(() => chat.activeThreadReplies)
 const replayVersion = computed(() => chat.activeThreadReplayVersion)
+const threadDraftScope = computed<ChatDraftScope | null>(() => {
+  if (!chat.activeThreadConversationId || !chat.activeThreadRootId) return null
+  return {
+    kind: 'thread',
+    conversationId: chat.activeThreadConversationId,
+    rootMessageId: chat.activeThreadRootId,
+  }
+})
 const replyCount = computed(() =>
   chat.threadSummaries[rootMessage.value?.id ?? '']?.replyCount
   ?? replies.value.length

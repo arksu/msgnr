@@ -34,6 +34,7 @@
     <MessageInput
       :channel-name="conversation?.title ?? 'conversation'"
       :conversation-id="conversationId"
+      :draft-scope="conversationDraftScope"
       :disabled="!conversationId"
       :typing-label="typingLabel"
       :online="wsStore.state !== 'DISCONNECTED' && wsStore.state !== 'CONNECTING'"
@@ -46,6 +47,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { ChatDraftScope } from '@/services/storage/chatDraftStorage'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from '@/components/MessageBubble.vue'
@@ -71,6 +73,10 @@ let typingLastSentAtMs = 0
 
 const conversation = computed(() => chatStore.getConversationById(props.conversationId))
 const messages = computed(() => chatStore.getMessagesForConversation(props.conversationId))
+const conversationDraftScope = computed<ChatDraftScope>(() => ({
+  kind: 'conversation',
+  conversationId: props.conversationId,
+}))
 const typingLabel = computed(() => {
   const entries = chatStore.getTypingForConversation(props.conversationId)
     .filter(entry => entry.userId !== chatStore.workspace?.selfUserId)

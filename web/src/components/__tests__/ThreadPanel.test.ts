@@ -138,6 +138,57 @@ describe('ThreadPanel reaction affordance', () => {
     expect(wrapper.get('[data-testid="thread-focus-token"]').text()).toBe('5')
   })
 
+  it('passes the thread draft scope to the thread composer', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.activeThreadConversationId = 'channel-1'
+    chat.activeThreadRootId = 'root-1'
+    chat.messages = {
+      'channel-1': [{
+        id: 'root-1',
+        channelId: 'channel-1',
+        senderId: 'user-1',
+        senderName: 'Ada',
+        body: 'root',
+        channelSeq: 1n,
+        threadSeq: 0n,
+        mentionedUserIds: [],
+        mentionEveryone: false,
+        createdAt: '2026-03-06T00:00:00Z',
+        reactions: [],
+        myReactions: [],
+      }],
+    }
+
+    const wrapper = mount(ThreadPanel, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: {
+            props: ['draftScope'],
+            template: '<div data-testid="thread-draft-scope">{{ JSON.stringify(draftScope) }}</div>',
+          },
+        },
+      },
+    })
+
+    expect(wrapper.get('[data-testid="thread-draft-scope"]').text()).toBe(JSON.stringify({
+      kind: 'thread',
+      conversationId: 'channel-1',
+      rootMessageId: 'root-1',
+    }))
+  })
+
   it('scrolls to the latest reply when the panel opens', async () => {
     vi.useFakeTimers()
 

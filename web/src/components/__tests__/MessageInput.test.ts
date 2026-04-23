@@ -4,6 +4,7 @@ import { nextTick, ref, shallowRef } from 'vue'
 import MessageInput from '@/components/MessageInput.vue'
 import RichTextComposer from '@/components/RichTextComposer.vue'
 import { uploadChatAttachment } from '@/services/http/chatApi'
+import { loadChatDraft, saveChatDraft, type ChatDraftScope } from '@/services/storage/chatDraftStorage'
 
 vi.mock('@/composables/useComposerEmojiPicker', () => ({
   useComposerEmojiPicker: ({ onSelect }: { onSelect: (emoji: string) => void }) => {
@@ -38,6 +39,7 @@ vi.mock('@/services/http/chatApi', () => ({
 describe('MessageInput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
   })
 
   async function flushAll() {
@@ -93,6 +95,17 @@ describe('MessageInput', () => {
   async function insertHardBreak(wrapper: ReturnType<typeof mount>) {
     await prose(wrapper).trigger('keydown', { key: 'Enter', shiftKey: true })
     await flushAll()
+  }
+
+  const conversationDraftScope: ChatDraftScope = {
+    kind: 'conversation',
+    conversationId: 'channel-1',
+  }
+
+  const threadDraftScope: ChatDraftScope = {
+    kind: 'thread',
+    conversationId: 'channel-1',
+    rootMessageId: 'root-1',
   }
 
   it('does not emit typing=false on blur', async () => {
@@ -326,5 +339,159 @@ describe('MessageInput', () => {
     const content = composerEditor(wrapper).getJSON().content ?? []
     expect(content[0]?.type).toBe('paragraph')
     expect(content[1]?.type).toBe('codeBlock')
+  })
+
+  it('restores a saved conversation draft on mount', async () => {
+    saveChatDraft(conversationDraftScope, {
+      body: 'Saved draft',
+      entities: [],
+    })
+
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        draftScope: conversationDraftScope,
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    expect(composer(wrapper).props('modelValue')).toBe('Saved draft')
+  })
+
+  it('persists edits into storage as text changes', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        draftScope: conversationDraftScope,
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    await insertText(wrapper, 'hello draft')
+
+    expect(loadChatDraft(conversationDraftScope)).toEqual({
+      body: 'hello draft',
+      entities: [],
+    })
+  })
+
+  it('restores saved mention metadata, not just plain text', async () => {
+    saveChatDraft(conversationDraftScope, {
+      body: 'Hello @Ada',
+      entities: [{
+        kind: 'user',
+        targetId: 'user-1',
+        label: '@Ada',
+        href: '',
+        start: 6,
+        end: 10,
+      }],
+    })
+
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        draftScope: conversationDraftScope,
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    expect(composer(wrapper).props('modelValue')).toBe('Hello @Ada')
+    expect(composer(wrapper).props('entities')).toEqual([{
+      kind: 'user',
+      targetId: 'user-1',
+      label: '@Ada',
+      href: '',
+      start: 6,
+      end: 10,
+    }])
+  })
+
+  it('clears the stored draft on successful send', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        draftScope: conversationDraftScope,
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    await insertText(wrapper, 'send me')
+    await wrapper.get('[data-testid="composer-send-button"]').trigger('click')
+    await flushAll()
+
+    expect(loadChatDraft(conversationDraftScope)).toEqual({
+      body: '',
+      entities: [],
+    })
+    expect(wrapper.emitted('send')).toHaveLength(1)
+  })
+
+  it('swaps between draft scopes and restores the correct content for each', async () => {
+    saveChatDraft(conversationDraftScope, {
+      body: 'Conversation draft',
+      entities: [],
+    })
+    saveChatDraft(threadDraftScope, {
+      body: 'Thread draft',
+      entities: [],
+    })
+
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        draftScope: conversationDraftScope,
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    expect(composer(wrapper).props('modelValue')).toBe('Conversation draft')
+
+    await wrapper.setProps({
+      channelName: 'thread',
+      draftScope: threadDraftScope,
+    })
+    await flushAll()
+
+    expect(composer(wrapper).props('modelValue')).toBe('Thread draft')
+  })
+
+  it('keeps attachments out of persisted draft storage', async () => {
+    vi.mocked(uploadChatAttachment).mockResolvedValue({
+      id: 'att-1',
+      file_name: 'photo.png',
+      file_size: 4,
+      mime_type: 'image/png',
+    })
+
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        draftScope: conversationDraftScope,
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    const file = new File(['test'], 'photo.png', { type: 'image/png' })
+    await (composer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
+    await flushAll()
+
+    expect(loadChatDraft(conversationDraftScope)).toEqual({
+      body: '',
+      entities: [],
+    })
+    expect(localStorage.getItem('msgnr:chat:drafts:v1')).toBeNull()
   })
 })

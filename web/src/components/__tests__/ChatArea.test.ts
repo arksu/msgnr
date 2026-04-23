@@ -117,6 +117,37 @@ describe('ChatArea', () => {
     expect(wrapper.get('[data-testid="composer-focus-token"]').text()).toBe('7')
   })
 
+  it('passes the conversation draft scope to the main composer', () => {
+    const chatStore = useChatStore()
+
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: {
+            props: ['draftScope'],
+            template: '<div data-testid="composer-draft-scope">{{ JSON.stringify(draftScope) }}</div>',
+          },
+        },
+      },
+    })
+
+    expect(wrapper.get('[data-testid="composer-draft-scope"]').text()).toBe(JSON.stringify({
+      kind: 'conversation',
+      conversationId: 'channel-1',
+    }))
+  })
+
   it('sends a message when self display name is empty', async () => {
     const authStore = useAuthStore()
     const chatStore = useChatStore()

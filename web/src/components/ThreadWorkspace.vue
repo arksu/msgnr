@@ -47,6 +47,7 @@
     <MessageInput
       :channel-name="rootMessage?.senderName ?? 'thread'"
       :conversation-id="conversationId"
+      :draft-scope="threadDraftScope"
       :disabled="!conversationId || !rootMessageId"
       :typing-label="typingLabel"
       :online="wsStore.state !== 'DISCONNECTED' && wsStore.state !== 'CONNECTING'"
@@ -59,6 +60,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import type { ChatDraftScope } from '@/services/storage/chatDraftStorage'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from '@/components/MessageBubble.vue'
@@ -80,6 +82,11 @@ let typingLastSentAtMs = 0
 
 const rootMessage = computed(() => chatStore.getThreadRoot(props.conversationId, props.rootMessageId))
 const replies = computed(() => chatStore.getThreadReplies(props.rootMessageId))
+const threadDraftScope = computed<ChatDraftScope>(() => ({
+  kind: 'thread',
+  conversationId: props.conversationId,
+  rootMessageId: props.rootMessageId,
+}))
 const replyCount = computed(() => (
   chatStore.threadSummaries[props.rootMessageId]?.replyCount ?? replies.value.length
 ))

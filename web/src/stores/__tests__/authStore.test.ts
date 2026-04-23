@@ -10,6 +10,7 @@ import { saveLastOpenedConversation, loadLastOpenedConversation } from '@/servic
 import { saveLastOpenedTaskPublicId, loadLastOpenedTaskPublicId } from '@/services/storage/lastTaskRouteStorage'
 import { setBackendBaseUrl, getBackendBaseUrl } from '@/services/runtime/backendEndpoint'
 import { saveAudioPrefs, loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
+import { loadChatDraft, saveChatDraft } from '@/services/storage/chatDraftStorage'
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void
@@ -370,6 +371,10 @@ describe('authStore.logout', () => {
     saveLastOpenedConversation('workspace-1', 'user-1', 'conversation-1')
     localStorage.setItem('msgnr:thread-summaries:v1', JSON.stringify({ user1: {} }))
     saveLastOpenedTaskPublicId('TASK-1')
+    saveChatDraft(
+      { kind: 'conversation', conversationId: 'conversation-1' },
+      { body: 'Draft message', entities: [] },
+    )
     const logoutSpy = vi.spyOn(authApi, 'apiLogout').mockResolvedValue(undefined)
 
     const store = useAuthStore()
@@ -386,6 +391,10 @@ describe('authStore.logout', () => {
     expect(loadLastOpenedConversation('workspace-1', 'user-1')).toBe('')
     expect(localStorage.getItem('msgnr:thread-summaries:v1')).toBeNull()
     expect(loadLastOpenedTaskPublicId()).toBe('')
+    expect(loadChatDraft({ kind: 'conversation', conversationId: 'conversation-1' })).toEqual({
+      body: '',
+      entities: [],
+    })
     expect(clientInstanceId).toBeTruthy()
   })
 

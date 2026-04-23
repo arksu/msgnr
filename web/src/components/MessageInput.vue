@@ -160,6 +160,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { deleteChatAttachment, uploadChatAttachment } from '@/services/http/chatApi'
+import {
+  clearChatDraft,
+  loadChatDraft,
+  saveChatDraft,
+  type ChatDraftScope,
+} from '@/services/storage/chatDraftStorage'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 import type { MessageEntity } from '@/stores/chat'
 import RichTextComposer from './RichTextComposer.vue'
@@ -184,6 +190,7 @@ const MAX_COMPOSER_LINES = 8
 const props = defineProps<{
   channelName: string
   conversationId?: string
+  draftScope?: ChatDraftScope | null
   disabled?: boolean
   typingLabel?: string
   online?: boolean
@@ -207,6 +214,7 @@ const currentUploadingFileName = ref('')
 const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
+const syncingDraft = ref(false)
 
 const {
   showEmojiPicker,
@@ -264,6 +272,9 @@ function submit() {
     attachmentIds: attachments.value.map(item => item.id),
     attachments: attachments.value.slice(),
   })
+  if (props.draftScope) {
+    clearChatDraft(props.draftScope)
+  }
   text.value = ''
   entities.value = []
   attachments.value = []
@@ -377,6 +388,36 @@ async function cleanupStagedAttachments() {
 watch(text, (next) => {
   emitTyping(next.trim().length > 0)
 })
+
+watch(
+  () => props.draftScope,
+  (scope) => {
+    syncingDraft.value = true
+    if (!scope) {
+      text.value = ''
+      entities.value = []
+      syncingDraft.value = false
+      return
+    }
+    const draft = loadChatDraft(scope)
+    text.value = draft.body
+    entities.value = draft.entities
+    syncingDraft.value = false
+  },
+  { immediate: true, deep: true },
+)
+
+watch(
+  () => [props.draftScope, text.value, JSON.stringify(entities.value)] as const,
+  ([scope]) => {
+    if (!scope || syncingDraft.value) return
+    saveChatDraft(scope, {
+      body: text.value,
+      entities: entities.value,
+    })
+  },
+  { deep: true },
+)
 
 watch(() => props.conversationId, (next, prev) => {
   closeEmojiPicker()

@@ -31,6 +31,7 @@ import { clearLastOpenedTaskPublicId } from '@/services/storage/lastTaskRouteSto
 import { clearPushEndpoint } from '@/services/storage/pushStorage'
 import { clearCollapsedDocumentsTeamspaceIds } from '@/services/storage/documentsTeamspaceCollapseStorage'
 import { clearCollapsedDocumentsNodeIds } from '@/services/storage/documentsNodeCollapseStorage'
+import { clearAllChatDrafts } from '@/services/storage/chatDraftStorage'
 import { cacheUserProfile, loadCachedUserProfile, clearAllData as clearIndexedDb } from '@/services/db/cache'
 import { clearAllPersistedClientDataPreservingBackendUrl } from '@/services/storage/hardReset'
 
@@ -368,6 +369,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearPushEndpoint()
     clearCollapsedDocumentsTeamspaceIds()
     clearCollapsedDocumentsNodeIds()
+    clearAllChatDrafts()
     // Wipe all IndexedDB cached data (fire-and-forget)
     void clearIndexedDb()
     authState.value = 'ANON'

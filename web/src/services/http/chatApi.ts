@@ -155,6 +155,7 @@ export interface SavedMessageItem {
   sender_id: string
   sender_name: string
   body: string
+  entities?: MessageEntityItem[]
   created_at: string
   saved_at: string
 }

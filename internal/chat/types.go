@@ -126,6 +126,7 @@ type SavedMessageItem struct {
 	SenderID               uuid.UUID
 	SenderName             string
 	Body                   string
+	Entities               []MessageEntity
 	CreatedAt              time.Time
 	SavedAt                time.Time
 }

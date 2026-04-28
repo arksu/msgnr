@@ -225,6 +225,7 @@ export interface SavedMessageItem {
   senderId: string
   senderName: string
   body: string
+  entities?: MessageEntity[]
   createdAt: string
   savedAt: string
 }
@@ -393,6 +394,7 @@ function savedMessageItemFromHttp(item: HttpSavedMessageItem): SavedMessageItem 
     senderId: item.sender_id,
     senderName: decodeNotificationText(item.sender_name),
     body: item.body,
+    entities: normalizeMessageEntities(item.entities),
     createdAt: item.created_at,
     savedAt: item.saved_at,
   }

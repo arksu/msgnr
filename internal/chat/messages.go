@@ -84,8 +84,12 @@ func (s *Service) ListSavedMessages(ctx context.Context, userID uuid.UUID) ([]Sa
 	}
 
 	items := make([]SavedMessageItem, 0, len(rows))
+	messageIDs := make([]uuid.UUID, 0, len(rows))
 	for _, row := range rows {
 		messageID := parseUUIDOrNil(row.MessageID)
+		if messageID != uuid.Nil {
+			messageIDs = append(messageIDs, messageID)
+		}
 		items = append(items, SavedMessageItem{
 			ID:                     "saved:" + row.MessageID,
 			ConversationID:         parseUUIDOrNil(row.ConversationID),
@@ -100,6 +104,13 @@ func (s *Service) ListSavedMessages(ctx context.Context, userID uuid.UUID) ([]Sa
 			CreatedAt:              row.CreatedAt,
 			SavedAt:                row.SavedAt,
 		})
+	}
+	entitiesByMessageID, err := s.loadMessageEntitiesByMessageIDs(ctx, messageIDs)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListSavedMessages load entities: %w", err)
+	}
+	for i := range items {
+		items[i].Entities = entitiesByMessageID[items[i].MessageID.String()]
 	}
 	return items, nil
 }

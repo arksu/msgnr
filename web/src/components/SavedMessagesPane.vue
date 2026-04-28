@@ -29,12 +29,15 @@
       </div>
 
       <div v-else class="divide-y divide-chat-border/70">
-        <button
+        <div
           v-for="item in chatStore.savedMessageItems"
           :key="item.id"
-          type="button"
-          class="block w-full px-4 py-3 text-left transition-colors hover:bg-white/5"
+          role="button"
+          tabindex="0"
+          class="block w-full cursor-pointer px-4 py-3 text-left transition-colors hover:bg-white/5 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-400/40"
           @click="$emit('open-item', item)"
+          @keydown.enter.prevent="$emit('open-item', item)"
+          @keydown.space.prevent="$emit('open-item', item)"
         >
           <div class="flex items-start gap-3">
             <span class="mt-0.5 inline-flex rounded-full bg-cyan-500/20 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-cyan-200">
@@ -48,12 +51,17 @@
               <div class="mt-1 truncate text-sm font-medium text-white">
                 {{ item.senderName || item.conversationTitle }}
               </div>
-              <div class="mt-1 line-clamp-2 text-sm text-gray-300">
-                {{ item.body || 'Saved attachment message.' }}
+              <div
+                v-if="item.body"
+                class="markdown-body mt-1 line-clamp-2 text-sm text-gray-300"
+                v-html="renderSavedMessageBody(item)"
+              ></div>
+              <div v-else class="mt-1 line-clamp-2 text-sm text-gray-300">
+                Saved attachment message.
               </div>
             </div>
           </div>
-        </button>
+        </div>
       </div>
     </div>
   </section>
@@ -61,6 +69,7 @@
 
 <script setup lang="ts">
 import { useChatStore, type SavedMessageItem } from '@/stores/chat'
+import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
 
 defineEmits<{
   'open-item': [item: SavedMessageItem]
@@ -73,6 +82,10 @@ function conversationLabel(item: SavedMessageItem) {
   return item.conversationVisibility === 'private'
     ? `Private · #${item.conversationTitle}`
     : `#${item.conversationTitle}`
+}
+
+function renderSavedMessageBody(item: SavedMessageItem) {
+  return renderMessageBodyWithEntities(item.body, item.entities ?? [])
 }
 
 function formatTimestamp(value: string) {

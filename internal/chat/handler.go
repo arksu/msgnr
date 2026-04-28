@@ -205,18 +205,19 @@ type unreadFeedResponse struct {
 }
 
 type savedMessageItemResponse struct {
-	ID                     string `json:"id"`
-	ConversationID         string `json:"conversation_id"`
-	ConversationKind       string `json:"conversation_kind"`
-	ConversationVisibility string `json:"conversation_visibility"`
-	ConversationTitle      string `json:"conversation_title"`
-	MessageID              string `json:"message_id"`
-	ThreadRootMessageID    string `json:"thread_root_message_id,omitempty"`
-	SenderID               string `json:"sender_id"`
-	SenderName             string `json:"sender_name"`
-	Body                   string `json:"body"`
-	CreatedAt              string `json:"created_at"`
-	SavedAt                string `json:"saved_at"`
+	ID                     string                  `json:"id"`
+	ConversationID         string                  `json:"conversation_id"`
+	ConversationKind       string                  `json:"conversation_kind"`
+	ConversationVisibility string                  `json:"conversation_visibility"`
+	ConversationTitle      string                  `json:"conversation_title"`
+	MessageID              string                  `json:"message_id"`
+	ThreadRootMessageID    string                  `json:"thread_root_message_id,omitempty"`
+	SenderID               string                  `json:"sender_id"`
+	SenderName             string                  `json:"sender_name"`
+	Body                   string                  `json:"body"`
+	Entities               []messageEntityResponse `json:"entities"`
+	CreatedAt              string                  `json:"created_at"`
+	SavedAt                string                  `json:"saved_at"`
 }
 
 type savedMessagesResponse struct {
@@ -845,6 +846,7 @@ func (h *Handler) listSavedMessages(w http.ResponseWriter, r *http.Request, prin
 			SenderID:               item.SenderID.String(),
 			SenderName:             item.SenderName,
 			Body:                   item.Body,
+			Entities:               encodeMessageEntities(item.Entities),
 			CreatedAt:              item.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			SavedAt:                item.SavedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		}

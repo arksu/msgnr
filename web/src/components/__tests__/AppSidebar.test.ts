@@ -315,6 +315,47 @@ describe('AppSidebar', () => {
     expect(refreshUnreadFeed).toHaveBeenCalledTimes(1)
   })
 
+  it('highlights unread without leaving the active conversation highlighted', async () => {
+    const chatStore = useChatStore()
+    chatStore.channels = [
+      { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', unread: 3, notificationLevel: NotificationLevel.ALL },
+    ]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.chatViewMode = 'conversation'
+    vi.spyOn(chatStore, 'refreshUnreadFeed').mockResolvedValue()
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', name: 'main', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            props: ['active'],
+            template: '<button class="sidebar-item" :class="{ active }" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.get('.sidebar-item').classes()).toContain('active')
+
+    await wrapper.get('[data-testid="sidebar-unread-button"]').trigger('click')
+    await flushAll()
+
+    expect(wrapper.get('[data-testid="sidebar-unread-button"]').classes()).toContain('bg-sidebar-active')
+    expect(wrapper.get('.sidebar-item').classes()).not.toContain('active')
+  })
+
   it('switches to saved message view on click', async () => {
     const chatStore = useChatStore()
     const refreshSavedMessages = vi.spyOn(chatStore, 'refreshSavedMessages').mockResolvedValue()

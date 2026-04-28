@@ -102,7 +102,7 @@
           <SidebarItem
             v-for="ch in sortedChannels"
             :key="ch.id"
-            :active="chatStore.activeChannelId === ch.id"
+            :active="isConversationActive(ch.id)"
             :unread="ch.unread"
             :muted="ch.notificationLevel === NotificationLevel.NOTHING"
             @click="openConversation(ch.id)"
@@ -195,7 +195,7 @@
         <SidebarItem
           v-for="dm in sortedDirectMessages"
           :key="dm.id"
-            :active="chatStore.activeChannelId === dm.id"
+            :active="isConversationActive(dm.id)"
             :unread="dm.unread"
             :muted="dm.notificationLevel === NotificationLevel.NOTHING"
             @click="openConversation(dm.id)"
@@ -568,6 +568,10 @@ function hasActiveCall(conversationId: string): boolean {
 
 function hasUserInCall(userId: string): boolean {
   return (chatStore.userCallPresenceByUserId[userId] ?? 0) > 0
+}
+
+function isConversationActive(conversationId: string): boolean {
+  return chatStore.chatViewMode === 'conversation' && chatStore.activeChannelId === conversationId
 }
 
 async function handleLogout() {

@@ -107,6 +107,10 @@
           v-if="chatStore.chatViewMode === 'unread'"
           @open-item="openUnreadFeedItem"
         />
+        <SavedMessagesPane
+          v-else-if="chatStore.chatViewMode === 'saved'"
+          @open-item="openSavedMessageItem"
+        />
         <ChatArea v-else />
       </template>
       <template v-else-if="appMode === 'task-tracker'">
@@ -332,7 +336,7 @@ import { computed, ref, watch, onMounted, onUnmounted, defineAsyncComponent, def
 import { useRoute, useRouter } from 'vue-router'
 import { PresenceStatus } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
-import { useChatStore, type IncomingMessageNotification, type UnreadFeedItem } from '@/stores/chat'
+import { useChatStore, type IncomingMessageNotification, type SavedMessageItem, type UnreadFeedItem } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
@@ -366,6 +370,7 @@ import ChatArea from '@/components/ChatArea.vue'
 import PinnedDialogsHost from '@/components/PinnedDialogsHost.vue'
 import ConnectionBanner from '@/components/ConnectionBanner.vue'
 import UnreadFeedPane from '@/components/UnreadFeedPane.vue'
+import SavedMessagesPane from '@/components/SavedMessagesPane.vue'
 import CallDock from '@/components/CallDock.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useTasksStore } from '@/stores/tasks'
@@ -642,7 +647,7 @@ function rootMessageIdFromIntent(intent: NotificationOpenIntent): string {
   return intent.threadRootMessageId || intent.messageId || ''
 }
 
-async function openChatTarget(intent: NotificationOpenIntent): Promise<boolean> {
+async function openChatTarget(intent: NotificationOpenIntent, options: { focusThreadMessage?: boolean } = {}): Promise<boolean> {
   if (!intent.conversationId) return false
 
   if (router.currentRoute.value.name !== 'main') {
@@ -673,6 +678,9 @@ async function openChatTarget(intent: NotificationOpenIntent): Promise<boolean> 
     if (rootMessage) {
       // Product decision: thread notifications open pinned thread workspace only.
       chatStore.focusConversationMessage(rootMessage.id)
+      if (options.focusThreadMessage && intent.messageId && intent.messageId !== rootMessage.id) {
+        chatStore.focusThreadMessage(intent.messageId)
+      }
       pinnedDialogsStore.ensureThreadPinned(intent.conversationId, rootMessage.id)
       return true
     }
@@ -728,6 +736,14 @@ async function openUnreadFeedItem(item: UnreadFeedItem) {
   })
   if (!opened) return
   await chatStore.markUnreadFeedItemRead(item)
+}
+
+async function openSavedMessageItem(item: SavedMessageItem) {
+  await openChatTarget({
+    conversationId: item.conversationId,
+    messageId: item.messageId,
+    ...(item.threadRootMessageId ? { threadRootMessageId: item.threadRootMessageId } : {}),
+  }, { focusThreadMessage: true })
 }
 
 function canonicalTaskSlugFromPublicId(publicId: string): string {

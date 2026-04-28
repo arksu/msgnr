@@ -51,6 +51,23 @@
             </span>
           </button>
         </div>
+        <div class="relative mx-1 mt-0.5">
+          <button
+            data-testid="sidebar-saved-button"
+            class="flex min-h-9 w-full items-center gap-2 rounded px-3 py-1 text-left text-[15px] transition-colors"
+            :class="chatStore.chatViewMode === 'saved'
+              ? 'bg-sidebar-active text-white'
+              : 'text-sidebar-text hover:bg-sidebar-hover'"
+            @click="openSavedView"
+          >
+            <span class="flex w-8 shrink-0 items-center justify-center text-sidebar-textMuted">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21 12 17 5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+              </svg>
+            </span>
+            <span class="flex-1 truncate font-normal text-sidebar-text">Saved Message</span>
+          </button>
+        </div>
       </div>
 
       <!-- Channels section -->
@@ -568,6 +585,14 @@ async function openConversation(conversationId: string) {
 async function openUnreadView() {
   chatStore.showUnreadView()
   void chatStore.refreshUnreadFeed()
+  if (router.currentRoute.value.name !== 'main') {
+    await router.push({ name: 'main' })
+  }
+}
+
+async function openSavedView() {
+  chatStore.showSavedView()
+  void chatStore.refreshSavedMessages()
   if (router.currentRoute.value.name !== 'main') {
     await router.push({ name: 'main' })
   }

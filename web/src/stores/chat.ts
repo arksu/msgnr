@@ -47,10 +47,11 @@ import {
   saveLastOpenedConversation,
   clearLastOpenedConversation,
 } from '@/services/storage/lastConversationStorage'
-import { ChatApiError, getMessageContext, listConversationMessages, listDmCandidates, listUnreadFeed, resolveUnreadFeedNotification } from '@/services/http/chatApi'
+import { ChatApiError, getMessageContext, listConversationMessages, listDmCandidates, listSavedMessages, listUnreadFeed, resolveUnreadFeedNotification, saveMessage as saveMessageApi, unsaveMessage as unsaveMessageApi } from '@/services/http/chatApi'
 import type {
   ConversationMessageItem,
   MessageEntityItem,
+  SavedMessageItem as HttpSavedMessageItem,
   UnreadFeedItem as HttpUnreadFeedItem,
 } from '@/services/http/chatApi'
 import type { MessageEntity as ProtoMessageEntity } from '@/shared/proto/packets_pb'
@@ -144,6 +145,7 @@ export interface Message {
   reactions: ReactionCount[]
   myReactions: string[]
   attachments?: MessageAttachment[]
+  isSaved?: boolean
   clientMsgId?: string
   /** @deprecated Use sendStatus instead. Kept temporarily for migration. */
   pending?: boolean
@@ -194,7 +196,7 @@ export interface NotificationItem {
   createdAt: string
 }
 
-export type ChatViewMode = 'conversation' | 'unread'
+export type ChatViewMode = 'conversation' | 'unread' | 'saved'
 
 export interface UnreadFeedItem {
   id: string
@@ -210,6 +212,21 @@ export interface UnreadFeedItem {
   senderName: string
   body: string
   createdAt: string
+}
+
+export interface SavedMessageItem {
+  id: string
+  conversationId: string
+  conversationKind: 'channel' | 'dm'
+  conversationVisibility: 'public' | 'private' | 'dm'
+  conversationTitle: string
+  messageId: string
+  threadRootMessageId?: string
+  senderId: string
+  senderName: string
+  body: string
+  createdAt: string
+  savedAt: string
 }
 
 export interface ActiveCallItem {
@@ -364,6 +381,23 @@ function unreadFeedItemFromHttp(item: HttpUnreadFeedItem): UnreadFeedItem {
   }
 }
 
+function savedMessageItemFromHttp(item: HttpSavedMessageItem): SavedMessageItem {
+  return {
+    id: item.id,
+    conversationId: item.conversation_id,
+    conversationKind: item.conversation_kind,
+    conversationVisibility: item.conversation_visibility,
+    conversationTitle: decodeNotificationText(item.conversation_title),
+    messageId: item.message_id,
+    threadRootMessageId: item.thread_root_message_id || undefined,
+    senderId: item.sender_id,
+    senderName: decodeNotificationText(item.sender_name),
+    body: item.body,
+    createdAt: item.created_at,
+    savedAt: item.saved_at,
+  }
+}
+
 const ACK_BATCH_SIZE = 20
 const ACK_INTERVAL_MS = 2000
 const DEFAULT_SYNC_BATCH = 200
@@ -475,6 +509,11 @@ export const useChatStore = defineStore('chat', () => {
   const unreadFeedError = ref('')
   const unreadFeedLoaded = ref(false)
   const unreadFeedRefreshQueued = ref(false)
+  const savedMessageItems = ref<SavedMessageItem[]>([])
+  const savedMessageTotalCount = ref(0)
+  const savedMessagesLoading = ref(false)
+  const savedMessagesError = ref('')
+  const savedMessagesLoaded = ref(false)
   const userNames = ref<Record<string, string>>({})
   const userEmails = ref<Record<string, string>>({})
   const userAvatars = ref<Record<string, string>>({})
@@ -771,6 +810,10 @@ export const useChatStore = defineStore('chat', () => {
 
   function showUnreadView() {
     chatViewMode.value = 'unread'
+  }
+
+  function showSavedView() {
+    chatViewMode.value = 'saved'
   }
 
   function focusConversationMessage(messageId: string) {
@@ -1105,6 +1148,11 @@ export const useChatStore = defineStore('chat', () => {
     unreadFeedError.value = ''
     unreadFeedLoaded.value = false
     unreadFeedRefreshQueued.value = false
+    savedMessageItems.value = []
+    savedMessageTotalCount.value = 0
+    savedMessagesLoading.value = false
+    savedMessagesError.value = ''
+    savedMessagesLoaded.value = false
 
     userNames.value = {}
     userEmails.value = {}
@@ -2028,6 +2076,74 @@ export const useChatStore = defineStore('chat', () => {
         clearTimeout(unreadFeedRefreshTimer)
         unreadFeedRefreshTimer = null
       }
+    }
+  }
+
+  async function refreshSavedMessages(): Promise<void> {
+    if (!bootstrapped.value) return
+    savedMessagesLoading.value = true
+    savedMessagesError.value = ''
+    try {
+      const response = await listSavedMessages()
+      savedMessageItems.value = (response.items ?? []).map(savedMessageItemFromHttp)
+      savedMessageTotalCount.value = Math.max(0, Math.floor(response.total_count ?? 0))
+      savedMessagesLoaded.value = true
+    } catch (err) {
+      savedMessagesError.value = err instanceof Error ? err.message : 'Failed to load saved messages'
+      savedMessagesLoaded.value = true
+    } finally {
+      savedMessagesLoading.value = false
+    }
+  }
+
+  function updateMessageSavedState(messageId: string, isSaved: boolean) {
+    if (!messageId) return
+    for (const conversationId of Object.keys(messages.value)) {
+      const list = messages.value[conversationId] ?? []
+      const idx = list.findIndex(message => message.id === messageId)
+      if (idx === -1) continue
+      const next = [...list]
+      next[idx] = { ...next[idx], isSaved }
+      messages.value[conversationId] = next
+    }
+    for (const rootId of Object.keys(threadMessages.value)) {
+      const list = threadMessages.value[rootId] ?? []
+      const idx = list.findIndex(message => message.id === messageId)
+      if (idx === -1) continue
+      const next = [...list]
+      next[idx] = { ...next[idx], isSaved }
+      threadMessages.value[rootId] = next
+    }
+  }
+
+  async function toggleMessageSaved(message: Message): Promise<void> {
+    if (!message.id || message.sendStatus || message.pending) return
+    const nextSaved = !message.isSaved
+    const previousSaved = Boolean(message.isSaved)
+    updateMessageSavedState(message.id, nextSaved)
+    if (!nextSaved) {
+      const previousCount = savedMessageItems.value.length
+      savedMessageItems.value = savedMessageItems.value.filter(item => item.messageId !== message.id)
+      if (savedMessageItems.value.length < previousCount) {
+        savedMessageTotalCount.value = Math.max(0, savedMessageTotalCount.value - (previousCount - savedMessageItems.value.length))
+      }
+    }
+
+    try {
+      if (nextSaved) {
+        await saveMessageApi(message.id)
+        if (savedMessagesLoaded.value) {
+          void refreshSavedMessages()
+        }
+      } else {
+        await unsaveMessageApi(message.id)
+      }
+    } catch (err) {
+      updateMessageSavedState(message.id, previousSaved)
+      if (!nextSaved && savedMessagesLoaded.value) {
+        void refreshSavedMessages()
+      }
+      showToast(err instanceof Error ? err.message : 'Failed to update saved message')
     }
   }
 
@@ -3132,6 +3248,7 @@ export const useChatStore = defineStore('chat', () => {
         fileSize: Number(item.fileSize),
         mimeType: item.mimeType,
       })),
+      isSaved: false,
       serverConfirmed: Boolean(evt.threadRootMessageId) || undefined,
     }
   }
@@ -3170,6 +3287,7 @@ export const useChatStore = defineStore('chat', () => {
           fileSize: attachment.file_size,
           mimeType: attachment.mime_type,
         })),
+        isSaved: item.is_saved ?? prev?.isSaved ?? false,
       })
 
       const threadReplyCount = Math.max(0, Math.floor(Number(item.thread_reply_count ?? 0)))
@@ -3271,6 +3389,11 @@ export const useChatStore = defineStore('chat', () => {
     unreadFeedError,
     unreadFeedLoaded,
     unreadFeedRefreshQueued,
+    savedMessageItems,
+    savedMessageTotalCount,
+    savedMessagesLoading,
+    savedMessagesError,
+    savedMessagesLoaded,
     workspace,
     notifications,
     activeCalls,
@@ -3293,6 +3416,7 @@ export const useChatStore = defineStore('chat', () => {
     setChannels,
     showConversationView,
     showUnreadView,
+    showSavedView,
     selectChannel,
     registerUserName,
     registerUserIdentity,
@@ -3333,6 +3457,8 @@ export const useChatStore = defineStore('chat', () => {
     ensureConversationHistory,
     loadMessageContext,
     refreshUnreadFeed,
+    refreshSavedMessages,
+    toggleMessageSaved,
     scheduleUnreadFeedRefresh,
     markUnreadFeedItemRead,
     loadOlderConversationHistory,

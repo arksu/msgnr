@@ -244,6 +244,95 @@ func TestIntegration_SendMessage_Basic(t *testing.T) {
 	assert.Equal(t, "message_created", evtType)
 }
 
+func TestIntegration_SavedMessages_SaveListUnsave(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	userID, channelID := seedUserAndChannel(t, ctx, pool)
+	otherUserID := createMemberInChannel(t, ctx, pool, channelID, "Other User")
+	outsiderID := seedChatUserWithAttrs(t, ctx, pool, "Outsider", "member", "active")
+
+	first, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    userID,
+		ClientMsgID: "saved-first",
+		Body:        "first saved",
+	})
+	require.NoError(t, err)
+	root, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    otherUserID,
+		ClientMsgID: "saved-root",
+		Body:        "root saved",
+	})
+	require.NoError(t, err)
+	reply, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            otherUserID,
+		ClientMsgID:         "saved-reply",
+		Body:                "reply saved",
+		ThreadRootMessageID: root.MessageID,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SaveMessage(ctx, userID, first.MessageID)
+	require.NoError(t, err)
+	_, err = svc.SaveMessage(ctx, userID, reply.MessageID)
+	require.NoError(t, err)
+	_, err = svc.SaveMessage(ctx, userID, reply.MessageID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE message_saves SET saved_at = now() - interval '1 hour' WHERE user_id = $1 AND message_id = $2`, userID, first.MessageID)
+	require.NoError(t, err)
+
+	items, err := svc.ListSavedMessages(ctx, userID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, reply.MessageID, items[0].MessageID)
+	assert.Equal(t, root.MessageID, items[0].ThreadRootMessageID)
+	assert.Equal(t, "reply saved", items[0].Body)
+	assert.Equal(t, first.MessageID, items[1].MessageID)
+
+	page, _, err := svc.ListMessagePage(ctx, userID, channelID, nil, 20)
+	require.NoError(t, err)
+	require.Len(t, page, 2)
+	assert.True(t, page[0].IsSaved)
+
+	_, err = svc.SaveMessage(ctx, outsiderID, first.MessageID)
+	require.ErrorIs(t, err, chat.ErrNotMember)
+
+	require.NoError(t, svc.UnsaveMessage(ctx, userID, first.MessageID))
+	items, err = svc.ListSavedMessages(ctx, userID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, reply.MessageID, items[0].MessageID)
+}
+
+func TestIntegration_SavedMessages_DeleteCascade(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+	userID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	msg, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    userID,
+		ClientMsgID: "saved-delete",
+		Body:        "saved then deleted",
+	})
+	require.NoError(t, err)
+	_, err = svc.SaveMessage(ctx, userID, msg.MessageID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `DELETE FROM messages WHERE id = $1`, msg.MessageID)
+	require.NoError(t, err)
+
+	items, err := svc.ListSavedMessages(ctx, userID)
+	require.NoError(t, err)
+	assert.Empty(t, items)
+}
+
 func TestIntegration_SendMessage_MessageAlertForChannelMember(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

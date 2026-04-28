@@ -34,6 +34,9 @@ vi.mock('@/services/http/chatApi', () => ({
   uploadChatAttachment: vi.fn(),
   deleteChatAttachment: vi.fn(),
   listMessageReactionUsers: vi.fn(),
+  listSavedMessages: vi.fn(),
+  saveMessage: vi.fn(),
+  unsaveMessage: vi.fn(),
 }))
 
 describe('MessageInput', () => {

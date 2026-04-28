@@ -96,6 +96,7 @@ type ConversationMessage struct {
 	Reactions           []ReactionAggregate
 	MyReactions         []string
 	Attachments         []MessageAttachment
+	IsSaved             bool
 }
 
 type UnreadFeedItem struct {
@@ -112,6 +113,21 @@ type UnreadFeedItem struct {
 	SenderName             string
 	Body                   string
 	CreatedAt              time.Time
+}
+
+type SavedMessageItem struct {
+	ID                     string
+	ConversationID         uuid.UUID
+	ConversationKind       string
+	ConversationVisibility string
+	ConversationTitle      string
+	MessageID              uuid.UUID
+	ThreadRootMessageID    uuid.UUID
+	SenderID               uuid.UUID
+	SenderName             string
+	Body                   string
+	CreatedAt              time.Time
+	SavedAt                time.Time
 }
 
 type ReactionAggregate struct {

@@ -14,6 +14,9 @@ const chatApiMocks = vi.hoisted(() => ({
   listMessageReactionUsers: vi.fn(),
   editMessage: vi.fn(),
   deleteMessage: vi.fn(),
+  listSavedMessages: vi.fn(),
+  saveMessage: vi.fn(),
+  unsaveMessage: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
@@ -22,6 +25,9 @@ vi.mock('@/services/http/chatApi', () => ({
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
   editMessage: chatApiMocks.editMessage,
   deleteMessage: chatApiMocks.deleteMessage,
+  listSavedMessages: chatApiMocks.listSavedMessages,
+  saveMessage: chatApiMocks.saveMessage,
+  unsaveMessage: chatApiMocks.unsaveMessage,
 }))
 
 async function flushAll() {
@@ -125,6 +131,12 @@ describe('MessageBubble reactions', () => {
     })
     chatApiMocks.deleteMessage.mockReset()
     chatApiMocks.deleteMessage.mockResolvedValue(undefined)
+    chatApiMocks.listSavedMessages.mockReset()
+    chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.saveMessage.mockReset()
+    chatApiMocks.saveMessage.mockResolvedValue(undefined)
+    chatApiMocks.unsaveMessage.mockReset()
+    chatApiMocks.unsaveMessage.mockResolvedValue(undefined)
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:attachment-preview')
     globalThis.URL.revokeObjectURL = vi.fn()
     window.open = vi.fn(() => ({
@@ -236,6 +248,32 @@ describe('MessageBubble reactions', () => {
 
     const button = wrapper.get('[data-testid="thread-action-button"]')
     expect(button.text()).toContain('3 replies')
+  })
+
+  it('shows save action for any confirmed message and toggles saved state', async () => {
+    const chat = useChatStore()
+    const msg = buildMessage({ senderId: 'other-user', reactions: [], myReactions: [], isSaved: false })
+    chat.messages = { 'channel-1': [msg] }
+    chat.bootstrapped = true
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+    })
+
+    await wrapper.get('[data-testid="save-message-button"]').trigger('click')
+    await flushAll()
+
+    expect(chatApiMocks.saveMessage).toHaveBeenCalledWith('message-1')
+    expect(chat.messages['channel-1'][0].isSaved).toBe(true)
+  })
+
+  it('hides save action for queued messages', () => {
+    const msg = buildMessage({ reactions: [], myReactions: [], sendStatus: 'queued' })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+    })
+
+    expect(wrapper.find('[data-testid="save-message-button"]').exists()).toBe(false)
   })
 
   it('hides thread action for thread replies but keeps it for self-root encoded messages', () => {

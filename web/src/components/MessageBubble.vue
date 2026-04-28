@@ -65,6 +65,18 @@
 
         <!-- Hover actions (right-aligned) -->
         <div class="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            v-if="canSaveMessage"
+            data-testid="save-message-button"
+            class="h-7 w-7 rounded flex items-center justify-center transition-colors"
+            :class="message.isSaved ? 'text-cyan-300 hover:text-cyan-200 hover:bg-white/10' : 'text-gray-400 hover:text-gray-200 hover:bg-white/10'"
+            :title="message.isSaved ? 'Unsave message' : 'Save message'"
+            @click.stop="toggleSaved"
+          >
+            <svg class="w-4 h-4" :fill="message.isSaved ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M19 21 12 17 5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
           <!-- 🙂 Add reaction: hide when reactions already exist -->
           <button
             v-if="!hasReactions && showFirstReactionAction"
@@ -106,6 +118,18 @@
 
       <!-- Hover actions for grouped messages (no header row) -->
       <div v-if="!showHeader" class="absolute right-2 top-0.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          v-if="canSaveMessage"
+          data-testid="save-message-button"
+          class="h-7 w-7 rounded flex items-center justify-center transition-colors"
+          :class="message.isSaved ? 'text-cyan-300 hover:text-cyan-200 hover:bg-white/10' : 'text-gray-400 hover:text-gray-200 hover:bg-white/10'"
+          :title="message.isSaved ? 'Unsave message' : 'Save message'"
+          @click.stop="toggleSaved"
+        >
+          <svg class="w-4 h-4" :fill="message.isSaved ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M19 21 12 17 5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+          </svg>
+        </button>
         <button
           v-if="!hasReactions && showFirstReactionAction"
           data-testid="first-reaction-button"
@@ -653,6 +677,7 @@ const isThreadReply = computed(() => {
   const rootId = props.message.threadRootMessageId
   return Boolean(rootId && rootId !== props.message.id)
 })
+const canSaveMessage = computed(() => !props.message.sendStatus && !props.message.pending)
 
 const showThreadAction = computed(() => {
   if (props.showThreadAction === false) return false
@@ -1070,6 +1095,10 @@ function toggleReaction(emoji: string) {
     chat.queueReactionOp(opId, props.message.channelId, props.message.id, emoji, 'add')
     ws.sendAddReaction(props.message.channelId, props.message.id, emoji, opId)
   }
+}
+
+function toggleSaved() {
+  void chat.toggleMessageSaved(props.message)
 }
 
 function addReaction(emoji: string) {

@@ -42,6 +42,9 @@ const chatApiMocks = vi.hoisted(() => ({
   listDmCandidates: vi.fn(),
   listMessageReactionUsers: vi.fn(),
   listUnreadFeed: vi.fn(),
+  listSavedMessages: vi.fn(),
+  saveMessage: vi.fn(),
+  unsaveMessage: vi.fn(),
   getMessageContext: vi.fn(),
   resolveUnreadFeedNotification: vi.fn(),
 }))
@@ -51,6 +54,9 @@ vi.mock('@/services/http/chatApi', () => ({
   listDmCandidates: chatApiMocks.listDmCandidates,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
   listUnreadFeed: chatApiMocks.listUnreadFeed,
+  listSavedMessages: chatApiMocks.listSavedMessages,
+  saveMessage: chatApiMocks.saveMessage,
+  unsaveMessage: chatApiMocks.unsaveMessage,
   getMessageContext: chatApiMocks.getMessageContext,
   resolveUnreadFeedNotification: chatApiMocks.resolveUnreadFeedNotification,
 }))
@@ -80,10 +86,16 @@ describe('chatStore phase 6 flows', () => {
     chatApiMocks.listConversationMessages.mockReset()
     chatApiMocks.listDmCandidates.mockReset()
     chatApiMocks.listUnreadFeed.mockReset()
+    chatApiMocks.listSavedMessages.mockReset()
+    chatApiMocks.saveMessage.mockReset()
+    chatApiMocks.unsaveMessage.mockReset()
     chatApiMocks.getMessageContext.mockReset()
     chatApiMocks.resolveUnreadFeedNotification.mockReset()
     chatApiMocks.listDmCandidates.mockResolvedValue([])
     chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.saveMessage.mockResolvedValue(undefined)
+    chatApiMocks.unsaveMessage.mockResolvedValue(undefined)
     chatApiMocks.getMessageContext.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
     chatApiMocks.resolveUnreadFeedNotification.mockResolvedValue(undefined)
   })
@@ -3235,5 +3247,85 @@ describe('chatStore.onTaskStatusChanged', () => {
 
     expect(received).toHaveLength(1)
     expect(received[0].taskId).toBe('task-1')
+  })
+
+  it('rolls back saved state and shows a toast when save fails', async () => {
+    const chat = useChatStore()
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'message-1', isSaved: false })],
+    }
+    chat.threadMessages = {
+      'root-1': [buildMessage({ id: 'message-1', threadRootMessageId: 'root-1', isSaved: false })],
+    }
+    chatApiMocks.saveMessage.mockRejectedValueOnce(new Error('save failed'))
+
+    await chat.toggleMessageSaved(chat.messages['channel-1'][0])
+
+    expect(chat.messages['channel-1'][0].isSaved).toBe(false)
+    expect(chat.threadMessages['root-1'][0].isSaved).toBe(false)
+    expect(chat.toast?.message).toBe('save failed')
+  })
+
+  it('rolls back unsave failure, refreshes saved feed, and avoids unrelated message-list churn', async () => {
+    const chat = useChatStore()
+    const target = buildMessage({ id: 'message-1', isSaved: true })
+    const other = buildMessage({ id: 'message-2', channelId: 'channel-2', isSaved: false })
+    chat.messages = {
+      'channel-1': [target],
+      'channel-2': [other],
+    }
+    chat.threadMessages = {
+      'root-1': [buildMessage({ id: 'message-1', threadRootMessageId: 'root-1', isSaved: true })],
+    }
+    chat.bootstrapped = true
+    chat.savedMessagesLoaded = true as any
+    chat.savedMessageItems = [{
+      id: 'saved:message-1',
+      conversationId: 'channel-1',
+      conversationKind: 'channel',
+      conversationVisibility: 'public',
+      conversationTitle: 'general',
+      messageId: 'message-1',
+      senderId: 'user-2',
+      senderName: 'Bob',
+      body: 'hello',
+      createdAt: '2026-03-06T00:00:00Z',
+      savedAt: '2026-03-06T00:01:00Z',
+    }] as any
+    const unrelatedList = chat.messages['channel-2']
+    chatApiMocks.unsaveMessage.mockRejectedValueOnce(new Error('unsave failed'))
+
+    await chat.toggleMessageSaved(chat.messages['channel-1'][0])
+
+    expect(chat.messages['channel-1'][0].isSaved).toBe(true)
+    expect(chat.threadMessages['root-1'][0].isSaved).toBe(true)
+    expect(chat.messages['channel-2']).toBe(unrelatedList)
+    expect(chatApiMocks.listSavedMessages).toHaveBeenCalledTimes(1)
+    expect(chat.toast?.message).toBe('unsave failed')
+  })
+
+  it('maps saved message bodies without notification escape decoding', async () => {
+    const chat = useChatStore()
+    chat.bootstrapped = true
+    chatApiMocks.listSavedMessages.mockResolvedValueOnce({
+      total_count: 1,
+      items: [{
+        id: 'saved:message-1',
+        conversation_id: 'channel-1',
+        conversation_kind: 'channel',
+        conversation_visibility: 'public',
+        conversation_title: 'general',
+        message_id: 'message-1',
+        sender_id: 'user-2',
+        sender_name: 'Bob',
+        body: String.raw`literal\nslash \\u0041`,
+        created_at: '2026-03-06T00:00:00Z',
+        saved_at: '2026-03-06T00:01:00Z',
+      }],
+    })
+
+    await chat.refreshSavedMessages()
+
+    expect(chat.savedMessageItems[0].body).toBe(String.raw`literal\nslash \\u0041`)
   })
 })

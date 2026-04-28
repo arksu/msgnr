@@ -12,11 +12,17 @@ import { useCallStore } from '@/stores/call'
 const chatApiMocks = vi.hoisted(() => ({
   listDmCandidates: vi.fn(),
   listMessageReactionUsers: vi.fn(),
+  listSavedMessages: vi.fn(),
+  saveMessage: vi.fn(),
+  unsaveMessage: vi.fn(),
 }))
 
 vi.mock('@/services/http/chatApi', () => ({
   listDmCandidates: chatApiMocks.listDmCandidates,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
+  listSavedMessages: chatApiMocks.listSavedMessages,
+  saveMessage: chatApiMocks.saveMessage,
+  unsaveMessage: chatApiMocks.unsaveMessage,
 }))
 
 async function flushAll() {

@@ -55,6 +55,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/conversations/invite", h.requireAuth(h.inviteToConversation))
 	mux.HandleFunc("/api/chat/unread-feed", h.requireAuth(h.listUnreadFeed))
 	mux.HandleFunc("/api/chat/unread-feed/resolve", h.requireAuth(h.resolveUnreadFeedItem))
+	mux.HandleFunc("/api/chat/saved-messages", h.requireAuth(h.listSavedMessages))
 	mux.HandleFunc("/api/messages", h.requireAuth(h.listConversationMessages))
 	mux.HandleFunc("/api/messages/context", h.requireAuth(h.getMessageContext))
 	mux.HandleFunc("/api/messages/reaction-users", h.requireAuth(h.listMessageReactionUsers))
@@ -132,6 +133,7 @@ type conversationMessageResponse struct {
 	Reactions           []reactionAggregateResponse `json:"reactions"`
 	MyReactions         []string                    `json:"my_reactions"`
 	Attachments         []messageAttachmentResponse `json:"attachments"`
+	IsSaved             bool                        `json:"is_saved"`
 }
 
 type messageAttachmentResponse struct {
@@ -200,6 +202,26 @@ type unreadFeedItemResponse struct {
 type unreadFeedResponse struct {
 	TotalCount int                      `json:"total_count"`
 	Items      []unreadFeedItemResponse `json:"items"`
+}
+
+type savedMessageItemResponse struct {
+	ID                     string `json:"id"`
+	ConversationID         string `json:"conversation_id"`
+	ConversationKind       string `json:"conversation_kind"`
+	ConversationVisibility string `json:"conversation_visibility"`
+	ConversationTitle      string `json:"conversation_title"`
+	MessageID              string `json:"message_id"`
+	ThreadRootMessageID    string `json:"thread_root_message_id,omitempty"`
+	SenderID               string `json:"sender_id"`
+	SenderName             string `json:"sender_name"`
+	Body                   string `json:"body"`
+	CreatedAt              string `json:"created_at"`
+	SavedAt                string `json:"saved_at"`
+}
+
+type savedMessagesResponse struct {
+	TotalCount int                        `json:"total_count"`
+	Items      []savedMessageItemResponse `json:"items"`
 }
 
 type resolveUnreadFeedItemRequest struct {
@@ -645,6 +667,7 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 			Reactions:           reactions,
 			MyReactions:         msg.MyReactions,
 			Attachments:         attachments,
+			IsSaved:             msg.IsSaved,
 		})
 	}
 
@@ -736,6 +759,7 @@ func (h *Handler) getMessageContext(w http.ResponseWriter, r *http.Request, prin
 			Reactions:           reactions,
 			MyReactions:         msg.MyReactions,
 			Attachments:         attachments,
+			IsSaved:             msg.IsSaved,
 		})
 	}
 
@@ -786,6 +810,46 @@ func (h *Handler) listUnreadFeed(w http.ResponseWriter, r *http.Request, princip
 		}
 		if item.SenderID != uuid.Nil {
 			payload.SenderID = item.SenderID.String()
+		}
+		resp.Items = append(resp.Items, payload)
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listSavedMessages(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodGet {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	items, err := h.svc.ListSavedMessages(r.Context(), principal.UserID)
+	if err != nil {
+		h.log.Error("listSavedMessages error", zap.Error(err))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		return
+	}
+
+	resp := savedMessagesResponse{
+		TotalCount: len(items),
+		Items:      make([]savedMessageItemResponse, 0, len(items)),
+	}
+	for _, item := range items {
+		payload := savedMessageItemResponse{
+			ID:                     item.ID,
+			ConversationID:         item.ConversationID.String(),
+			ConversationKind:       item.ConversationKind,
+			ConversationVisibility: item.ConversationVisibility,
+			ConversationTitle:      item.ConversationTitle,
+			MessageID:              item.MessageID.String(),
+			SenderID:               item.SenderID.String(),
+			SenderName:             item.SenderName,
+			Body:                   item.Body,
+			CreatedAt:              item.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			SavedAt:                item.SavedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		}
+		if item.ThreadRootMessageID != uuid.Nil {
+			payload.ThreadRootMessageID = item.ThreadRootMessageID.String()
 		}
 		resp.Items = append(resp.Items, payload)
 	}
@@ -1002,6 +1066,25 @@ func (h *Handler) messageItem(w http.ResponseWriter, r *http.Request, principal 
 		}
 	}
 
+	if len(parts) == 2 && parts[1] == "save" {
+		messageID, err := uuid.Parse(parts[0])
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid message_id"))
+			return
+		}
+		switch r.Method {
+		case http.MethodPost:
+			h.saveMessage(w, r, principal, messageID)
+			return
+		case http.MethodDelete:
+			h.unsaveMessage(w, r, principal, messageID)
+			return
+		default:
+			httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+			return
+		}
+	}
+
 	// GET /api/messages/:message_id/attachments/:attachment_id/download
 	if len(parts) == 4 && parts[1] == "attachments" && parts[3] == "download" {
 		if r.Method != http.MethodGet {
@@ -1023,6 +1106,32 @@ func (h *Handler) messageItem(w http.ResponseWriter, r *http.Request, principal 
 	}
 
 	httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("not found"))
+}
+
+func (h *Handler) saveMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal, messageID uuid.UUID) {
+	_, err := h.svc.SaveMessage(r.Context(), principal.UserID, messageID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrMessageNotFound):
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("message not found"))
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
+		default:
+			h.log.Error("saveMessage error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) unsaveMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal, messageID uuid.UUID) {
+	if err := h.svc.UnsaveMessage(r.Context(), principal.UserID, messageID); err != nil {
+		h.log.Error("unsaveMessage error", zap.Error(err))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal, messageID uuid.UUID) {

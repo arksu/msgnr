@@ -203,6 +203,12 @@ type MessageRead struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type MessageSafe struct {
+	UserID    uuid.UUID `json:"user_id"`
+	MessageID uuid.UUID `json:"message_id"`
+	SavedAt   time.Time `json:"saved_at"`
+}
+
 type Notification struct {
 	ID                  uuid.UUID     `json:"id"`
 	UserID              uuid.UUID     `json:"user_id"`

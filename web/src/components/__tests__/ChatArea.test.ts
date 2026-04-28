@@ -15,6 +15,9 @@ vi.mock('@/services/http/chatApi', () => ({
   listActiveCallMembers: vi.fn(),
   listConversationMembers: vi.fn(),
   listMessageReactionUsers: vi.fn(),
+  listSavedMessages: vi.fn(),
+  saveMessage: vi.fn(),
+  unsaveMessage: vi.fn(),
 }))
 
 const listActiveCallMembersMock = vi.mocked(listActiveCallMembers)

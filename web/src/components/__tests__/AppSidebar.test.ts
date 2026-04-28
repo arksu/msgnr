@@ -17,6 +17,9 @@ const chatApiMocks = vi.hoisted(() => ({
   leaveConversation: vi.fn(),
   listMessageReactionUsers: vi.fn(),
   listUnreadFeed: vi.fn(),
+  listSavedMessages: vi.fn(),
+  saveMessage: vi.fn(),
+  unsaveMessage: vi.fn(),
   getMessageContext: vi.fn(),
   resolveUnreadFeedNotification: vi.fn(),
 }))
@@ -29,6 +32,9 @@ vi.mock('@/services/http/chatApi', () => ({
   leaveConversation: chatApiMocks.leaveConversation,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
   listUnreadFeed: chatApiMocks.listUnreadFeed,
+  listSavedMessages: chatApiMocks.listSavedMessages,
+  saveMessage: chatApiMocks.saveMessage,
+  unsaveMessage: chatApiMocks.unsaveMessage,
   getMessageContext: chatApiMocks.getMessageContext,
   resolveUnreadFeedNotification: chatApiMocks.resolveUnreadFeedNotification,
 }))
@@ -70,6 +76,9 @@ describe('AppSidebar', () => {
     ])
     chatApiMocks.leaveConversation.mockResolvedValue(undefined)
     chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.saveMessage.mockResolvedValue(undefined)
+    chatApiMocks.unsaveMessage.mockResolvedValue(undefined)
     chatApiMocks.getMessageContext.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
     chatApiMocks.resolveUnreadFeedNotification.mockResolvedValue(undefined)
   })
@@ -304,6 +313,37 @@ describe('AppSidebar', () => {
     await wrapper.get('[data-testid="sidebar-unread-button"]').trigger('click')
     expect(chatStore.chatViewMode).toBe('unread')
     expect(refreshUnreadFeed).toHaveBeenCalledTimes(1)
+  })
+
+  it('switches to saved message view on click', async () => {
+    const chatStore = useChatStore()
+    const refreshSavedMessages = vi.spyOn(chatStore, 'refreshSavedMessages').mockResolvedValue()
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', name: 'main', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            template: '<button class="sidebar-item" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="sidebar-saved-button"]').trigger('click')
+    expect(chatStore.chatViewMode).toBe('saved')
+    expect(refreshSavedMessages).toHaveBeenCalledTimes(1)
   })
 
   it('hides the leave action for a self dm', async () => {

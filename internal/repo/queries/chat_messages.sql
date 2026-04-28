@@ -39,7 +39,13 @@ SELECT m.id, m.channel_id, m.sender_id, u.display_name, m.body, m.channel_seq,
          ) ORDER BY ma.created_at, ma.id)
            FROM message_attachment ma
           WHERE ma.message_id = m.id
-       ), '[]'::json) AS attachments
+       ), '[]'::json) AS attachments,
+       EXISTS (
+         SELECT 1
+           FROM message_saves ms
+          WHERE ms.message_id = m.id
+            AND ms.user_id = @requester_id
+       ) AS is_saved
 FROM messages m
 JOIN users u ON u.id = m.sender_id
 LEFT JOIN thread_summaries ts ON ts.root_message_id = m.id
@@ -104,10 +110,16 @@ context_messages AS (
              'mime_type', ma.mime_type,
              'uploaded_by', ma.uploaded_by,
              'created_at', ma.created_at
-           ) ORDER BY ma.created_at, ma.id)
+         ) ORDER BY ma.created_at, ma.id)
            FROM message_attachment ma
            WHERE ma.message_id = m.id
-         ), '[]'::json) AS attachments
+         ), '[]'::json) AS attachments,
+         EXISTS (
+           SELECT 1
+             FROM message_saves ms
+            WHERE ms.message_id = m.id
+              AND ms.user_id = @requester_id
+         ) AS is_saved
   FROM messages m
   JOIN users u
     ON u.id = m.sender_id
@@ -155,6 +167,7 @@ SELECT context_messages.id,
        context_messages.mention_everyone,
        context_messages.reactions,
        context_messages.my_reactions,
-       context_messages.attachments
+       context_messages.attachments,
+       context_messages.is_saved
 FROM context_messages
 ORDER BY context_messages.channel_seq ASC;

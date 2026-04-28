@@ -35,6 +35,75 @@ func (s *Service) ListRecentMessages(ctx context.Context, requesterID, conversat
 	return messages, err
 }
 
+func (s *Service) SaveMessage(ctx context.Context, userID, messageID uuid.UUID) (time.Time, error) {
+	savedAt, err := s.q.SaveMessage(ctx, queries.SaveMessageParams{
+		UserID:    userID,
+		MessageID: messageID,
+	})
+	if err == nil {
+		return savedAt, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, fmt.Errorf("chat.SaveMessage query: %w", err)
+	}
+
+	channelID, channelErr := s.q.GetMessageChannelID(ctx, messageID)
+	if errors.Is(channelErr, sql.ErrNoRows) {
+		return time.Time{}, ErrMessageNotFound
+	}
+	if channelErr != nil {
+		return time.Time{}, fmt.Errorf("chat.SaveMessage message lookup: %w", channelErr)
+	}
+	isMember, memberErr := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
+		ChannelID: channelID,
+		UserID:    userID,
+	})
+	if memberErr != nil {
+		return time.Time{}, fmt.Errorf("chat.SaveMessage membership check: %w", memberErr)
+	}
+	if !isMember {
+		return time.Time{}, ErrNotMember
+	}
+	return time.Time{}, fmt.Errorf("chat.SaveMessage unexpected empty insert result for message=%s user=%s", messageID, userID)
+}
+
+func (s *Service) UnsaveMessage(ctx context.Context, userID, messageID uuid.UUID) error {
+	if err := s.q.UnsaveMessage(ctx, queries.UnsaveMessageParams{
+		UserID:    userID,
+		MessageID: messageID,
+	}); err != nil {
+		return fmt.Errorf("chat.UnsaveMessage query: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) ListSavedMessages(ctx context.Context, userID uuid.UUID) ([]SavedMessageItem, error) {
+	rows, err := s.q.ListSavedMessages(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListSavedMessages query: %w", err)
+	}
+
+	items := make([]SavedMessageItem, 0, len(rows))
+	for _, row := range rows {
+		messageID := parseUUIDOrNil(row.MessageID)
+		items = append(items, SavedMessageItem{
+			ID:                     "saved:" + row.MessageID,
+			ConversationID:         parseUUIDOrNil(row.ConversationID),
+			ConversationKind:       row.Kind,
+			ConversationVisibility: row.Visibility,
+			ConversationTitle:      row.ConversationTitle,
+			MessageID:              messageID,
+			ThreadRootMessageID:    parseUUIDOrNil(row.ThreadRootMessageID),
+			SenderID:               parseUUIDOrNil(row.SenderID),
+			SenderName:             row.SenderName,
+			Body:                   row.Body,
+			CreatedAt:              row.CreatedAt,
+			SavedAt:                row.SavedAt,
+		})
+	}
+	return items, nil
+}
+
 func (s *Service) ListMessagePage(
 	ctx context.Context,
 	requesterID, conversationID uuid.UUID,
@@ -88,6 +157,7 @@ func (s *Service) ListMessagePage(
 			ThreadReplyCount: int32(row.ThreadReplyCount),
 			CreatedAt:        row.CreatedAt,
 			MentionEveryone:  row.MentionEveryone,
+			IsSaved:          row.IsSaved,
 		}
 		if row.EditedAt.Valid {
 			editedAt := row.EditedAt.Time
@@ -958,6 +1028,7 @@ func (s *Service) ListMessageContext(
 			ThreadReplyCount: int32(row.ThreadReplyCount),
 			CreatedAt:        row.CreatedAt,
 			MentionEveryone:  row.MentionEveryone,
+			IsSaved:          row.IsSaved,
 		}
 		if row.ThreadRootID.Valid {
 			item.ThreadRootMessageID = row.ThreadRootID.UUID

@@ -95,6 +95,7 @@ export interface ConversationMessageItem {
   reactions?: Array<{ emoji: string; count: number }>
   my_reactions?: string[]
   attachments?: ChatMessageAttachmentItem[]
+  is_saved?: boolean
 }
 
 export interface ChatMessageAttachmentItem {
@@ -141,6 +142,26 @@ export interface UnreadFeedItem {
 export interface UnreadFeedResponse {
   total_count: number
   items: UnreadFeedItem[]
+}
+
+export interface SavedMessageItem {
+  id: string
+  conversation_id: string
+  conversation_kind: 'channel' | 'dm'
+  conversation_visibility: 'public' | 'private' | 'dm'
+  conversation_title: string
+  message_id: string
+  thread_root_message_id?: string
+  sender_id: string
+  sender_name: string
+  body: string
+  created_at: string
+  saved_at: string
+}
+
+export interface SavedMessagesResponse {
+  total_count: number
+  items: SavedMessageItem[]
 }
 
 export interface ReactionUserItem {
@@ -281,6 +302,25 @@ export async function listUnreadFeed(): Promise<UnreadFeedResponse> {
   try {
     const { data } = await http.get<UnreadFeedResponse>('/api/chat/unread-feed')
     return data
+  } catch (e) { handleError(e) }
+}
+
+export async function listSavedMessages(): Promise<SavedMessagesResponse> {
+  try {
+    const { data } = await http.get<SavedMessagesResponse>('/api/chat/saved-messages')
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function saveMessage(messageId: string): Promise<void> {
+  try {
+    await http.post(`/api/messages/${messageId}/save`)
+  } catch (e) { handleError(e) }
+}
+
+export async function unsaveMessage(messageId: string): Promise<void> {
+  try {
+    await http.delete(`/api/messages/${messageId}/save`)
   } catch (e) { handleError(e) }
 }
 

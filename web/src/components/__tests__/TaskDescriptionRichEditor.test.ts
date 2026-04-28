@@ -19,6 +19,9 @@ vi.mock('@/services/http/attachmentOwnersApi', () => ({
 
 vi.mock('@/services/http/chatApi', () => ({
   createOrOpenDm: vi.fn(),
+  listSavedMessages: vi.fn(),
+  saveMessage: vi.fn(),
+  unsaveMessage: vi.fn(),
 }))
 
 vi.mock('@/services/http/tasksApi', () => ({

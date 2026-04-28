@@ -313,6 +313,21 @@ CREATE INDEX IF NOT EXISTS idx_message_entities_message
   ON message_entities(message_id, ordinal);
 
 -- ---------------------------------------------------------------------------
+-- Saved messages
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS message_saves (
+  user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  message_id UUID        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  saved_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  PRIMARY KEY (user_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_saves_user_saved_at
+  ON message_saves(user_id, saved_at DESC);
+
+-- ---------------------------------------------------------------------------
 -- Reactions
 -- ---------------------------------------------------------------------------
 

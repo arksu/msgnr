@@ -34,6 +34,7 @@ declare module 'vue' {
     RichTextComposer: typeof import('./src/components/RichTextComposer.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SavedMessagesPane: typeof import('./src/components/SavedMessagesPane.vue')['default']
     SettingsDialog: typeof import('./src/components/SettingsDialog.vue')['default']
     SidebarItem: typeof import('./src/components/SidebarItem.vue')['default']
     SortIcon: typeof import('./src/components/tasks/SortIcon.vue')['default']

@@ -75,7 +75,7 @@
         <span
           class="flex-1 overflow-hidden text-ellipsis py-1 text-center text-[12px] font-semibold tracking-wide"
           :class="item.id === pinned.activeId ? 'font-bold text-white' : 'text-gray-200'"
-          style="writing-mode: vertical-lr; transform: rotate(180deg);"
+          style="writing-mode: vertical-rl;"
         >
           {{ item.title }}
         </span>

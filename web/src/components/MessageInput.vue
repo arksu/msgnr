@@ -52,6 +52,7 @@
         :submit-on-enter="true"
         :on-files="handleComposerFiles"
         @submit="submit"
+        @empty-arrow-up="requestEditLastMessage"
         @resize="handleComposerResize"
       />
 
@@ -201,6 +202,7 @@ const emit = defineEmits<{
   send: [payload: ComposerSendPayload]
   typing: [active: boolean]
   resize: [deltaPx: number]
+  'edit-last-message': []
 }>()
 
 const text = ref('')
@@ -290,6 +292,13 @@ function emitTyping(active: boolean) {
 
 function handleComposerResize(deltaPx: number) {
   emit('resize', deltaPx)
+}
+
+function requestEditLastMessage() {
+  if (props.disabled || uploading.value) return
+  if (attachments.value.length > 0) return
+  if (text.value.trim().length > 0) return
+  emit('edit-last-message')
 }
 
 async function handleComposerFiles(files: File[]) {

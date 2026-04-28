@@ -71,6 +71,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:entities': [value: MessageEntity[]]
   submit: [{ body: string; entities: MessageEntity[] }]
+  'empty-arrow-up': []
   blur: []
   resize: [deltaPx: number]
 }>()
@@ -411,6 +412,20 @@ const editor = useEditor({
       if (event.key === 'Escape') {
         closeTagPicker()
         return false
+      }
+
+      if (
+        event.key === 'ArrowUp'
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+        && !event.isComposing
+        && serializeCurrentState().body.trim().length === 0
+      ) {
+        event.preventDefault()
+        emit('empty-arrow-up')
+        return true
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {

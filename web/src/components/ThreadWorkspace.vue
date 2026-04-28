@@ -34,6 +34,7 @@
               :show-header="shouldShowHeader(idx)"
               :show-thread-action="false"
               :show-first-reaction-action="true"
+              :edit-request-token="editRequestTokenFor(reply.id)"
             />
           </div>
         </div>
@@ -53,6 +54,7 @@
       :online="wsStore.state !== 'DISCONNECTED' && wsStore.state !== 'CONNECTING'"
       @send="handleSend"
       @typing="handleTyping"
+      @edit-last-message="handleEditLastMessage"
       @resize="handleComposerResize"
     />
   </div>
@@ -62,6 +64,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChatDraftScope } from '@/services/storage/chatDraftStorage'
 import { useChatStore, type Message } from '@/stores/chat'
+import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from '@/components/MessageBubble.vue'
 import MessageInput from '@/components/MessageInput.vue'
@@ -73,9 +76,11 @@ const props = defineProps<{
 }>()
 
 const chatStore = useChatStore()
+const authStore = useAuthStore()
 const wsStore = useWsStore()
 const scrollEl = ref<HTMLElement | null>(null)
 const isNearBottom = ref(true)
+const inlineEditRequest = ref({ messageId: '', token: 0 })
 let typingIdleTimer: ReturnType<typeof setTimeout> | null = null
 let typingIsActive = false
 let typingLastSentAtMs = 0
@@ -114,6 +119,14 @@ function scrollToBottom() {
   el.scrollTop = el.scrollHeight
 }
 
+function scrollMessageIntoView(messageId: string) {
+  if (!messageId) return
+  const el = scrollEl.value
+  if (!el) return
+  const target = el.querySelector<HTMLElement>(`[data-thread-message-id="${messageId}"]`)
+  target?.scrollIntoView({ block: 'center' })
+}
+
 function handleScroll() {
   const el = scrollEl.value
   if (!el) return
@@ -123,6 +136,35 @@ function handleScroll() {
 function handleComposerResize(deltaPx: number) {
   if (!deltaPx || !isNearBottom.value) return
   scrollToBottom()
+}
+
+function canInlineEditReply(message: Message): boolean {
+  const selfUserId = authStore.user?.id || chatStore.workspace?.selfUserId || ''
+  return Boolean(selfUserId)
+    && message.senderId === selfUserId
+    && !message.sendStatus
+    && !message.pending
+}
+
+function editRequestTokenFor(messageId: string): number {
+  return inlineEditRequest.value.messageId === messageId ? inlineEditRequest.value.token : 0
+}
+
+function requestInlineEdit(messageId: string) {
+  if (!messageId) return
+  inlineEditRequest.value = {
+    messageId,
+    token: inlineEditRequest.value.token + 1,
+  }
+  void nextTick(() => {
+    scrollMessageIntoView(messageId)
+  })
+}
+
+function handleEditLastMessage() {
+  const target = [...replies.value].reverse().find(canInlineEditReply)
+  if (!target) return
+  requestInlineEdit(target.id)
 }
 
 function stopTypingPresence(sendStop: boolean) {
@@ -171,6 +213,7 @@ function handleSend(payload: { body: string; entities: NonNullable<Message['enti
 }
 
 watch(() => [props.conversationId, props.rootMessageId] as const, async ([conversationId, rootMessageId]) => {
+  inlineEditRequest.value = { messageId: '', token: inlineEditRequest.value.token }
   if (!conversationId || !rootMessageId) return
   await chatStore.ensureConversationHistory(conversationId)
   if (!chatStore.getThreadRoot(conversationId, rootMessageId)) {

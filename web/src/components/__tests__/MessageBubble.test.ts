@@ -369,6 +369,59 @@ describe('MessageBubble reactions', () => {
     pendingWrapper.unmount()
   })
 
+  it('opens inline edit when editRequestToken changes for an own confirmed message', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+      body: 'before edit',
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true, editRequestToken: 0 },
+      attachTo: document.body,
+    })
+
+    await wrapper.setProps({ editRequestToken: 1 })
+    await waitForEditComposer(wrapper)
+
+    expect(wrapper.find('[data-testid="message-edit-textarea"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('ignores editRequestToken for messages that cannot be edited', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const otherMessage = mount(MessageBubble, {
+      props: {
+        message: buildMessage({ senderId: 'user-2', reactions: [], myReactions: [] }),
+        showHeader: true,
+        editRequestToken: 0,
+      },
+      attachTo: document.body,
+    })
+    await otherMessage.setProps({ editRequestToken: 1 })
+    await flushAll()
+    expect(otherMessage.find('[data-testid="message-edit-textarea"]').exists()).toBe(false)
+    otherMessage.unmount()
+
+    const unconfirmedMessage = mount(MessageBubble, {
+      props: {
+        message: buildMessage({ senderId: 'user-1', sendStatus: 'sending', reactions: [], myReactions: [] }),
+        showHeader: true,
+        editRequestToken: 0,
+      },
+      attachTo: document.body,
+    })
+    await unconfirmedMessage.setProps({ editRequestToken: 1 })
+    await flushAll()
+    expect(unconfirmedMessage.find('[data-testid="message-edit-textarea"]').exists()).toBe(false)
+    unconfirmedMessage.unmount()
+  })
+
   it('edits inline and renders edited marker', async () => {
     const auth = useAuthStore()
     const chat = useChatStore()

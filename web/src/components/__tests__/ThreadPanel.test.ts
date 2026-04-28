@@ -3,6 +3,7 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import ThreadPanel from '@/components/ThreadPanel.vue'
+import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { NotificationLevel } from '@/shared/proto/packets_pb'
@@ -187,6 +188,114 @@ describe('ThreadPanel reaction affordance', () => {
       conversationId: 'channel-1',
       rootMessageId: 'root-1',
     }))
+  })
+
+  it('requests inline edit for the latest editable own thread reply', async () => {
+    const auth = useAuthStore()
+    const chat = useChatStore()
+    const ws = useWsStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+    ws.state = 'LIVE_SYNCED'
+
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.activeThreadConversationId = 'channel-1'
+    chat.activeThreadRootId = 'root-1'
+    chat.messages = {
+      'channel-1': [{
+        id: 'root-1',
+        channelId: 'channel-1',
+        senderId: 'user-1',
+        senderName: 'U1',
+        body: 'root should not be targeted',
+        channelSeq: 1n,
+        threadSeq: 0n,
+        mentionedUserIds: [],
+        mentionEveryone: false,
+        createdAt: '2026-03-06T00:00:00Z',
+        reactions: [],
+        myReactions: [],
+      }],
+    }
+    chat.threadMessages = {
+      'root-1': [
+        {
+          id: 'reply-own',
+          channelId: 'channel-1',
+          senderId: 'user-1',
+          senderName: 'U1',
+          body: 'editable',
+          channelSeq: 2n,
+          threadSeq: 1n,
+          threadRootMessageId: 'root-1',
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:00:01Z',
+          reactions: [],
+          myReactions: [],
+        },
+        {
+          id: 'reply-other',
+          channelId: 'channel-1',
+          senderId: 'user-2',
+          senderName: 'Bob',
+          body: 'not mine',
+          channelSeq: 3n,
+          threadSeq: 2n,
+          threadRootMessageId: 'root-1',
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:00:02Z',
+          reactions: [],
+          myReactions: [],
+        },
+        {
+          id: 'reply-queued',
+          channelId: 'channel-1',
+          senderId: 'user-1',
+          senderName: 'U1',
+          body: 'queued',
+          channelSeq: 0n,
+          threadSeq: 3n,
+          threadRootMessageId: 'root-1',
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:00:03Z',
+          reactions: [],
+          myReactions: [],
+          sendStatus: 'queued',
+        },
+      ],
+    }
+
+    const wrapper = mount(ThreadPanel, {
+      global: {
+        stubs: {
+          MessageBubble: {
+            props: ['message', 'editRequestToken'],
+            template: '<div class="msg" :data-id="message.id" :data-edit-token="editRequestToken" />',
+          },
+          MessageInput: {
+            emits: ['edit-last-message'],
+            template: '<button data-testid="edit-last" @click="$emit(\'edit-last-message\')">edit</button>',
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="edit-last"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('[data-id="root-1"]').attributes('data-edit-token')).toBeUndefined()
+    expect(wrapper.get('[data-id="reply-own"]').attributes('data-edit-token')).toBe('1')
+    expect(wrapper.get('[data-id="reply-other"]').attributes('data-edit-token')).toBe('0')
+    expect(wrapper.get('[data-id="reply-queued"]').attributes('data-edit-token')).toBe('0')
   })
 
   it('scrolls to the latest reply when the panel opens', async () => {

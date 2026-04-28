@@ -153,6 +153,7 @@
               :show-header="shouldShowHeader(idx)"
               :thread-reply-count="threadReplyCount(msg.id)"
               :is-active-thread="chatStore.activeThreadRootId === msg.id"
+              :edit-request-token="editRequestTokenFor(msg.id)"
               @edit-open="handleInlineEditOpen"
               @edit-close="handleInlineEditClose"
               @edit-resize="handleInlineEditResize"
@@ -220,6 +221,7 @@
       :focus-token="chatStore.conversationComposerFocusToken"
       @send="handleSend"
       @typing="handleTyping"
+      @edit-last-message="handleEditLastMessage"
       @resize="handleComposerResize"
     />
     </div>
@@ -327,6 +329,7 @@ const loadingOlderHistory = ref(false)
 const forceScrollToBottomOnNextRender = ref(false)
 const composerBottomStickArmed = ref(false)
 const activeInlineEditMessageId = ref('')
+const inlineEditRequest = ref({ messageId: '', token: 0 })
 const pendingSwitchAutoScrollConversationId = ref('')
 const pendingSwitchAutoScrollAttempts = ref(0)
 const switchFollowConversationId = ref('')
@@ -637,6 +640,35 @@ function threadReplyCount(rootMessageId: string): number {
   const summaryCount = chatStore.threadSummaries[rootMessageId]?.replyCount ?? 0
   const timelineCount = threadReplyCountsFromTimeline.value[rootMessageId] ?? 0
   return Math.max(summaryCount, timelineCount)
+}
+
+function canInlineEditMessage(message: Message): boolean {
+  const selfUserId = authStore.user?.id || chatStore.workspace?.selfUserId || ''
+  return Boolean(selfUserId)
+    && message.senderId === selfUserId
+    && !message.sendStatus
+    && !message.pending
+}
+
+function editRequestTokenFor(messageId: string): number {
+  return inlineEditRequest.value.messageId === messageId ? inlineEditRequest.value.token : 0
+}
+
+function requestInlineEdit(messageId: string) {
+  if (!messageId) return
+  inlineEditRequest.value = {
+    messageId,
+    token: inlineEditRequest.value.token + 1,
+  }
+  void nextTick(() => {
+    scrollMessageIntoView(messageId)
+  })
+}
+
+function handleEditLastMessage() {
+  const target = [...messages.value].reverse().find(canInlineEditMessage)
+  if (!target) return
+  requestInlineEdit(target.id)
 }
 
 function openThreadFromMessage(message: Message) {
@@ -1174,6 +1206,7 @@ watch(() => chatStore.activeChannelId, async (conversationId) => {
   const startedAt = performance.now()
   openRenderProbe.value = { conversationId, startedAt }
   activeInlineEditMessageId.value = ''
+  inlineEditRequest.value = { messageId: '', token: inlineEditRequest.value.token }
   composerBottomStickArmed.value = true
   isAtBottom.value = true
   unreadWhileScrolledAway.value = 0

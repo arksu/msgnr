@@ -544,6 +544,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  editRequestToken: {
+    type: Number,
+    default: 0,
+  },
 })
 
 const emit = defineEmits<{
@@ -1028,6 +1032,11 @@ watch(() => props.message.id, () => {
   editBody.value = ''
   editError.value = ''
   editSaving.value = false
+})
+
+watch(() => props.editRequestToken, (token, previous) => {
+  if (!token || token === previous) return
+  startEdit()
 })
 
 watch(isEditing, (next, previous) => {

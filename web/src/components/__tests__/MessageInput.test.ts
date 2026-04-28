@@ -40,6 +40,59 @@ describe('MessageInput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    Object.defineProperty(globalThis.Node.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [],
+    })
+    Object.defineProperty(globalThis.Node.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }),
+    })
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [],
+    })
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }),
+    })
+    if (typeof globalThis.Range !== 'undefined') {
+      Object.defineProperty(globalThis.Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: () => [],
+      })
+      Object.defineProperty(globalThis.Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+        }),
+      })
+    }
   })
 
   async function flushAll() {
@@ -94,6 +147,11 @@ describe('MessageInput', () => {
 
   async function insertHardBreak(wrapper: ReturnType<typeof mount>) {
     await prose(wrapper).trigger('keydown', { key: 'Enter', shiftKey: true })
+    await flushAll()
+  }
+
+  async function pressArrowUp(wrapper: ReturnType<typeof mount>) {
+    await prose(wrapper).trigger('keydown', { key: 'ArrowUp' })
     await flushAll()
   }
 
@@ -321,6 +379,94 @@ describe('MessageInput', () => {
     await flushAll()
 
     expect(document.activeElement === editor || editor.contains(document.activeElement)).toBe(true)
+  })
+
+  it('emits edit-last-message when ArrowUp is pressed in an empty composer', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    await pressArrowUp(wrapper)
+
+    expect(wrapper.emitted('edit-last-message')).toHaveLength(1)
+  })
+
+  it('does not emit edit-last-message when composer has text', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    await insertText(wrapper, 'draft')
+    await pressArrowUp(wrapper)
+
+    expect(wrapper.emitted('edit-last-message')).toBeUndefined()
+  })
+
+  it('does not emit edit-last-message when disabled', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        disabled: true,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    await pressArrowUp(wrapper)
+
+    expect(wrapper.emitted('edit-last-message')).toBeUndefined()
+  })
+
+  it('does not emit edit-last-message with staged attachments', async () => {
+    vi.mocked(uploadChatAttachment).mockResolvedValue({
+      id: 'att-1',
+      file_name: 'photo.png',
+      file_size: 4,
+      mime_type: 'image/png',
+    })
+
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    const file = new File(['test'], 'photo.png', { type: 'image/png' })
+    await (composer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
+    await flushAll()
+    await pressArrowUp(wrapper)
+
+    expect(wrapper.emitted('edit-last-message')).toBeUndefined()
+  })
+
+  it('does not emit edit-last-message while uploading attachments', async () => {
+    vi.mocked(uploadChatAttachment).mockImplementation(() => new Promise(() => {}))
+
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    const file = new File(['test'], 'photo.png', { type: 'image/png' })
+    void (composer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
+    await flushAll()
+    await pressArrowUp(wrapper)
+
+    expect(wrapper.emitted('edit-last-message')).toBeUndefined()
   })
 
   it('supports visual-line code fence shortcuts below existing message text', async () => {

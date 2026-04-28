@@ -62,6 +62,7 @@
               :show-header="shouldShowHeader(idx)"
               :show-thread-action="false"
               :show-first-reaction-action="true"
+              :edit-request-token="editRequestTokenFor(reply.id)"
             />
           </div>
         </div>
@@ -80,6 +81,7 @@
       :online="ws.state !== 'DISCONNECTED' && ws.state !== 'CONNECTING'"
       :focus-token="chat.threadComposerFocusToken"
       @send="sendReply"
+      @edit-last-message="handleEditLastMessage"
       @resize="handleComposerResize"
     />
   </aside>
@@ -89,6 +91,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChatDraftScope } from '@/services/storage/chatDraftStorage'
 import { useChatStore, type Message } from '@/stores/chat'
+import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from './MessageBubble.vue'
 import MessageInput from './MessageInput.vue'
@@ -96,6 +99,7 @@ import MessageInput from './MessageInput.vue'
 defineEmits<{ close: [] }>()
 
 const chat = useChatStore()
+const auth = useAuthStore()
 const ws = useWsStore()
 
 const rootMessage = computed(() => chat.activeThreadRootMessage)
@@ -119,6 +123,7 @@ const pendingBottomScroll = ref(false)
 const pendingBottomScrollRootId = ref('')
 const pendingBottomScrollReplayVersion = ref(0)
 const pendingFocusedMessageId = ref('')
+const inlineEditRequest = ref({ messageId: '', token: 0 })
 let bottomScrollTimers: ReturnType<typeof setTimeout>[] = []
 let focusScrollTimers: ReturnType<typeof setTimeout>[] = []
 
@@ -248,6 +253,35 @@ function sendReply(payload: { body: string; entities: NonNullable<Message['entit
   scheduleGuaranteedBottomScroll(true)
 }
 
+function canInlineEditReply(message: Message): boolean {
+  const selfUserId = auth.user?.id || chat.workspace?.selfUserId || ''
+  return Boolean(selfUserId)
+    && message.senderId === selfUserId
+    && !message.sendStatus
+    && !message.pending
+}
+
+function editRequestTokenFor(messageId: string): number {
+  return inlineEditRequest.value.messageId === messageId ? inlineEditRequest.value.token : 0
+}
+
+function requestInlineEdit(messageId: string) {
+  if (!messageId) return
+  inlineEditRequest.value = {
+    messageId,
+    token: inlineEditRequest.value.token + 1,
+  }
+  void nextTick(() => {
+    scrollMessageIntoView(messageId)
+  })
+}
+
+function handleEditLastMessage() {
+  const target = [...replies.value].reverse().find(canInlineEditReply)
+  if (!target) return
+  requestInlineEdit(target.id)
+}
+
 function shouldShowHeader(idx: number): boolean {
   if (idx === 0) return true
   const prev = replies.value[idx - 1] as Message
@@ -259,6 +293,7 @@ function shouldShowHeader(idx: number): boolean {
 }
 
 watch(() => rootMessage.value?.id ?? '', (rootId) => {
+  inlineEditRequest.value = { messageId: '', token: inlineEditRequest.value.token }
   if (!rootId) return
   if (chat.focusedThreadMessageId) {
     scheduleFocusedMessageScroll(chat.focusedThreadMessageId)

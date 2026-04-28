@@ -29,6 +29,11 @@ describe('ChatArea', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      value: vi.fn(),
+      configurable: true,
+      writable: true,
+    })
     listActiveCallMembersMock.mockResolvedValue([])
     listConversationMembersMock.mockResolvedValue([])
   })
@@ -146,6 +151,91 @@ describe('ChatArea', () => {
       kind: 'conversation',
       conversationId: 'channel-1',
     }))
+  })
+
+  it('requests inline edit for the latest editable own conversation message', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+
+    authStore.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [
+        {
+          id: 'own-confirmed',
+          channelId: 'channel-1',
+          senderId: 'user-1',
+          senderName: 'U1',
+          body: 'editable',
+          channelSeq: 1n,
+          threadSeq: 0n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:00:00Z',
+          reactions: [],
+          myReactions: [],
+        },
+        {
+          id: 'other-later',
+          channelId: 'channel-1',
+          senderId: 'user-2',
+          senderName: 'Bob',
+          body: 'not mine',
+          channelSeq: 2n,
+          threadSeq: 0n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:01:00Z',
+          reactions: [],
+          myReactions: [],
+        },
+        {
+          id: 'own-sending',
+          channelId: 'channel-1',
+          senderId: 'user-1',
+          senderName: 'U1',
+          body: 'sending',
+          channelSeq: 0n,
+          threadSeq: 0n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:02:00Z',
+          reactions: [],
+          myReactions: [],
+          sendStatus: 'sending',
+        },
+      ],
+    }
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: {
+            props: ['message', 'editRequestToken'],
+            template: '<div class="msg" :data-id="message.id" :data-edit-token="editRequestToken" />',
+          },
+          MessageInput: {
+            emits: ['edit-last-message'],
+            template: '<button data-testid="edit-last" @click="$emit(\'edit-last-message\')">edit</button>',
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="edit-last"]').trigger('click')
+    await flushAll()
+
+    expect(wrapper.get('[data-id="own-confirmed"]').attributes('data-edit-token')).toBe('1')
+    expect(wrapper.get('[data-id="other-later"]').attributes('data-edit-token')).toBe('0')
+    expect(wrapper.get('[data-id="own-sending"]').attributes('data-edit-token')).toBe('0')
   })
 
   it('sends a message when self display name is empty', async () => {

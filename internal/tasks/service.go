@@ -54,7 +54,7 @@ func (e *TaskTitleConflictError) Unwrap() error {
 }
 
 const prefixMaxLen = 32
-const maxCommentAttachments = 5
+const maxCommentAttachments = 10
 const defaultTaskDescriptionHistoryLimit = 20
 const defaultEnumTaskLookupLimit = 200
 

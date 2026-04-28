@@ -156,6 +156,10 @@ import {
 import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 
+const props = defineProps<{
+  initialTemplateId: string | null
+}>()
+
 const tasksStore = useTasksStore()
 
 const selectedTemplateId = ref<string>('')
@@ -187,6 +191,14 @@ const canSubmit = computed(() =>
   tasksStore.activeTemplates.length > 0 &&
   missingFields.value.length === 0,
 )
+
+function resolveInitialTemplateId(): string {
+  const initialTemplateIsActive = !!props.initialTemplateId
+    && tasksStore.activeTemplates.some(tpl => tpl.id === props.initialTemplateId)
+  return initialTemplateIsActive
+    ? props.initialTemplateId!
+    : tasksStore.activeTemplates[0]?.id ?? ''
+}
 
 function isFieldMissing(id: string): boolean {
   return showValidation.value && missingFields.value.includes(id)
@@ -265,7 +277,7 @@ function reset() {
   Object.keys(customValues).forEach(k => delete customValues[k])
   submitError.value = ''
   showValidation.value = false
-  selectedTemplateId.value = tasksStore.activeTemplates[0]?.id ?? ''
+  selectedTemplateId.value = resolveInitialTemplateId()
 }
 
 async function submit() {
@@ -301,7 +313,7 @@ watch(() => tasksStore.createDialogOpen, async (open) => {
   try {
     await tasksStore.loadConfig()
     // Set defaults after config is loaded
-    selectedTemplateId.value = tasksStore.activeTemplates[0]?.id ?? ''
+    selectedTemplateId.value = resolveInitialTemplateId()
     form.statusId = tasksStore.activeStatuses[0]?.id ?? ''
     if (selectedTemplateId.value) {
       await tasksStore.loadFieldsFor(selectedTemplateId.value)

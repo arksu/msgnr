@@ -85,8 +85,9 @@ vi.mock('@/stores/tasks', () => ({
   useTasksStore: () => tasksStoreMock,
 }))
 
-function mountDialog() {
+function mountDialog(props: { initialTemplateId: string | null } = { initialTemplateId: null }) {
   return mount(TaskCreateDialog, {
+    props,
     global: {
       stubs: {
         Teleport: true,
@@ -180,6 +181,45 @@ describe('TaskCreateDialog', () => {
     const templateButton = wrapper.findAll('button').find(button => button.text() === 'TASK')
     const secondTemplateButton = wrapper.findAll('button').find(button => button.text() === 'BUG')
     expect(templateButton?.classes()).toContain('bg-accent')
+    expect(secondTemplateButton?.classes()).not.toContain('bg-accent')
+  })
+
+  it('preselects the initial template when it is active', async () => {
+    tasksStoreMock.createDialogOpen = false
+    const wrapper = mountDialog({ initialTemplateId: 'tpl-2' })
+    tasksStoreMock.createDialogOpen = true
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+
+    const firstTemplateButton = wrapper.findAll('button').find(button => button.text() === 'TASK')
+    const secondTemplateButton = wrapper.findAll('button').find(button => button.text() === 'BUG')
+    expect(firstTemplateButton?.classes()).not.toContain('bg-accent')
+    expect(secondTemplateButton?.classes()).toContain('bg-accent')
+  })
+
+  it('uses the first active template when no initial template is provided', async () => {
+    tasksStoreMock.createDialogOpen = false
+    const wrapper = mountDialog({ initialTemplateId: null })
+    tasksStoreMock.createDialogOpen = true
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+
+    const firstTemplateButton = wrapper.findAll('button').find(button => button.text() === 'TASK')
+    const secondTemplateButton = wrapper.findAll('button').find(button => button.text() === 'BUG')
+    expect(firstTemplateButton?.classes()).toContain('bg-accent')
+    expect(secondTemplateButton?.classes()).not.toContain('bg-accent')
+  })
+
+  it('uses the first active template when the initial template is not active', async () => {
+    tasksStoreMock.createDialogOpen = false
+    const wrapper = mountDialog({ initialTemplateId: 'tpl-deleted' })
+    tasksStoreMock.createDialogOpen = true
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+
+    const firstTemplateButton = wrapper.findAll('button').find(button => button.text() === 'TASK')
+    const secondTemplateButton = wrapper.findAll('button').find(button => button.text() === 'BUG')
+    expect(firstTemplateButton?.classes()).toContain('bg-accent')
     expect(secondTemplateButton?.classes()).not.toContain('bg-accent')
   })
 
@@ -290,6 +330,9 @@ describe('TaskCreateDialog', () => {
   it('does not close when clicking the backdrop', async () => {
     clearTaskCreateDraft()
     const wrapper = mount(TaskCreateDialog, {
+      props: {
+        initialTemplateId: null,
+      },
       attachTo: document.body,
       global: {
         stubs: {

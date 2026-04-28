@@ -32,7 +32,7 @@
         @open-task="emit('openTask', $event)"
       />
     </main>
-    <TaskCreateDialog />
+    <TaskCreateDialog :initial-template-id="modelValue" />
   </div>
 </template>
 

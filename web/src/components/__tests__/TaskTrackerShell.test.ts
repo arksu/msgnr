@@ -34,7 +34,8 @@ vi.mock('@/components/tasks/TaskListView.vue', () => ({
 
 vi.mock('@/components/tasks/TaskCreateDialog.vue', () => ({
   default: {
-    template: '<div data-testid="task-create-dialog" />',
+    props: ['initialTemplateId'],
+    template: '<div data-testid="task-create-dialog" :data-initial-template-id="initialTemplateId" />',
   },
 }))
 
@@ -68,5 +69,18 @@ describe('TaskTrackerShell', () => {
     expect(wrapper.find('[data-testid="task-tracker-sidebar"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="task-kanban-view"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="task-create-dialog"]').exists()).toBe(true)
+  })
+
+  it('passes the selected template filter to the create dialog', () => {
+    const wrapper = mount(TaskTrackerShell, {
+      props: {
+        modelValue: 'tpl-2',
+        sidebarCollapsed: false,
+        currentView: 'tasks-list',
+        viewMode: 'list',
+      },
+    })
+
+    expect(wrapper.get('[data-testid="task-create-dialog"]').attributes('data-initial-template-id')).toBe('tpl-2')
   })
 })

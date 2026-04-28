@@ -473,7 +473,7 @@ import {
   type TaskCommentAttachment,
 } from '@/services/http/tasksApi'
 
-const MAX_ATTACHMENTS = 5
+const MAX_ATTACHMENTS = 10
 const MAX_COMPOSER_LINES = 8
 
 const props = defineProps<{ taskId: string }>()

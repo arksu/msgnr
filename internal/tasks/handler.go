@@ -1355,6 +1355,7 @@ func sanitiseHeaderValue(s string) string {
 //	suffix == "/attachments"                       → POST (upload staged attachment)
 //	suffix == "/attachments/:aid"                  → DELETE (remove staged attachment)
 //	suffix == "/:comment_id"                       → PUT (update comment)
+//	suffix == "/:comment_id/thread"                → POST (ensure chat thread)
 //	suffix == "/:comment_id/attachments/:aid/download" → GET (download linked attachment)
 func (h *Handler) taskCommentsRouter(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID uuid.UUID, suffix string) {
 	suffix = strings.TrimPrefix(suffix, "/")
@@ -1414,6 +1415,20 @@ func (h *Handler) taskCommentsRouter(w http.ResponseWriter, r *http.Request, p a
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "thread" {
+		commentID, err := uuid.Parse(parts[0])
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid comment id"))
+			return
+		}
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		h.taskCommentThreadEnsure(w, r, p, taskID, commentID)
+		return
+	}
+
 	if len(parts) == 1 {
 		commentID, err := uuid.Parse(parts[0])
 		if err != nil {
@@ -1429,6 +1444,15 @@ func (h *Handler) taskCommentsRouter(w http.ResponseWriter, r *http.Request, p a
 	}
 
 	writeJSON(w, http.StatusNotFound, errBody("not found"))
+}
+
+func (h *Handler) taskCommentThreadEnsure(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID, commentID uuid.UUID) {
+	row, err := h.svc.EnsureCommentThread(r.Context(), taskID, commentID, p.UserID)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
 }
 
 func (h *Handler) taskCommentAttachmentUpload(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID uuid.UUID) {

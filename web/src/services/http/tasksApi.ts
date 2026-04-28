@@ -820,10 +820,18 @@ export interface TaskComment {
   id: string
   task_id: string
   author_id: string
+  thread_root_message_id?: string
+  thread_reply_count?: number
   body: string
   created_at: string
   updated_at: string
   attachments: TaskCommentAttachment[]
+}
+
+export interface TaskCommentThread {
+  conversation_id: string
+  thread_root_message_id: string
+  reply_count: number
 }
 
 export interface TaskCommentAttachment {
@@ -861,6 +869,13 @@ export async function tasksUpdateComment(
 ): Promise<TaskComment> {
   try {
     const { data } = await http.put<TaskComment>(`/api/tasks/${taskId}/comments/${commentId}`, payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksEnsureCommentThread(taskId: string, commentId: string): Promise<TaskCommentThread> {
+  try {
+    const { data } = await http.post<TaskCommentThread>(`/api/tasks/${taskId}/comments/${commentId}/thread`)
     return data
   } catch (e) { handleError(e) }
 }

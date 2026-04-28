@@ -194,6 +194,41 @@ func TestIntegration_Bootstrap_FirstPageAndContinuation(t *testing.T) {
 	assert.NotEqual(t, first.GetConversations()[0].GetConversationId(), second.GetConversations()[0].GetConversationId())
 }
 
+func TestIntegration_Bootstrap_HiddenChannelsExcluded(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	cfg := &config.Config{
+		BootstrapDefaultPageSize: 10,
+		BootstrapMaxPageSize:     10,
+		BootstrapSessionTTL:      5 * time.Minute,
+	}
+	bootstrapSvc := bootstrap.NewService(pool, cfg)
+
+	seedBootstrapWorkspace(t, ctx, pool)
+	userID := seedBootstrapUser(t, ctx, pool)
+	visibleID := seedBootstrapChannel(t, ctx, pool, userID, "general", time.Now())
+	var hiddenID uuid.UUID
+	err := pool.QueryRow(ctx, `
+		INSERT INTO channels (kind, visibility, name, created_by, hidden)
+		VALUES ('channel', 'private', 'task hidden', $1, true)
+		RETURNING id`,
+		userID,
+	).Scan(&hiddenID)
+	require.NoError(t, err)
+	seedBootstrapMember(t, ctx, pool, hiddenID, userID)
+
+	resp, err := bootstrapSvc.Bootstrap(ctx, auth.Principal{UserID: userID, SessionID: uuid.New(), Role: "member"}, &packetspb.BootstrapRequest{
+		ClientInstanceId: "client-hidden",
+		PageSizeHint:     10,
+		IncludeArchived:  true,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetConversations(), 1)
+	assert.Equal(t, visibleID.String(), resp.GetConversations()[0].GetConversationId())
+	assert.Equal(t, uint32(1), resp.GetEstimatedTotalConversations())
+}
+
 func TestIntegration_Bootstrap_SelfDmConversationSummary(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

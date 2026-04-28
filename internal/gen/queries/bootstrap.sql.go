@@ -17,6 +17,7 @@ SELECT COUNT(*)::int AS total
 FROM channels c
 JOIN channel_members cm ON cm.channel_id = c.id
 WHERE cm.user_id = $1
+  AND c.hidden = false
   AND (
     $2::bool
     OR (cm.is_archived = false AND c.is_archived = false)
@@ -293,6 +294,7 @@ SELECT c.id
 FROM channels c
 JOIN channel_members cm ON cm.channel_id = c.id
 WHERE cm.user_id = $1
+  AND c.hidden = false
   AND (
     $2::bool
     OR (cm.is_archived = false AND c.is_archived = false)

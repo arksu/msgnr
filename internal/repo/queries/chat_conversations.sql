@@ -16,6 +16,7 @@ FROM channels c
 WHERE c.kind = 'channel'
   AND c.visibility = 'public'
   AND c.is_archived = false
+  AND c.hidden = false
   AND NOT EXISTS (
     SELECT 1
     FROM channel_members cm
@@ -76,7 +77,8 @@ SELECT id,
        last_activity_at,
        is_archived
 FROM channels
-WHERE id = @channel_id;
+WHERE id = @channel_id
+  AND hidden = false;
 
 -- name: GetInviteTargetUserByID :one
 SELECT COALESCE(NULLIF(display_name, ''), email) AS display_name,

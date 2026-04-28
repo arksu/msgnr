@@ -14,9 +14,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"msgnr/internal/gen/queries"
 	"msgnr/internal/tasks"
 	"msgnr/internal/testdb"
 )
@@ -3122,6 +3124,175 @@ func TestIntegration_Comment_UpdateBodyOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.Equal(t, "Updated body", list[0].Body)
+}
+
+func TestIntegration_CommentThread_EnsureCreatesHiddenChannelAndRootOnce(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	other := seedUserProfile(t, ctx, pool, "thread_member_"+uuid.NewString()+"@example.com", "Thread Member", "")
+	tpl := seedTemplate(t, ctx, svc, "THR", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Thread task")
+
+	comment, err := svc.CreateComment(ctx, task.ID, actor, "Open a thread")
+	require.NoError(t, err)
+
+	thread, err := svc.EnsureCommentThread(ctx, task.ID, comment.ID, actor)
+	require.NoError(t, err)
+	require.NotEqual(t, uuid.Nil, thread.ConversationID)
+	require.NotEqual(t, uuid.Nil, thread.ThreadRootMessageID)
+	assert.Equal(t, 0, thread.ThreadReplyCount)
+
+	var hidden bool
+	var rootBody string
+	err = pool.QueryRow(ctx, `
+		SELECT c.hidden, m.body
+		  FROM channels c
+		  JOIN messages m ON m.channel_id = c.id
+		 WHERE c.id = $1
+		   AND m.id = $2`,
+		thread.ConversationID,
+		thread.ThreadRootMessageID,
+	).Scan(&hidden, &rootBody)
+	require.NoError(t, err)
+	assert.True(t, hidden)
+	assert.Equal(t, "Open a thread", rootBody)
+
+	db := stdlib.OpenDBFromPool(pool)
+	defer db.Close()
+	userChannels, err := queries.New(db).ListUserChannels(ctx, actor)
+	require.NoError(t, err)
+	for _, channel := range userChannels {
+		assert.NotEqual(t, thread.ConversationID, channel.ID)
+	}
+	bootstrapCount, err := queries.New(db).CountBootstrapConversations(ctx, queries.CountBootstrapConversationsParams{
+		UserID:          actor,
+		IncludeArchived: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, bootstrapCount)
+	bootstrapIDs, err := queries.New(db).ListBootstrapConversationIDs(ctx, queries.ListBootstrapConversationIDsParams{
+		UserID:          actor,
+		IncludeArchived: true,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, bootstrapIDs, thread.ConversationID)
+
+	var eventType string
+	var lastActivityAt time.Time
+	var messageCreatedAt time.Time
+	err = pool.QueryRow(ctx, `
+		SELECT we.event_type, c.last_activity_at, m.created_at
+		  FROM workspace_events we
+		  JOIN channels c ON c.id = we.channel_id
+		  JOIN messages m ON m.id = $2
+		 WHERE we.channel_id = $1
+		 ORDER BY we.event_seq DESC
+		 LIMIT 1`,
+		thread.ConversationID,
+		thread.ThreadRootMessageID,
+	).Scan(&eventType, &lastActivityAt, &messageCreatedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "message_created", eventType)
+	assert.False(t, lastActivityAt.Before(messageCreatedAt))
+
+	var hasOtherMember bool
+	err = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM channel_members
+			 WHERE channel_id = $1
+			   AND user_id = $2
+			   AND is_archived = false
+		)`,
+		thread.ConversationID,
+		other,
+	).Scan(&hasOtherMember)
+	require.NoError(t, err)
+	assert.True(t, hasOtherMember)
+
+	again, err := svc.EnsureCommentThread(ctx, task.ID, comment.ID, actor)
+	require.NoError(t, err)
+	assert.Equal(t, thread.ConversationID, again.ConversationID)
+	assert.Equal(t, thread.ThreadRootMessageID, again.ThreadRootMessageID)
+
+	list, err := svc.ListComments(ctx, task.ID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.NotNil(t, list[0].ThreadRootMessageID)
+	assert.Equal(t, thread.ThreadRootMessageID, *list[0].ThreadRootMessageID)
+}
+
+func TestIntegration_CommentThread_UpdateCommentSyncsRootBody(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "THU", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Thread update task")
+
+	comment, err := svc.CreateComment(ctx, task.ID, actor, "Before")
+	require.NoError(t, err)
+	thread, err := svc.EnsureCommentThread(ctx, task.ID, comment.ID, actor)
+	require.NoError(t, err)
+
+	_, err = svc.UpdateComment(ctx, task.ID, comment.ID, actor, "After")
+	require.NoError(t, err)
+
+	var rootBody string
+	err = pool.QueryRow(ctx, `SELECT body FROM messages WHERE id = $1`, thread.ThreadRootMessageID).Scan(&rootBody)
+	require.NoError(t, err)
+	assert.Equal(t, "After", rootBody)
+
+	var eventType string
+	err = pool.QueryRow(ctx, `
+		SELECT event_type
+		  FROM workspace_events
+		 WHERE channel_id = $1
+		 ORDER BY event_seq DESC
+		 LIMIT 1`,
+		thread.ConversationID,
+	).Scan(&eventType)
+	require.NoError(t, err)
+	assert.Equal(t, "message_updated", eventType)
+}
+
+func TestIntegration_CommentThread_AttachmentOnlyCommentCreatesEmptyRoot(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := tasks.NewService(pool, minioClient)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "THA", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "Attachment-only thread")
+
+	attachment, err := svc.UploadCommentAttachment(ctx, tasks.UploadCommentAttachmentParams{
+		TaskID:   task.ID,
+		ActorID:  actor,
+		FileName: "note.txt",
+		MimeType: "text/plain",
+		Size:     int64(len("payload")),
+		Body:     bytes.NewReader([]byte("payload")),
+	}, 1)
+	require.NoError(t, err)
+	comment, err := svc.CreateComment(ctx, task.ID, actor, "", attachment.ID)
+	require.NoError(t, err)
+
+	thread, err := svc.EnsureCommentThread(ctx, task.ID, comment.ID, actor)
+	require.NoError(t, err)
+
+	var body string
+	err = pool.QueryRow(ctx, `SELECT body FROM messages WHERE id = $1`, thread.ThreadRootMessageID).Scan(&body)
+	require.NoError(t, err)
+	assert.Equal(t, "", body)
+
+	list, err := svc.ListComments(ctx, task.ID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Len(t, list[0].Attachments, 1)
 }
 
 func TestIntegration_Comment_ListOnUnknownTaskReturnsNotFound(t *testing.T) {

@@ -242,6 +242,7 @@ RETURNING *;
 
 -- name: TaskCommentListWithAttachments :many
 SELECT c.*,
+       COALESCE(ts.reply_count, 0)::int AS thread_reply_count,
        COALESCE((
          SELECT json_agg(json_build_object(
            'id', a.id,
@@ -257,8 +258,31 @@ SELECT c.*,
          WHERE a.comment_id = c.id
        ), '[]'::json) AS attachments
 FROM task_comment c
+LEFT JOIN thread_summaries ts ON ts.root_message_id = c.thread_root_message_id
 WHERE c.task_id = $1
 ORDER BY c.created_at ASC;
+
+-- name: TaskCommentGetWithAttachments :one
+SELECT c.*,
+       COALESCE(ts.reply_count, 0)::int AS thread_reply_count,
+       COALESCE((
+         SELECT json_agg(json_build_object(
+           'id', a.id,
+           'task_id', a.task_id,
+           'comment_id', a.comment_id,
+           'file_name', a.file_name,
+           'file_size', a.file_size,
+           'mime_type', a.mime_type,
+           'uploaded_by', a.uploaded_by,
+           'created_at', a.created_at
+         ) ORDER BY a.created_at, a.id)
+         FROM task_comment_attachment a
+         WHERE a.comment_id = c.id
+       ), '[]'::json) AS attachments
+FROM task_comment c
+LEFT JOIN thread_summaries ts ON ts.root_message_id = c.thread_root_message_id
+WHERE c.task_id = $1
+  AND c.id = $2;
 
 -- ---- task_comment_attachment ----
 

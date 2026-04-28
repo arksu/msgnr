@@ -154,4 +154,5 @@ JOIN channel_members cm ON cm.channel_id = c.id
 WHERE cm.user_id = @user_id
   AND cm.is_archived = false
   AND c.is_archived = false
+  AND c.hidden = false
 ORDER BY c.last_activity_at DESC;

@@ -515,7 +515,7 @@ const taskCommentCreate = `-- name: TaskCommentCreate :one
 
 INSERT INTO task_comment (task_id, author_id, body)
 VALUES ($1, $2, $3)
-RETURNING id, task_id, author_id, body, created_at, updated_at
+RETURNING id, task_id, author_id, thread_root_message_id, body, created_at, updated_at
 `
 
 type TaskCommentCreateParams struct {
@@ -532,6 +532,7 @@ func (q *Queries) TaskCommentCreate(ctx context.Context, arg TaskCommentCreatePa
 		&i.ID,
 		&i.TaskID,
 		&i.AuthorID,
+		&i.ThreadRootMessageID,
 		&i.Body,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -539,8 +540,9 @@ func (q *Queries) TaskCommentCreate(ctx context.Context, arg TaskCommentCreatePa
 	return i, err
 }
 
-const taskCommentListWithAttachments = `-- name: TaskCommentListWithAttachments :many
-SELECT c.id, c.task_id, c.author_id, c.body, c.created_at, c.updated_at,
+const taskCommentGetWithAttachments = `-- name: TaskCommentGetWithAttachments :one
+SELECT c.id, c.task_id, c.author_id, c.thread_root_message_id, c.body, c.created_at, c.updated_at,
+       COALESCE(ts.reply_count, 0)::int AS thread_reply_count,
        COALESCE((
          SELECT json_agg(json_build_object(
            'id', a.id,
@@ -556,18 +558,78 @@ SELECT c.id, c.task_id, c.author_id, c.body, c.created_at, c.updated_at,
          WHERE a.comment_id = c.id
        ), '[]'::json) AS attachments
 FROM task_comment c
+LEFT JOIN thread_summaries ts ON ts.root_message_id = c.thread_root_message_id
+WHERE c.task_id = $1
+  AND c.id = $2
+`
+
+type TaskCommentGetWithAttachmentsParams struct {
+	TaskID uuid.UUID `json:"task_id"`
+	ID     uuid.UUID `json:"id"`
+}
+
+type TaskCommentGetWithAttachmentsRow struct {
+	ID                  uuid.UUID     `json:"id"`
+	TaskID              uuid.UUID     `json:"task_id"`
+	AuthorID            uuid.UUID     `json:"author_id"`
+	ThreadRootMessageID uuid.NullUUID `json:"thread_root_message_id"`
+	Body                string        `json:"body"`
+	CreatedAt           time.Time     `json:"created_at"`
+	UpdatedAt           time.Time     `json:"updated_at"`
+	ThreadReplyCount    int           `json:"thread_reply_count"`
+	Attachments         interface{}   `json:"attachments"`
+}
+
+func (q *Queries) TaskCommentGetWithAttachments(ctx context.Context, arg TaskCommentGetWithAttachmentsParams) (TaskCommentGetWithAttachmentsRow, error) {
+	row := q.db.QueryRowContext(ctx, taskCommentGetWithAttachments, arg.TaskID, arg.ID)
+	var i TaskCommentGetWithAttachmentsRow
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.AuthorID,
+		&i.ThreadRootMessageID,
+		&i.Body,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ThreadReplyCount,
+		&i.Attachments,
+	)
+	return i, err
+}
+
+const taskCommentListWithAttachments = `-- name: TaskCommentListWithAttachments :many
+SELECT c.id, c.task_id, c.author_id, c.thread_root_message_id, c.body, c.created_at, c.updated_at,
+       COALESCE(ts.reply_count, 0)::int AS thread_reply_count,
+       COALESCE((
+         SELECT json_agg(json_build_object(
+           'id', a.id,
+           'task_id', a.task_id,
+           'comment_id', a.comment_id,
+           'file_name', a.file_name,
+           'file_size', a.file_size,
+           'mime_type', a.mime_type,
+           'uploaded_by', a.uploaded_by,
+           'created_at', a.created_at
+         ) ORDER BY a.created_at, a.id)
+         FROM task_comment_attachment a
+         WHERE a.comment_id = c.id
+       ), '[]'::json) AS attachments
+FROM task_comment c
+LEFT JOIN thread_summaries ts ON ts.root_message_id = c.thread_root_message_id
 WHERE c.task_id = $1
 ORDER BY c.created_at ASC
 `
 
 type TaskCommentListWithAttachmentsRow struct {
-	ID          uuid.UUID   `json:"id"`
-	TaskID      uuid.UUID   `json:"task_id"`
-	AuthorID    uuid.UUID   `json:"author_id"`
-	Body        string      `json:"body"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
-	Attachments interface{} `json:"attachments"`
+	ID                  uuid.UUID     `json:"id"`
+	TaskID              uuid.UUID     `json:"task_id"`
+	AuthorID            uuid.UUID     `json:"author_id"`
+	ThreadRootMessageID uuid.NullUUID `json:"thread_root_message_id"`
+	Body                string        `json:"body"`
+	CreatedAt           time.Time     `json:"created_at"`
+	UpdatedAt           time.Time     `json:"updated_at"`
+	ThreadReplyCount    int           `json:"thread_reply_count"`
+	Attachments         interface{}   `json:"attachments"`
 }
 
 func (q *Queries) TaskCommentListWithAttachments(ctx context.Context, taskID uuid.UUID) ([]TaskCommentListWithAttachmentsRow, error) {
@@ -583,9 +645,11 @@ func (q *Queries) TaskCommentListWithAttachments(ctx context.Context, taskID uui
 			&i.ID,
 			&i.TaskID,
 			&i.AuthorID,
+			&i.ThreadRootMessageID,
 			&i.Body,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ThreadReplyCount,
 			&i.Attachments,
 		); err != nil {
 			return nil, err
@@ -606,7 +670,7 @@ const taskCreate = `-- name: TaskCreate :one
 
 INSERT INTO task (template_id, parent_task_id, title, description, status_id, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6, $6)
-RETURNING id, public_id, template_id, template_snapshot_prefix, sequence_number, title, description, status_id, parent_task_id, created_by, updated_by, created_at, updated_at
+RETURNING id, public_id, template_id, discussion_channel_id, template_snapshot_prefix, sequence_number, title, description, status_id, parent_task_id, created_by, updated_by, created_at, updated_at
 `
 
 type TaskCreateParams struct {
@@ -636,6 +700,7 @@ func (q *Queries) TaskCreate(ctx context.Context, arg TaskCreateParams) (Task, e
 		&i.ID,
 		&i.PublicID,
 		&i.TemplateID,
+		&i.DiscussionChannelID,
 		&i.TemplateSnapshotPrefix,
 		&i.SequenceNumber,
 		&i.Title,
@@ -1035,7 +1100,7 @@ func (q *Queries) TaskFieldValueUpsert(ctx context.Context, arg TaskFieldValueUp
 }
 
 const taskGet = `-- name: TaskGet :one
-SELECT id, public_id, template_id, template_snapshot_prefix, sequence_number, title, description, status_id, parent_task_id, created_by, updated_by, created_at, updated_at FROM task WHERE id = $1
+SELECT id, public_id, template_id, discussion_channel_id, template_snapshot_prefix, sequence_number, title, description, status_id, parent_task_id, created_by, updated_by, created_at, updated_at FROM task WHERE id = $1
 `
 
 func (q *Queries) TaskGet(ctx context.Context, id uuid.UUID) (Task, error) {
@@ -1045,6 +1110,7 @@ func (q *Queries) TaskGet(ctx context.Context, id uuid.UUID) (Task, error) {
 		&i.ID,
 		&i.PublicID,
 		&i.TemplateID,
+		&i.DiscussionChannelID,
 		&i.TemplateSnapshotPrefix,
 		&i.SequenceNumber,
 		&i.Title,
@@ -1220,7 +1286,7 @@ func (q *Queries) TaskStatusUpdate(ctx context.Context, arg TaskStatusUpdatePara
 }
 
 const taskSubtaskList = `-- name: TaskSubtaskList :many
-SELECT id, public_id, template_id, template_snapshot_prefix, sequence_number, title, description, status_id, parent_task_id, created_by, updated_by, created_at, updated_at FROM task
+SELECT id, public_id, template_id, discussion_channel_id, template_snapshot_prefix, sequence_number, title, description, status_id, parent_task_id, created_by, updated_by, created_at, updated_at FROM task
 WHERE parent_task_id = $1
 ORDER BY created_at ASC
 `
@@ -1238,6 +1304,7 @@ func (q *Queries) TaskSubtaskList(ctx context.Context, parentTaskID uuid.NullUUI
 			&i.ID,
 			&i.PublicID,
 			&i.TemplateID,
+			&i.DiscussionChannelID,
 			&i.TemplateSnapshotPrefix,
 			&i.SequenceNumber,
 			&i.Title,
@@ -1429,7 +1496,7 @@ const taskUpdate = `-- name: TaskUpdate :one
 UPDATE task
 SET title = $2, description = $3, status_id = $4, updated_by = $5, updated_at = now()
 WHERE id = $1
-RETURNING id, public_id, template_id, template_snapshot_prefix, sequence_number, title, description, status_id, parent_task_id, created_by, updated_by, created_at, updated_at
+RETURNING id, public_id, template_id, discussion_channel_id, template_snapshot_prefix, sequence_number, title, description, status_id, parent_task_id, created_by, updated_by, created_at, updated_at
 `
 
 type TaskUpdateParams struct {
@@ -1453,6 +1520,7 @@ func (q *Queries) TaskUpdate(ctx context.Context, arg TaskUpdateParams) (Task, e
 		&i.ID,
 		&i.PublicID,
 		&i.TemplateID,
+		&i.DiscussionChannelID,
 		&i.TemplateSnapshotPrefix,
 		&i.SequenceNumber,
 		&i.Title,

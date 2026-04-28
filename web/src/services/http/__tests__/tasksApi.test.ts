@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getMock = vi.fn()
+const postMock = vi.fn()
 const patchMock = vi.fn()
 
 vi.mock('@/services/http/client', () => ({
   createAuthenticatedClient: () => ({
     get: getMock,
-    post: vi.fn(),
+    post: postMock,
     patch: patchMock,
     delete: vi.fn(),
   }),
@@ -15,6 +16,7 @@ vi.mock('@/services/http/client', () => ({
 describe('tasksApi task list queries', () => {
   beforeEach(() => {
     getMock.mockReset()
+    postMock.mockReset()
     patchMock.mockReset()
   })
 
@@ -124,5 +126,21 @@ describe('tasksApi task list queries', () => {
       description: 'x',
       force_snapshot: true,
     })
+  })
+
+  it('ensures a comment thread via POST /api/tasks/:id/comments/:comment_id/thread', async () => {
+    postMock.mockResolvedValueOnce({
+      data: {
+        conversation_id: 'channel-1',
+        thread_root_message_id: 'root-1',
+        reply_count: 0,
+      },
+    })
+    const { tasksEnsureCommentThread } = await import('@/services/http/tasksApi')
+
+    const result = await tasksEnsureCommentThread('task-1', 'comment-1')
+
+    expect(postMock).toHaveBeenCalledWith('/api/tasks/task-1/comments/comment-1/thread')
+    expect(result.thread_root_message_id).toBe('root-1')
   })
 })

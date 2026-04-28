@@ -72,6 +72,7 @@ type Channel struct {
 	CreatedBy      uuid.UUID      `json:"created_by"`
 	NextSeq        int64          `json:"next_seq"`
 	LastActivityAt time.Time      `json:"last_activity_at"`
+	Hidden         bool           `json:"hidden"`
 	CreatedAt      time.Time      `json:"created_at"`
 }
 
@@ -262,6 +263,7 @@ type Task struct {
 	ID                     uuid.UUID      `json:"id"`
 	PublicID               string         `json:"public_id"`
 	TemplateID             uuid.UUID      `json:"template_id"`
+	DiscussionChannelID    uuid.NullUUID  `json:"discussion_channel_id"`
 	TemplateSnapshotPrefix string         `json:"template_snapshot_prefix"`
 	SequenceNumber         int64          `json:"sequence_number"`
 	Title                  string         `json:"title"`
@@ -286,12 +288,13 @@ type TaskAttachment struct {
 }
 
 type TaskComment struct {
-	ID        uuid.UUID `json:"id"`
-	TaskID    uuid.UUID `json:"task_id"`
-	AuthorID  uuid.UUID `json:"author_id"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                  uuid.UUID     `json:"id"`
+	TaskID              uuid.UUID     `json:"task_id"`
+	AuthorID            uuid.UUID     `json:"author_id"`
+	ThreadRootMessageID uuid.NullUUID `json:"thread_root_message_id"`
+	Body                string        `json:"body"`
+	CreatedAt           time.Time     `json:"created_at"`
+	UpdatedAt           time.Time     `json:"updated_at"`
 }
 
 type TaskCommentAttachment struct {

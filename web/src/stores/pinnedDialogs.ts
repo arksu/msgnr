@@ -96,10 +96,11 @@ export const usePinnedDialogsStore = defineStore('pinnedDialogs', () => {
     return normalized.id
   }
 
-  function ensureThreadPinned(conversationId: string, rootMessageId: string): string | null {
+  function ensureThreadPinned(conversationId: string, rootMessageId: string, titleOverride = ''): string | null {
     if (!conversationId || !rootMessageId) return null
-    const channel = chatStore.channels.find(item => item.id === conversationId)
-    const conversationTitle = channel?.name
+    const overrideTitle = titleOverride.trim()
+    const channelTitle = overrideTitle || chatStore.channels.find(item => item.id === conversationId)?.name
+    const conversationTitle = channelTitle
       || chatStore.directMessages.find(item => item.id === conversationId)?.displayName
       || chatStore.getConversationById(conversationId)?.title
       || 'Conversation'

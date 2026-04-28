@@ -146,6 +146,14 @@
             >
               Edit
             </button>
+            <button
+              data-testid="task-comment-thread-button"
+              class="rounded px-1.5 py-0.5 text-[11px] text-amber-300 transition-colors hover:bg-white/10 hover:text-amber-200 disabled:cursor-wait disabled:opacity-60"
+              :disabled="openingThreadCommentIds.has(comment.id)"
+              @click="openCommentThread(comment)"
+            >
+              Thread<span v-if="comment.thread_reply_count"> ({{ comment.thread_reply_count }})</span>
+            </button>
           </div>
 
           <template v-if="editingCommentId === comment.id">
@@ -457,6 +465,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick, reactive, t
 import router from '@/router'
 import { useTasksStore } from '@/stores/tasks'
 import { useAuthStore } from '@/stores/auth'
+import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 import { renderMarkdownToHtml } from '@/utils/markdown'
@@ -466,6 +475,7 @@ import {
   tasksListComments,
   tasksCreateComment,
   tasksUpdateComment,
+  tasksEnsureCommentThread,
   tasksUploadCommentAttachment,
   tasksDeleteCommentAttachment,
   tasksFetchCommentAttachmentBlob,
@@ -480,11 +490,13 @@ const props = defineProps<{ taskId: string }>()
 
 const tasksStore = useTasksStore()
 const authStore = useAuthStore()
+const pinnedDialogs = usePinnedDialogsStore()
 const comments = ref<TaskComment[]>([])
 const loading = ref(false)
 const error = ref('')
 const newBody = ref('')
 const submitting = ref(false)
+const openingThreadCommentIds = ref(new Set<string>())
 
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const stagedAttachments = ref<TaskCommentAttachment[]>([])
@@ -827,6 +839,30 @@ function canEditComment(comment: TaskComment): boolean {
 
 function isEditedComment(comment: TaskComment): boolean {
   return new Date(comment.updated_at).getTime() > new Date(comment.created_at).getTime()
+}
+
+async function openCommentThread(comment: TaskComment) {
+  if (openingThreadCommentIds.value.has(comment.id)) return
+  openingThreadCommentIds.value.add(comment.id)
+  error.value = ''
+  try {
+    const thread = await tasksEnsureCommentThread(props.taskId, comment.id)
+    comments.value = comments.value.map(item => item.id === comment.id
+      ? {
+          ...item,
+          thread_root_message_id: thread.thread_root_message_id,
+          thread_reply_count: thread.reply_count,
+        }
+      : item)
+    const title = tasksStore.selectedTask?.public_id
+      ? `Task ${tasksStore.selectedTask.public_id}`
+      : 'Task'
+    pinnedDialogs.ensureThreadPinned(thread.conversation_id, thread.thread_root_message_id, title)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to open thread'
+  } finally {
+    openingThreadCommentIds.value.delete(comment.id)
+  }
 }
 
 async function startEditingComment(comment: TaskComment) {

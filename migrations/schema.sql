@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS channels (
   next_seq         BIGINT      NOT NULL DEFAULT 0,
   -- updated on every new message; drives sidebar sort (last_activity_at DESC)
   last_activity_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- hidden channels back non-sidebar surfaces such as task comment threads
+  hidden           BOOLEAN     NOT NULL DEFAULT false,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -112,6 +114,10 @@ CREATE INDEX IF NOT EXISTS idx_channel_members_active_user
 CREATE INDEX IF NOT EXISTS idx_channel_members_active_channel
   ON channel_members(channel_id, user_id)
   WHERE is_archived = false;
+
+CREATE INDEX IF NOT EXISTS idx_channels_visible_activity
+  ON channels(last_activity_at DESC, id)
+  WHERE hidden = false AND is_archived = false;
 
 -- ---------------------------------------------------------------------------
 -- Messages
@@ -765,6 +771,7 @@ CREATE TABLE IF NOT EXISTS task (
     id                       uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     public_id                varchar(64) NOT NULL,
     template_id              uuid        NOT NULL REFERENCES task_template(id) ON DELETE RESTRICT,
+    discussion_channel_id    uuid        NULL REFERENCES channels(id) ON DELETE SET NULL,
     template_snapshot_prefix varchar(32) NOT NULL,
     sequence_number          bigint      NOT NULL,
     title                    text        NOT NULL,
@@ -966,6 +973,7 @@ CREATE TABLE IF NOT EXISTS task_comment (
     id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id    uuid        NOT NULL REFERENCES task(id) ON DELETE CASCADE,
     author_id  uuid        NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    thread_root_message_id uuid NULL REFERENCES messages(id) ON DELETE SET NULL,
     body       text        NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
@@ -976,6 +984,10 @@ ALTER TABLE task_comment DROP CONSTRAINT IF EXISTS chk_task_comment_body;
 
 CREATE INDEX IF NOT EXISTS idx_task_comment_task_created_at
     ON task_comment (task_id, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_task_comment_thread_root_message_id
+    ON task_comment (thread_root_message_id)
+    WHERE thread_root_message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS task_comment_attachment (
     id           uuid          PRIMARY KEY DEFAULT gen_random_uuid(),

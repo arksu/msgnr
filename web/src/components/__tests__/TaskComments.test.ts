@@ -5,8 +5,10 @@ import { ref, shallowRef } from 'vue'
 import TaskComments from '@/components/tasks/TaskComments.vue'
 import RichTextComposer from '@/components/RichTextComposer.vue'
 import { useAuthStore } from '@/stores/auth'
+import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import {
   tasksCreateComment,
+  tasksEnsureCommentThread,
   tasksFetchCommentAttachmentBlob,
   tasksListComments,
   tasksUpdateComment,
@@ -40,6 +42,7 @@ vi.mock('@/composables/useComposerEmojiPicker', () => ({
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListComments: vi.fn(),
   tasksCreateComment: vi.fn(),
+  tasksEnsureCommentThread: vi.fn(),
   tasksUpdateComment: vi.fn(),
   tasksUploadCommentAttachment: vi.fn(),
   tasksDeleteCommentAttachment: vi.fn(),
@@ -61,6 +64,11 @@ describe('TaskComments', () => {
       created_at: '2026-03-10T12:00:00Z',
       updated_at: '2026-03-10T12:00:00Z',
       attachments: [],
+    })
+    vi.mocked(tasksEnsureCommentThread).mockResolvedValue({
+      conversation_id: 'task-channel-1',
+      thread_root_message_id: 'root-message-1',
+      reply_count: 2,
     })
     vi.mocked(tasksUpdateComment).mockResolvedValue({
       id: 'comment-1',
@@ -710,6 +718,38 @@ describe('TaskComments', () => {
     const link = wrapper.find('.markdown-body a')
     expect(link.exists()).toBe(true)
     expect(link.attributes('href')).toBe('https://example.com')
+  })
+
+  it('opens a task comment chat thread and pins it', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-thread',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: 'thread me',
+      thread_reply_count: 1,
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await waitForComposer(wrapper)
+
+    expect(wrapper.get('[data-testid="task-comment-thread-button"]').text()).toContain('Thread (1)')
+    await wrapper.get('[data-testid="task-comment-thread-button"]').trigger('click')
+    await flushPromises()
+
+    expect(tasksEnsureCommentThread).toHaveBeenCalledWith('task-1', 'comment-thread')
+    const pinned = usePinnedDialogsStore()
+    expect(pinned.activeId).toBe('thread:task-channel-1:root-message-1')
+    expect(pinned.items[0]).toMatchObject({
+      kind: 'thread',
+      conversationId: 'task-channel-1',
+      threadRootMessageId: 'root-message-1',
+    })
+    expect(wrapper.get('[data-testid="task-comment-thread-button"]').text()).toContain('Thread (2)')
   })
 
   it('opens markdown links in the system browser when clicked', async () => {

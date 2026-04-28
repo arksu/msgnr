@@ -19,7 +19,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/sqlc-dev/pqtype"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"msgnr/internal/events"
+	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/gen/queries"
 )
 
@@ -205,6 +210,7 @@ type TaskRow struct {
 	ID                     uuid.UUID  `json:"id"`
 	PublicID               string     `json:"public_id"`
 	TemplateID             uuid.UUID  `json:"template_id"`
+	DiscussionChannelID    *uuid.UUID `json:"discussion_channel_id,omitempty"`
 	TemplateSnapshotPrefix string     `json:"template_snapshot_prefix"`
 	SequenceNumber         int64      `json:"sequence_number"`
 	Title                  string     `json:"title"`
@@ -293,13 +299,22 @@ type AttachmentRow struct {
 
 // CommentRow is one comment record returned by the service.
 type CommentRow struct {
-	ID          uuid.UUID              `json:"id"`
-	TaskID      uuid.UUID              `json:"task_id"`
-	AuthorID    uuid.UUID              `json:"author_id"`
-	Body        string                 `json:"body"`
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
-	Attachments []CommentAttachmentRow `json:"attachments"`
+	ID                  uuid.UUID              `json:"id"`
+	TaskID              uuid.UUID              `json:"task_id"`
+	AuthorID            uuid.UUID              `json:"author_id"`
+	ThreadRootMessageID *uuid.UUID             `json:"thread_root_message_id,omitempty"`
+	ThreadReplyCount    int                    `json:"thread_reply_count"`
+	Body                string                 `json:"body"`
+	CreatedAt           time.Time              `json:"created_at"`
+	UpdatedAt           time.Time              `json:"updated_at"`
+	Attachments         []CommentAttachmentRow `json:"attachments"`
+}
+
+// CommentThreadRow identifies the chat thread backing one task comment.
+type CommentThreadRow struct {
+	ConversationID      uuid.UUID `json:"conversation_id"`
+	ThreadRootMessageID uuid.UUID `json:"thread_root_message_id"`
+	ThreadReplyCount    int       `json:"reply_count"`
 }
 
 // CommentAttachmentRow is one file attachment record linked to a task comment.
@@ -401,6 +416,7 @@ type UpdateTaskDescriptionParams struct {
 type Service struct {
 	pool                    *pgxpool.Pool
 	q                       *queries.Queries
+	eventStore              *events.Store
 	store                   Storage
 	descriptionHistoryLimit int
 }
@@ -417,6 +433,7 @@ func NewService(pool *pgxpool.Pool, store Storage) *Service {
 	return &Service{
 		pool:                    pool,
 		q:                       queries.New(stdlib.OpenDBFromPool(pool)),
+		eventStore:              events.NewStore(pool),
 		store:                   store,
 		descriptionHistoryLimit: defaultTaskDescriptionHistoryLimit,
 	}
@@ -2709,7 +2726,7 @@ func validateJSONArrayOfStrings(raw json.RawMessage) error {
 // taskColumns is the explicit column list for task RETURNING / SELECT clauses.
 // Explicit enumeration prevents silent column-order breakage if the schema
 // gains new columns. Must stay in sync with scanTask's Scan call.
-const taskColumns = `id, public_id, template_id, template_snapshot_prefix, sequence_number,
+const taskColumns = `id, public_id, template_id, discussion_channel_id, template_snapshot_prefix, sequence_number,
 	title, description, status_id, parent_task_id,
 	created_by, updated_by, created_at, updated_at`
 
@@ -2892,12 +2909,12 @@ func scanOneTask(s scanner) (TaskRow, error) {
 		id, templateID, statusID, createdBy, updatedBy uuid.UUID
 		publicID, snapshotPrefix, title                string
 		description                                    sql.NullString
-		parentTaskID                                   uuid.NullUUID
+		discussionChannelID, parentTaskID              uuid.NullUUID
 		seqNum                                         int64
 		createdAt, updatedAt                           time.Time
 	)
 	if err := s.Scan(
-		&id, &publicID, &templateID, &snapshotPrefix, &seqNum,
+		&id, &publicID, &templateID, &discussionChannelID, &snapshotPrefix, &seqNum,
 		&title, &description, &statusID,
 		&parentTaskID, &createdBy, &updatedBy,
 		&createdAt, &updatedAt,
@@ -2920,6 +2937,9 @@ func scanOneTask(s scanner) (TaskRow, error) {
 	if description.Valid {
 		t.Description = &description.String
 	}
+	if discussionChannelID.Valid {
+		t.DiscussionChannelID = &discussionChannelID.UUID
+	}
 	if parentTaskID.Valid {
 		t.ParentTaskID = &parentTaskID.UUID
 	}
@@ -2931,7 +2951,7 @@ func scanTask(row pgx.Row) (TaskRow, error) {
 	return scanOneTask(row)
 }
 
-// scanOneTaskWithTotal scans the 13 taskSelectColumns followed by the window-
+// scanOneTaskWithTotal scans taskSelectColumns followed by the window-
 // function column status_total in one Scan call.  Used by the ListTasks rows
 // loop where the SELECT list is taskSelectColumns + status_total.
 func scanOneTaskWithTotal(s scanner, statusTotal *int) (TaskRow, error) {
@@ -2939,12 +2959,12 @@ func scanOneTaskWithTotal(s scanner, statusTotal *int) (TaskRow, error) {
 		id, templateID, statusID, createdBy, updatedBy uuid.UUID
 		publicID, snapshotPrefix, title                string
 		description                                    sql.NullString
-		parentTaskID                                   uuid.NullUUID
+		discussionChannelID, parentTaskID              uuid.NullUUID
 		seqNum                                         int64
 		createdAt, updatedAt                           time.Time
 	)
 	if err := s.Scan(
-		&id, &publicID, &templateID, &snapshotPrefix, &seqNum,
+		&id, &publicID, &templateID, &discussionChannelID, &snapshotPrefix, &seqNum,
 		&title, &description, &statusID,
 		&parentTaskID, &createdBy, &updatedBy,
 		&createdAt, &updatedAt,
@@ -2967,6 +2987,9 @@ func scanOneTaskWithTotal(s scanner, statusTotal *int) (TaskRow, error) {
 	}
 	if description.Valid {
 		t.Description = &description.String
+	}
+	if discussionChannelID.Valid {
+		t.DiscussionChannelID = &discussionChannelID.UUID
 	}
 	if parentTaskID.Valid {
 		t.ParentTaskID = &parentTaskID.UUID
@@ -3020,6 +3043,9 @@ func mapTask(r queries.Task) TaskRow {
 	}
 	if r.Description.Valid {
 		t.Description = &r.Description.String
+	}
+	if r.DiscussionChannelID.Valid {
+		t.DiscussionChannelID = &r.DiscussionChannelID.UUID
 	}
 	if r.ParentTaskID.Valid {
 		t.ParentTaskID = &r.ParentTaskID.UUID
@@ -3573,7 +3599,7 @@ func buildGroupedInitialQuery(p ListTasksParams, limit int) (string, []any) {
 
 // taskSelectColumns lists t.* columns in scan order — must stay in sync with
 // scanOneTask's Scan call.
-const taskSelectColumns = `t.id, t.public_id, t.template_id, t.template_snapshot_prefix,` +
+const taskSelectColumns = `t.id, t.public_id, t.template_id, t.discussion_channel_id, t.template_snapshot_prefix,` +
 	` t.sequence_number, t.title, t.description, t.status_id, t.parent_task_id,` +
 	` t.created_by, t.updated_by, t.created_at, t.updated_at`
 
@@ -4180,15 +4206,16 @@ func (s *Service) UpdateComment(ctx context.Context, taskID, commentID, actorID 
 	}
 
 	var authorID uuid.UUID
+	var threadRootMessageID uuid.NullUUID
 	if err := tx.QueryRow(ctx, `
-		SELECT author_id
+		SELECT author_id, thread_root_message_id
 		  FROM task_comment
 		 WHERE id = $1
 		   AND task_id = $2
 		 FOR UPDATE`,
 		commentID,
 		taskID,
-	).Scan(&authorID); err != nil {
+	).Scan(&authorID, &threadRootMessageID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: comment", ErrNotFound)
 		}
@@ -4287,7 +4314,7 @@ func (s *Service) UpdateComment(ctx context.Context, taskID, commentID, actorID 
 		   SET body = $3
 		 WHERE id = $1
 		   AND task_id = $2
-		RETURNING id, task_id, author_id, body, created_at, updated_at`,
+		RETURNING id, task_id, author_id, thread_root_message_id, body, created_at, updated_at`,
 		commentID,
 		taskID,
 		body,
@@ -4295,11 +4322,43 @@ func (s *Service) UpdateComment(ctx context.Context, taskID, commentID, actorID 
 		&updated.ID,
 		&updated.TaskID,
 		&updated.AuthorID,
+		&threadRootMessageID,
 		&updated.Body,
 		&updated.CreatedAt,
 		&updated.UpdatedAt,
 	); err != nil {
 		return nil, fmt.Errorf("tasks: update comment in tx: %w", err)
+	}
+	if threadRootMessageID.Valid {
+		updated.ThreadRootMessageID = &threadRootMessageID.UUID
+		var rootChannelID uuid.UUID
+		var editedAt time.Time
+		if err := tx.QueryRow(ctx, `
+			UPDATE messages
+			   SET body = $2,
+			       edited_at = now()
+			 WHERE id = $1
+			RETURNING channel_id, edited_at`,
+			threadRootMessageID.UUID,
+			body,
+		).Scan(&rootChannelID, &editedAt); err != nil {
+			return nil, fmt.Errorf("tasks: update comment thread root: %w", err)
+		}
+		updatedEvt := &packetspb.MessageUpdatedEvent{
+			ConversationId:  rootChannelID.String(),
+			MessageId:       threadRootMessageID.UUID.String(),
+			Body:            body,
+			MentionEveryone: false,
+			EditedAt:        timestamppb.New(editedAt),
+		}
+		updatedServerEvt := &packetspb.ServerEvent{
+			EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_UPDATED,
+			ConversationId: rootChannelID.String(),
+			Payload:        &packetspb.ServerEvent_MessageUpdated{MessageUpdated: updatedEvt},
+		}
+		if err := s.appendAndNotifyTx(ctx, tx, "message_updated", rootChannelID.String(), updatedEvt, updatedServerEvt); err != nil {
+			return nil, fmt.Errorf("tasks: emit comment thread root update: %w", err)
+		}
 	}
 
 	if len(toLink) > 0 {
@@ -4353,16 +4412,220 @@ func (s *Service) UpdateComment(ctx context.Context, taskID, commentID, actorID 
 		}
 	}
 
-	list, err := s.ListComments(ctx, taskID)
+	item, err := s.getCommentWithAttachments(ctx, taskID, commentID)
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range list {
-		if item.ID == commentID {
-			return &item, nil
+	return item, nil
+}
+
+// EnsureCommentThread lazily creates the hidden chat thread backing a task comment.
+func (s *Service) EnsureCommentThread(ctx context.Context, taskID, commentID, actorID uuid.UUID) (*CommentThreadRow, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: begin ensure comment thread tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, taskID.String()); err != nil {
+		return nil, fmt.Errorf("tasks: lock comment thread advisory key: %w", err)
+	}
+
+	var (
+		publicID            string
+		title               string
+		discussionChannelID uuid.NullUUID
+	)
+	if err := tx.QueryRow(ctx, `
+		SELECT public_id, title, discussion_channel_id
+		  FROM task
+		 WHERE id = $1`,
+		taskID,
+	).Scan(&publicID, &title, &discussionChannelID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: task", ErrNotFound)
+		}
+		return nil, fmt.Errorf("tasks: lock task for comment thread: %w", err)
+	}
+
+	var (
+		authorID            uuid.UUID
+		threadRootMessageID uuid.NullUUID
+		body                string
+	)
+	if err := tx.QueryRow(ctx, `
+		SELECT author_id, thread_root_message_id, body
+		  FROM task_comment
+		 WHERE id = $1
+		   AND task_id = $2
+		 FOR UPDATE`,
+		commentID,
+		taskID,
+	).Scan(&authorID, &threadRootMessageID, &body); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: comment", ErrNotFound)
+		}
+		return nil, fmt.Errorf("tasks: lock comment for thread: %w", err)
+	}
+
+	channelID := discussionChannelID.UUID
+	if !discussionChannelID.Valid {
+		name := strings.TrimSpace(publicID)
+		if name == "" {
+			name = taskID.String()
+		}
+		if title = strings.TrimSpace(title); title != "" {
+			name = name + " " + title
+		}
+		if len(name) > 120 {
+			name = name[:120]
+		}
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO channels (kind, visibility, name, topic, created_by, hidden)
+			VALUES ('channel', 'private', $1, 'Task comment threads', $2, true)
+			RETURNING id`,
+			name,
+			actorID,
+		).Scan(&channelID); err != nil {
+			return nil, fmt.Errorf("tasks: create hidden task discussion channel: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO channel_members (channel_id, user_id)
+			SELECT $1, u.id
+			  FROM users u
+			 WHERE u.status = 'active'
+			   AND u.role <> 'bot'
+			ON CONFLICT (channel_id, user_id) DO UPDATE
+			    SET is_archived = false`,
+			channelID,
+		); err != nil {
+			return nil, fmt.Errorf("tasks: add hidden task channel members: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `SET LOCAL msgnr.preserve_task_updated_at = 'on'`); err != nil {
+			return nil, fmt.Errorf("tasks: preserve task updated_at setting: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE task
+			   SET discussion_channel_id = $2
+			 WHERE id = $1`,
+			taskID,
+			channelID,
+		); err != nil {
+			return nil, fmt.Errorf("tasks: link hidden task discussion channel: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO channel_members (channel_id, user_id)
+			VALUES ($1, $2)
+			ON CONFLICT (channel_id, user_id) DO UPDATE
+			    SET is_archived = false`,
+			channelID,
+			actorID,
+		); err != nil {
+			return nil, fmt.Errorf("tasks: ensure requester task channel membership: %w", err)
 		}
 	}
-	return nil, fmt.Errorf("%w: comment", ErrNotFound)
+
+	rootID := threadRootMessageID.UUID
+	if !threadRootMessageID.Valid {
+		var channelSeq int64
+		var createdAt time.Time
+		if err := tx.QueryRow(ctx, `
+			WITH seq AS (
+			    UPDATE channels
+			       SET next_seq = next_seq + 1,
+			           last_activity_at = now()
+			     WHERE id = $1
+			     RETURNING next_seq
+			)
+			INSERT INTO messages (channel_id, channel_seq, sender_id, client_msg_id, body,
+			                      thread_root_id, thread_seq, mention_everyone, created_at)
+			VALUES ($1, (SELECT next_seq FROM seq), $2, $3, $4, NULL, 0, false, now())
+			RETURNING id, channel_seq, created_at`,
+			channelID,
+			authorID,
+			"task-comment-root:"+commentID.String(),
+			body,
+		).Scan(&rootID, &channelSeq, &createdAt); err != nil {
+			return nil, fmt.Errorf("tasks: create comment thread root: %w", err)
+		}
+		msgProto := &packetspb.MessageEvent{
+			ConversationId: channelID.String(),
+			MessageId:      rootID.String(),
+			SenderId:       authorID.String(),
+			Body:           body,
+			ChannelSeq:     channelSeq,
+			CreatedAt:      timestamppb.New(createdAt),
+		}
+		msgServerEvt := &packetspb.ServerEvent{
+			EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+			ConversationId: channelID.String(),
+			Payload:        &packetspb.ServerEvent_MessageCreated{MessageCreated: msgProto},
+		}
+		if err := s.appendAndNotifyTx(ctx, tx, "message_created", channelID.String(), msgProto, msgServerEvt); err != nil {
+			return nil, fmt.Errorf("tasks: emit comment thread root event: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE task_comment
+			   SET thread_root_message_id = $3
+			 WHERE id = $1
+			   AND task_id = $2`,
+			commentID,
+			taskID,
+			rootID,
+		); err != nil {
+			return nil, fmt.Errorf("tasks: link comment thread root: %w", err)
+		}
+	}
+
+	var replyCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE((
+			SELECT reply_count
+			  FROM thread_summaries
+			 WHERE root_message_id = $1
+		), 0)::int`,
+		rootID,
+	).Scan(&replyCount); err != nil {
+		return nil, fmt.Errorf("tasks: load comment thread reply count: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("tasks: commit ensure comment thread tx: %w", err)
+	}
+
+	return &CommentThreadRow{
+		ConversationID:      channelID,
+		ThreadRootMessageID: rootID,
+		ThreadReplyCount:    replyCount,
+	}, nil
+}
+
+func (s *Service) appendAndNotifyTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	eventType, channelID string,
+	payload proto.Message,
+	wrapper *packetspb.ServerEvent,
+) error {
+	payloadJSON, err := protojson.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", eventType, err)
+	}
+	stored, err := s.eventStore.AppendEventTx(ctx, tx, events.AppendParams{
+		EventID:      uuid.New().String(),
+		EventType:    eventType,
+		ChannelID:    channelID,
+		PayloadJSON:  payloadJSON,
+		ProtoPayload: wrapper,
+	})
+	if err != nil {
+		return fmt.Errorf("append %s: %w", eventType, err)
+	}
+	if err := s.eventStore.NotifyEventTx(ctx, tx, stored.Seq); err != nil {
+		return fmt.Errorf("notify %s: %w", eventType, err)
+	}
+	return nil
 }
 
 func (s *Service) requireStore() (Storage, error) {
@@ -4395,29 +4658,28 @@ func (s *Service) ListComments(ctx context.Context, taskID uuid.UUID) ([]Comment
 
 	out := make([]CommentRow, 0, len(rows))
 	for _, row := range rows {
-		item := CommentRow{
-			ID:        row.ID,
-			TaskID:    row.TaskID,
-			AuthorID:  row.AuthorID,
-			Body:      row.Body,
-			CreatedAt: row.CreatedAt,
-			UpdatedAt: row.UpdatedAt,
-		}
-		attachmentsJSON, err := normalizeJSONValue(row.Attachments)
+		item, err := mapCommentListRow(row)
 		if err != nil {
-			return nil, fmt.Errorf("tasks: normalize comment attachments: %w", err)
-		}
-		if len(attachmentsJSON) > 0 {
-			if err := json.Unmarshal(attachmentsJSON, &item.Attachments); err != nil {
-				return nil, fmt.Errorf("tasks: decode comment attachments: %w", err)
-			}
-		}
-		if item.Attachments == nil {
-			item.Attachments = []CommentAttachmentRow{}
+			return nil, err
 		}
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func (s *Service) getCommentWithAttachments(ctx context.Context, taskID, commentID uuid.UUID) (*CommentRow, error) {
+	row, err := s.q.TaskCommentGetWithAttachments(ctx, queries.TaskCommentGetWithAttachmentsParams{
+		TaskID: taskID,
+		ID:     commentID,
+	})
+	if err != nil {
+		return nil, mapNotFound(err, "comment")
+	}
+	item, err := mapCommentGetRow(row)
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
 }
 
 // uniqueUUIDs removes duplicate UUIDs while preserving the first-seen order.
@@ -4500,17 +4762,6 @@ func mapAttachment(r queries.TaskAttachment) AttachmentRow {
 	}
 }
 
-func mapComment(r queries.TaskComment) CommentRow {
-	return CommentRow{
-		ID:        r.ID,
-		TaskID:    r.TaskID,
-		AuthorID:  r.AuthorID,
-		Body:      r.Body,
-		CreatedAt: r.CreatedAt,
-		UpdatedAt: r.UpdatedAt,
-	}
-}
-
 func mapTaskCommentAttachment(r queries.TaskCommentAttachment) CommentAttachmentRow {
 	var commentID *uuid.UUID
 	if r.CommentID.Valid {
@@ -4528,6 +4779,69 @@ func mapTaskCommentAttachment(r queries.TaskCommentAttachment) CommentAttachment
 		UploadedBy: r.UploadedBy,
 		CreatedAt:  r.CreatedAt,
 	}
+}
+
+func mapCommentListRow(row queries.TaskCommentListWithAttachmentsRow) (CommentRow, error) {
+	return mapCommentWithAttachments(
+		row.ID,
+		row.TaskID,
+		row.AuthorID,
+		row.ThreadRootMessageID,
+		row.ThreadReplyCount,
+		row.Body,
+		row.CreatedAt,
+		row.UpdatedAt,
+		row.Attachments,
+	)
+}
+
+func mapCommentGetRow(row queries.TaskCommentGetWithAttachmentsRow) (CommentRow, error) {
+	return mapCommentWithAttachments(
+		row.ID,
+		row.TaskID,
+		row.AuthorID,
+		row.ThreadRootMessageID,
+		row.ThreadReplyCount,
+		row.Body,
+		row.CreatedAt,
+		row.UpdatedAt,
+		row.Attachments,
+	)
+}
+
+func mapCommentWithAttachments(
+	id, taskID, authorID uuid.UUID,
+	threadRootMessageID uuid.NullUUID,
+	threadReplyCount int,
+	body string,
+	createdAt, updatedAt time.Time,
+	attachments any,
+) (CommentRow, error) {
+	item := CommentRow{
+		ID:               id,
+		TaskID:           taskID,
+		AuthorID:         authorID,
+		ThreadReplyCount: threadReplyCount,
+		Body:             body,
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
+	}
+	if threadRootMessageID.Valid {
+		item.ThreadRootMessageID = &threadRootMessageID.UUID
+	}
+	attachmentsJSON, err := normalizeJSONValue(attachments)
+	if err != nil {
+		return CommentRow{}, fmt.Errorf("tasks: normalize comment attachments: %w", err)
+	}
+	if len(attachmentsJSON) > 0 {
+		if err := json.Unmarshal(attachmentsJSON, &item.Attachments); err != nil {
+			return CommentRow{}, fmt.Errorf("tasks: decode comment attachments: %w", err)
+		}
+	}
+	if item.Attachments == nil {
+		item.Attachments = []CommentAttachmentRow{}
+	}
+	return item, nil
 }
 
 // sanitiseFileName strips path separators and other problematic characters

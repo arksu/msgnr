@@ -6,6 +6,7 @@ SELECT n.id::text AS notification_id,
        c.visibility,
        (CASE
          WHEN c.kind = 'dm' THEN COALESCE(dm_peer.display_name, dm_peer.email, c.name)
+         WHEN c.hidden THEN COALESCE('Task ' || t.public_id, c.name)
          ELSE c.name
        END)::text AS conversation_title,
        COALESCE(n.message_id::text, '')::text AS message_id,
@@ -25,6 +26,10 @@ LEFT JOIN messages msg
   ON msg.id = n.message_id
 LEFT JOIN users sender
   ON sender.id = msg.sender_id
+LEFT JOIN task_comment tc
+  ON tc.thread_root_message_id = COALESCE(n.thread_root_message_id, n.message_id)
+LEFT JOIN task t
+  ON t.id = tc.task_id
 LEFT JOIN LATERAL (
   SELECT COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
          u.email
@@ -87,5 +92,6 @@ LEFT JOIN LATERAL (
 WHERE cm_self.user_id = @user_id
   AND cm_self.is_archived = false
   AND c.is_archived = false
+  AND c.hidden = false
   AND cm_self.notification_level = @notification_level_all
 ORDER BY m.created_at DESC;

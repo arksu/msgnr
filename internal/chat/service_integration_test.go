@@ -2858,6 +2858,40 @@ func TestIntegration_ListUnreadFeed_MentionsOnlyIncludesMentionsAndThreadsButNot
 	}
 }
 
+func TestIntegration_ListUnreadFeed_HiddenChannelRootMessagesAreExcluded(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	authorID := seedChatUserWithAttrs(t, ctx, pool, "Hidden Author", "member", "active")
+	recipientID := seedChatUserWithAttrs(t, ctx, pool, "Hidden Recipient", "member", "active")
+
+	var hiddenChannelID uuid.UUID
+	err := pool.QueryRow(ctx, `
+		INSERT INTO channels (kind, visibility, name, created_by, hidden)
+		VALUES ('channel', 'private', 'hidden-thread-space', $1, true)
+		RETURNING id`,
+		authorID,
+	).Scan(&hiddenChannelID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2), ($1, $3)`, hiddenChannelID, authorID, recipientID)
+	require.NoError(t, err)
+
+	_, err = svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   hiddenChannelID,
+		SenderID:    authorID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "hidden root message",
+	})
+	require.NoError(t, err)
+
+	items, err := svc.ListUnreadFeed(ctx, recipientID)
+	require.NoError(t, err)
+	assert.Empty(t, items)
+}
+
 func TestIntegration_ListUnreadFeed_LegacyNotificationsKeepStableIDs(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

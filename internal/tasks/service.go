@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -4477,9 +4478,7 @@ func (s *Service) EnsureCommentThread(ctx context.Context, taskID, commentID, ac
 		if title = strings.TrimSpace(title); title != "" {
 			name = name + " " + title
 		}
-		if len(name) > 120 {
-			name = name[:120]
-		}
+		name = truncateUTF8Runes(name, 120)
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO channels (kind, visibility, name, topic, created_by, hidden)
 			VALUES ('channel', 'private', $1, 'Task comment threads', $2, true)
@@ -4965,4 +4964,15 @@ func rawJSONEqual(a json.RawMessage, aValid, aComparable bool, b json.RawMessage
 		return bytes.Equal(a, b)
 	}
 	return bytes.Equal(a, b)
+}
+
+func truncateUTF8Runes(value string, maxRunes int) string {
+	if maxRunes <= 0 || value == "" {
+		return ""
+	}
+	if utf8.RuneCountInString(value) <= maxRunes {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:maxRunes])
 }

@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -3257,6 +3259,30 @@ func TestIntegration_CommentThread_UpdateCommentSyncsRootBody(t *testing.T) {
 	).Scan(&eventType)
 	require.NoError(t, err)
 	assert.Equal(t, "message_updated", eventType)
+}
+
+func TestIntegration_CommentThread_LongUTF8TitleDoesNotBreakChannelCreate(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "UTF", actor)
+	status := seedStatus(t, ctx, svc, actor)
+	longTitle := strings.Repeat("Привет", 40)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, longTitle)
+
+	comment, err := svc.CreateComment(ctx, task.ID, actor, "Body")
+	require.NoError(t, err)
+
+	thread, err := svc.EnsureCommentThread(ctx, task.ID, comment.ID, actor)
+	require.NoError(t, err)
+	require.NotEqual(t, uuid.Nil, thread.ConversationID)
+
+	var channelName string
+	err = pool.QueryRow(ctx, `SELECT name FROM channels WHERE id = $1`, thread.ConversationID).Scan(&channelName)
+	require.NoError(t, err)
+	assert.True(t, utf8.ValidString(channelName))
+	assert.LessOrEqual(t, utf8.RuneCountInString(channelName), 120)
 }
 
 func TestIntegration_CommentThread_AttachmentOnlyCommentCreatesEmptyRoot(t *testing.T) {

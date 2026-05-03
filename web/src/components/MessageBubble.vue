@@ -243,20 +243,20 @@
         <div
           v-for="attachment in messageAttachments"
           :key="attachment.id"
-          :class="isImageAttachment(attachment) ? '' : 'rounded-md border border-chat-border bg-chat-input/70 p-2'"
+          :class="isInlinePreviewAttachment(attachment) ? '' : 'rounded-md border border-chat-border bg-chat-input/70 p-2'"
         >
           <div v-if="isImageAttachment(attachment)" class="group/image relative w-fit">
             <button
               data-testid="message-image-thumbnail"
-              class="block max-w-[180px] overflow-hidden rounded-lg bg-chat-input/60 shadow-sm transition-colors hover:bg-chat-input/80 sm:max-w-[280px] cursor-pointer"
-              @click="openImagePreview(attachment)"
+              class="block max-h-[min(38vh,220px)] max-w-[min(72vw,280px)] overflow-hidden rounded-lg bg-chat-input/60 shadow-sm transition-colors hover:bg-chat-input/80 sm:max-w-[min(42vw,360px)] cursor-pointer"
+              @click="openMediaPreview(attachment)"
             >
               <img
                 v-if="attachmentUrl(attachment)"
                 data-testid="message-image-thumbnail-img"
                 :src="attachmentUrl(attachment)"
                 :alt="attachment.fileName"
-                class="max-h-[180px] w-full object-contain sm:max-h-[220px]"
+                class="max-h-[min(38vh,220px)] w-full object-contain"
               >
               <div v-else class="flex h-24 items-center justify-center text-xs text-gray-500">
                 {{ loadingAttachmentIds.has(attachment.id) ? 'Loading image...' : 'Preview unavailable' }}
@@ -264,6 +264,36 @@
             </button>
             <button
               class="absolute right-2 top-2 rounded-md border border-white/20 bg-black/55 p-1 text-white/90 opacity-0 transition-opacity group-hover/image:opacity-100 hover:bg-black/75 hover:text-white"
+              title="Download"
+              @click.stop="downloadAttachment(attachment)"
+            >
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7,10 12,15 17,10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </button>
+          </div>
+
+          <div v-else-if="isVideoAttachment(attachment)" class="group/video relative w-fit">
+            <button
+              v-if="attachmentUrl(attachment)"
+              data-testid="message-video-thumbnail"
+              class="block max-h-[min(42vh,260px)] max-w-[min(76vw,420px)] overflow-hidden rounded-lg border border-chat-border/70 bg-black/50 shadow-sm transition-colors hover:border-white/20 sm:max-w-[min(46vw,520px)] cursor-pointer"
+              @click="openMediaPreview(attachment)"
+            >
+              <video
+                data-testid="message-video-thumbnail-video"
+                class="max-h-[min(42vh,260px)] w-full object-contain"
+                preload="metadata"
+                :src="attachmentUrl(attachment)"
+              />
+            </button>
+            <p v-else class="rounded-md border border-chat-border bg-chat-input/70 p-2 text-[11px] text-gray-500">
+              {{ loadingAttachmentIds.has(attachment.id) ? 'Loading video...' : 'Preview unavailable' }}
+            </p>
+            <button
+              class="absolute right-2 top-2 rounded-md border border-white/20 bg-black/55 p-1 text-white/90 opacity-0 transition-opacity group-hover/video:opacity-100 hover:bg-black/75 hover:text-white"
               title="Download"
               @click.stop="downloadAttachment(attachment)"
             >
@@ -291,30 +321,17 @@
               </button>
             </div>
 
-            <div v-if="isVideoAttachment(attachment)">
-            <video
-              v-if="attachmentUrl(attachment)"
-              class="w-full rounded border border-chat-border/70 bg-black/50"
-              controls
-              preload="metadata"
-              :src="attachmentUrl(attachment)"
-            />
-            <p v-else class="text-[11px] text-gray-500">
-              {{ loadingAttachmentIds.has(attachment.id) ? 'Loading video...' : 'Preview unavailable' }}
-            </p>
-            </div>
-
-            <div v-else-if="isAudioAttachment(attachment)">
-            <audio
-              v-if="attachmentUrl(attachment)"
-              class="w-full"
-              controls
-              preload="metadata"
-              :src="attachmentUrl(attachment)"
-            />
-            <p v-else class="text-[11px] text-gray-500">
-              {{ loadingAttachmentIds.has(attachment.id) ? 'Loading audio...' : 'Preview unavailable' }}
-            </p>
+            <div v-if="isAudioAttachment(attachment)">
+              <audio
+                v-if="attachmentUrl(attachment)"
+                class="w-full"
+                controls
+                preload="metadata"
+                :src="attachmentUrl(attachment)"
+              />
+              <p v-else class="text-[11px] text-gray-500">
+                {{ loadingAttachmentIds.has(attachment.id) ? 'Loading audio...' : 'Preview unavailable' }}
+              </p>
             </div>
 
             <p v-else class="text-[11px] text-gray-500">
@@ -494,28 +511,39 @@
 
   <Teleport to="body">
     <div
-      v-if="imagePreview.open"
-      data-testid="message-image-lightbox"
+      v-if="mediaPreview.open"
+      :data-testid="mediaPreview.kind === 'video' ? 'message-video-lightbox' : 'message-image-lightbox'"
       class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/85 p-4 sm:p-6"
-      @click.self="closeImagePreview"
+      @click.self="closeMediaPreview"
     >
-      <div class="relative rounded-xl bg-black/20 p-2 shadow-xl sm:p-3">
+      <div class="relative max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] rounded-xl bg-black/20 p-2 shadow-xl sm:max-h-[calc(100vh-3rem)] sm:max-w-[calc(100vw-3rem)] sm:p-3">
         <button
-          data-testid="message-image-lightbox-close"
+          :data-testid="mediaPreview.kind === 'video' ? 'message-video-lightbox-close' : 'message-image-lightbox-close'"
           class="absolute right-2 top-2 rounded-md border border-white/20 bg-black/55 p-1.5 text-white/90 transition-colors hover:bg-black/75 hover:text-white"
-          @click="closeImagePreview"
+          @click="closeMediaPreview"
         >
           <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path d="M18 6 6 18M6 6l12 12" />
           </svg>
         </button>
         <img
-          v-if="imagePreview.src"
+          v-if="mediaPreview.kind === 'image' && mediaPreview.src"
           data-testid="message-image-lightbox-img"
-          :src="imagePreview.src"
-          :alt="imagePreview.fileName"
-          class="max-h-[60vh] max-w-[86vw] rounded-lg object-contain sm:max-h-[70vh] sm:max-w-[74vw]"
+          :src="mediaPreview.src"
+          :alt="mediaPreview.fileName"
+          class="max-h-[calc(100vh-5rem)] max-w-[calc(100vw-5rem)] rounded-lg object-contain sm:max-h-[calc(100vh-6rem)] sm:max-w-[calc(100vw-6rem)]"
         >
+        <video
+          v-else-if="mediaPreview.kind === 'video' && mediaPreview.src"
+          data-testid="message-video-lightbox-video"
+          class="max-h-[calc(100vh-5rem)] max-w-[calc(100vw-5rem)] rounded-lg bg-black object-contain sm:max-h-[calc(100vh-6rem)] sm:max-w-[calc(100vw-6rem)]"
+          controls
+          autoplay
+          preload="metadata"
+          :src="mediaPreview.src"
+        >
+          Sorry, your browser does not support embedded videos.
+        </video>
       </div>
     </div>
   </Teleport>
@@ -628,8 +656,9 @@ const REACTION_USERS_POPUP_MAX_HEIGHT = 288
 const REACTION_USERS_POPUP_GAP = 8
 const attachmentUrls = ref<Record<string, string>>({})
 const loadingAttachmentIds = ref(new Set<string>())
-const imagePreview = ref<{ open: boolean; src: string; fileName: string }>({
+const mediaPreview = ref<{ open: boolean; kind: 'image' | 'video'; src: string; fileName: string }>({
   open: false,
+  kind: 'image',
   src: '',
   fileName: '',
 })
@@ -806,6 +835,10 @@ function isAudioAttachment(attachment: MessageAttachment): boolean {
   return attachment.mimeType.startsWith('audio/')
 }
 
+function isInlinePreviewAttachment(attachment: MessageAttachment): boolean {
+  return isImageAttachment(attachment) || isVideoAttachment(attachment)
+}
+
 function attachmentUrl(attachment: MessageAttachment): string {
   return attachmentUrls.value[attachment.id] ?? ''
 }
@@ -868,19 +901,22 @@ async function downloadAttachment(attachment: MessageAttachment) {
   }
 }
 
-function openImagePreview(attachment: MessageAttachment) {
+function openMediaPreview(attachment: MessageAttachment) {
   const src = attachmentUrl(attachment)
   if (!src) return
-  imagePreview.value = {
+  if (!isImageAttachment(attachment) && !isVideoAttachment(attachment)) return
+  mediaPreview.value = {
     open: true,
+    kind: isVideoAttachment(attachment) ? 'video' : 'image',
     src,
     fileName: attachment.fileName,
   }
 }
 
-function closeImagePreview() {
-  imagePreview.value = {
+function closeMediaPreview() {
+  mediaPreview.value = {
     open: false,
+    kind: 'image',
     src: '',
     fileName: '',
   }
@@ -1255,8 +1291,8 @@ function handleEscape(evt: KeyboardEvent) {
     cancelEdit()
     return
   }
-  if (imagePreview.value.open) {
-    closeImagePreview()
+  if (mediaPreview.value.open) {
+    closeMediaPreview()
   }
   showEmojiPicker.value = false
   showContextMenu.value = false
@@ -1266,7 +1302,7 @@ function handleEscape(evt: KeyboardEvent) {
 }
 
 watch(
-  [showEmojiPicker, showContextMenu, () => imagePreview.value.open, reactionPopupVisible, isEditing, editTagPickerOpen],
+  [showEmojiPicker, showContextMenu, () => mediaPreview.value.open, reactionPopupVisible, isEditing, editTagPickerOpen],
   ([pickerVisible, menuVisible, previewVisible, popupVisible, editingVisible, editPickerVisible]) => {
   const anyOpen = pickerVisible || menuVisible || previewVisible || popupVisible || editingVisible || editPickerVisible
   if (anyOpen) {
@@ -1324,7 +1360,7 @@ onBeforeUnmount(() => {
     activeEmojiPickerId.value = null
   }
   closeReactionUsersPopup()
-  closeImagePreview()
+  closeMediaPreview()
   clearReactionPopupCloseTimer()
   for (const id of Object.keys(attachmentUrls.value)) {
     revokeAttachmentUrl(id)

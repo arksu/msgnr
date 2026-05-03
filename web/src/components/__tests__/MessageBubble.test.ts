@@ -779,13 +779,13 @@ describe('MessageBubble reactions', () => {
     await flushAll()
 
     const thumbnailButton = wrapper.get('[data-testid="message-image-thumbnail"]')
-    expect(thumbnailButton.classes()).toContain('max-w-[180px]')
-    expect(thumbnailButton.classes()).toContain('sm:max-w-[280px]')
+    expect(thumbnailButton.classes()).toContain('max-h-[min(38vh,220px)]')
+    expect(thumbnailButton.classes()).toContain('max-w-[min(72vw,280px)]')
+    expect(thumbnailButton.classes()).toContain('sm:max-w-[min(42vw,360px)]')
     expect(thumbnailButton.classes()).toContain('cursor-pointer')
 
     const thumbnailImage = wrapper.get('[data-testid="message-image-thumbnail-img"]')
-    expect(thumbnailImage.classes()).toContain('max-h-[180px]')
-    expect(thumbnailImage.classes()).toContain('sm:max-h-[220px]')
+    expect(thumbnailImage.classes()).toContain('max-h-[min(38vh,220px)]')
     expect(thumbnailImage.classes()).toContain('object-contain')
     expect(thumbnailImage.classes()).not.toContain('object-cover')
 
@@ -796,10 +796,10 @@ describe('MessageBubble reactions', () => {
     expect(lightbox).toBeTruthy()
     const lightboxImage = document.body.querySelector('[data-testid="message-image-lightbox-img"]')
     expect(lightboxImage).toBeTruthy()
-    expect(lightboxImage?.classList.contains('max-h-[60vh]')).toBe(true)
-    expect(lightboxImage?.classList.contains('sm:max-h-[70vh]')).toBe(true)
-    expect(lightboxImage?.classList.contains('max-w-[86vw]')).toBe(true)
-    expect(lightboxImage?.classList.contains('sm:max-w-[74vw]')).toBe(true)
+    expect(lightboxImage?.classList.contains('max-h-[calc(100vh-5rem)]')).toBe(true)
+    expect(lightboxImage?.classList.contains('sm:max-h-[calc(100vh-6rem)]')).toBe(true)
+    expect(lightboxImage?.classList.contains('max-w-[calc(100vw-5rem)]')).toBe(true)
+    expect(lightboxImage?.classList.contains('sm:max-w-[calc(100vw-6rem)]')).toBe(true)
     expect(lightboxImage?.classList.contains('max-h-[85vh]')).toBe(false)
     expect(lightboxImage?.classList.contains('max-w-[90vw]')).toBe(false)
 
@@ -807,6 +807,73 @@ describe('MessageBubble reactions', () => {
     await flushAll()
 
     expect(document.body.querySelector('[data-testid="message-image-lightbox"]')).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('renders compact video thumbnail and viewport-bound video preview controls', async () => {
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      attachments: [{
+        id: 'vid-1',
+        fileName: 'clip.mp4',
+        fileSize: 12,
+        mimeType: 'video/mp4',
+      }],
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await flushAll()
+
+    const thumbnailButton = wrapper.get('[data-testid="message-video-thumbnail"]')
+    expect(thumbnailButton.classes()).toContain('max-h-[min(42vh,260px)]')
+    expect(thumbnailButton.classes()).toContain('max-w-[min(76vw,420px)]')
+    expect(thumbnailButton.classes()).toContain('sm:max-w-[min(46vw,520px)]')
+    expect(thumbnailButton.classes()).toContain('cursor-pointer')
+
+    const thumbnailVideo = wrapper.get('[data-testid="message-video-thumbnail-video"]')
+    expect(thumbnailVideo.classes()).toContain('max-h-[min(42vh,260px)]')
+    expect(thumbnailVideo.classes()).toContain('object-contain')
+    expect(thumbnailVideo.attributes('controls')).toBeUndefined()
+
+    await thumbnailButton.trigger('click')
+    await flushAll()
+
+    const lightbox = document.body.querySelector('[data-testid="message-video-lightbox"]')
+    expect(lightbox).toBeTruthy()
+    const lightboxVideo = document.body.querySelector('[data-testid="message-video-lightbox-video"]') as HTMLVideoElement | null
+    expect(lightboxVideo).toBeTruthy()
+    expect(lightboxVideo?.classList.contains('max-h-[calc(100vh-5rem)]')).toBe(true)
+    expect(lightboxVideo?.classList.contains('sm:max-h-[calc(100vh-6rem)]')).toBe(true)
+    expect(lightboxVideo?.classList.contains('max-w-[calc(100vw-5rem)]')).toBe(true)
+    expect(lightboxVideo?.classList.contains('sm:max-w-[calc(100vw-6rem)]')).toBe(true)
+    expect(lightboxVideo?.classList.contains('object-contain')).toBe(true)
+    expect(lightboxVideo?.hasAttribute('controls')).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-video-lightbox"]')).toBeNull()
+
+    await thumbnailButton.trigger('click')
+    await flushAll()
+    const closeButton = document.body.querySelector('[data-testid="message-video-lightbox-close"]') as HTMLButtonElement
+    expect(closeButton).toBeTruthy()
+    closeButton.click()
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-video-lightbox"]')).toBeNull()
+
+    await thumbnailButton.trigger('click')
+    await flushAll()
+    const reopenedLightbox = document.body.querySelector('[data-testid="message-video-lightbox"]') as HTMLDivElement
+    expect(reopenedLightbox).toBeTruthy()
+    reopenedLightbox.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-video-lightbox"]')).toBeNull()
 
     wrapper.unmount()
   })

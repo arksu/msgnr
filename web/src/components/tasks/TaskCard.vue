@@ -471,7 +471,32 @@
               </div>
               <div class="shrink-0">
                 <div class="form-label">Title</div>
+                <div
+                  v-if="descriptionHistoryTitleChanged"
+                  data-testid="task-description-history-title-diff"
+                  class="grid gap-2 md:grid-cols-2"
+                >
+                  <div class="rounded border border-red-400/20 bg-red-500/10 px-2 py-1.5">
+                    <div class="mb-1 text-[10px] uppercase tracking-wide text-red-200/80">Before</div>
+                    <div
+                      data-testid="task-description-history-title-before"
+                      class="truncate text-sm text-red-100"
+                    >
+                      {{ descriptionHistoryBaseTitle || 'No previous title' }}
+                    </div>
+                  </div>
+                  <div class="rounded border border-emerald-400/20 bg-emerald-500/10 px-2 py-1.5">
+                    <div class="mb-1 text-[10px] uppercase tracking-wide text-emerald-200/80">After</div>
+                    <div
+                      data-testid="task-description-history-title-after"
+                      class="truncate text-sm text-emerald-100"
+                    >
+                      {{ descriptionRestoreCandidate.title }}
+                    </div>
+                  </div>
+                </div>
                 <input
+                  v-else
                   data-testid="task-description-history-preview-title"
                   :value="descriptionRestoreCandidate.title"
                   type="text"
@@ -480,16 +505,75 @@
                 >
               </div>
               <div class="flex min-h-0 flex-1 flex-col">
-                <div class="form-label">Description</div>
+                <div class="mb-1 flex shrink-0 items-center justify-between gap-2">
+                  <div class="form-label mb-0">Description diff</div>
+                  <div class="inline-flex overflow-hidden rounded text-[11px]">
+                    <button
+                      type="button"
+                      class="px-2 py-0.5"
+                      data-testid="task-description-history-diff-tab-rendered"
+                      :class="descriptionHistoryDiffTab === 'rendered' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
+                      @click="descriptionHistoryDiffTab = 'rendered'"
+                    >
+                      Rendered
+                    </button>
+                    <button
+                      type="button"
+                      class="border-l border-chat-border px-2 py-0.5"
+                      data-testid="task-description-history-diff-tab-markdown"
+                      :class="descriptionHistoryDiffTab === 'markdown' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
+                      @click="descriptionHistoryDiffTab = 'markdown'"
+                    >
+                      Markdown
+                    </button>
+                  </div>
+                </div>
                 <div
-                  data-testid="task-description-history-preview-description-scroll"
-                  class="min-h-0 flex-1 pr-1"
+                  data-testid="task-description-history-diff-scroll"
+                  class="min-h-0 flex-1 overflow-y-auto pr-1"
                 >
-                  <TaskDescriptionEditor
-                    v-model="descriptionRestoreDraft"
-                    class="h-full min-h-0 w-full"
-                    :editable="false"
-                  />
+                  <div
+                    v-if="descriptionHistoryDiffTab === 'rendered'"
+                    class="grid min-h-full gap-3 lg:grid-cols-2"
+                    data-testid="task-description-history-rendered-diff"
+                  >
+                    <section class="min-h-0 rounded border border-chat-border bg-chat-input p-3">
+                      <div class="mb-2 text-[10px] uppercase tracking-wide text-red-200/80">Before</div>
+                      <div
+                        v-if="descriptionHistoryBaseDescription"
+                        class="markdown-body break-words text-sm text-gray-300"
+                        data-testid="task-description-history-rendered-before"
+                        v-html="descriptionHistoryRenderedDiff.beforeHtml"
+                      />
+                      <p v-else class="text-sm italic text-gray-500">No previous description</p>
+                    </section>
+                    <section class="min-h-0 rounded border border-chat-border bg-chat-input p-3">
+                      <div class="mb-2 text-[10px] uppercase tracking-wide text-emerald-200/80">After</div>
+                      <div
+                        v-if="descriptionHistorySelectedDescription"
+                        class="markdown-body break-words text-sm text-gray-300"
+                        data-testid="task-description-history-rendered-after"
+                        v-html="descriptionHistoryRenderedDiff.afterHtml"
+                      />
+                      <p v-else class="text-sm italic text-gray-500">No description</p>
+                    </section>
+                  </div>
+
+                  <pre
+                    v-else
+                    data-testid="task-description-history-markdown-diff"
+                    class="min-h-full whitespace-pre-wrap rounded border border-chat-border bg-chat-input p-3 font-mono text-xs leading-relaxed text-gray-300"
+                  ><template
+                    v-for="(part, index) in descriptionHistoryMarkdownDiffParts"
+                    :key="`${part.kind}:${index}:${part.value.length}`"
+                  ><span
+                    :data-testid="part.kind === 'added' ? 'task-history-diff-added' : part.kind === 'removed' ? 'task-history-diff-removed' : undefined"
+                    :class="part.kind === 'added'
+                      ? 'task-history-diff-added-text'
+                      : part.kind === 'removed'
+                        ? 'task-history-diff-removed-text'
+                        : ''"
+                  >{{ part.value }}</span></template></pre>
                 </div>
               </div>
             </template>
@@ -549,6 +633,12 @@ import {
   loadSubtaskCreateDraft,
   saveSubtaskCreateDraft,
 } from '@/services/storage/taskCreateDraftStorage'
+import {
+  buildRenderedMarkdownDiff,
+  diffText,
+  type TextDiffPart,
+  type RenderedMarkdownDiff,
+} from '@/utils/taskHistoryDiff'
 import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
@@ -557,6 +647,8 @@ import UserAvatar from '../UserAvatar.vue'
 
 defineProps<{ templateFilter: string | null }>()
 const emit = defineEmits<{ back: [] }>()
+
+type DescriptionHistoryDiffTab = 'rendered' | 'markdown'
 
 const tasksStore = useTasksStore()
 const chatStore = useChatStore()
@@ -584,7 +676,7 @@ const descriptionHistoryLoading = ref(false)
 const descriptionHistoryError = ref('')
 const descriptionHistoryItems = ref<TaskDescriptionHistoryItem[]>([])
 const descriptionRestoreCandidate = ref<TaskDescriptionHistoryItem | null>(null)
-const descriptionRestoreDraft = ref('')
+const descriptionHistoryDiffTab = ref<DescriptionHistoryDiffTab>('rendered')
 const descriptionRestoreApplying = ref(false)
 const descriptionRestoreError = ref('')
 const descriptionEditorRenderKey = ref(0)
@@ -630,6 +722,25 @@ const taskDescriptionAllowLocalDraftSeed = computed(() => descriptionCollab.allo
 
 const creatorUser = computed(() => userSummaryFor(task.value?.created_by ?? ''))
 const updaterUser = computed(() => userSummaryFor(task.value?.updated_by ?? ''))
+const descriptionHistoryBaseItem = computed<TaskDescriptionHistoryItem | null>(() => {
+  const candidate = descriptionRestoreCandidate.value
+  if (!candidate) return null
+  const index = descriptionHistoryItems.value.indexOf(candidate)
+  if (index < 0) return null
+  return descriptionHistoryItems.value[index + 1] ?? null
+})
+const descriptionHistoryBaseTitle = computed(() => descriptionHistoryBaseItem.value?.title ?? '')
+const descriptionHistoryBaseDescription = computed(() => descriptionHistoryBaseItem.value?.description ?? '')
+const descriptionHistorySelectedDescription = computed(() => descriptionRestoreCandidate.value?.description ?? '')
+const descriptionHistoryTitleChanged = computed(() =>
+  !!descriptionRestoreCandidate.value && descriptionHistoryBaseTitle.value !== descriptionRestoreCandidate.value.title,
+)
+const descriptionHistoryMarkdownDiffParts = computed<TextDiffPart[]>(() =>
+  diffText(descriptionHistoryBaseDescription.value, descriptionHistorySelectedDescription.value),
+)
+const descriptionHistoryRenderedDiff = computed<RenderedMarkdownDiff>(() =>
+  buildRenderedMarkdownDiff(descriptionHistoryBaseDescription.value, descriptionHistorySelectedDescription.value),
+)
 
 function markdownSignature(input: string): string {
   let hash = 0
@@ -1220,13 +1331,11 @@ async function loadDescriptionHistory(taskID: string) {
       selectDescriptionHistoryItem(descriptionHistoryItems.value[0])
     } else {
       descriptionRestoreCandidate.value = null
-      descriptionRestoreDraft.value = ''
     }
   } catch (e) {
     descriptionHistoryItems.value = []
     descriptionHistoryError.value = e instanceof Error ? e.message : 'Failed to load description history'
     descriptionRestoreCandidate.value = null
-    descriptionRestoreDraft.value = ''
   } finally {
     descriptionHistoryLoading.value = false
   }
@@ -1241,13 +1350,13 @@ async function openDescriptionHistoryModal() {
 
 function selectDescriptionHistoryItem(item: TaskDescriptionHistoryItem) {
   descriptionRestoreCandidate.value = item
-  descriptionRestoreDraft.value = item.description ?? ''
+  descriptionHistoryDiffTab.value = 'rendered'
 }
 
 function resetDescriptionHistoryModalState() {
   descriptionHistoryModalOpen.value = false
   descriptionRestoreCandidate.value = null
-  descriptionRestoreDraft.value = ''
+  descriptionHistoryDiffTab.value = 'rendered'
   descriptionRestoreError.value = ''
 }
 
@@ -1331,7 +1440,7 @@ watch(() => task.value?.id, (_nextTaskID, prevTaskID) => {
   descriptionHistoryError.value = ''
   descriptionHistoryItems.value = []
   descriptionRestoreCandidate.value = null
-  descriptionRestoreDraft.value = ''
+  descriptionHistoryDiffTab.value = 'rendered'
   descriptionRestoreApplying.value = false
   descriptionRestoreError.value = ''
   descriptionEditorRenderKey.value += 1
@@ -1420,5 +1529,17 @@ onBeforeUnmount(() => {
 }
 .btn-secondary {
   @apply px-3 py-1.5 rounded border border-chat-border text-gray-300 hover:text-white hover:border-accent/60 transition-colors disabled:opacity-50;
+}
+.task-history-diff-added-text {
+  @apply rounded-sm bg-emerald-500/20 text-emerald-100 no-underline;
+}
+.task-history-diff-removed-text {
+  @apply rounded-sm bg-red-500/20 text-red-100 line-through;
+}
+:deep(.task-history-diff-added) {
+  @apply rounded-sm bg-emerald-500/20 text-emerald-100 no-underline;
+}
+:deep(.task-history-diff-removed) {
+  @apply rounded-sm bg-red-500/20 text-red-100 line-through;
 }
 </style>

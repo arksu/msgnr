@@ -767,7 +767,7 @@ describe('TaskCard', () => {
       {
         public_id: 'TASK-1',
         title: 'Newest title',
-        description: '## Newest',
+        description: '## Newest\n\nKeep line\n\nAdded line',
         edited_by: 'u-2',
         created_at: '2026-03-11T10:00:00Z',
         editor: {
@@ -779,12 +779,24 @@ describe('TaskCard', () => {
       {
         public_id: 'TASK-1',
         title: 'Older title',
-        description: '## Older',
+        description: '## Older\n\nKeep line',
         edited_by: 'u-3',
         created_at: '2026-03-10T10:00:00Z',
         editor: {
           id: 'u-3',
           display_name: 'Another User',
+          avatar_url: '',
+        },
+      },
+      {
+        public_id: 'TASK-1',
+        title: 'Seed title',
+        description: 'Seed only',
+        edited_by: 'u-1',
+        created_at: '2026-03-09T10:00:00Z',
+        editor: {
+          id: 'u-1',
+          display_name: 'Creator User',
           avatar_url: '',
         },
       },
@@ -814,20 +826,42 @@ describe('TaskCard', () => {
     expect(tasksStoreMock.listTaskDescriptionHistory).toHaveBeenCalledWith('task-1')
     expect(document.body.querySelector('[data-testid="task-description-restore-modal"] > div')?.className).toContain('w-[90vw]')
     expect(document.body.querySelector('[data-testid="task-description-restore-modal"] > div')?.className).toContain('h-[90vh]')
-    expect((document.body.querySelector('[data-testid="task-description-history-preview-title"]') as HTMLInputElement | null)?.value).toBe('Newest title')
+    expect(document.body.querySelector('[data-testid="task-description-history-title-before"]')?.textContent).toContain('Older title')
+    expect(document.body.querySelector('[data-testid="task-description-history-title-after"]')?.textContent).toContain('Newest title')
+    expect(document.body.querySelector('[data-testid="task-description-history-diff-tab-rendered"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="task-description-history-diff-tab-markdown"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="task-description-history-rendered-before"]')?.textContent).toContain('Older')
+    expect(document.body.querySelector('[data-testid="task-description-history-rendered-after"]')?.textContent).toContain('Added line')
+    expect(document.body.querySelector('[data-testid="task-history-diff-added"]')?.textContent).toContain('Newest')
+    expect(document.body.querySelector('[data-testid="task-history-diff-removed"]')?.textContent).toContain('Older')
+
+    ;(document.body.querySelector('[data-testid="task-description-history-diff-tab-markdown"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-description-history-markdown-diff"]')?.textContent).toContain('Added line')
+    expect(Array.from(document.body.querySelectorAll('[data-testid="task-history-diff-added"]')).some(el => el.textContent?.includes('Added line'))).toBe(true)
+    expect(Array.from(document.body.querySelectorAll('[data-testid="task-history-diff-removed"]')).some(el => el.textContent?.includes('Older'))).toBe(true)
 
     const historyItems = document.body.querySelectorAll('[data-testid="task-description-history-item"]')
-    expect(historyItems.length).toBe(2)
+    expect(historyItems.length).toBe(3)
     ;(historyItems[1] as HTMLButtonElement).click()
     await flushPromises()
-    expect((document.body.querySelector('[data-testid="task-description-history-preview-title"]') as HTMLInputElement | null)?.value).toBe('Older title')
+    expect(document.body.querySelector('[data-testid="task-description-history-title-before"]')?.textContent).toContain('Seed title')
+    expect(document.body.querySelector('[data-testid="task-description-history-title-after"]')?.textContent).toContain('Older title')
+
+    ;(historyItems[2] as HTMLButtonElement).click()
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-description-history-title-before"]')?.textContent).toContain('No previous title')
+    expect(document.body.querySelector('[data-testid="task-description-history-rendered-after"]')?.textContent).toContain('Seed only')
+    ;(document.body.querySelector('[data-testid="task-description-history-diff-tab-markdown"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-description-history-markdown-diff"]')?.textContent).toBe('Seed only')
 
     const applyButton = document.body.querySelector('[data-testid="task-description-restore-apply"]') as HTMLButtonElement | null
     expect(applyButton).not.toBeNull()
     applyButton?.click()
     await flushPromises()
 
-    expect(tasksStoreMock.updateTaskDescription).toHaveBeenCalledWith('task-1', '## Older', { forceSnapshot: true })
+    expect(tasksStoreMock.updateTaskDescription).toHaveBeenCalledWith('task-1', 'Seed only', { forceSnapshot: true })
     wrapper.unmount()
   })
 

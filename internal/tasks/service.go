@@ -65,8 +65,9 @@ const defaultTaskDescriptionHistoryLimit = 20
 const defaultEnumTaskLookupLimit = 200
 
 var (
-	rePrefixValid    = regexp.MustCompile(`^[A-Z]+$`)
-	reFieldCodeValid = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	rePrefixValid             = regexp.MustCompile(`^[A-Z]+$`)
+	reFieldCodeValid          = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	reTaskStagedAttachmentRef = regexp.MustCompile(`msgnr-staged-attachment://task/([^)\s]+)`)
 )
 
 // ---- Domain types ----
@@ -298,6 +299,18 @@ type AttachmentRow struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// StagedAttachmentRow is a pre-task attachment uploaded while a create dialog
+// draft is still unsaved. StorageKey is internal and must never be exposed.
+type StagedAttachmentRow struct {
+	ID         uuid.UUID `json:"id"`
+	FileName   string    `json:"file_name"`
+	FileSize   int64     `json:"file_size"`
+	MimeType   string    `json:"mime_type"`
+	StorageKey string    `json:"-"`
+	UploadedBy uuid.UUID `json:"uploaded_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // CommentRow is one comment record returned by the service.
 type CommentRow struct {
 	ID                  uuid.UUID              `json:"id"`
@@ -354,6 +367,15 @@ type UploadAttachmentParams struct {
 	Body io.Reader
 }
 
+// UploadTaskStagedAttachmentParams carries inputs for pre-create image uploads.
+type UploadTaskStagedAttachmentParams struct {
+	ActorID  uuid.UUID
+	FileName string
+	MimeType string
+	Size     int64
+	Body     io.Reader
+}
+
 // UploadCommentAttachmentParams carries inputs for staged comment attachment upload.
 type UploadCommentAttachmentParams struct {
 	TaskID   uuid.UUID
@@ -379,13 +401,14 @@ type FieldValueInput struct {
 
 // CreateTaskParams carries all inputs for task creation.
 type CreateTaskParams struct {
-	TemplateID   uuid.UUID
-	ParentTaskID *uuid.UUID // nil for top-level tasks
-	Title        string
-	Description  *string
-	StatusID     uuid.UUID
-	FieldValues  []FieldValueInput
-	ActorID      uuid.UUID
+	TemplateID          uuid.UUID
+	ParentTaskID        *uuid.UUID // nil for top-level tasks
+	Title               string
+	Description         *string
+	StatusID            uuid.UUID
+	FieldValues         []FieldValueInput
+	StagedAttachmentIDs []uuid.UUID
+	ActorID             uuid.UUID
 }
 
 // UpdateTaskParams carries all inputs for a full task update.
@@ -1766,6 +1789,90 @@ func mapFields(rows []queries.TaskFieldDefinition) []FieldRow {
 	return out
 }
 
+func extractTaskStagedAttachmentRefs(description *string) ([]uuid.UUID, error) {
+	if description == nil || !strings.Contains(*description, "msgnr-staged-attachment://task/") {
+		return nil, nil
+	}
+
+	seen := map[uuid.UUID]struct{}{}
+	out := make([]uuid.UUID, 0)
+	matches := reTaskStagedAttachmentRef.FindAllStringSubmatch(*description, -1)
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		id, err := uuid.Parse(match[1])
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid staged attachment reference", ErrBadRequest)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+
+	return out, nil
+}
+
+func validateTaskStagedAttachmentRequest(description *string, requested []uuid.UUID) ([]uuid.UUID, error) {
+	referenced, err := extractTaskStagedAttachmentRefs(description)
+	if err != nil {
+		return nil, err
+	}
+	if len(referenced) == 0 {
+		if len(requested) > 0 {
+			return nil, fmt.Errorf("%w: staged attachment ids must be referenced by the description", ErrBadRequest)
+		}
+		return nil, nil
+	}
+
+	requestedSet := make(map[uuid.UUID]struct{}, len(requested))
+	for _, id := range requested {
+		requestedSet[id] = struct{}{}
+	}
+	if len(requestedSet) != len(referenced) {
+		return nil, fmt.Errorf("%w: staged attachment ids do not match description references", ErrBadRequest)
+	}
+	for _, id := range referenced {
+		if _, ok := requestedSet[id]; !ok {
+			return nil, fmt.Errorf("%w: staged attachment ids do not match description references", ErrBadRequest)
+		}
+	}
+	return referenced, nil
+}
+
+func rewriteTaskStagedAttachmentRefs(description *string, taskID uuid.UUID, ids []uuid.UUID) *string {
+	if description == nil || len(ids) == 0 {
+		return description
+	}
+	next := *description
+	for _, id := range ids {
+		next = strings.ReplaceAll(
+			next,
+			"msgnr-staged-attachment://task/"+id.String(),
+			"msgnr-attachment://task/"+taskID.String()+"/"+id.String(),
+		)
+	}
+	return &next
+}
+
+func scanTaskStagedAttachment(scanner interface {
+	Scan(dest ...any) error
+}) (StagedAttachmentRow, error) {
+	var row StagedAttachmentRow
+	err := scanner.Scan(
+		&row.ID,
+		&row.FileName,
+		&row.FileSize,
+		&row.MimeType,
+		&row.StorageKey,
+		&row.UploadedBy,
+		&row.CreatedAt,
+	)
+	return row, err
+}
+
 // =========================================================
 // Tasks — Phase 3
 // =========================================================
@@ -1807,6 +1914,10 @@ func (s *Service) CreateTask(ctx context.Context, p CreateTaskParams) (TaskRespo
 	if err := validateRequiredFields(defs, p.FieldValues); err != nil {
 		return TaskResponse{}, err
 	}
+	stagedAttachmentIDs, err := validateTaskStagedAttachmentRequest(p.Description, p.StagedAttachmentIDs)
+	if err != nil {
+		return TaskResponse{}, err
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -1814,17 +1925,80 @@ func (s *Service) CreateTask(ctx context.Context, p CreateTaskParams) (TaskRespo
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	if len(stagedAttachmentIDs) > 0 {
+		rows, err := tx.Query(ctx,
+			`SELECT id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+			   FROM task_staged_attachment
+			  WHERE uploaded_by = $1
+			    AND id = ANY($2::uuid[])
+			  FOR UPDATE`,
+			p.ActorID,
+			stagedAttachmentIDs,
+		)
+		if err != nil {
+			return TaskResponse{}, fmt.Errorf("tasks: lock staged attachments: %w", err)
+		}
+		defer rows.Close()
+		locked := make(map[uuid.UUID]StagedAttachmentRow, len(stagedAttachmentIDs))
+		for rows.Next() {
+			row, scanErr := scanTaskStagedAttachment(rows)
+			if scanErr != nil {
+				return TaskResponse{}, fmt.Errorf("tasks: scan staged attachment: %w", scanErr)
+			}
+			locked[row.ID] = row
+		}
+		if err := rows.Err(); err != nil {
+			return TaskResponse{}, fmt.Errorf("tasks: iterate staged attachments: %w", err)
+		}
+		if len(locked) != len(stagedAttachmentIDs) {
+			return TaskResponse{}, fmt.Errorf("%w: staged attachment not found", ErrBadRequest)
+		}
+		for _, id := range stagedAttachmentIDs {
+			if !strings.HasPrefix(locked[id].MimeType, "image/") {
+				return TaskResponse{}, fmt.Errorf("%w: only image staged attachments are supported", ErrBadRequest)
+			}
+		}
+	}
+
+	taskID := uuid.New()
+	description := rewriteTaskStagedAttachmentRefs(p.Description, taskID, stagedAttachmentIDs)
+
 	// Raw pgx tx query mirrors the sqlc TaskCreate query. The sqlc-generated path
 	// (s.q.TaskCreate) cannot join a pgx transaction because s.q is bound to a
-	// *sql.DB pool. We keep the SQL identical to the sqlc source so both are in sync.
+	// *sql.DB pool. We keep the SQL aligned with the sqlc source while supplying
+	// an explicit ID so staged attachment URLs can be finalized before insert.
 	taskRow, err := scanTask(tx.QueryRow(ctx,
-		`INSERT INTO task (template_id, parent_task_id, title, description, status_id, created_by, updated_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $6)
+		`INSERT INTO task (id, template_id, parent_task_id, title, description, status_id, created_by, updated_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
 		 RETURNING `+taskColumns,
-		p.TemplateID, nullUUID(p.ParentTaskID), p.Title, nullString(p.Description), p.StatusID, p.ActorID,
+		taskID, p.TemplateID, nullUUID(p.ParentTaskID), p.Title, nullString(description), p.StatusID, p.ActorID,
 	))
 	if err != nil {
 		return TaskResponse{}, mapTaskWriteError(err)
+	}
+
+	if len(stagedAttachmentIDs) > 0 {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO task_attachment (id, task_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at)
+			  SELECT id, $1, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+			    FROM task_staged_attachment
+			   WHERE uploaded_by = $2
+			     AND id = ANY($3::uuid[])`,
+			taskRow.ID,
+			p.ActorID,
+			stagedAttachmentIDs,
+		); err != nil {
+			return TaskResponse{}, fmt.Errorf("tasks: bind staged attachments: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM task_staged_attachment
+			  WHERE uploaded_by = $1
+			    AND id = ANY($2::uuid[])`,
+			p.ActorID,
+			stagedAttachmentIDs,
+		); err != nil {
+			return TaskResponse{}, fmt.Errorf("tasks: delete staged attachments: %w", err)
+		}
 	}
 
 	fieldValues, err := upsertFieldValuesInTx(ctx, tx, taskRow.ID, p.FieldValues)
@@ -3771,9 +3945,145 @@ func (s *Service) ListUsers(ctx context.Context) ([]UserRow, error) {
 // Attachments (Phase 6)
 // =========================================================
 
-// UploadAttachment stores a file in object storage and records its metadata in
-// the database. The service verifies that the referenced task exists before
-// storing anything so partial uploads are avoided.
+// UploadTaskStagedAttachment stores an image before a task exists. The row is
+// later moved into task_attachment by CreateTask.
+func (s *Service) UploadTaskStagedAttachment(
+	ctx context.Context,
+	p UploadTaskStagedAttachmentParams,
+	maxSizeMB int,
+) (*StagedAttachmentRow, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(p.FileName) == "" {
+		return nil, fmt.Errorf("%w: file_name is required", ErrBadRequest)
+	}
+	if p.Size < 0 {
+		return nil, fmt.Errorf("%w: file size must be provided", ErrBadRequest)
+	}
+	if p.MimeType == "" {
+		p.MimeType = "application/octet-stream"
+	}
+	if !strings.HasPrefix(p.MimeType, "image/") {
+		return nil, fmt.Errorf("%w: only image attachments can be staged before task creation", ErrBadRequest)
+	}
+
+	maxBytes := int64(maxSizeMB) * 1024 * 1024
+	if p.Size > maxBytes {
+		return nil, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
+	}
+
+	payload, err := io.ReadAll(io.LimitReader(p.Body, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("tasks: read staged attachment payload: %w", err)
+	}
+	actualSize := int64(len(payload))
+	if actualSize > maxBytes {
+		return nil, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
+	}
+	if p.Size != actualSize {
+		return nil, fmt.Errorf("%w: uploaded file size does not match multipart metadata", ErrBadRequest)
+	}
+
+	attachmentID := uuid.New()
+	safeFileName := sanitiseFileName(p.FileName)
+	storageKey := fmt.Sprintf("tasks/staged/%s/%s", attachmentID, safeFileName)
+
+	if err := store.PutObject(ctx, storageKey, bytes.NewReader(payload), actualSize, p.MimeType); err != nil {
+		return nil, fmt.Errorf("tasks: upload staged attachment: %w", err)
+	}
+
+	row, err := s.q.TaskStagedAttachmentCreate(ctx, queries.TaskStagedAttachmentCreateParams{
+		ID:         attachmentID,
+		FileName:   p.FileName,
+		FileSize:   actualSize,
+		MimeType:   p.MimeType,
+		StorageKey: storageKey,
+		UploadedBy: p.ActorID,
+	})
+	if err != nil {
+		s.deleteObjectBestEffort(ctx, store, storageKey)
+		return nil, fmt.Errorf("tasks: create staged attachment record: %w", err)
+	}
+	out := mapTaskStagedAttachment(row)
+	return &out, nil
+}
+
+func (s *Service) DownloadTaskStagedAttachment(ctx context.Context, actorID, attachmentID uuid.UUID) (io.ReadCloser, int64, string, string, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	row, err := s.q.TaskStagedAttachmentGet(ctx, attachmentID)
+	if err != nil {
+		return nil, 0, "", "", mapNotFound(err, "attachment")
+	}
+	if row.UploadedBy != actorID {
+		return nil, 0, "", "", fmt.Errorf("%w: attachment", ErrNotFound)
+	}
+	body, size, mimeType, err := store.GetObject(ctx, row.StorageKey)
+	if err != nil {
+		return nil, 0, "", "", fmt.Errorf("tasks: download staged attachment: %w", err)
+	}
+	return body, size, mimeType, row.FileName, nil
+}
+
+func (s *Service) DeleteTaskStagedAttachment(ctx context.Context, actorID, attachmentID uuid.UUID) error {
+	store, err := s.requireStore()
+	if err != nil {
+		return err
+	}
+	row, err := s.q.TaskStagedAttachmentDelete(ctx, queries.TaskStagedAttachmentDeleteParams{
+		ID:         attachmentID,
+		UploadedBy: actorID,
+	})
+	if err != nil {
+		return mapNotFound(err, "attachment")
+	}
+	s.deleteObjectBestEffort(ctx, store, row.StorageKey)
+	return nil
+}
+
+// CleanupExpiredTaskStagedAttachments removes abandoned pre-create uploads
+// older than ttl. Database rows are deleted before objects so users never see
+// dangling metadata if object cleanup fails.
+func (s *Service) CleanupExpiredTaskStagedAttachments(ctx context.Context, ttl time.Duration) (int, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return 0, err
+	}
+	if ttl <= 0 {
+		return 0, fmt.Errorf("%w: staged attachment ttl must be positive", ErrBadRequest)
+	}
+
+	cutoff := time.Now().UTC().Add(-ttl)
+	rows, err := s.pool.Query(ctx,
+		`DELETE FROM task_staged_attachment
+		  WHERE created_at < $1
+		  RETURNING id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("tasks: delete expired staged attachments: %w", err)
+	}
+	defer rows.Close()
+
+	deleted := 0
+	for rows.Next() {
+		row, scanErr := scanTaskStagedAttachment(rows)
+		if scanErr != nil {
+			return deleted, fmt.Errorf("tasks: scan expired staged attachment: %w", scanErr)
+		}
+		s.deleteObjectBestEffort(ctx, store, row.StorageKey)
+		deleted++
+	}
+	if err := rows.Err(); err != nil {
+		return deleted, fmt.Errorf("tasks: iterate expired staged attachments: %w", err)
+	}
+	return deleted, nil
+}
+
 // UploadAttachment stores a file in object storage and records its metadata in
 // the database. counter must be non-nil when p.Size == -1; the actual byte
 // count is read from counter after streaming to detect over-limit uploads.
@@ -4752,6 +5062,18 @@ func mapAttachment(r queries.TaskAttachment) AttachmentRow {
 	return AttachmentRow{
 		ID:         r.ID,
 		TaskID:     r.TaskID,
+		FileName:   r.FileName,
+		FileSize:   r.FileSize,
+		MimeType:   r.MimeType,
+		StorageKey: r.StorageKey,
+		UploadedBy: r.UploadedBy,
+		CreatedAt:  r.CreatedAt,
+	}
+}
+
+func mapTaskStagedAttachment(r queries.TaskStagedAttachment) StagedAttachmentRow {
+	return StagedAttachmentRow{
+		ID:         r.ID,
 		FileName:   r.FileName,
 		FileSize:   r.FileSize,
 		MimeType:   r.MimeType,

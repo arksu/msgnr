@@ -7,7 +7,7 @@ import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 import TaskDescriptionRichEditor from '@/components/tasks/TaskDescriptionRichEditor.vue'
 import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
 import { createOrOpenDm } from '@/services/http/chatApi'
-import { tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
+import { tasksFetchStagedAttachmentBlob, tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
 import { resetDescriptionMentionCacheForTests } from '@/utils/descriptionMentions'
 
 vi.mock('@/services/http/attachmentOwnersApi', () => ({
@@ -25,6 +25,7 @@ vi.mock('@/services/http/chatApi', () => ({
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListUsers: vi.fn(),
   tasksListTasks: vi.fn(),
+  tasksFetchStagedAttachmentBlob: vi.fn(),
 }))
 
 describe('TaskDescriptionEditor', () => {
@@ -118,6 +119,7 @@ describe('TaskDescriptionEditor', () => {
       close: vi.fn(),
     } as unknown as Window))
     vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    vi.mocked(tasksFetchStagedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
     vi.mocked(createOrOpenDm).mockResolvedValue({
       conversation_id: 'dm-1',
       user_id: 'user-1',
@@ -252,6 +254,36 @@ describe('TaskDescriptionEditor', () => {
 
     expect(uploadOwnedAttachment).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="task-description-attachment-note"]').text()).toContain('available after save')
+  })
+
+  it('uploads pasted images through the create-task staging callback', async () => {
+    const uploadStaged = vi.fn(async () => [{
+      id: 'staged-1',
+      file_name: 'Photo.png',
+      mime_type: 'image/png',
+    }])
+
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '',
+        defaultTab: 'markdown',
+        ownerKind: 'task',
+        taskStagedAttachmentUpload: uploadStaged,
+      },
+    })
+
+    await wrapper.get('[data-testid="task-description-markdown-input"]').trigger('paste', {
+      clipboardData: {
+        files: [new File(['img'], 'Photo.png', { type: 'image/png' })],
+      },
+    })
+    await flushPromises()
+
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    const latest = updates[updates.length - 1]?.[0] as string
+    expect(uploadStaged).toHaveBeenCalledWith([expect.any(File)])
+    expect(latest).toContain('![Photo.png](msgnr-staged-attachment://task/staged-1)')
+    expect(uploadOwnedAttachment).not.toHaveBeenCalled()
   })
 
   it('syncs markdown-tab edits into the collab-backed rendered editor', async () => {

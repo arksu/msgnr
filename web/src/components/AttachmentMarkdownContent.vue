@@ -106,6 +106,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import UserMentionCard from '@/components/UserMentionCard.vue'
 import router from '@/router'
 import { fetchOwnedAttachmentBlob } from '@/services/http/attachmentOwnersApi'
+import { tasksFetchStagedAttachmentBlob } from '@/services/http/tasksApi'
 import { openBlobInBrowser } from '@/utils/attachmentBrowser'
 import {
   decorateDescriptionMentionHtml,
@@ -162,6 +163,9 @@ function attachmentKey(token: AttachmentToken): string {
 }
 
 async function fetchBlob(token: AttachmentToken): Promise<Blob> {
+  if (token.ownerKind === 'task-staged') {
+    return tasksFetchStagedAttachmentBlob(token.attachmentId)
+  }
   return fetchOwnedAttachmentBlob(token.ownerKind, token.ownerId, token.attachmentId)
 }
 

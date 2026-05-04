@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildAttachmentMarkdown,
   buildAttachmentUrl,
+  buildTaskStagedAttachmentMarkdown,
+  extractTaskStagedAttachmentIds,
   parseAttachmentTokenLine,
   parseAttachmentUrl,
   splitMarkdownWithAttachmentBlocks,
@@ -16,6 +18,23 @@ describe('attachmentMarkdown', () => {
       ownerId: 'task-1',
       attachmentId: 'att-1',
     })
+  })
+
+  it('builds and parses staged task attachment urls', () => {
+    const markdown = buildTaskStagedAttachmentMarkdown('staged-1', 'Photo.png', 'image/png')
+    expect(markdown).toBe('![Photo.png](msgnr-staged-attachment://task/staged-1)')
+    expect(parseAttachmentUrl('msgnr-staged-attachment://task/staged-1')).toEqual({
+      ownerKind: 'task-staged',
+      ownerId: '',
+      attachmentId: 'staged-1',
+    })
+    expect(parseAttachmentTokenLine(markdown)).toMatchObject({
+      kind: 'image',
+      fileName: 'Photo.png',
+      ownerKind: 'task-staged',
+      attachmentId: 'staged-1',
+    })
+    expect(extractTaskStagedAttachmentIds(`${markdown}\n${markdown}`)).toEqual(['staged-1'])
   })
 
   it('parses image and file token lines', () => {

@@ -285,7 +285,6 @@ func (q *Queries) TaskActiveTemplateCount(ctx context.Context) (int64, error) {
 
 const taskAttachmentCreate = `-- name: TaskAttachmentCreate :one
 
-
 INSERT INTO task_attachment (id, task_id, file_name, file_size, mime_type, storage_key, uploaded_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, task_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
@@ -301,9 +300,6 @@ type TaskAttachmentCreateParams struct {
 	UploadedBy uuid.UUID `json:"uploaded_by"`
 }
 
-// =========================================================
-// Task Tracker — Phase 6 queries
-// =========================================================
 // ---- task_attachment ----
 func (q *Queries) TaskAttachmentCreate(ctx context.Context, arg TaskAttachmentCreateParams) (TaskAttachment, error) {
 	row := q.db.QueryRowContext(ctx, taskAttachmentCreate,
@@ -1121,6 +1117,96 @@ func (q *Queries) TaskGet(ctx context.Context, id uuid.UUID) (Task, error) {
 		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const taskStagedAttachmentCreate = `-- name: TaskStagedAttachmentCreate :one
+
+
+INSERT INTO task_staged_attachment (id, file_name, file_size, mime_type, storage_key, uploaded_by)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+`
+
+type TaskStagedAttachmentCreateParams struct {
+	ID         uuid.UUID `json:"id"`
+	FileName   string    `json:"file_name"`
+	FileSize   int64     `json:"file_size"`
+	MimeType   string    `json:"mime_type"`
+	StorageKey string    `json:"storage_key"`
+	UploadedBy uuid.UUID `json:"uploaded_by"`
+}
+
+// =========================================================
+// Task Tracker — Phase 6 queries
+// =========================================================
+// ---- task_staged_attachment ----
+func (q *Queries) TaskStagedAttachmentCreate(ctx context.Context, arg TaskStagedAttachmentCreateParams) (TaskStagedAttachment, error) {
+	row := q.db.QueryRowContext(ctx, taskStagedAttachmentCreate,
+		arg.ID,
+		arg.FileName,
+		arg.FileSize,
+		arg.MimeType,
+		arg.StorageKey,
+		arg.UploadedBy,
+	)
+	var i TaskStagedAttachment
+	err := row.Scan(
+		&i.ID,
+		&i.FileName,
+		&i.FileSize,
+		&i.MimeType,
+		&i.StorageKey,
+		&i.UploadedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const taskStagedAttachmentDelete = `-- name: TaskStagedAttachmentDelete :one
+DELETE FROM task_staged_attachment
+WHERE id = $1
+  AND uploaded_by = $2
+RETURNING id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+`
+
+type TaskStagedAttachmentDeleteParams struct {
+	ID         uuid.UUID `json:"id"`
+	UploadedBy uuid.UUID `json:"uploaded_by"`
+}
+
+func (q *Queries) TaskStagedAttachmentDelete(ctx context.Context, arg TaskStagedAttachmentDeleteParams) (TaskStagedAttachment, error) {
+	row := q.db.QueryRowContext(ctx, taskStagedAttachmentDelete, arg.ID, arg.UploadedBy)
+	var i TaskStagedAttachment
+	err := row.Scan(
+		&i.ID,
+		&i.FileName,
+		&i.FileSize,
+		&i.MimeType,
+		&i.StorageKey,
+		&i.UploadedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const taskStagedAttachmentGet = `-- name: TaskStagedAttachmentGet :one
+SELECT id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at FROM task_staged_attachment
+WHERE id = $1
+`
+
+func (q *Queries) TaskStagedAttachmentGet(ctx context.Context, id uuid.UUID) (TaskStagedAttachment, error) {
+	row := q.db.QueryRowContext(ctx, taskStagedAttachmentGet, id)
+	var i TaskStagedAttachment
+	err := row.Scan(
+		&i.ID,
+		&i.FileName,
+		&i.FileSize,
+		&i.MimeType,
+		&i.StorageKey,
+		&i.UploadedBy,
+		&i.CreatedAt,
 	)
 	return i, err
 }

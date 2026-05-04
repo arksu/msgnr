@@ -349,6 +349,16 @@ type TaskFieldValue struct {
 	UpdatedAt         time.Time             `json:"updated_at"`
 }
 
+type TaskStagedAttachment struct {
+	ID         uuid.UUID `json:"id"`
+	FileName   string    `json:"file_name"`
+	FileSize   int64     `json:"file_size"`
+	MimeType   string    `json:"mime_type"`
+	StorageKey string    `json:"storage_key"`
+	UploadedBy uuid.UUID `json:"uploaded_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type TaskStatus struct {
 	ID        uuid.UUID    `json:"id"`
 	Code      string       `json:"code"`

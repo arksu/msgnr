@@ -951,6 +951,23 @@ END $$;
 -- Task Tracker — Phase 6: attachments + comments
 -- ---------------------------------------------------------------------------
 
+CREATE TABLE IF NOT EXISTS task_staged_attachment (
+    id           uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+    file_name    varchar(1024) NOT NULL,
+    file_size    bigint        NOT NULL,
+    mime_type    varchar(255)  NOT NULL,
+    storage_key  varchar(2048) NOT NULL,
+    uploaded_by  uuid          NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    created_at   timestamptz   NOT NULL DEFAULT now(),
+
+    CONSTRAINT chk_task_staged_attachment_file_size    CHECK (file_size >= 0),
+    CONSTRAINT chk_task_staged_attachment_file_name    CHECK (btrim(file_name) <> ''),
+    CONSTRAINT chk_task_staged_attachment_storage_key  CHECK (btrim(storage_key) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_staged_attachment_uploaded_by
+    ON task_staged_attachment (uploaded_by, created_at ASC);
+
 CREATE TABLE IF NOT EXISTS task_attachment (
     id           uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id      uuid          NOT NULL REFERENCES task(id) ON DELETE CASCADE,

@@ -213,6 +213,23 @@ WHERE task_id = $1
 -- Task Tracker — Phase 6 queries
 -- =========================================================
 
+-- ---- task_staged_attachment ----
+
+-- name: TaskStagedAttachmentCreate :one
+INSERT INTO task_staged_attachment (id, file_name, file_size, mime_type, storage_key, uploaded_by)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
+-- name: TaskStagedAttachmentGet :one
+SELECT * FROM task_staged_attachment
+WHERE id = $1;
+
+-- name: TaskStagedAttachmentDelete :one
+DELETE FROM task_staged_attachment
+WHERE id = $1
+  AND uploaded_by = $2
+RETURNING *;
+
 -- ---- task_attachment ----
 
 -- name: TaskAttachmentCreate :one

@@ -7,11 +7,13 @@ import {
   tasksFetchAttachmentBlob,
   tasksUploadAttachment,
   type TaskAttachment,
+  type TaskStagedAttachment,
 } from './tasksApi'
 import type { AttachmentOwnerKind } from '@/utils/attachmentMarkdown'
 
 export type OwnedAttachmentUpload = Pick<TaskAttachment, 'id' | 'file_name' | 'mime_type'>
   | Pick<DocumentAttachment, 'id' | 'file_name' | 'mime_type'>
+  | Pick<TaskStagedAttachment, 'id' | 'file_name' | 'mime_type'>
 
 export async function fetchOwnedAttachmentBlob(
   ownerKind: AttachmentOwnerKind,

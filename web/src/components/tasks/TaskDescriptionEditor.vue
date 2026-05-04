@@ -41,6 +41,7 @@
         :force-local-sync-token="combinedForceLocalSyncToken"
         :owner-kind="ownerKind"
         :owner-id="ownerId"
+        :attachment-upload-mode="taskStagedAttachmentUpload ? 'task-staged' : 'owner'"
         :collab-user="collabUser"
         :upload-attachments="uploadAttachments"
         @blur="emit('blur')"
@@ -83,7 +84,11 @@ import type { Doc as YDoc } from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
 import { uploadOwnedAttachment, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
-import { buildAttachmentMarkdown, type AttachmentOwnerKind } from '@/utils/attachmentMarkdown'
+import {
+  buildAttachmentMarkdown,
+  buildTaskStagedAttachmentMarkdown,
+  type AttachmentOwnerKind,
+} from '@/utils/attachmentMarkdown'
 
 type DescriptionTab = 'rendered' | 'markdown'
 const MARKDOWN_DRAFT_SYNC_DEBOUNCE_MS = 300
@@ -102,6 +107,7 @@ const props = withDefaults(defineProps<{
   forceLocalSyncToken?: number
   ownerKind?: AttachmentOwnerKind | null
   ownerId?: string | null
+  taskStagedAttachmentUpload?: ((files: File[]) => Promise<OwnedAttachmentUpload[] | null>) | null
   collabUser?: {
     id: string
     name: string
@@ -118,6 +124,7 @@ const props = withDefaults(defineProps<{
   forceLocalSyncToken: 0,
   ownerKind: null,
   ownerId: null,
+  taskStagedAttachmentUpload: null,
   collabUser: null,
 })
 
@@ -190,17 +197,20 @@ function onMarkdownBlur() {
 }
 
 function attachmentsEnabledForUpload(): boolean {
-  return editable.value && !!props.ownerKind && !!props.ownerId
+  return editable.value && (!!props.taskStagedAttachmentUpload || (!!props.ownerKind && !!props.ownerId))
 }
 
-function buildInsertedAttachmentMarkdown(ownerKind: AttachmentOwnerKind, ownerId: string, rows: OwnedAttachmentUpload[]): string {
-  return rows.map(row => buildAttachmentMarkdown(
-    ownerKind,
-    ownerId,
-    row.id,
-    row.file_name,
-    row.mime_type,
-  )).join('\n\n')
+function buildInsertedAttachmentMarkdown(rows: OwnedAttachmentUpload[]): string {
+  const build = props.taskStagedAttachmentUpload
+    ? (row: OwnedAttachmentUpload) => buildTaskStagedAttachmentMarkdown(row.id, row.file_name, row.mime_type)
+    : (row: OwnedAttachmentUpload) => buildAttachmentMarkdown(
+      props.ownerKind!,
+      props.ownerId!,
+      row.id,
+      row.file_name,
+      row.mime_type,
+    )
+  return rows.map(build).join('\n\n')
 }
 
 async function uploadAttachments(files: File[]): Promise<OwnedAttachmentUpload[] | null> {
@@ -208,6 +218,22 @@ async function uploadAttachments(files: File[]): Promise<OwnedAttachmentUpload[]
   if (!attachmentsEnabledForUpload()) {
     setAttachmentNotice('Attachments are available after save.')
     return null
+  }
+  if (props.taskStagedAttachmentUpload) {
+    const imageFiles = files.filter(file => file.type.startsWith('image/'))
+    if (!imageFiles.length) {
+      setAttachmentNotice('Only images can be pasted before save.')
+      return null
+    }
+    setAttachmentNotice(`Uploading ${imageFiles.length === 1 ? 'image' : `${imageFiles.length} images`}...`)
+    try {
+      const uploaded = await props.taskStagedAttachmentUpload(imageFiles)
+      clearAttachmentNotice()
+      return uploaded
+    } catch (error) {
+      setAttachmentNotice(error instanceof Error ? error.message : 'Attachment upload failed', true)
+      return null
+    }
   }
   const ownerKind = props.ownerKind
   const ownerId = props.ownerId
@@ -257,8 +283,8 @@ async function onMarkdownPaste(event: ClipboardEvent) {
   if (!files.length) return
   event.preventDefault()
   const uploaded = await uploadAttachments(files)
-  if (!uploaded || !props.ownerKind || !props.ownerId) return
-  insertMarkdownAtCursor(buildInsertedAttachmentMarkdown(props.ownerKind, props.ownerId, uploaded))
+  if (!uploaded) return
+  insertMarkdownAtCursor(buildInsertedAttachmentMarkdown(uploaded))
 }
 
 function onMarkdownDragOver(event: DragEvent) {
@@ -273,8 +299,8 @@ async function onMarkdownDrop(event: DragEvent) {
   if (!files.length) return
   event.preventDefault()
   const uploaded = await uploadAttachments(files)
-  if (!uploaded || !props.ownerKind || !props.ownerId) return
-  insertMarkdownAtCursor(buildInsertedAttachmentMarkdown(props.ownerKind, props.ownerId, uploaded))
+  if (!uploaded) return
+  insertMarkdownAtCursor(buildInsertedAttachmentMarkdown(uploaded))
 }
 
 function switchTab(nextTab: DescriptionTab) {
@@ -321,9 +347,15 @@ watch(
 )
 
 watch(
-  [() => props.ownerId, () => props.ownerKind, editable],
-  ([ownerId, ownerKind, isEditable]) => {
+  [() => props.ownerId, () => props.ownerKind, () => props.taskStagedAttachmentUpload, editable],
+  ([ownerId, ownerKind, stagedUpload, isEditable]) => {
     if (!isEditable) return
+    if (stagedUpload) {
+      if (!attachmentNoticeIsError.value) {
+        clearAttachmentNotice()
+      }
+      return
+    }
     if (!ownerId || !ownerKind) {
       setAttachmentNotice('Attachments are available after save.')
       return

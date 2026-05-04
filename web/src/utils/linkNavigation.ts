@@ -45,7 +45,8 @@ function isInternalHttpUrl(url: URL): boolean {
 }
 
 function isAttachmentHref(href: string): boolean {
-  return href.trim().startsWith('msgnr-attachment://')
+  const trimmed = href.trim()
+  return trimmed.startsWith('msgnr-attachment://') || trimmed.startsWith('msgnr-staged-attachment://')
 }
 
 function isUserMentionHref(href: string): boolean {

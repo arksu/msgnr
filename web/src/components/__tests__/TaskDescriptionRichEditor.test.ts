@@ -6,7 +6,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import TaskDescriptionRichEditor from '@/components/tasks/TaskDescriptionRichEditor.vue'
 import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
 import { createOrOpenDm } from '@/services/http/chatApi'
-import { tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
+import { tasksFetchStagedAttachmentBlob, tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
 import MessageTagPicker from '@/components/MessageTagPicker.vue'
 import { resetDescriptionMentionCacheForTests } from '@/utils/descriptionMentions'
 import router from '@/router'
@@ -27,6 +27,7 @@ vi.mock('@/services/http/chatApi', () => ({
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListUsers: vi.fn(),
   tasksListTasks: vi.fn(),
+  tasksFetchStagedAttachmentBlob: vi.fn(),
 }))
 
 describe('TaskDescriptionRichEditor', () => {
@@ -98,6 +99,7 @@ describe('TaskDescriptionRichEditor', () => {
       close: vi.fn(),
     } as unknown as Window))
     vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    vi.mocked(tasksFetchStagedAttachmentBlob).mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
     vi.mocked(createOrOpenDm).mockResolvedValue({
       conversation_id: 'dm-1',
       user_id: 'user-1',
@@ -362,6 +364,40 @@ describe('TaskDescriptionRichEditor', () => {
     expect(latest).toContain('![Photo.png](msgnr-attachment://task/task-1/att-image)')
     expect(uploadOwnedAttachment).toHaveBeenCalledWith('task', 'task-1', expect.any(File))
     expect(fetchOwnedAttachmentBlob).toHaveBeenCalledWith('task', 'task-1', 'att-image')
+  })
+
+  it('uploads create-task staged images from the rendered editor', async () => {
+    const uploadStaged = vi.fn(async () => [{
+      id: 'staged-1',
+      file_name: 'Photo.png',
+      mime_type: 'image/png',
+    }])
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '',
+        attachmentUploadMode: 'task-staged',
+        uploadAttachments: uploadStaged,
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    const editorEl = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror')
+    await editorEl.trigger('paste', {
+      clipboardData: {
+        files: [new File(['img'], 'Photo.png', { type: 'image/png' })],
+        getData: () => '',
+      },
+    })
+    await flushPromises()
+
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    const latest = updates[updates.length - 1]?.[0] as string
+    expect(uploadStaged).toHaveBeenCalledWith([expect.any(File)])
+    expect(latest).toContain('![Photo.png](msgnr-staged-attachment://task/staged-1)')
+    expect(tasksFetchStagedAttachmentBlob).toHaveBeenCalledWith('staged-1')
+    expect(fetchOwnedAttachmentBlob).not.toHaveBeenCalled()
   })
 
   it('opens attachment links from the editor on first mouse press', async () => {

@@ -1,4 +1,4 @@
-import { reactive } from 'vue'
+import { defineComponent, reactive } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskCreateDialog from '@/components/tasks/TaskCreateDialog.vue'
@@ -7,6 +7,20 @@ import {
   loadTaskCreateDraft,
   saveTaskCreateDraft,
 } from '@/services/storage/taskCreateDraftStorage'
+
+const tasksApiMock = vi.hoisted(() => ({
+  tasksUploadStagedAttachment: vi.fn(),
+  tasksDeleteStagedAttachment: vi.fn(),
+}))
+
+vi.mock('@/services/http/tasksApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/http/tasksApi')>()
+  return {
+    ...actual,
+    tasksUploadStagedAttachment: tasksApiMock.tasksUploadStagedAttachment,
+    tasksDeleteStagedAttachment: tasksApiMock.tasksDeleteStagedAttachment,
+  }
+})
 
 const baseTemplates = [
   {
@@ -92,11 +106,20 @@ function mountDialog(props: { initialTemplateId: string | null } = { initialTemp
       stubs: {
         Teleport: true,
         TaskFieldInput: true,
-        TaskDescriptionEditor: {
-          props: ['modelValue'],
+        TaskDescriptionEditor: defineComponent({
+          name: 'TaskDescriptionEditor',
+          props: ['modelValue', 'taskStagedAttachmentUpload'],
           emits: ['update:modelValue'],
-          template: '<textarea data-testid="description-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
-        },
+          methods: {
+            async pasteImage() {
+              const upload = this.taskStagedAttachmentUpload as ((files: File[]) => Promise<Array<{ id: string }>>) | undefined
+              const rows = await upload?.([new File(['img'], 'Photo.png', { type: 'image/png' })])
+              if (!rows?.length) return
+              this.$emit('update:modelValue', `![Photo.png](msgnr-staged-attachment://task/${rows[0].id})`)
+            },
+          },
+          template: '<div><textarea data-testid="description-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" /><button type="button" data-testid="paste-image-stub" @click="pasteImage">paste</button></div>',
+        }),
       },
     },
   })
@@ -113,6 +136,15 @@ describe('TaskCreateDialog', () => {
       tasksStoreMock.createDialogOpen = false
     })
     tasksStoreMock.createTask.mockImplementation(async () => ({ id: 'task-1' }))
+    tasksApiMock.tasksUploadStagedAttachment.mockResolvedValue({
+      id: 'staged-1',
+      file_name: 'Photo.png',
+      file_size: 3,
+      mime_type: 'image/png',
+      uploaded_by: 'u-1',
+      created_at: '2026-01-01T00:00:00Z',
+    })
+    tasksApiMock.tasksDeleteStagedAttachment.mockResolvedValue(undefined)
   })
 
   it('submits trimmed markdown description', async () => {
@@ -237,6 +269,7 @@ describe('TaskCreateDialog', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: 'Draft title',
       description: 'Draft description',
+      stagedAttachments: [],
     })
   })
 
@@ -260,6 +293,68 @@ describe('TaskCreateDialog', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: '',
       description: '',
+      stagedAttachments: [],
+    })
+  })
+
+  it('uploads pasted staged images and sends referenced staged attachment ids on create', async () => {
+    tasksStoreMock.createDialogOpen = false
+    const wrapper = mountDialog()
+    tasksStoreMock.createDialogOpen = true
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+
+    await wrapper.get('select').setValue('st-1')
+    await wrapper.get('input[placeholder="Task title"]').setValue('Task with image')
+    await wrapper.get('[data-testid="paste-image-stub"]').trigger('click')
+    await flushPromises()
+
+    expect(tasksApiMock.tasksUploadStagedAttachment).toHaveBeenCalledWith(expect.any(File))
+    expect(loadTaskCreateDraft()).toMatchObject({
+      description: '![Photo.png](msgnr-staged-attachment://task/staged-1)',
+      stagedAttachments: [{
+        id: 'staged-1',
+        file_name: 'Photo.png',
+      }],
+    })
+
+    const createButton = wrapper.findAll('button').find(button => button.text() === 'Create task')
+    expect(createButton).toBeTruthy()
+    await createButton!.trigger('click')
+    await flushPromises()
+
+    expect(tasksStoreMock.createTask).toHaveBeenCalledWith(expect.objectContaining({
+      staged_attachment_ids: ['staged-1'],
+      description: '![Photo.png](msgnr-staged-attachment://task/staged-1)',
+    }))
+    expect(tasksApiMock.tasksDeleteStagedAttachment).not.toHaveBeenCalled()
+    expect(loadTaskCreateDraft()).toEqual({
+      title: '',
+      description: '',
+      stagedAttachments: [],
+    })
+  })
+
+  it('deletes staged attachments when cancel clears the draft', async () => {
+    tasksStoreMock.createDialogOpen = false
+    const wrapper = mountDialog()
+    tasksStoreMock.createDialogOpen = true
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="paste-image-stub"]').trigger('click')
+    await flushPromises()
+
+    const cancelButton = wrapper.findAll('button').find(button => button.text() === 'Cancel')
+    expect(cancelButton).toBeTruthy()
+    await cancelButton!.trigger('click')
+    await flushPromises()
+
+    expect(tasksApiMock.tasksDeleteStagedAttachment).toHaveBeenCalledWith('staged-1')
+    expect(loadTaskCreateDraft()).toEqual({
+      title: '',
+      description: '',
+      stagedAttachments: [],
     })
   })
 
@@ -282,6 +377,7 @@ describe('TaskCreateDialog', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: '',
       description: '',
+      stagedAttachments: [],
     })
   })
 
@@ -302,6 +398,7 @@ describe('TaskCreateDialog', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: 'Keep me',
       description: 'Keep description',
+      stagedAttachments: [],
     })
   })
 
@@ -324,6 +421,7 @@ describe('TaskCreateDialog', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: 'Retry task',
       description: 'Retry description',
+      stagedAttachments: [],
     })
   })
 

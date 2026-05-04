@@ -22,6 +22,35 @@ describe('taskCreateDraftStorage', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: 'Task title',
       description: 'Task description',
+      stagedAttachments: [],
+    })
+  })
+
+  it('persists staged task attachments with the task draft', () => {
+    saveTaskCreateDraft({
+      title: 'Task title',
+      description: '![Photo](msgnr-staged-attachment://task/staged-1)',
+      stagedAttachments: [{
+        id: 'staged-1',
+        file_name: 'Photo.png',
+        file_size: 3,
+        mime_type: 'image/png',
+        uploaded_by: 'u-1',
+        created_at: '2026-01-01T00:00:00Z',
+      }],
+    })
+
+    expect(loadTaskCreateDraft()).toEqual({
+      title: 'Task title',
+      description: '![Photo](msgnr-staged-attachment://task/staged-1)',
+      stagedAttachments: [{
+        id: 'staged-1',
+        file_name: 'Photo.png',
+        file_size: 3,
+        mime_type: 'image/png',
+        uploaded_by: 'u-1',
+        created_at: '2026-01-01T00:00:00Z',
+      }],
     })
   })
 
@@ -31,6 +60,7 @@ describe('taskCreateDraftStorage', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: '',
       description: '',
+      stagedAttachments: [],
     })
   })
 
@@ -45,6 +75,7 @@ describe('taskCreateDraftStorage', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: '',
       description: '',
+      stagedAttachments: [],
     })
   })
 
@@ -58,6 +89,7 @@ describe('taskCreateDraftStorage', () => {
     expect(loadTaskCreateDraft()).toEqual({
       title: '',
       description: '',
+      stagedAttachments: [],
     })
   })
 
@@ -70,6 +102,7 @@ describe('taskCreateDraftStorage', () => {
     expect(loadSubtaskCreateDraft()).toEqual({
       title: 'Subtask title',
       description: 'Subtask description',
+      stagedAttachments: [],
     })
 
     clearSubtaskCreateDraft()
@@ -77,6 +110,7 @@ describe('taskCreateDraftStorage', () => {
     expect(loadSubtaskCreateDraft()).toEqual({
       title: '',
       description: '',
+      stagedAttachments: [],
     })
   })
 })

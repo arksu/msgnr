@@ -95,6 +95,12 @@ async function buildAttachmentBlock(token: AttachmentToken): Promise<TaskPdfExpo
       fileName: token.fileName,
     }
   }
+  if (token.ownerKind === 'task-staged') {
+    return {
+      kind: 'file',
+      fileName: token.fileName,
+    }
+  }
 
   try {
     const blob = await fetchOwnedAttachmentBlob(token.ownerKind, token.ownerId, token.attachmentId)

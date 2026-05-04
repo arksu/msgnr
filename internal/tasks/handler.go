@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -101,6 +102,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Tasks (any authenticated user)
 	mux.HandleFunc("/api/tasks", h.requireAuth(h.tasksCollection))
 	mux.HandleFunc("/api/tasks/grouped", h.requireAuth(h.tasksGroupedCollection))
+	mux.HandleFunc("/api/tasks/staged-attachments", h.requireAuth(h.taskStagedAttachments))
+	mux.HandleFunc("/api/tasks/staged-attachments/", h.requireAuth(h.taskStagedAttachmentItem))
 	mux.HandleFunc("/api/tasks/status/", h.requireAuth(h.tasksStatusRouter))
 	mux.HandleFunc("/api/tasks/", h.requireAuth(h.tasksItem))
 }
@@ -707,23 +710,25 @@ func (h *Handler) tasksCollection(w http.ResponseWriter, r *http.Request, p auth
 
 	case http.MethodPost:
 		var req struct {
-			TemplateID  uuid.UUID         `json:"template_id"`
-			Title       string            `json:"title"`
-			Description *string           `json:"description"`
-			StatusID    uuid.UUID         `json:"status_id"`
-			FieldValues []FieldValueInput `json:"field_values"`
+			TemplateID          uuid.UUID         `json:"template_id"`
+			Title               string            `json:"title"`
+			Description         *string           `json:"description"`
+			StatusID            uuid.UUID         `json:"status_id"`
+			FieldValues         []FieldValueInput `json:"field_values"`
+			StagedAttachmentIDs []uuid.UUID       `json:"staged_attachment_ids"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
 			return
 		}
 		resp, err := h.svc.CreateTask(r.Context(), CreateTaskParams{
-			TemplateID:  req.TemplateID,
-			Title:       req.Title,
-			Description: req.Description,
-			StatusID:    req.StatusID,
-			FieldValues: req.FieldValues,
-			ActorID:     p.UserID,
+			TemplateID:          req.TemplateID,
+			Title:               req.Title,
+			Description:         req.Description,
+			StatusID:            req.StatusID,
+			FieldValues:         req.FieldValues,
+			StagedAttachmentIDs: req.StagedAttachmentIDs,
+			ActorID:             p.UserID,
 		})
 		if err != nil {
 			h.serviceError(w, err)
@@ -1250,6 +1255,96 @@ func (h *Handler) taskAttachmentsRouter(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) taskStagedAttachments(w http.ResponseWriter, r *http.Request, p auth.Principal) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+
+	file, header, mimeType, err := parseMultipartFilePart(r, h.maxAttachSizeMB)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
+		return
+	}
+	defer file.Close()
+
+	row, err := h.svc.UploadTaskStagedAttachment(r.Context(), UploadTaskStagedAttachmentParams{
+		ActorID:  p.UserID,
+		FileName: header.Filename,
+		MimeType: mimeType,
+		Size:     header.Size,
+		Body:     file,
+	}, h.maxAttachSizeMB)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, row)
+}
+
+func (h *Handler) taskStagedAttachmentItem(w http.ResponseWriter, r *http.Request, p auth.Principal) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/staged-attachments/")
+	parts := strings.SplitN(rest, "/", 2)
+	attachmentID, err := uuid.Parse(parts[0])
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody("invalid attachment id"))
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "download" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		h.taskStagedAttachmentDownload(w, r, p.UserID, attachmentID)
+		return
+	}
+
+	if r.Method != http.MethodDelete {
+		methodNotAllowed(w)
+		return
+	}
+	if err := h.svc.DeleteTaskStagedAttachment(r.Context(), p.UserID, attachmentID); err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) taskStagedAttachmentDownload(w http.ResponseWriter, r *http.Request, actorID, attachmentID uuid.UUID) {
+	body, size, mimeType, fileName, err := h.svc.DownloadTaskStagedAttachment(r.Context(), actorID, attachmentID)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	defer body.Close()
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitiseHeaderValue(fileName)+`"`)
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, body) //nolint:errcheck
+}
+
+func parseMultipartFilePart(r *http.Request, maxAttachSizeMB int) (multipart.File, *multipart.FileHeader, string, error) {
+	maxBytes := int64(maxAttachSizeMB) * 1024 * 1024
+	formLimit := maxBytes + 2*1024*1024
+	if err := r.ParseMultipartForm(formLimit); err != nil {
+		return nil, nil, "", fmt.Errorf("failed to parse multipart form: %w", err)
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		return nil, nil, "", errors.New("missing 'file' field in form")
+	}
+
+	mimeType := header.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	return file, header, mimeType, nil
+}
+
 // taskAttachmentUpload handles multipart file uploads.
 //
 // Size enforcement: header.Size is client-provided and cannot be trusted.
@@ -1258,25 +1353,12 @@ func (h *Handler) taskAttachmentsRouter(w http.ResponseWriter, r *http.Request, 
 // over the limit and we reject the request (deleting the orphaned object).
 func (h *Handler) taskAttachmentUpload(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID uuid.UUID) {
 	maxBytes := int64(h.maxAttachSizeMB) * 1024 * 1024
-	// Allow extra room for multipart form overhead, but keep the file part
-	// itself bounded to maxBytes+1 (see counting reader below).
-	formLimit := maxBytes + 2*1024*1024
-	if err := r.ParseMultipartForm(formLimit); err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("failed to parse multipart form: "+err.Error()))
-		return
-	}
-
-	file, header, err := r.FormFile("file")
+	file, header, mimeType, err := parseMultipartFilePart(r, h.maxAttachSizeMB)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("missing 'file' field in form"))
+		writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
 		return
 	}
 	defer file.Close()
-
-	mimeType := header.Header.Get("Content-Type")
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
 
 	// Wrap in a counting reader limited to maxBytes+1. If the full limit is
 	// consumed we know the client sent more than maxBytes.

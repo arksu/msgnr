@@ -3671,6 +3671,181 @@ func TestIntegration_Attachment_UploadListDelete(t *testing.T) {
 	require.ErrorIs(t, err, tasks.ErrNotFound)
 }
 
+func TestIntegration_TaskStagedAttachment_UploadCreateListDownload(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := tasks.NewService(pool, minioClient)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "STA", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	content := []byte("staged image content")
+	staged, err := svc.UploadTaskStagedAttachment(ctx, tasks.UploadTaskStagedAttachmentParams{
+		ActorID:  actor,
+		FileName: "photo.png",
+		MimeType: "image/png",
+		Size:     int64(len(content)),
+		Body:     bytes.NewReader(content),
+	}, 50)
+	require.NoError(t, err)
+
+	body, size, mimeType, fileName, err := svc.DownloadTaskStagedAttachment(ctx, actor, staged.ID)
+	require.NoError(t, err)
+	raw, err := io.ReadAll(body)
+	require.NoError(t, err)
+	require.NoError(t, body.Close())
+	assert.Equal(t, int64(len(content)), size)
+	assert.Equal(t, "image/png", mimeType)
+	assert.Equal(t, "photo.png", fileName)
+	assert.Equal(t, content, raw)
+
+	description := fmt.Sprintf("Before\n\n![Photo](msgnr-staged-attachment://task/%s)", staged.ID)
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:          tpl.ID,
+		Title:               "Task with staged image",
+		Description:         &description,
+		StatusID:            status.ID,
+		ActorID:             actor,
+		StagedAttachmentIDs: []uuid.UUID{staged.ID},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.Description)
+	finalURL := fmt.Sprintf("msgnr-attachment://task/%s/%s", created.ID, staged.ID)
+	assert.Contains(t, *created.Description, finalURL)
+	assert.NotContains(t, *created.Description, "msgnr-staged-attachment://")
+
+	attachments, err := svc.ListAttachments(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, attachments, 1)
+	assert.Equal(t, staged.ID, attachments[0].ID)
+
+	body, _, _, fileName, err = svc.DownloadAttachment(ctx, created.ID, staged.ID)
+	require.NoError(t, err)
+	raw, err = io.ReadAll(body)
+	require.NoError(t, err)
+	require.NoError(t, body.Close())
+	assert.Equal(t, "photo.png", fileName)
+	assert.Equal(t, content, raw)
+
+	_, _, _, _, err = svc.DownloadTaskStagedAttachment(ctx, actor, staged.ID)
+	require.ErrorIs(t, err, tasks.ErrNotFound)
+}
+
+func TestIntegration_TaskStagedAttachment_CreateRejectsForeignOrMissingStagedRows(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := tasks.NewService(pool, minioClient)
+	actor := seedUser(t, ctx, pool)
+	other := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "STB", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	staged, err := svc.UploadTaskStagedAttachment(ctx, tasks.UploadTaskStagedAttachmentParams{
+		ActorID:  actor,
+		FileName: "photo.png",
+		MimeType: "image/png",
+		Size:     int64(len("img")),
+		Body:     bytes.NewReader([]byte("img")),
+	}, 50)
+	require.NoError(t, err)
+
+	foreignDescription := fmt.Sprintf("![Photo](msgnr-staged-attachment://task/%s)", staged.ID)
+	_, err = svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:          tpl.ID,
+		Title:               "Foreign staged image",
+		Description:         &foreignDescription,
+		StatusID:            status.ID,
+		ActorID:             other,
+		StagedAttachmentIDs: []uuid.UUID{staged.ID},
+	})
+	require.ErrorIs(t, err, tasks.ErrBadRequest)
+
+	missingID := uuid.New()
+	missingDescription := fmt.Sprintf("![Photo](msgnr-staged-attachment://task/%s)", missingID)
+	_, err = svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:          tpl.ID,
+		Title:               "Missing staged image",
+		Description:         &missingDescription,
+		StatusID:            status.ID,
+		ActorID:             actor,
+		StagedAttachmentIDs: []uuid.UUID{missingID},
+	})
+	require.ErrorIs(t, err, tasks.ErrBadRequest)
+}
+
+func TestIntegration_TaskStagedAttachment_CreateRejectsMismatchedDescriptionRefs(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "STC", actor)
+	status := seedStatus(t, ctx, svc, actor)
+
+	stagedID := uuid.New()
+	description := fmt.Sprintf("![Photo](msgnr-staged-attachment://task/%s)", stagedID)
+	_, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:  tpl.ID,
+		Title:       "Mismatched staged image",
+		Description: &description,
+		StatusID:    status.ID,
+		ActorID:     actor,
+	})
+	require.ErrorIs(t, err, tasks.ErrBadRequest)
+
+	plainDescription := "No staged refs"
+	_, err = svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID:          tpl.ID,
+		Title:               "Extra staged image",
+		Description:         &plainDescription,
+		StatusID:            status.ID,
+		ActorID:             actor,
+		StagedAttachmentIDs: []uuid.UUID{stagedID},
+	})
+	require.ErrorIs(t, err, tasks.ErrBadRequest)
+}
+
+func TestIntegration_TaskStagedAttachment_CleanupExpiredRows(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := tasks.NewService(pool, minioClient)
+	actor := seedUser(t, ctx, pool)
+
+	expired, err := svc.UploadTaskStagedAttachment(ctx, tasks.UploadTaskStagedAttachmentParams{
+		ActorID:  actor,
+		FileName: "old.png",
+		MimeType: "image/png",
+		Size:     int64(len("old")),
+		Body:     bytes.NewReader([]byte("old")),
+	}, 50)
+	require.NoError(t, err)
+	fresh, err := svc.UploadTaskStagedAttachment(ctx, tasks.UploadTaskStagedAttachmentParams{
+		ActorID:  actor,
+		FileName: "fresh.png",
+		MimeType: "image/png",
+		Size:     int64(len("fresh")),
+		Body:     bytes.NewReader([]byte("fresh")),
+	}, 50)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `UPDATE task_staged_attachment SET created_at = now() - interval '25 hours' WHERE id = $1`, expired.ID)
+	require.NoError(t, err)
+
+	deleted, err := svc.CleanupExpiredTaskStagedAttachments(ctx, 24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted)
+
+	_, _, _, _, err = svc.DownloadTaskStagedAttachment(ctx, actor, expired.ID)
+	require.ErrorIs(t, err, tasks.ErrNotFound)
+
+	body, _, _, fileName, err := svc.DownloadTaskStagedAttachment(ctx, actor, fresh.ID)
+	require.NoError(t, err)
+	require.NoError(t, body.Close())
+	assert.Equal(t, "fresh.png", fileName)
+}
+
 func TestIntegration_Attachment_FileSizeRejected(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
 import router from '@/router'
 import { fetchOwnedAttachmentBlob } from '@/services/http/attachmentOwnersApi'
-import { tasksListUsers } from '@/services/http/tasksApi'
+import { tasksFetchStagedAttachmentBlob, tasksListUsers } from '@/services/http/tasksApi'
 import { resetDescriptionMentionCacheForTests } from '@/utils/descriptionMentions'
 
 vi.mock('@/services/http/attachmentOwnersApi', () => ({
@@ -13,6 +13,7 @@ vi.mock('@/services/http/attachmentOwnersApi', () => ({
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListUsers: vi.fn(),
   tasksListTasks: vi.fn(),
+  tasksFetchStagedAttachmentBlob: vi.fn(),
 }))
 
 describe('AttachmentMarkdownContent', () => {
@@ -30,6 +31,7 @@ describe('AttachmentMarkdownContent', () => {
     } as unknown as Window))
     vi.mocked(fetchOwnedAttachmentBlob).mockResolvedValue(new Blob(['blob'], { type: 'application/octet-stream' }))
     vi.mocked(tasksListUsers).mockResolvedValue([])
+    vi.mocked(tasksFetchStagedAttachmentBlob).mockResolvedValue(new Blob(['staged'], { type: 'image/png' }))
   })
 
   it('renders image tokens with fetched previews and opens file tokens in a new tab', async () => {

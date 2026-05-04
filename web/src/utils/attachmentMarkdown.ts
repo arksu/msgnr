@@ -1,7 +1,8 @@
 export type AttachmentOwnerKind = 'task' | 'document'
+export type AttachmentTokenOwnerKind = AttachmentOwnerKind | 'task-staged'
 
 export interface AttachmentUrlParts {
-  ownerKind: AttachmentOwnerKind
+  ownerKind: AttachmentTokenOwnerKind
   ownerId: string
   attachmentId: string
 }
@@ -17,9 +18,12 @@ export type AttachmentMarkdownBlock =
   | { type: 'attachment'; token: AttachmentToken }
 
 const ATTACHMENT_URL_PREFIX = 'msgnr-attachment://'
+const STAGED_ATTACHMENT_URL_PREFIX = 'msgnr-staged-attachment://'
 const ATTACHMENT_URL_RE = /^msgnr-attachment:\/\/(task|document)\/([^/]+)\/([^/\s)]+)$/
-const ATTACHMENT_IMAGE_LINE_RE = /^!\[((?:\\.|[^\]])*)\]\((msgnr-attachment:\/\/[^)\s]+)\)\s*$/
-const ATTACHMENT_FILE_LINE_RE = /^\[((?:\\.|[^\]])*)\]\((msgnr-attachment:\/\/[^)\s]+)\)\s*$/
+const STAGED_TASK_ATTACHMENT_URL_RE = /^msgnr-staged-attachment:\/\/task\/([^/\s)]+)$/
+const ATTACHMENT_IMAGE_LINE_RE = /^!\[((?:\\.|[^\]])*)\]\(((?:msgnr-attachment|msgnr-staged-attachment):\/\/[^)\s]+)\)\s*$/
+const ATTACHMENT_FILE_LINE_RE = /^\[((?:\\.|[^\]])*)\]\(((?:msgnr-attachment|msgnr-staged-attachment):\/\/[^)\s]+)\)\s*$/
+const STAGED_TASK_ATTACHMENT_ID_RE = /msgnr-staged-attachment:\/\/task\/([^/\s)]+)/g
 
 function escapeMarkdownLabel(value: string): string {
   return value
@@ -40,6 +44,10 @@ export function buildAttachmentUrl(ownerKind: AttachmentOwnerKind, ownerId: stri
   return `${ATTACHMENT_URL_PREFIX}${ownerKind}/${ownerId}/${attachmentId}`
 }
 
+export function buildTaskStagedAttachmentUrl(attachmentId: string): string {
+  return `${STAGED_ATTACHMENT_URL_PREFIX}task/${attachmentId}`
+}
+
 export function buildAttachmentMarkdown(
   ownerKind: AttachmentOwnerKind,
   ownerId: string,
@@ -54,16 +62,46 @@ export function buildAttachmentMarkdown(
     : `[${label}](${url})`
 }
 
+export function buildTaskStagedAttachmentMarkdown(attachmentId: string, fileName: string, mimeType: string): string {
+  const label = escapeMarkdownLabel(fileName)
+  const url = buildTaskStagedAttachmentUrl(attachmentId)
+  return mimeType.startsWith('image/')
+    ? `![${label}](${url})`
+    : `[${label}](${url})`
+}
+
 export function parseAttachmentUrl(value: string): AttachmentUrlParts | null {
-  const match = value.match(ATTACHMENT_URL_RE)
+  let match = value.match(ATTACHMENT_URL_RE)
+  if (match) {
+    const [, ownerKind, ownerId, attachmentId] = match
+    if (ownerKind !== 'task' && ownerKind !== 'document') return null
+    return {
+      ownerKind,
+      ownerId,
+      attachmentId,
+    }
+  }
+
+  match = value.match(STAGED_TASK_ATTACHMENT_URL_RE)
   if (!match) return null
-  const [, ownerKind, ownerId, attachmentId] = match
-  if (ownerKind !== 'task' && ownerKind !== 'document') return null
+  const [, attachmentId] = match
   return {
-    ownerKind,
-    ownerId,
+    ownerKind: 'task-staged',
+    ownerId: '',
     attachmentId,
   }
+}
+
+export function extractTaskStagedAttachmentIds(markdown: string | null | undefined): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const match of (markdown ?? '').matchAll(STAGED_TASK_ATTACHMENT_ID_RE)) {
+    const id = match[1]
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
 }
 
 export function parseAttachmentTokenLine(value: string): AttachmentToken | null {

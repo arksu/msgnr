@@ -441,6 +441,7 @@ export interface CreateTaskPayload {
   description?: string | null
   status_id: string
   field_values?: TaskFieldValueInput[]
+  staged_attachment_ids?: string[]
 }
 
 export interface UpdateTaskPayload {
@@ -761,6 +762,44 @@ export interface TaskAttachment {
   // Downloads go through /api/tasks/:id/attachments/:aid/download (proxied).
   uploaded_by: string
   created_at: string
+}
+
+export interface TaskStagedAttachment {
+  id: string
+  file_name: string
+  file_size: number
+  mime_type: string
+  uploaded_by: string
+  created_at: string
+}
+
+export async function tasksUploadStagedAttachment(file: File): Promise<TaskStagedAttachment> {
+  try {
+    const form = new FormData()
+    form.append('file', file, file.name)
+    const { data } = await http.post<TaskStagedAttachment>(
+      '/api/tasks/staged-attachments',
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksDeleteStagedAttachment(attachmentId: string): Promise<void> {
+  try {
+    await http.delete(`/api/tasks/staged-attachments/${attachmentId}`)
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksFetchStagedAttachmentBlob(attachmentId: string): Promise<Blob> {
+  try {
+    const { data } = await http.get<Blob>(
+      `/api/tasks/staged-attachments/${attachmentId}/download`,
+      { responseType: 'blob' },
+    )
+    return data
+  } catch (e) { handleError(e) }
 }
 
 export async function tasksListAttachments(taskId: string): Promise<TaskAttachment[]> {

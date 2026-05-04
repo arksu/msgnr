@@ -69,7 +69,7 @@
               <label class="form-label">Description</label>
               <TaskDescriptionEditor
                 v-model="form.description"
-                owner-kind="task"
+                :task-staged-attachment-upload="uploadTaskStagedAttachments"
                 placeholder="Optional description"
               />
             </div>
@@ -146,13 +146,19 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useTasksStore } from '@/stores/tasks'
-import type { TaskFieldDefinition } from '@/services/http/tasksApi'
+import {
+  tasksDeleteStagedAttachment,
+  tasksUploadStagedAttachment,
+  type TaskFieldDefinition,
+  type TaskStagedAttachment,
+} from '@/services/http/tasksApi'
 import { buildFieldValues, missingRequiredFields } from '@/composables/useTaskFieldValues'
 import {
   clearTaskCreateDraft,
   loadTaskCreateDraft,
   saveTaskCreateDraft,
 } from '@/services/storage/taskCreateDraftStorage'
+import { extractTaskStagedAttachmentIds } from '@/utils/attachmentMarkdown'
 import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 
@@ -167,6 +173,7 @@ const submitting = ref(false)
 const submitError = ref('')
 const showValidation = ref(false)
 const hydratingDraft = ref(false)
+const stagedAttachments = ref<TaskStagedAttachment[]>([])
 
 const form = reactive({
   title: '',
@@ -259,13 +266,50 @@ async function onSearchFieldEnumItems(field: TaskFieldDefinition, query: string)
   await tasksStore.searchEnumItemsFor(field.enum_dictionary_id, query, selectedCodesForField(field), 20)
 }
 
+function rememberStagedAttachments(rows: TaskStagedAttachment[]) {
+  const byID = new Map(stagedAttachments.value.map(item => [item.id, item]))
+  for (const row of rows) {
+    byID.set(row.id, row)
+  }
+  stagedAttachments.value = Array.from(byID.values())
+}
+
+async function uploadTaskStagedAttachments(files: File[]): Promise<TaskStagedAttachment[] | null> {
+  if (!files.length) return null
+  const uploaded = await Promise.all(files.map(file => tasksUploadStagedAttachment(file)))
+  rememberStagedAttachments(uploaded)
+  return uploaded
+}
+
+async function deleteStagedAttachments(ids: string[]) {
+  await Promise.allSettled(ids.map(id => tasksDeleteStagedAttachment(id)))
+}
+
+function referencedStagedAttachmentIds(): string[] {
+  return extractTaskStagedAttachmentIds(form.description)
+}
+
+async function cleanupUnreferencedStagedAttachments(referencedIds: string[]) {
+  const keep = new Set(referencedIds)
+  const unreferencedIds = stagedAttachments.value
+    .map(item => item.id)
+    .filter(id => !keep.has(id))
+  if (unreferencedIds.length > 0) {
+    await deleteStagedAttachments(unreferencedIds)
+  }
+  stagedAttachments.value = stagedAttachments.value.filter(item => keep.has(item.id))
+}
+
 function close() {
   if (submitting.value) return
   tasksStore.closeCreateDialog()
 }
 
-function cancel() {
+async function cancel() {
   if (submitting.value) return
+  const ids = stagedAttachments.value.map(item => item.id)
+  stagedAttachments.value = []
+  await deleteStagedAttachments(ids)
   clearTaskCreateDraft()
   tasksStore.closeCreateDialog()
 }
@@ -278,6 +322,7 @@ function reset() {
   submitError.value = ''
   showValidation.value = false
   selectedTemplateId.value = resolveInitialTemplateId()
+  stagedAttachments.value = []
 }
 
 async function submit() {
@@ -286,13 +331,17 @@ async function submit() {
   submitting.value = true
   submitError.value = ''
   try {
+    const stagedAttachmentIds = referencedStagedAttachmentIds()
+    await cleanupUnreferencedStagedAttachments(stagedAttachmentIds)
     await tasksStore.createTask({
       template_id: selectedTemplateId.value,
       title: form.title.trim(),
       description: form.description.trim() || null,
       status_id: form.statusId,
       field_values: buildFieldValues(activeFields.value, customValues, tasksStore.enumVersionFor),
+      staged_attachment_ids: stagedAttachmentIds,
     })
+    stagedAttachments.value = []
     clearTaskCreateDraft()
     tasksStore.closeCreateDialog()
   } catch (e) {
@@ -322,18 +371,20 @@ watch(() => tasksStore.createDialogOpen, async (open) => {
     const draft = loadTaskCreateDraft()
     form.title = draft.title
     form.description = draft.description
+    stagedAttachments.value = draft.stagedAttachments
   } finally {
     hydratingDraft.value = false
   }
 })
 
 watch(
-  [() => form.title, () => form.description],
+  [() => form.title, () => form.description, () => stagedAttachments.value.map(item => item.id).join('|')],
   () => {
     if (!tasksStore.createDialogOpen || hydratingDraft.value) return
     saveTaskCreateDraft({
       title: form.title,
       description: form.description,
+      stagedAttachments: stagedAttachments.value,
     })
   },
   { flush: 'sync' },

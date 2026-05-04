@@ -260,9 +260,15 @@ import router from '@/router'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
 import MessageTagPicker, { type MessageTagPickerItem } from '@/components/MessageTagPicker.vue'
 import { fetchOwnedAttachmentBlob, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
+import { tasksFetchStagedAttachmentBlob } from '@/services/http/tasksApi'
 import { createOrOpenDm } from '@/services/http/chatApi'
 import { openBlobInBrowser } from '@/utils/attachmentBrowser'
-import { buildAttachmentUrl, parseAttachmentUrl, type AttachmentOwnerKind } from '@/utils/attachmentMarkdown'
+import {
+  buildAttachmentUrl,
+  buildTaskStagedAttachmentUrl,
+  parseAttachmentUrl,
+  type AttachmentOwnerKind,
+} from '@/utils/attachmentMarkdown'
 import {
   decorateDescriptionMentionAnchors,
   parseUserMentionHref,
@@ -286,6 +292,7 @@ const props = withDefaults(defineProps<{
   forceLocalSyncToken?: number
   ownerKind?: AttachmentOwnerKind | null
   ownerId?: string | null
+  attachmentUploadMode?: 'owner' | 'task-staged'
   collabUser?: {
     id: string
     name: string
@@ -301,6 +308,7 @@ const props = withDefaults(defineProps<{
   forceLocalSyncToken: 0,
   ownerKind: null,
   ownerId: null,
+  attachmentUploadMode: 'owner',
   collabUser: null,
 })
 
@@ -403,10 +411,17 @@ async function openAttachmentLinkFromEditor(href: string): Promise<void> {
   if (!parsed) return
 
   try {
-    await openBlobInBrowser(() => fetchOwnedAttachmentBlob(parsed.ownerKind, parsed.ownerId, parsed.attachmentId))
+    await openBlobInBrowser(() => fetchEditorAttachmentBlob(parsed.ownerKind, parsed.ownerId, parsed.attachmentId))
   } catch {
     return
   }
+}
+
+function fetchEditorAttachmentBlob(ownerKind: AttachmentOwnerKind | 'task-staged', ownerId: string, attachmentId: string): Promise<Blob> {
+  if (ownerKind === 'task-staged') {
+    return tasksFetchStagedAttachmentBlob(attachmentId)
+  }
+  return fetchOwnedAttachmentBlob(ownerKind, ownerId, attachmentId)
 }
 
 function revokeAttachmentObjectUrls() {
@@ -420,7 +435,12 @@ function revokeAttachmentObjectUrls() {
 async function resolveEditorAttachmentImages() {
   const root = editor.value?.view.dom as HTMLElement | undefined
   if (!root) return
-  const imageEls = Array.from(root.querySelectorAll('img[src^="msgnr-attachment://"], img[data-attachment-url^="msgnr-attachment://"]')) as HTMLImageElement[]
+  const imageEls = Array.from(root.querySelectorAll([
+    'img[src^="msgnr-attachment://"]',
+    'img[data-attachment-url^="msgnr-attachment://"]',
+    'img[src^="msgnr-staged-attachment://"]',
+    'img[data-attachment-url^="msgnr-staged-attachment://"]',
+  ].join(', '))) as HTMLImageElement[]
   for (const imageEl of imageEls) {
     const attachmentUrl = imageEl.dataset.attachmentUrl ?? imageEl.getAttribute('src') ?? ''
     const parsed = parseAttachmentUrl(attachmentUrl)
@@ -432,7 +452,7 @@ async function resolveEditorAttachmentImages() {
     }
     if (attachmentLoadsInFlight.has(attachmentUrl)) continue
     attachmentLoadsInFlight.add(attachmentUrl)
-    fetchOwnedAttachmentBlob(parsed.ownerKind, parsed.ownerId, parsed.attachmentId)
+    fetchEditorAttachmentBlob(parsed.ownerKind, parsed.ownerId, parsed.attachmentId)
       .then((blob) => {
         const objectUrl = URL.createObjectURL(blob)
         attachmentObjectUrls.set(attachmentUrl, objectUrl)
@@ -634,9 +654,11 @@ function selectMentionItem(item: MessageTagPickerItem) {
   })
 }
 
-function buildEditorAttachmentNodes(ownerKind: AttachmentOwnerKind, ownerId: string, rows: OwnedAttachmentUpload[]) {
+function buildEditorAttachmentNodes(rows: OwnedAttachmentUpload[]) {
   return rows.map((row) => {
-    const url = buildAttachmentUrl(ownerKind, ownerId, row.id)
+    const url = props.attachmentUploadMode === 'task-staged'
+      ? buildTaskStagedAttachmentUrl(row.id)
+      : buildAttachmentUrl(props.ownerKind!, props.ownerId!, row.id)
     if (row.mime_type.startsWith('image/')) {
       return {
         type: 'image',
@@ -665,12 +687,10 @@ function buildEditorAttachmentNodes(ownerKind: AttachmentOwnerKind, ownerId: str
 
 async function uploadAndInsertFiles(files: File[]) {
   if (!files.length) return
-  const ownerKind = props.ownerKind
-  const ownerId = props.ownerId
-  if (!ownerKind || !ownerId) return
+  if (props.attachmentUploadMode !== 'task-staged' && (!props.ownerKind || !props.ownerId)) return
   const uploaded = await props.uploadAttachments(files)
   if (!uploaded || !editor.value) return
-  editor.value.chain().focus().insertContent(buildEditorAttachmentNodes(ownerKind, ownerId, uploaded)).run()
+  editor.value.chain().focus().insertContent(buildEditorAttachmentNodes(uploaded)).run()
   queueResolveEditorAttachmentImages()
 }
 

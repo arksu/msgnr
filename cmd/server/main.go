@@ -157,6 +157,31 @@ func main() {
 
 	tasksSvc := tasks.NewService(db.Pool, storageClient)
 	tasksSvc.SetDescriptionHistoryLimit(cfg.TaskDescriptionHistoryLimit)
+	taskStagedCleanupCtx, taskStagedCleanupCancel := context.WithCancel(context.Background())
+	taskStagedCleanupDone := make(chan struct{})
+	go func() {
+		defer close(taskStagedCleanupDone)
+		const stagedAttachmentTTL = 24 * time.Hour
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-taskStagedCleanupCtx.Done():
+				return
+			case <-ticker.C:
+				runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				deleted, err := tasksSvc.CleanupExpiredTaskStagedAttachments(runCtx, stagedAttachmentTTL)
+				cancel()
+				if err != nil {
+					log.Warn("Task staged attachment cleanup failed", zap.Error(err))
+					continue
+				}
+				if deleted > 0 {
+					log.Info("Task staged attachment cleanup removed expired uploads", zap.Int("deleted", deleted))
+				}
+			}
+		}
+	}()
 	tasksHandler := tasks.NewHandler(
 		tasksSvc,
 		authSvc,
@@ -245,6 +270,8 @@ func main() {
 	<-pushCleanupDone
 	callExpiryCancel()
 	<-callExpiryDone
+	taskStagedCleanupCancel()
+	<-taskStagedCleanupDone
 	listenerCancel()
 	<-listenerStopped
 

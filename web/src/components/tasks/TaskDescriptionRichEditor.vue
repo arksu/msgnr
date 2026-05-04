@@ -80,46 +80,6 @@
         >
           Link
         </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :disabled="!isActive('table')"
-          @click="editor?.chain().focus().addRowAfter().run()"
-        >
-          +row
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :disabled="!isActive('table')"
-          @click="editor?.chain().focus().deleteRow().run()"
-        >
-          -row
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :disabled="!isActive('table')"
-          @click="editor?.chain().focus().addColumnAfter().run()"
-        >
-          +col
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :disabled="!isActive('table')"
-          @click="editor?.chain().focus().deleteColumn().run()"
-        >
-          -col
-        </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :disabled="!isActive('table')"
-          @click="editor?.chain().focus().deleteTable().run()"
-        >
-          Del table
-        </button>
       </div>
     </BubbleMenu>
 
@@ -207,6 +167,59 @@
     </FloatingMenu>
 
     <div
+      v-if="tableToolbarVisible"
+      class="task-table-toolbar"
+      data-testid="task-description-table-toolbar"
+      @mousedown.prevent
+    >
+      <button
+        type="button"
+        class="toolbar-btn"
+        data-testid="task-description-table-add-row"
+        :disabled="!canRunTableCommand('addRowAfter')"
+        @click.prevent="runTableCommand('addRowAfter')"
+      >
+        + row
+      </button>
+      <button
+        type="button"
+        class="toolbar-btn"
+        data-testid="task-description-table-delete-row"
+        :disabled="!canRunTableCommand('deleteRow')"
+        @click.prevent="runTableCommand('deleteRow')"
+      >
+        - row
+      </button>
+      <button
+        type="button"
+        class="toolbar-btn"
+        data-testid="task-description-table-add-column"
+        :disabled="!canRunTableCommand('addColumnAfter')"
+        @click.prevent="runTableCommand('addColumnAfter')"
+      >
+        + col
+      </button>
+      <button
+        type="button"
+        class="toolbar-btn"
+        data-testid="task-description-table-delete-column"
+        :disabled="!canRunTableCommand('deleteColumn')"
+        @click.prevent="runTableCommand('deleteColumn')"
+      >
+        - col
+      </button>
+      <button
+        type="button"
+        class="toolbar-btn toolbar-btn-danger"
+        data-testid="task-description-table-delete-table"
+        :disabled="!canRunTableCommand('deleteTable')"
+        @click.prevent="runTableCommand('deleteTable')"
+      >
+        Delete table
+      </button>
+    </div>
+
+    <div
       v-if="showRenderedFallback"
       data-testid="task-description-editor-fallback"
       class="min-h-[140px] px-3 py-2"
@@ -282,6 +295,9 @@ import { FenceOnEnterExtension } from '@/editor/richTextShortcuts'
 import { useChatStore } from '@/stores/chat'
 import { NotificationLevel } from '@/shared/proto/packets_pb'
 
+type TableCommand = 'addRowAfter' | 'deleteRow' | 'addColumnAfter' | 'deleteColumn' | 'deleteTable'
+type TableCommandRunner = Record<TableCommand, () => { run: () => boolean }>
+
 const props = withDefaults(defineProps<{
   modelValue: string
   editable?: boolean
@@ -322,6 +338,7 @@ const suppressEditorSync = ref(false)
 const syncingFromEditor = ref(false)
 const syncingFromModel = ref(0)
 const editorContentEmpty = ref(true)
+const editorViewVersion = ref(0)
 let seedInProgress = false
 const DEBUG_TASK_DESC = import.meta.env.DEV
 
@@ -350,6 +367,10 @@ let mentionSearchRequestToken = 0
 
 const mentionPickerUsers = computed(() => mentionPickerItems.value.filter(item => item.kind === 'user'))
 const mentionPickerTasks = computed(() => mentionPickerItems.value.filter(item => item.kind === 'task'))
+const tableToolbarVisible = computed(() => {
+  editorViewVersion.value
+  return !!editor.value && editable.value && editor.value.isActive('table')
+})
 
 const AttachmentImage = TiptapNode.create({
   name: 'image',
@@ -601,6 +622,10 @@ function refreshMentionSearch() {
   }, 120)
 }
 
+function refreshEditorViewState() {
+  editorViewVersion.value += 1
+}
+
 async function openDirectMessageFromMention(href: string) {
   const mention = parseUserMentionHref(href)
   if (!mention) return
@@ -819,11 +844,13 @@ const editor = useEditor({
     emit('blur')
   },
   onCreate() {
+    refreshEditorViewState()
     syncEditorContentEmpty('onCreate')
     queueResolveEditorAttachmentImages()
     queueDecorateEditorMentionAnchors()
   },
   onUpdate({ editor: nextEditor }) {
+    refreshEditorViewState()
     syncEditorContentEmpty('onUpdate:start')
     if (suppressEditorSync.value) return
     const nextMarkdown = tiptapJsonToMarkdown(nextEditor.getJSON())
@@ -844,6 +871,7 @@ const editor = useEditor({
     refreshMentionSearch()
   },
   onSelectionUpdate() {
+    refreshEditorViewState()
     updateMentionPickerPosition()
     refreshMentionSearch()
   },
@@ -851,6 +879,23 @@ const editor = useEditor({
 
 function isActive(name: string, attrs?: Record<string, unknown>) {
   return editor.value?.isActive(name, attrs) ?? false
+}
+
+function canRunTableCommand(command: TableCommand): boolean {
+  if (!editor.value || !editable.value || !isActive('table')) return false
+  try {
+    const chain = editor.value.can().chain().focus() as unknown as TableCommandRunner
+    return chain[command]().run()
+  } catch {
+    return false
+  }
+}
+
+function runTableCommand(command: TableCommand) {
+  if (!editor.value || !editable.value || !canRunTableCommand(command)) return
+  const chain = editor.value.chain().focus() as unknown as TableCommandRunner
+  chain[command]().run()
+  refreshEditorViewState()
 }
 
 function setContentWithSafeSelection(html: string): boolean {
@@ -1075,6 +1120,7 @@ watch(
 watch(editor, (next) => {
   if (!next) return
   next.on('transaction', ({ transaction }) => {
+    refreshEditorViewState()
     syncEditorContentEmpty('transaction')
     descLog('transaction', {
       collab: collabEnabled.value,
@@ -1138,7 +1184,15 @@ defineExpose<{ editor: typeof editor }>({
   @apply border-accent bg-accent/20 text-white;
 }
 
+.toolbar-btn-danger {
+  @apply hover:border-red-400/70 hover:text-red-200;
+}
+
 .task-editor-menu-panel {
+  @apply flex flex-wrap gap-1 rounded border border-chat-border bg-chat-bg/95 p-1 shadow-lg;
+}
+
+.task-table-toolbar {
   @apply flex flex-wrap gap-1 rounded border border-chat-border bg-chat-bg/95 p-1 shadow-lg;
 }
 

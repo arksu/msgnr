@@ -3,6 +3,7 @@ import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as Y from 'yjs'
 import { createPinia, setActivePinia } from 'pinia'
+import type { Editor } from '@tiptap/core'
 import TaskDescriptionRichEditor from '@/components/tasks/TaskDescriptionRichEditor.vue'
 import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
 import { createOrOpenDm } from '@/services/http/chatApi'
@@ -150,19 +151,71 @@ describe('TaskDescriptionRichEditor', () => {
   }
 
   function getEditor(wrapper: ReturnType<typeof mount>) {
-    const editor = wrapper.getComponent({ name: 'EditorContent' }).props('editor') as {
-      isEditable: boolean
-      commands: {
-        clearContent: () => boolean
-        focus: (...args: unknown[]) => boolean
-        insertContent: (value: unknown) => boolean
-        setCodeBlock: () => boolean
-      }
-    } | undefined
+    const editor = wrapper.getComponent({ name: 'EditorContent' }).props('editor') as Editor | undefined
     if (!editor) {
       throw new Error('editor did not initialize')
     }
     return editor
+  }
+
+  function latestMarkdown(wrapper: ReturnType<typeof mount>): string {
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    return String(updates[updates.length - 1]?.[0] ?? '')
+  }
+
+  function selectTextInEditor(editor: Editor, text: string) {
+    let targetPos: number | null = null
+    editor.state.doc.descendants((node, pos) => {
+      if (targetPos !== null) return false
+      if (node.isText && node.text === text) {
+        targetPos = pos + 1
+        return false
+      }
+      return true
+    })
+    if (targetPos === null) {
+      throw new Error(`editor text node ${JSON.stringify(text)} not found`)
+    }
+    editor.commands.setTextSelection(targetPos)
+  }
+
+  async function waitForTableToolbar(wrapper: ReturnType<typeof mount>) {
+    for (let i = 0; i < 10; i += 1) {
+      await flushPromises()
+      await nextTick()
+      if (wrapper.find('[data-testid="task-description-table-toolbar"]').exists()) {
+        return
+      }
+    }
+    throw new Error('table toolbar did not appear')
+  }
+
+  async function mountTableEditor() {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: [
+          '| H1 | H2 | H3 |',
+          '| --- | --- | --- |',
+          '| A1 | B1 | C1 |',
+          '| A2 | B2 | C2 |',
+        ].join('\n'),
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    const editor = getEditor(wrapper)
+    selectTextInEditor(editor, 'B1')
+    await waitForTableToolbar(wrapper)
+    return { wrapper, editor }
+  }
+
+  async function clickToolbarButton(wrapper: ReturnType<typeof mount>, testId: string) {
+    const button = wrapper.get(`[data-testid="${testId}"]`)
+    await button.trigger('mousedown')
+    await button.trigger('click')
+    await flushPromises()
+    await nextTick()
   }
 
   it('renders markdown task items as checkboxes and toggles them back to markdown', async () => {
@@ -206,6 +259,88 @@ describe('TaskDescriptionRichEditor', () => {
     expect(items[0].find('label').exists()).toBe(true)
     expect(items[0].find('div').exists()).toBe(true)
     expect(items[0].text()).toContain('text')
+  })
+
+  it('shows table structure controls only when the selection is inside a table', async () => {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: 'Plain text',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    expect(wrapper.find('[data-testid="task-description-table-toolbar"]').exists()).toBe(false)
+
+    const editor = getEditor(wrapper)
+    editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+    await waitForTableToolbar(wrapper)
+
+    expect(wrapper.find('[data-testid="task-description-table-add-row"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="task-description-table-delete-row"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="task-description-table-add-column"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="task-description-table-delete-column"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="task-description-table-delete-table"]').exists()).toBe(true)
+  })
+
+  it('disables table structure controls when TipTap reports commands cannot run', async () => {
+    const { wrapper, editor } = await mountTableEditor()
+    vi.spyOn(editor, 'can').mockReturnValue({
+      chain: () => ({
+        focus: () => ({
+          addRowAfter: () => ({ run: () => false }),
+          deleteRow: () => ({ run: () => false }),
+          addColumnAfter: () => ({ run: () => false }),
+          deleteColumn: () => ({ run: () => false }),
+          deleteTable: () => ({ run: () => false }),
+        }),
+      }),
+    } as never)
+    wrapper.vm.$forceUpdate()
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="task-description-table-add-row"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="task-description-table-delete-row"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="task-description-table-add-column"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="task-description-table-delete-column"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="task-description-table-delete-table"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('adds and deletes table columns from the contextual table toolbar', async () => {
+    const { wrapper } = await mountTableEditor()
+
+    await clickToolbarButton(wrapper, 'task-description-table-add-column')
+    expect(latestMarkdown(wrapper)).toContain('| H1 | H2 |  | H3 |')
+    expect(latestMarkdown(wrapper)).toContain('| A1 | B1 |  | C1 |')
+
+    await clickToolbarButton(wrapper, 'task-description-table-delete-column')
+    expect(latestMarkdown(wrapper)).toContain('| H1 |  | H3 |')
+    expect(latestMarkdown(wrapper)).toContain('| A1 |  | C1 |')
+    expect(latestMarkdown(wrapper)).not.toContain('B1')
+  })
+
+  it('adds and deletes table rows from the contextual table toolbar', async () => {
+    const { wrapper } = await mountTableEditor()
+
+    await clickToolbarButton(wrapper, 'task-description-table-add-row')
+    expect(latestMarkdown(wrapper)).toContain('| A1 | B1 | C1 |')
+    expect(latestMarkdown(wrapper)).toContain('|  |  |  |')
+    expect(latestMarkdown(wrapper)).toContain('| A2 | B2 | C2 |')
+
+    await clickToolbarButton(wrapper, 'task-description-table-delete-row')
+    expect(latestMarkdown(wrapper)).not.toContain('| A1 | B1 | C1 |')
+    expect(latestMarkdown(wrapper)).toContain('|  |  |  |')
+    expect(latestMarkdown(wrapper)).toContain('| A2 | B2 | C2 |')
+  })
+
+  it('deletes the current table from the contextual table toolbar', async () => {
+    const { wrapper } = await mountTableEditor()
+
+    await clickToolbarButton(wrapper, 'task-description-table-delete-table')
+
+    expect(latestMarkdown(wrapper)).toBe('')
+    expect(wrapper.find('[data-testid="task-description-table-toolbar"]').exists()).toBe(false)
   })
 
   it('falls back to rendered markdown when collab doc stays empty', async () => {

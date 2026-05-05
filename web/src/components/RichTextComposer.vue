@@ -24,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { JSONContent } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Link from '@tiptap/extension-link'
@@ -311,10 +311,10 @@ function shouldShowPlaceholder(): boolean {
   return firstChild?.type.name === 'paragraph' && firstChild.childCount === 0
 }
 
-function syncPlaceholderState() {
+function syncPlaceholderState(placeholder = props.placeholder) {
   const root = editor.value?.view.dom as HTMLElement | undefined
   if (!root) return
-  root.dataset.placeholder = props.placeholder
+  root.dataset.placeholder = placeholder
   root.classList.toggle('is-empty', shouldShowPlaceholder())
 }
 
@@ -543,6 +543,8 @@ watch(() => props.disabled, (next) => {
   editor.value?.setEditable(!next)
 })
 
+watch(() => props.placeholder, syncPlaceholderState)
+
 watch(
   () => [props.modelValue, JSON.stringify(props.entities ?? [])] as const,
   ([nextBody, nextEntitiesJson]) => {
@@ -558,6 +560,13 @@ watch(
 watch(() => props.focusToken, () => {
   void maybeApplyFocusToken()
 }, { immediate: true })
+
+onMounted(() => {
+  void nextTick(() => {
+    syncPlaceholderState()
+    syncComposerHeight()
+  })
+})
 
 onBeforeUnmount(() => {
   if (searchDebounceTimer) {

@@ -200,6 +200,24 @@ describe('MessageInput', () => {
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('updates the composer placeholder when the conversation name changes', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+    await flushAll()
+
+    expect((prose(wrapper).element as HTMLElement).dataset.placeholder).toBe('Message #general')
+
+    await wrapper.setProps({ channelName: 'random' })
+    await flushAll()
+
+    expect((prose(wrapper).element as HTMLElement).dataset.placeholder).toBe('Message #random')
+  })
+
   it('inserts selected emoji at cursor and closes picker', async () => {
     const wrapper = mount(MessageInput, {
       attachTo: document.body,

@@ -129,38 +129,40 @@
         style="overflow-anchor: none; overscroll-behavior-y: contain;"
         @scroll.passive="handleScroll"
       >
-        <template v-if="messages.length === 0">
-          <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-2">
-            <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-              <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
-            </svg>
-            <span class="text-sm">No messages yet. Start the conversation!</span>
-            <span v-if="wsStore.state === 'BOOTSTRAPPING' || wsStore.state === 'RECOVERING_GAP' || wsStore.state === 'STALE_REBOOTSTRAP'" class="text-xs text-gray-600">
-              {{ statusLabel }}
-            </span>
-          </div>
-        </template>
+        <div ref="messagesContentEl" class="min-h-full">
+          <template v-if="messages.length === 0">
+            <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-2">
+              <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+              </svg>
+              <span class="text-sm">No messages yet. Start the conversation!</span>
+              <span v-if="wsStore.state === 'BOOTSTRAPPING' || wsStore.state === 'RECOVERING_GAP' || wsStore.state === 'STALE_REBOOTSTRAP'" class="text-xs text-gray-600">
+                {{ statusLabel }}
+              </span>
+            </div>
+          </template>
 
-        <template v-else>
-          <div
-            v-for="(msg, idx) in messages"
-            :key="msg.id"
-            :data-message-id="msg.id"
-            :class="msg.id === chatStore.focusedMessageId ? 'rounded-md bg-amber-500/10 ring-1 ring-amber-300/40' : ''"
-          >
-            <MessageBubble
-              :message="msg"
-              :show-header="shouldShowHeader(idx)"
-              :thread-reply-count="threadReplyCount(msg.id)"
-              :is-active-thread="chatStore.activeThreadRootId === msg.id"
-              :edit-request-token="editRequestTokenFor(msg.id)"
-              @edit-open="handleInlineEditOpen"
-              @edit-close="handleInlineEditClose"
-              @edit-resize="handleInlineEditResize"
-              @open-thread="openThreadFromMessage"
-            />
-          </div>
-        </template>
+          <template v-else>
+            <div
+              v-for="(msg, idx) in messages"
+              :key="msg.id"
+              :data-message-id="msg.id"
+              :class="msg.id === chatStore.focusedMessageId ? 'rounded-md bg-amber-500/10 ring-1 ring-amber-300/40' : ''"
+            >
+              <MessageBubble
+                :message="msg"
+                :show-header="shouldShowHeader(idx)"
+                :thread-reply-count="threadReplyCount(msg.id)"
+                :is-active-thread="chatStore.activeThreadRootId === msg.id"
+                :edit-request-token="editRequestTokenFor(msg.id)"
+                @edit-open="handleInlineEditOpen"
+                @edit-close="handleInlineEditClose"
+                @edit-resize="handleInlineEditResize"
+                @open-thread="openThreadFromMessage"
+              />
+            </div>
+          </template>
+        </div>
       </div>
 
       <div
@@ -324,6 +326,7 @@ const wsStore = useWsStore()
 const callStore = useCallStore()
 const offlineQueue = useOfflineQueue()
 const scrollEl = ref<HTMLElement | null>(null)
+const messagesContentEl = ref<HTMLElement | null>(null)
 const openRenderProbe = ref<{ conversationId: string; startedAt: number } | null>(null)
 const loadingOlderHistory = ref(false)
 const forceScrollToBottomOnNextRender = ref(false)
@@ -331,14 +334,16 @@ const composerBottomStickArmed = ref(false)
 const activeInlineEditMessageId = ref('')
 const inlineEditRequest = ref({ messageId: '', token: 0 })
 const pendingSwitchAutoScrollConversationId = ref('')
-const pendingSwitchAutoScrollAttempts = ref(0)
-const switchFollowConversationId = ref('')
-let forceScrollResetTimer: ReturnType<typeof setTimeout> | null = null
-let switchFollowInterval: ReturnType<typeof setInterval> | null = null
-let switchFollowStopTimer: ReturnType<typeof setTimeout> | null = null
+let scheduledBottomStickFrame: number | null = null
+let scheduledBottomStickToken = 0
+let resizeObserver: ResizeObserver | null = null
+let lastResizeAnchor: ScrollAnchor | null = null
+let lastResizeWasNearBottom = true
+let lastResizeAnchorUpdateAtMs = 0
 const TOP_PRELOAD_THRESHOLD_PX = 120
 const TOP_PRELOAD_REARM_GAP_PX = 72
 const BOTTOM_STICK_THRESHOLD_PX = 72
+const SCROLL_ANCHOR_CAPTURE_INTERVAL_MS = 100
 const DEBUG_CHAT_COMPOSER_SCROLL = import.meta.env.DEV
 const topPreloadArmed = ref(true)
 const isAtBottom = ref(true)
@@ -356,6 +361,8 @@ interface ScrollMetrics {
   clientHeight: number
   distanceFromBottom: number
 }
+
+type BottomStickReason = 'conversation-open' | 'send' | 'composer-resize' | 'inline-edit' | 'content-resize'
 
 const conversation = computed(() => chatStore.activeConversation)
 const conversationDraftScope = computed<ChatDraftScope | null>(() => {
@@ -588,41 +595,52 @@ function hasPendingSwitchAutoScroll(conversationId: string = chatStore.activeCha
   return conversationId !== '' && pendingSwitchAutoScrollConversationId.value === conversationId
 }
 
-function stopSwitchFollowWindow(reason: string) {
-  if (switchFollowInterval) {
-    clearInterval(switchFollowInterval)
-    switchFollowInterval = null
-  }
-  if (switchFollowStopTimer) {
-    clearTimeout(switchFollowStopTimer)
-    switchFollowStopTimer = null
-  }
-  if (switchFollowConversationId.value) {
-    chatComposerScrollDebug('switch-follow-stop', {
-      reason,
-      conversationId: switchFollowConversationId.value,
-    })
-  }
-  switchFollowConversationId.value = ''
+function clearForceBottomFlag() {
+  forceScrollToBottomOnNextRender.value = false
 }
 
-function startSwitchFollowWindow(conversationId: string, durationMs = 2600) {
-  stopSwitchFollowWindow('restart')
-  if (!conversationId) return
-  switchFollowConversationId.value = conversationId
-  switchFollowInterval = setInterval(() => {
-    if (switchFollowConversationId.value !== chatStore.activeChannelId) {
-      stopSwitchFollowWindow('conversation-changed')
-      return
-    }
-    scrollToBottom()
-  }, 80)
-  switchFollowStopTimer = setTimeout(() => {
-    stopSwitchFollowWindow('timeout')
-  }, durationMs)
-  chatComposerScrollDebug('switch-follow-start', {
-    conversationId,
-    durationMs,
+function cancelScheduledBottomStick() {
+  scheduledBottomStickToken += 1
+  if (scheduledBottomStickFrame !== null) {
+    cancelAnimationFrame(scheduledBottomStickFrame)
+    scheduledBottomStickFrame = null
+  }
+}
+
+function clearPendingConversationOpenScroll(reason: string, conversationId = pendingSwitchAutoScrollConversationId.value) {
+  if (!pendingSwitchAutoScrollConversationId.value) return
+  if (conversationId && pendingSwitchAutoScrollConversationId.value !== conversationId) return
+  chatComposerScrollDebug('conversation-open-scroll-clear', {
+    reason,
+    conversationId: pendingSwitchAutoScrollConversationId.value,
+  })
+  pendingSwitchAutoScrollConversationId.value = ''
+}
+
+function scheduleStableBottomStick(reason: BottomStickReason, options: { persistForce?: boolean } = {}) {
+  const el = scrollEl.value
+  if (!el) return
+  const persistForce = options.persistForce === true
+  forceScrollToBottomOnNextRender.value = true
+  cancelScheduledBottomStick()
+
+  const token = scheduledBottomStickToken
+  scrollToBottom()
+  void nextTick(() => {
+    if (token !== scheduledBottomStickToken) return
+    scheduledBottomStickFrame = requestAnimationFrame(() => {
+      scheduledBottomStickFrame = null
+      if (token !== scheduledBottomStickToken) return
+      scrollToBottom()
+      if (!persistForce) {
+        clearForceBottomFlag()
+      }
+      chatComposerScrollDebug('bottom-stick-stable', {
+        reason,
+        conversationId: chatStore.activeChannelId,
+        metrics: scrollEl.value ? getScrollMetrics(scrollEl.value) : null,
+      })
+    })
   })
 }
 
@@ -719,7 +737,7 @@ function handleSend(
   const clientMsgId = generateId()
   const now = new Date().toISOString()
   const isOffline = wsStore.state === 'DISCONNECTED' || wsStore.state === 'CONNECTING'
-  scheduleGuaranteedBottomScroll()
+  scheduleStableBottomStick('send')
 
   // Optimistic message — shown immediately regardless of connection state
   chatStore.addOptimisticMessage({
@@ -762,92 +780,39 @@ function handleSend(
   }
 }
 
-function scheduleGuaranteedBottomScroll(options: { persistForce?: boolean } = {}) {
-  const persistForce = options.persistForce === true
-  forceScrollToBottomOnNextRender.value = true
-  if (forceScrollResetTimer) {
-    clearTimeout(forceScrollResetTimer)
-    forceScrollResetTimer = null
-  }
-
-  const runScroll = () => {
-    scrollToBottom()
-  }
-
-  nextTick(() => {
-    runScroll()
-    requestAnimationFrame(() => {
-      runScroll()
-      requestAnimationFrame(() => {
-        runScroll()
-      })
-    })
-  })
-
-  setTimeout(runScroll, 60)
-  setTimeout(runScroll, 140)
-  if (!persistForce) {
-    forceScrollResetTimer = setTimeout(() => {
-      forceScrollToBottomOnNextRender.value = false
-      forceScrollResetTimer = null
-    }, 260)
-  }
-}
-
 async function flushPendingSwitchAutoScroll(trigger: string) {
   const targetConversationId = pendingSwitchAutoScrollConversationId.value
   if (!targetConversationId) return
   if (targetConversationId !== chatStore.activeChannelId) return
   if (chatStore.isConversationInitialLoading(targetConversationId)) return
 
-  scrollToBottom()
+  scheduleStableBottomStick('conversation-open', { persistForce: true })
   await nextTick()
-  scrollToBottom()
   await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
-  scrollToBottom()
-  await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
-  scrollToBottom()
+  if (targetConversationId !== chatStore.activeChannelId) return
 
   const current = scrollEl.value
   if (!current) return
   const metrics = getScrollMetrics(current)
-  const atBottom = metrics.distanceFromBottom <= BOTTOM_STICK_THRESHOLD_PX
   chatComposerScrollDebug('switch-auto-scroll-flush', {
     trigger,
     conversationId: targetConversationId,
-    attempts: pendingSwitchAutoScrollAttempts.value,
-    atBottom,
     metrics,
   })
 
-  if (!atBottom && pendingSwitchAutoScrollAttempts.value < 8) {
-    pendingSwitchAutoScrollAttempts.value += 1
-    setTimeout(() => {
-      void flushPendingSwitchAutoScroll('retry')
-    }, 90)
-    return
-  }
-
-  pendingSwitchAutoScrollConversationId.value = ''
-  pendingSwitchAutoScrollAttempts.value = 0
-  startSwitchFollowWindow(targetConversationId)
-  forceScrollToBottomOnNextRender.value = false
-  if (forceScrollResetTimer) {
-    clearTimeout(forceScrollResetTimer)
-    forceScrollResetTimer = null
-  }
+  clearPendingConversationOpenScroll('stable-frame', targetConversationId)
+  clearForceBottomFlag()
 }
 
 // When ChatArea remounts (e.g. returning from task-tracker mode), the active
 // channel hasn't changed so the channel-switch watcher won't fire. Scroll to
 // the bottom explicitly so the user lands at the latest message.
 onMounted(() => {
+  installResizeObserver()
   const activeConversationId = chatStore.activeChannelId
   if (activeConversationId) {
     pendingSwitchAutoScrollConversationId.value = activeConversationId
-    pendingSwitchAutoScrollAttempts.value = 0
   }
-  scheduleGuaranteedBottomScroll({ persistForce: Boolean(activeConversationId) })
   void flushPendingSwitchAutoScroll('mounted')
 })
 
@@ -855,11 +820,7 @@ function handleTyping(active: boolean) {
   const channelId = chatStore.activeChannelId
   if (!channelId || wsStore.state !== 'LIVE_SYNCED') return
   if (!active) {
-    if (typingConversationId === channelId) {
-      stopTypingPresence(true)
-      return
-    }
-    stopTypingPresence(false)
+    stopTypingPresence(typingConversationId === channelId)
     return
   }
 
@@ -981,6 +942,9 @@ function scrollToBottom() {
   const el = scrollEl.value
   if (!el) return
   el.scrollTop = el.scrollHeight
+  lastResizeWasNearBottom = true
+  lastResizeAnchor = null
+  lastResizeAnchorUpdateAtMs = performance.now()
 }
 
 function isLastTimelineMessage(messageId: string): boolean {
@@ -990,24 +954,12 @@ function isLastTimelineMessage(messageId: string): boolean {
 }
 
 function stickToBottomAfterComposerResize() {
-  scrollToBottom()
-  void nextTick(() => {
-    scrollToBottom()
-    requestAnimationFrame(() => {
-      scrollToBottom()
-      const current = scrollEl.value
-      if (!current) return
-      chatComposerScrollDebug('post-layout-stick', {
-        conversationId: chatStore.activeChannelId,
-        metrics: getScrollMetrics(current),
-      })
-    })
-  })
+  scheduleStableBottomStick('composer-resize')
 }
 
 function keepTailInlineEditVisible() {
   composerBottomStickArmed.value = true
-  stickToBottomAfterComposerResize()
+  scheduleStableBottomStick('inline-edit')
 }
 
 function handleInlineEditOpen(messageId: string) {
@@ -1081,6 +1033,9 @@ async function preloadOlderHistory() {
   if (hasPendingSwitchAutoScroll(conversationId) && showConversationLoadingOverlay.value) return
   if (el.scrollTop > TOP_PRELOAD_THRESHOLD_PX) return
 
+  cancelScheduledBottomStick()
+  clearForceBottomFlag()
+  clearPendingConversationOpenScroll('older-history-prepend')
   loadingOlderHistory.value = true
   const anchor = captureTopVisibleAnchor(el)
   const previousHeight = el.scrollHeight
@@ -1093,6 +1048,8 @@ async function preloadOlderHistory() {
     if (!current) return
     if (!restoreAnchorPosition(current, anchor)) {
       current.scrollTop = previousTop + (current.scrollHeight - previousHeight)
+      lastResizeAnchor = captureTopVisibleAnchor(current)
+      lastResizeWasNearBottom = isNearBottom()
     }
   } finally {
     loadingOlderHistory.value = false
@@ -1108,13 +1065,17 @@ function handleScroll() {
   const el = scrollEl.value
   if (!el) return
   const nearBottom = isNearBottom()
+  lastResizeWasNearBottom = nearBottom
+  maybeCaptureResizeAnchor(el, nearBottom)
   composerBottomStickArmed.value = nearBottom
   isAtBottom.value = nearBottom
   if (nearBottom) {
     unreadWhileScrolledAway.value = 0
   }
-  if (!hasPendingSwitchAutoScroll() && switchFollowConversationId.value && !nearBottom) {
-    stopSwitchFollowWindow('user-scrolled-away')
+  if (hasPendingSwitchAutoScroll() && !nearBottom) {
+    cancelScheduledBottomStick()
+    clearForceBottomFlag()
+    clearPendingConversationOpenScroll('user-scrolled-away')
   }
   if (el.scrollTop > TOP_PRELOAD_THRESHOLD_PX + TOP_PRELOAD_REARM_GAP_PX) {
     topPreloadArmed.value = true
@@ -1144,22 +1105,36 @@ function captureTopVisibleAnchor(container: HTMLElement): ScrollAnchor | null {
   return null
 }
 
+function messageIdSelector(messageId: string): string {
+  const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+    ? CSS.escape(messageId)
+    : messageId.replace(/["\\]/g, '\\$&')
+  return `[data-message-id="${escaped}"]`
+}
+
+function maybeCaptureResizeAnchor(container: HTMLElement, nearBottom: boolean) {
+  if (nearBottom) {
+    lastResizeAnchor = null
+    lastResizeAnchorUpdateAtMs = performance.now()
+    return
+  }
+  const now = performance.now()
+  if (now - lastResizeAnchorUpdateAtMs < SCROLL_ANCHOR_CAPTURE_INTERVAL_MS) return
+  lastResizeAnchor = captureTopVisibleAnchor(container)
+  lastResizeAnchorUpdateAtMs = now
+}
+
 function restoreAnchorPosition(container: HTMLElement, anchor: ScrollAnchor | null): boolean {
   if (!anchor) return false
-  const rows = container.querySelectorAll<HTMLElement>('[data-message-id]')
-  let target: HTMLElement | null = null
-  for (const row of rows) {
-    if (row.dataset.messageId === anchor.messageId) {
-      target = row
-      break
-    }
-  }
+  const target = container.querySelector<HTMLElement>(messageIdSelector(anchor.messageId))
   if (!target) return false
   const containerRect = container.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
   const delta = (targetRect.top - containerRect.top) - anchor.offsetFromViewportTop
   if (Math.abs(delta) < 0.5) return true
   container.scrollTop += delta
+  lastResizeAnchor = captureTopVisibleAnchor(container)
+  lastResizeWasNearBottom = isNearBottom()
   return true
 }
 
@@ -1167,9 +1142,38 @@ function scrollMessageIntoView(messageId: string) {
   if (!messageId) return
   const container = scrollEl.value
   if (!container) return
-  const target = container.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`)
+  const target = container.querySelector<HTMLElement>(messageIdSelector(messageId))
   if (!target) return
+  cancelScheduledBottomStick()
+  clearForceBottomFlag()
+  clearPendingConversationOpenScroll('focused-message')
   target.scrollIntoView({ block: 'center' })
+  lastResizeAnchor = captureTopVisibleAnchor(container)
+  lastResizeWasNearBottom = isNearBottom()
+}
+
+function handleContentResize() {
+  const container = scrollEl.value
+  if (!container || loadingOlderHistory.value) return
+  if (forceScrollToBottomOnNextRender.value || lastResizeWasNearBottom) {
+    scheduleStableBottomStick('content-resize', {
+      persistForce: forceScrollToBottomOnNextRender.value,
+    })
+    return
+  }
+  if (lastResizeAnchor) {
+    restoreAnchorPosition(container, lastResizeAnchor)
+  }
+}
+
+function installResizeObserver() {
+  if (resizeObserver || typeof ResizeObserver === 'undefined') return
+  const content = messagesContentEl.value
+  if (!content) return
+  resizeObserver = new ResizeObserver(() => {
+    handleContentResize()
+  })
+  resizeObserver.observe(content)
 }
 
 watch(() => {
@@ -1189,7 +1193,8 @@ watch(() => {
     scrollToBottom()
   }
   const probe = openRenderProbe.value
-  if (probe && probe.conversationId === chatStore.activeChannelId) {
+  if (DEBUG_CHAT_COMPOSER_SCROLL && probe && probe.conversationId === chatStore.activeChannelId) {
+    openRenderProbe.value = null
     requestAnimationFrame(() => {
       const elapsedMs = Math.round((performance.now() - probe.startedAt) * 100) / 100
       console.debug('[perf][conversation-open] render:messages-updated', {
@@ -1203,8 +1208,10 @@ watch(() => {
 })
 
 watch(() => chatStore.activeChannelId, async (conversationId) => {
-  const startedAt = performance.now()
-  openRenderProbe.value = { conversationId, startedAt }
+  const startedAt = DEBUG_CHAT_COMPOSER_SCROLL ? performance.now() : 0
+  cancelScheduledBottomStick()
+  clearForceBottomFlag()
+  openRenderProbe.value = DEBUG_CHAT_COMPOSER_SCROLL ? { conversationId, startedAt } : null
   activeInlineEditMessageId.value = ''
   inlineEditRequest.value = { messageId: '', token: inlineEditRequest.value.token }
   composerBottomStickArmed.value = true
@@ -1212,25 +1219,31 @@ watch(() => chatStore.activeChannelId, async (conversationId) => {
   unreadWhileScrolledAway.value = 0
   previousLastMessageId = ''
   pendingSwitchAutoScrollConversationId.value = conversationId
-  pendingSwitchAutoScrollAttempts.value = 0
-  startSwitchFollowWindow(conversationId, 3200)
   topPreloadArmed.value = true
-  scheduleGuaranteedBottomScroll({ persistForce: true })
-  console.debug('[perf][conversation-open] render:active-channel-changed', {
-    conversationId,
-    at: new Date().toISOString(),
-    currentMessageCount: messages.value.length,
-  })
-  await nextTick()
-  void preloadOlderHistory()
-  requestAnimationFrame(() => {
-    const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100
-    console.debug('[perf][conversation-open] render:first-frame', {
+  remoteActiveCallMembersRequestSeq += 1
+  resetRemoteActiveCallMembers()
+  closeCallMembersPopover()
+  if (typingConversationId && typingConversationId !== conversationId) {
+    stopTypingPresence(true)
+  }
+  if (DEBUG_CHAT_COMPOSER_SCROLL) {
+    console.debug('[perf][conversation-open] render:active-channel-changed', {
       conversationId,
-      messageCount: messages.value.length,
-      elapsedMs,
+      at: new Date().toISOString(),
+      currentMessageCount: messages.value.length,
     })
-  })
+  }
+  await nextTick()
+  if (DEBUG_CHAT_COMPOSER_SCROLL) {
+    requestAnimationFrame(() => {
+      const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100
+      console.debug('[perf][conversation-open] render:first-frame', {
+        conversationId,
+        messageCount: messages.value.length,
+        elapsedMs,
+      })
+    })
+  }
   void flushPendingSwitchAutoScroll('active-channel-watch')
 })
 
@@ -1261,18 +1274,6 @@ watch(() => [
   void refreshActiveCallMembers()
 })
 
-watch(() => chatStore.activeChannelId, () => {
-  remoteActiveCallMembersRequestSeq += 1
-  resetRemoteActiveCallMembers()
-  closeCallMembersPopover()
-})
-
-watch(() => chatStore.activeChannelId, (conversationId) => {
-  if (typingConversationId && typingConversationId !== conversationId) {
-    stopTypingPresence(true)
-  }
-})
-
 watch(() => wsStore.state, (state) => {
   if (state !== 'LIVE_SYNCED') {
     stopTypingPresence(false)
@@ -1280,11 +1281,12 @@ watch(() => wsStore.state, (state) => {
 })
 
 onBeforeUnmount(() => {
-  if (forceScrollResetTimer) {
-    clearTimeout(forceScrollResetTimer)
-    forceScrollResetTimer = null
+  clearForceBottomFlag()
+  cancelScheduledBottomStick()
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
   }
-  stopSwitchFollowWindow('unmount')
   stopTypingPresence(true)
 })
 </script>

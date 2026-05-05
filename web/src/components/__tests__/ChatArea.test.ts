@@ -5,7 +5,7 @@ import { nextTick } from 'vue'
 import { NotificationLevel } from '@/shared/proto/packets_pb'
 import ChatArea from '@/components/ChatArea.vue'
 import { useAuthStore } from '@/stores/auth'
-import { useChatStore } from '@/stores/chat'
+import { useChatStore, type Message } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useWsStore } from '@/stores/ws'
@@ -28,10 +28,58 @@ async function flushAll() {
   await nextTick()
 }
 
+async function flushFrames() {
+  await Promise.resolve()
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
+  await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
+  await nextTick()
+}
+
+function buildMessage(overrides: Partial<Message> = {}): Message {
+  return {
+    id: 'message-1',
+    channelId: 'channel-1',
+    senderId: 'user-1',
+    senderName: 'Ada',
+    body: 'hello',
+    channelSeq: 1n,
+    threadSeq: 0n,
+    mentionedUserIds: [],
+    mentionEveryone: false,
+    createdAt: '2026-03-06T00:00:00Z',
+    reactions: [],
+    myReactions: [],
+    ...overrides,
+  }
+}
+
 describe('ChatArea', () => {
+  let resizeObserverCallbacks: ResizeObserverCallback[] = []
+
+  function triggerResizeObserver() {
+    for (const callback of resizeObserverCallbacks) {
+      callback([], {} as ResizeObserver)
+    }
+  }
+
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    resizeObserverCallbacks = []
+    class TestResizeObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {
+        resizeObserverCallbacks.push(callback)
+      }
+
+      observe = vi.fn()
+      unobserve = vi.fn()
+      disconnect = vi.fn()
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      value: TestResizeObserver,
+      configurable: true,
+    })
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       value: vi.fn(),
       configurable: true,
@@ -741,6 +789,308 @@ describe('ChatArea', () => {
     await Promise.resolve()
 
     expect(el.scrollTop).toBe(120)
+  })
+
+  it('waits for initial conversation loading to finish before bottoming a switched channel', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    let loadingChannel2 = true
+    chatStore.isConversationInitialLoading = vi.fn((conversationId: string) =>
+      conversationId === 'channel-2' && loadingChannel2
+    )
+    chatStore.channels = [
+      {
+        id: 'channel-1',
+        name: 'general',
+        kind: 'channel',
+        visibility: 'public',
+        unread: 0,
+        notificationLevel: NotificationLevel.ALL,
+      },
+      {
+        id: 'channel-2',
+        name: 'random',
+        kind: 'channel',
+        visibility: 'public',
+        unread: 0,
+        notificationLevel: NotificationLevel.ALL,
+      },
+    ]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [buildMessage({ id: 'message-1', channelId: 'channel-1' })],
+      'channel-2': [buildMessage({ id: 'message-2', channelId: 'channel-2' })],
+    }
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
+    Object.defineProperty(el, 'scrollHeight', { value: 2200, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    el.scrollTop = 120
+
+    chatStore.activeChannelId = 'channel-2'
+    await flushFrames()
+    expect(el.scrollTop).toBe(120)
+
+    loadingChannel2 = false
+    chatStore.activeChannelId = 'channel-1'
+    await nextTick()
+    chatStore.activeChannelId = 'channel-2'
+    await flushFrames()
+    expect(el.scrollTop).toBe(2200)
+  })
+
+  it('cancels conversation-open bottom sticking when the user scrolls away', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    chatStore.isConversationInitialLoading = vi.fn().mockReturnValue(true)
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [buildMessage({ id: 'message-1' })],
+    }
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
+    Object.defineProperty(el, 'scrollHeight', { value: 2400, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    el.scrollTop = 300
+
+    await wrapper.find('.overflow-y-auto').trigger('scroll')
+    chatStore.isConversationInitialLoading = vi.fn().mockReturnValue(false)
+    await wrapper.setProps({})
+    await flushFrames()
+
+    expect(el.scrollTop).toBe(300)
+  })
+
+  it('preserves the visible top anchor when older history is prepended', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [
+        buildMessage({ id: 'message-1', channelSeq: 1n }),
+        buildMessage({ id: 'message-2', channelSeq: 2n }),
+      ],
+    }
+    let layoutPhase: 'before' | 'after' = 'before'
+    chatStore.loadOlderConversationHistory = vi.fn().mockImplementation(async () => {
+      chatStore.messages = {
+        'channel-1': [
+          buildMessage({ id: 'message-0', channelSeq: 0n }),
+          ...chatStore.messages['channel-1'],
+        ],
+      }
+      layoutPhase = 'after'
+      return 1
+    })
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      const messageId = (this as HTMLElement).dataset?.messageId
+      if (messageId === 'message-1') {
+        return {
+          top: layoutPhase === 'before' ? 20 : 180,
+          bottom: layoutPhase === 'before' ? 80 : 240,
+          left: 0,
+          right: 300,
+          width: 300,
+          height: 60,
+          x: 0,
+          y: layoutPhase === 'before' ? 20 : 180,
+          toJSON: () => ({}),
+        } as DOMRect
+      }
+      return originalRect.call(this)
+    }
+
+    try {
+      const wrapper = mount(ChatArea, {
+        global: {
+          stubs: {
+            MessageBubble: true,
+            MessageInput: true,
+          },
+        },
+      })
+
+      const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
+      Object.defineProperty(el, 'scrollHeight', { value: 1600, configurable: true })
+      Object.defineProperty(el, 'clientHeight', { value: 600, configurable: true })
+      el.scrollTop = 40
+
+      await wrapper.find('.overflow-y-auto').trigger('scroll')
+      await flushAll()
+
+      expect(el.scrollTop).toBe(200)
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+    }
+  })
+
+  it('keeps the latest message visible when content resizes near the bottom', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [buildMessage({ id: 'message-1' })],
+    }
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
+    let scrollHeight = 1500
+    Object.defineProperty(el, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    el.scrollTop = 1000
+    await wrapper.find('.overflow-y-auto').trigger('scroll')
+
+    scrollHeight = 1800
+    triggerResizeObserver()
+    await flushFrames()
+
+    expect(el.scrollTop).toBe(1800)
+  })
+
+  it('does not jump when content resizes while the user is reading older messages', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [buildMessage({ id: 'message-1' })],
+    }
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
+    let scrollHeight = 2000
+    Object.defineProperty(el, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    el.scrollTop = 400
+    await wrapper.find('.overflow-y-auto').trigger('scroll')
+
+    scrollHeight = 2300
+    triggerResizeObserver()
+    await flushFrames()
+
+    expect(el.scrollTop).toBe(400)
+  })
+
+  it('increments unread without moving scroll when a remote message arrives while scrolled away', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    wsStore.state = 'LIVE_SYNCED'
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [buildMessage({ id: 'message-1', channelSeq: 1n })],
+    }
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
+    Object.defineProperty(el, 'scrollHeight', { value: 1800, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    el.scrollTop = 300
+    await wrapper.find('.overflow-y-auto').trigger('scroll')
+
+    chatStore.messages['channel-1'].push(buildMessage({
+      id: 'message-2',
+      channelSeq: 2n,
+      senderId: 'user-2',
+      senderName: 'Bob',
+      body: 'remote',
+    }))
+    await flushAll()
+
+    expect(el.scrollTop).toBe(300)
+    expect(wrapper.get('[data-testid="scroll-to-bottom-btn"]').text()).toContain('1')
   })
 
   it('keeps the last inline edit bottom-anchored while the editor grows', async () => {

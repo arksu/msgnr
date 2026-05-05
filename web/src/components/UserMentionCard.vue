@@ -9,6 +9,7 @@
         :user-id="userId"
         :display-name="displayName"
         :avatar-url="avatarUrl"
+        :custom-status="customStatus"
         size="md"
       />
       <div class="min-w-0">
@@ -25,12 +26,14 @@
 
 <script setup lang="ts">
 import UserAvatar from '@/components/UserAvatar.vue'
+import type { UserCustomStatus } from '@/types/userStatus'
 
 defineProps<{
   userId: string
   displayName: string
   email: string
   avatarUrl: string
+  customStatus?: UserCustomStatus | null
   top: number
   left: number
 }>()

@@ -473,6 +473,13 @@ message UserSummary {
   string user_id = 1;
   string display_name = 2;
   string avatar_url = 3;
+  UserCustomStatus custom_status = 4;
+}
+
+message UserCustomStatus {
+  string text = 1;
+  string emoji = 2;
+  google.protobuf.Timestamp expires_at = 3;
 }
 
 message ConversationSummary {
@@ -691,6 +698,7 @@ message UserIdentityUpdatedEvent {
   string user_id = 1;
   string display_name = 2;
   string avatar_url = 3;
+  UserCustomStatus custom_status = 4;
 }
 
 message SetNotificationLevelRequest {

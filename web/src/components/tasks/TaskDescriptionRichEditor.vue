@@ -275,6 +275,7 @@ import MessageTagPicker, { type MessageTagPickerItem } from '@/components/Messag
 import { fetchOwnedAttachmentBlob, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
 import { tasksFetchStagedAttachmentBlob } from '@/services/http/tasksApi'
 import { createOrOpenDm } from '@/services/http/chatApi'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 import { openBlobInBrowser } from '@/utils/attachmentBrowser'
 import {
   buildAttachmentUrl,
@@ -637,6 +638,7 @@ async function openDirectMessageFromMention(href: string) {
       userId: dm.user_id,
       displayName: dm.display_name || dm.email,
       avatarUrl: dm.avatar_url,
+      customStatus: userCustomStatusFromDto(dm.custom_status),
       presence: 'offline',
       unread: 0,
       notificationLevel: NotificationLevel.ALL,

@@ -94,6 +94,7 @@
         :display-name="activeUserCard.displayName"
         :email="activeUserCard.email"
         :avatar-url="activeUserCard.avatarUrl"
+        :custom-status="activeUserCard.customStatus"
         :top="activeUserCard.top"
         :left="activeUserCard.left"
       />
@@ -121,6 +122,7 @@ import {
   splitMarkdownWithAttachmentBlocks,
 } from '@/utils/attachmentMarkdown'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
+import { userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
 
 const props = defineProps<{
   markdown: string
@@ -141,6 +143,7 @@ const activeUserCard = ref<{
   displayName: string
   email: string
   avatarUrl: string
+  customStatus: UserCustomStatus | null
   top: number
   left: number
 } | null>(null)
@@ -259,6 +262,7 @@ async function openUserMentionCard(href: string, link: HTMLAnchorElement) {
     displayName: user?.display_name || fallbackName,
     email: user?.email || '',
     avatarUrl: user?.avatar_url ?? '',
+    customStatus: userCustomStatusFromDto(user?.custom_status),
     top: rect.bottom + 8,
     left: rect.left,
   }

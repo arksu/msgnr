@@ -68,6 +68,7 @@
             :user-id="member.user_id"
             :display-name="member.display_name || member.email"
             :avatar-url="member.avatar_url"
+            :custom-status="userCustomStatusFromDto(member.custom_status)"
             size="md"
           />
           <!-- Name + email -->
@@ -145,6 +146,7 @@
               :user-id="candidate.user_id"
               :display-name="candidate.display_name || candidate.email"
               :avatar-url="candidate.avatar_url"
+              :custom-status="userCustomStatusFromDto(candidate.custom_status)"
               size="md"
             />
             <div class="min-w-0 flex-1">
@@ -188,6 +190,7 @@ import {
   type DmCandidateItem,
   ChatApiError,
 } from '@/services/http/chatApi'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 
 defineProps<{ visibility?: string }>()
 defineEmits<{ close: [] }>()
@@ -207,7 +210,7 @@ async function fetchMembers(conversationId: string) {
   try {
     members.value = await listConversationMembers(conversationId)
     for (const member of members.value) {
-      chat.registerUserIdentity(member.user_id, member.display_name, member.email, member.avatar_url)
+      chat.registerUserIdentity(member.user_id, member.display_name, member.email, member.avatar_url, userCustomStatusFromDto(member.custom_status))
     }
   } catch {
     error.value = 'Failed to load members.'
@@ -252,7 +255,7 @@ async function openInviteDialog() {
   try {
     const all = await listDmCandidates()
     for (const candidate of all) {
-      chat.registerUserIdentity(candidate.user_id, candidate.display_name, candidate.email, candidate.avatar_url)
+      chat.registerUserIdentity(candidate.user_id, candidate.display_name, candidate.email, candidate.avatar_url, userCustomStatusFromDto(candidate.custom_status))
     }
     // Filter out users already in the channel
     const memberIds = new Set(members.value.map(m => m.user_id))

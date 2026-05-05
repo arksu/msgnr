@@ -16,6 +16,7 @@
         :user-id="(value as string) || ''"
         :display-name="resolveUser(value as string)"
         :avatar-url="resolveUserAvatar(value as string)"
+        :custom-status="resolveUserCustomStatus(value as string)"
         size="xs"
       />
       <span>{{ resolveUser(value as string) }}</span>
@@ -27,6 +28,7 @@
           :user-id="userId"
           :display-name="resolveUser(userId)"
           :avatar-url="resolveUserAvatar(userId)"
+          :custom-status="resolveUserCustomStatus(userId)"
           size="xs"
         />
         <span>{{ resolveUser(userId) }}</span>
@@ -129,6 +131,7 @@ import { computed } from 'vue'
 import type { TaskFieldDefinition, TaskUser, EnumDictionary, EnumDictionaryVersionItem } from '@/services/http/tasksApi'
 import MultiSelect from './MultiSelect.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 
 interface SelectOption {
   value: string
@@ -170,6 +173,7 @@ const userOptions = computed(() =>
     label: u.display_name || u.email,
     userId: u.id,
     avatarUrl: u.avatar_url,
+    customStatus: userCustomStatusFromDto(u.custom_status),
   })),
 )
 
@@ -181,6 +185,11 @@ function resolveUser(id: string): string {
 function resolveUserAvatar(id: string): string {
   const u = props.users?.find(u => u.id === id)
   return u?.avatar_url ?? ''
+}
+
+function resolveUserCustomStatus(id: string) {
+  const u = props.users?.find(u => u.id === id)
+  return userCustomStatusFromDto(u?.custom_status)
 }
 
 // ---- Enum ----

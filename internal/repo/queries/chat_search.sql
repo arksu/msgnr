@@ -3,6 +3,9 @@ SELECT u.id,
        COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
        u.email,
        u.avatar_url,
+       u.custom_status_text,
+       u.custom_status_emoji,
+       u.custom_status_expires_at,
        COALESCE(up.status, 'offline') AS presence
 FROM channel_members cm
 JOIN users u
@@ -25,6 +28,9 @@ SELECT u.id,
        COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
        u.email,
        u.avatar_url,
+       u.custom_status_text,
+       u.custom_status_emoji,
+       u.custom_status_expires_at,
        COALESCE(up.status, 'offline') AS presence
 FROM channel_members cm
 JOIN users u

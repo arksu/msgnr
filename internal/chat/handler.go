@@ -16,6 +16,7 @@ import (
 	"msgnr/internal/config"
 	"msgnr/internal/httputil"
 	"msgnr/internal/logger"
+	"msgnr/internal/userstatus"
 )
 
 // Handler exposes chat-related HTTP endpoints.
@@ -76,10 +77,11 @@ type channelResponse struct {
 }
 
 type dmCandidateResponse struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name"`
-	Email       string `json:"email"`
-	AvatarURL   string `json:"avatar_url"`
+	UserID       string           `json:"user_id"`
+	DisplayName  string           `json:"display_name"`
+	Email        string           `json:"email"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
 }
 
 type createDirectMessageRequest struct {
@@ -100,20 +102,22 @@ type inviteConversationRequest struct {
 }
 
 type conversationMemberResponse struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name"`
-	Email       string `json:"email"`
-	AvatarURL   string `json:"avatar_url"`
+	UserID       string           `json:"user_id"`
+	DisplayName  string           `json:"display_name"`
+	Email        string           `json:"email"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
 }
 
 type directMessageResponse struct {
-	ConversationID string `json:"conversation_id"`
-	UserID         string `json:"user_id"`
-	DisplayName    string `json:"display_name"`
-	Email          string `json:"email"`
-	AvatarURL      string `json:"avatar_url"`
-	Kind           string `json:"kind"`
-	Visibility     string `json:"visibility"`
+	ConversationID string           `json:"conversation_id"`
+	UserID         string           `json:"user_id"`
+	DisplayName    string           `json:"display_name"`
+	Email          string           `json:"email"`
+	AvatarURL      string           `json:"avatar_url"`
+	CustomStatus   *userstatus.Body `json:"custom_status"`
+	Kind           string           `json:"kind"`
+	Visibility     string           `json:"visibility"`
 }
 
 type conversationMessageResponse struct {
@@ -241,11 +245,12 @@ type editMessageResponse struct {
 }
 
 type tagSearchUserResponse struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name"`
-	Email       string `json:"email"`
-	AvatarURL   string `json:"avatar_url"`
-	Presence    string `json:"presence"`
+	UserID       string           `json:"user_id"`
+	DisplayName  string           `json:"display_name"`
+	Email        string           `json:"email"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
+	Presence     string           `json:"presence"`
 }
 
 type tagSearchTaskResponse struct {
@@ -391,11 +396,12 @@ func (h *Handler) searchTagEntities(w http.ResponseWriter, r *http.Request, prin
 	}
 	for _, item := range result.Users {
 		resp.Users = append(resp.Users, tagSearchUserResponse{
-			UserID:      item.UserID.String(),
-			DisplayName: item.DisplayName,
-			Email:       item.Email,
-			AvatarURL:   item.AvatarURL,
-			Presence:    item.Presence,
+			UserID:       item.UserID.String(),
+			DisplayName:  item.DisplayName,
+			Email:        item.Email,
+			AvatarURL:    item.AvatarURL,
+			CustomStatus: userstatus.ToBody(item.CustomStatus),
+			Presence:     item.Presence,
 		})
 	}
 	for _, item := range result.Tasks {
@@ -531,10 +537,11 @@ func (h *Handler) listConversationMembers(w http.ResponseWriter, r *http.Request
 	resp := make([]conversationMemberResponse, 0, len(members))
 	for _, member := range members {
 		resp = append(resp, conversationMemberResponse{
-			UserID:      member.UserID.String(),
-			DisplayName: member.DisplayName,
-			Email:       member.Email,
-			AvatarURL:   member.AvatarURL,
+			UserID:       member.UserID.String(),
+			DisplayName:  member.DisplayName,
+			Email:        member.Email,
+			AvatarURL:    member.AvatarURL,
+			CustomStatus: userstatus.ToBody(member.CustomStatus),
 		})
 	}
 	httputil.WriteJSON(w, http.StatusOK, resp)
@@ -567,10 +574,11 @@ func (h *Handler) listActiveCallMembers(w http.ResponseWriter, r *http.Request, 
 	resp := make([]conversationMemberResponse, 0, len(members))
 	for _, member := range members {
 		resp = append(resp, conversationMemberResponse{
-			UserID:      member.UserID.String(),
-			DisplayName: member.DisplayName,
-			Email:       member.Email,
-			AvatarURL:   member.AvatarURL,
+			UserID:       member.UserID.String(),
+			DisplayName:  member.DisplayName,
+			Email:        member.Email,
+			AvatarURL:    member.AvatarURL,
+			CustomStatus: userstatus.ToBody(member.CustomStatus),
 		})
 	}
 	httputil.WriteJSON(w, http.StatusOK, resp)
@@ -1255,10 +1263,11 @@ func (h *Handler) listDMCandidates(w http.ResponseWriter, r *http.Request, princ
 	resp := make([]dmCandidateResponse, 0, len(candidates))
 	for _, candidate := range candidates {
 		resp = append(resp, dmCandidateResponse{
-			UserID:      candidate.UserID.String(),
-			DisplayName: candidate.DisplayName,
-			Email:       candidate.Email,
-			AvatarURL:   candidate.AvatarURL,
+			UserID:       candidate.UserID.String(),
+			DisplayName:  candidate.DisplayName,
+			Email:        candidate.Email,
+			AvatarURL:    candidate.AvatarURL,
+			CustomStatus: userstatus.ToBody(candidate.CustomStatus),
 		})
 	}
 
@@ -1310,6 +1319,7 @@ func (h *Handler) createOrOpenDirectMessage(w http.ResponseWriter, r *http.Reque
 		DisplayName:    dm.DisplayName,
 		Email:          dm.Email,
 		AvatarURL:      dm.AvatarURL,
+		CustomStatus:   userstatus.ToBody(dm.CustomStatus),
 		Kind:           dm.Kind,
 		Visibility:     dm.Visibility,
 	})

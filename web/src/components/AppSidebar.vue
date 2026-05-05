@@ -205,6 +205,7 @@
                 :user-id="dm.userId"
                 :display-name="dm.displayName"
                 :avatar-url="dm.avatarUrl"
+                :custom-status="dm.customStatus"
                 size="sm"
                 :presence="dm.presence"
               />
@@ -301,6 +302,7 @@
           :user-id="sidebarIdentity.userId"
           :display-name="sidebarIdentity.displayName || sidebarIdentity.fallback"
           :avatar-url="sidebarIdentity.avatarUrl"
+          :custom-status="sidebarIdentity.customStatus"
           size="sm"
           :presence="selfPresence"
         />
@@ -442,6 +444,7 @@
               :user-id="candidate.userId"
               :display-name="candidate.displayName"
               :avatar-url="candidate.avatarUrl"
+              :custom-status="candidate.customStatus"
               size="sm"
             />
             <div class="min-w-0">
@@ -485,6 +488,7 @@ import SidebarItem from './SidebarItem.vue'
 import NotificationLevelSelector from './NotificationLevelSelector.vue'
 import UserAvatar from './UserAvatar.vue'
 import CallPresenceIcon from './CallPresenceIcon.vue'
+import { userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
 
 defineEmits<{ profile: []; settings: [] }>()
 
@@ -505,7 +509,7 @@ const selectedChannelIds = ref<string[]>([])
 const dmPickerOpen = ref(false)
 const dmLoading = ref(false)
 const dmPickerError = ref('')
-const dmCandidates = ref<Array<{ userId: string; displayName: string; email: string; avatarUrl: string }>>([])
+const dmCandidates = ref<Array<{ userId: string; displayName: string; email: string; avatarUrl: string; customStatus: UserCustomStatus | null }>>([])
 const presenceMenuOpen = ref(false)
 const manualPresence = ref<'online' | 'away'>(loadManualPresencePreference() ?? 'online')
 const openConversationMenuKey = ref('')
@@ -548,6 +552,7 @@ const sidebarIdentity = computed(() => ({
   userId: authStore.user?.id ?? chatStore.workspace?.selfUserId ?? '',
   displayName: authStore.user?.displayName ?? chatStore.workspace?.selfDisplayName ?? '',
   avatarUrl: authStore.user?.avatarUrl ?? chatStore.workspace?.selfAvatarUrl ?? '',
+  customStatus: authStore.user?.customStatus ?? chatStore.workspace?.selfCustomStatus ?? null,
   role: authStore.effectiveRole ?? chatStore.workspace?.selfRole ?? '',
   fallback: authStore.user?.email ?? chatStore.workspace?.name ?? '?',
 }))
@@ -681,6 +686,7 @@ async function openDmPicker() {
           displayName: sidebarIdentity.value.displayName || authStore.user?.email || sidebarIdentity.value.fallback,
           email: authStore.user?.email ?? '',
           avatarUrl: sidebarIdentity.value.avatarUrl,
+          customStatus: sidebarIdentity.value.customStatus,
         }]
       : []
     const existingDmUserIds = new Set(
@@ -693,6 +699,7 @@ async function openDmPicker() {
       displayName: candidate.display_name || candidate.email,
       email: candidate.email,
       avatarUrl: candidate.avatar_url,
+      customStatus: userCustomStatusFromDto(candidate.custom_status),
     }))]
       .filter(candidate => !existingDmUserIds.has(candidate.userId))
   } catch (err) {
@@ -786,11 +793,13 @@ async function selectDmCandidate(userId: string) {
   dmPickerError.value = ''
   try {
     const dm = await createOrOpenDm(userId)
+    const customStatus = userCustomStatusFromDto(dm.custom_status)
     chatStore.openDirectMessage({
       id: dm.conversation_id,
       userId: dm.user_id,
       displayName: dm.display_name || dm.email,
       avatarUrl: dm.avatar_url,
+      ...(customStatus ? { customStatus } : {}),
       presence: 'offline',
       unread: 0,
       notificationLevel: NotificationLevel.ALL,

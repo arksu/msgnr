@@ -67,6 +67,12 @@ import {
   cacheThreadSummaries,
   loadCachedThreadSummaries,
 } from '@/services/db/cache'
+import {
+  isUserCustomStatusActive,
+  userCustomStatusFromDto,
+  userCustomStatusFromProto,
+  type UserCustomStatus,
+} from '@/types/userStatus'
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -87,6 +93,7 @@ export interface DirectMessage {
   userId: string
   displayName: string
   avatarUrl?: string
+  customStatus?: UserCustomStatus | null
   presence: 'online' | 'away' | 'offline'
   unread: number
   hasUnreadThreadReplies?: boolean
@@ -183,6 +190,7 @@ export interface WorkspaceShell {
   selfUserId: string
   selfDisplayName: string
   selfAvatarUrl?: string
+  selfCustomStatus?: UserCustomStatus | null
   selfRole: string
 }
 
@@ -519,6 +527,7 @@ export const useChatStore = defineStore('chat', () => {
   const userNames = ref<Record<string, string>>({})
   const userEmails = ref<Record<string, string>>({})
   const userAvatars = ref<Record<string, string>>({})
+  const userCustomStatuses = ref<Record<string, UserCustomStatus | null>>({})
   const pendingReactionOps = ref<Record<string, PendingReactionOp>>({})
   /** Tracks active send timeouts by clientMsgId. Cleared on ACK or discard. */
   const sendTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
@@ -963,7 +972,24 @@ export const useChatStore = defineStore('chat', () => {
     return ''
   }
 
-  function registerUserIdentity(userId: string, displayName?: string, email?: string, avatarUrl?: string) {
+  function resolveUserCustomStatus(userId: string): UserCustomStatus | null {
+    const fromDirectory = userCustomStatuses.value[userId]
+    if (isUserCustomStatusActive(fromDirectory)) return fromDirectory
+    const fromDm = directMessages.value.find(dm => dm.userId === userId)?.customStatus
+    if (isUserCustomStatusActive(fromDm)) return fromDm
+    if (workspace.value?.selfUserId === userId && isUserCustomStatusActive(workspace.value.selfCustomStatus)) {
+      return workspace.value.selfCustomStatus
+    }
+    return null
+  }
+
+  function registerUserIdentity(
+    userId: string,
+    displayName?: string,
+    email?: string,
+    avatarUrl?: string,
+    customStatus?: UserCustomStatus | null,
+  ) {
     const normalizedName = (displayName ?? '').trim()
     const normalizedEmail = (email ?? '').trim()
     const normalizedAvatar = (avatarUrl ?? '').trim()
@@ -977,11 +1003,15 @@ export const useChatStore = defineStore('chat', () => {
     if (normalizedAvatar || avatarUrl === '') {
       userAvatars.value[userId] = normalizedAvatar
     }
+    if (customStatus !== undefined) {
+      userCustomStatuses.value[userId] = isUserCustomStatusActive(customStatus) ? customStatus : null
+    }
   }
 
   function refreshSenderLabels(userId: string) {
     const resolved = resolveDisplayName(userId)
     const resolvedAvatar = resolveAvatarUrl(userId)
+    const resolvedCustomStatus = resolveUserCustomStatus(userId)
     for (const conversationId of Object.keys(messages.value)) {
       const list = messages.value[conversationId]
       for (const msg of list) {
@@ -1004,10 +1034,12 @@ export const useChatStore = defineStore('chat', () => {
     if (dm) {
       dm.displayName = resolved
       dm.avatarUrl = resolvedAvatar
+      dm.customStatus = resolvedCustomStatus
     }
     if (workspace.value?.selfUserId === userId) {
       workspace.value.selfDisplayName = resolved
       workspace.value.selfAvatarUrl = resolvedAvatar
+      workspace.value.selfCustomStatus = resolvedCustomStatus
     }
   }
 
@@ -1018,7 +1050,13 @@ export const useChatStore = defineStore('chat', () => {
       try {
         const candidates = await listDmCandidates()
         for (const candidate of candidates) {
-          registerUserIdentity(candidate.user_id, candidate.display_name, candidate.email, candidate.avatar_url)
+          registerUserIdentity(
+            candidate.user_id,
+            candidate.display_name,
+            candidate.email,
+            candidate.avatar_url,
+            userCustomStatusFromDto(candidate.custom_status),
+          )
         }
         userDirectoryHydrated = true
       } catch {
@@ -1640,6 +1678,7 @@ export const useChatStore = defineStore('chat', () => {
           selfUserId: resp.workspace.selfUser?.userId ?? '',
           selfDisplayName: resp.workspace.selfUser?.displayName ?? '',
           selfAvatarUrl: resp.workspace.selfUser?.avatarUrl ?? '',
+          selfCustomStatus: userCustomStatusFromProto(resp.workspace.selfUser?.customStatus),
           selfRole: workspaceRoleToSlug(resp.userRole || resp.workspace.selfRole),
         } : null,
         conversations: [],
@@ -1838,6 +1877,7 @@ export const useChatStore = defineStore('chat', () => {
           userId: dmUserId,
           displayName: summary.title,
           avatarUrl: resolveAvatarUrl(dmUserId),
+          customStatus: resolveUserCustomStatus(dmUserId),
           presence: resolveConversationPresence(summary.presence, dmUserId),
           unread,
           hasUnreadThreadReplies,
@@ -1868,6 +1908,7 @@ export const useChatStore = defineStore('chat', () => {
         stage.workspace.selfDisplayName,
         undefined,
         stage.workspace.selfAvatarUrl ?? '',
+        stage.workspace.selfCustomStatus ?? null,
       )
     }
     channels.value = nextChannels
@@ -2804,8 +2845,13 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function applyUserIdentityUpdated(evt: { userId: string; displayName: string; avatarUrl: string }) {
-    registerUserIdentity(evt.userId, evt.displayName, undefined, evt.avatarUrl)
+  function applyUserIdentityUpdated(evt: {
+    userId: string
+    displayName: string
+    avatarUrl: string
+    customStatus?: Parameters<typeof userCustomStatusFromProto>[0]
+  }) {
+    registerUserIdentity(evt.userId, evt.displayName, undefined, evt.avatarUrl, userCustomStatusFromProto(evt.customStatus))
     refreshSenderLabels(evt.userId)
   }
 
@@ -2857,6 +2903,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function upsertDirectMessage(dm: DirectMessage) {
+    registerUserIdentity(dm.userId, dm.displayName, undefined, dm.avatarUrl ?? '', dm.customStatus ?? null)
     const idx = directMessages.value.findIndex(existing => existing.id === dm.id)
     if (idx === -1) {
       directMessages.value.unshift(dm)
@@ -3412,6 +3459,7 @@ export const useChatStore = defineStore('chat', () => {
     userNames,
     userEmails,
     userAvatars,
+    userCustomStatuses,
     toast,
     lastAppliedEventSeq,
     lastAckedEventSeq,
@@ -3424,6 +3472,7 @@ export const useChatStore = defineStore('chat', () => {
     registerUserIdentity,
     resolveDisplayName,
     resolveAvatarUrl,
+    resolveUserCustomStatus,
     addOptimisticMessage,
     reconcileMessage,
     addMessage,

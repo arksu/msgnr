@@ -24,13 +24,31 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT        NOT NULL,
   display_name  TEXT        NOT NULL DEFAULT '',
   avatar_url    TEXT        NOT NULL DEFAULT '',
+  custom_status_text TEXT   NOT NULL DEFAULT '',
+  custom_status_emoji TEXT  NOT NULL DEFAULT '',
+  custom_status_expires_at TIMESTAMPTZ,
   -- mirrors WorkspaceRole enum: owner | admin | member | bot
   role                TEXT        NOT NULL CHECK (role IN ('owner', 'admin', 'member', 'bot')),
   status              TEXT        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'blocked')),
   need_change_password BOOLEAN    NOT NULL DEFAULT FALSE,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT users_custom_status_complete CHECK (
+    (
+      custom_status_expires_at IS NULL
+      AND btrim(custom_status_text) = ''
+      AND btrim(custom_status_emoji) = ''
+    )
+    OR (
+      custom_status_expires_at IS NOT NULL
+      AND btrim(custom_status_text) <> ''
+    )
+  )
 );
+
+CREATE INDEX IF NOT EXISTS idx_users_custom_status_expires_at
+  ON users(custom_status_expires_at)
+  WHERE custom_status_expires_at IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Auth

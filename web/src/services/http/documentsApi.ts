@@ -1,5 +1,6 @@
 import { AxiosError } from 'axios'
 import { createAuthenticatedClient } from './client'
+import type { UserCustomStatusDto } from '@/types/userStatus'
 
 const http = createAuthenticatedClient()
 
@@ -35,6 +36,7 @@ export interface TeamspaceMemberPreview {
   id: string
   display_name: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
 }
 
 export interface Teamspace {
@@ -91,6 +93,7 @@ export interface DocumentHistoryEditor {
   id: string
   display_name: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
 }
 
 export interface DocumentHistoryItem {

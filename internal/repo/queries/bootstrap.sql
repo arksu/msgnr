@@ -81,6 +81,9 @@ SELECT
   u.id AS self_user_id,
   u.display_name AS self_display_name,
   u.avatar_url AS self_avatar_url,
+  u.custom_status_text AS self_custom_status_text,
+  u.custom_status_emoji AS self_custom_status_emoji,
+  u.custom_status_expires_at AS self_custom_status_expires_at,
   u.role AS self_role
 FROM workspace w
 JOIN users u ON u.id = @user_id

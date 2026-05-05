@@ -7,7 +7,13 @@ FROM users
 WHERE id = $1;
 
 -- name: ListActiveUsers :many
-SELECT id, display_name, email, avatar_url
+SELECT id,
+       display_name,
+       email,
+       avatar_url,
+       custom_status_text,
+       custom_status_emoji,
+       custom_status_expires_at
 FROM users
 WHERE status = 'active'
   AND role <> 'bot'

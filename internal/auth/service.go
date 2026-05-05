@@ -24,6 +24,7 @@ import (
 	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/gen/queries"
 	"msgnr/internal/metrics"
+	"msgnr/internal/userstatus"
 )
 
 const (
@@ -66,6 +67,7 @@ type UserInfo struct {
 	Email              string
 	DisplayName        string
 	AvatarURL          string
+	CustomStatus       *userstatus.Status
 	Role               string
 	NeedChangePassword bool
 }
@@ -193,15 +195,7 @@ func (s *Service) Login(ctx context.Context, email, password, userAgent, ipAddr 
 		zap.String("session_id", sessionID.String()),
 	)
 
-	info := UserInfo{
-		ID:                 user.ID,
-		Email:              user.Email,
-		DisplayName:        user.DisplayName,
-		AvatarURL:          user.AvatarUrl,
-		Role:               user.Role,
-		NeedChangePassword: user.NeedChangePassword,
-	}
-	return pair, info, nil
+	return pair, userInfoFromRow(user), nil
 }
 
 // Refresh rotates the refresh token in-place on the existing session row.
@@ -277,14 +271,7 @@ func (s *Service) GetProfile(ctx context.Context, userID uuid.UUID) (UserInfo, e
 		return UserInfo{}, err
 	}
 
-	return UserInfo{
-		ID:                 user.ID,
-		Email:              user.Email,
-		DisplayName:        user.DisplayName,
-		AvatarURL:          user.AvatarUrl,
-		Role:               user.Role,
-		NeedChangePassword: user.NeedChangePassword,
-	}, nil
+	return userInfoFromRow(user), nil
 }
 
 func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, displayName, email string) (UserInfo, error) {
@@ -312,32 +299,35 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, displayNa
 		       display_name = COALESCE(NULLIF($2, ''), display_name),
 		       updated_at = now()
 		 WHERE id = $3
-		 RETURNING id, email, display_name, avatar_url, role, need_change_password`,
+		 RETURNING id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`,
 		email,
 		displayName,
 		userID,
-	).Scan(&row.ID, &row.Email, &row.DisplayName, &row.AvatarUrl, &row.Role, &row.NeedChangePassword); err != nil {
+	).Scan(
+		&row.ID,
+		&row.Email,
+		&row.DisplayName,
+		&row.AvatarUrl,
+		&row.CustomStatusText,
+		&row.CustomStatusEmoji,
+		&row.CustomStatusExpiresAt,
+		&row.Role,
+		&row.NeedChangePassword,
+	); err != nil {
 		if isEmailAlreadyInUse(err) {
 			return UserInfo{}, ErrProfileConflict
 		}
 		return UserInfo{}, err
 	}
 
-	if err := s.appendUserIdentityUpdatedEventTx(ctx, tx, row.ID, row.DisplayName, row.AvatarUrl); err != nil {
+	if err := s.appendUserIdentityUpdatedEventTx(ctx, tx, row.ID, row.DisplayName, row.AvatarUrl, customStatusFromRow(row)); err != nil {
 		return UserInfo{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return UserInfo{}, fmt.Errorf("auth: commit update profile tx: %w", err)
 	}
 
-	return UserInfo{
-		ID:                 row.ID,
-		Email:              row.Email,
-		DisplayName:        row.DisplayName,
-		AvatarURL:          row.AvatarUrl,
-		Role:               row.Role,
-		NeedChangePassword: row.NeedChangePassword,
-	}, nil
+	return userInfoFromRow(row), nil
 }
 
 func (s *Service) UploadAvatar(ctx context.Context, userID uuid.UUID, payload io.Reader) (UserInfo, error) {
@@ -447,40 +437,149 @@ func (s *Service) updateAvatarURL(ctx context.Context, userID uuid.UUID, avatarU
 		   SET avatar_url = $2,
 		       updated_at = now()
 		 WHERE id = $1
-		 RETURNING id, email, display_name, avatar_url, role, need_change_password`,
+		 RETURNING id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`,
 		userID,
 		avatarURL,
-	).Scan(&row.ID, &row.Email, &row.DisplayName, &row.AvatarUrl, &row.Role, &row.NeedChangePassword); err != nil {
+	).Scan(
+		&row.ID,
+		&row.Email,
+		&row.DisplayName,
+		&row.AvatarUrl,
+		&row.CustomStatusText,
+		&row.CustomStatusEmoji,
+		&row.CustomStatusExpiresAt,
+		&row.Role,
+		&row.NeedChangePassword,
+	); err != nil {
 		return UserInfo{}, "", err
 	}
 
-	if err := s.appendUserIdentityUpdatedEventTx(ctx, tx, row.ID, row.DisplayName, row.AvatarUrl); err != nil {
+	if err := s.appendUserIdentityUpdatedEventTx(ctx, tx, row.ID, row.DisplayName, row.AvatarUrl, customStatusFromRow(row)); err != nil {
 		return UserInfo{}, "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return UserInfo{}, "", fmt.Errorf("auth: commit avatar update tx: %w", err)
 	}
 
-	return UserInfo{
-		ID:                 row.ID,
-		Email:              row.Email,
-		DisplayName:        row.DisplayName,
-		AvatarURL:          row.AvatarUrl,
-		Role:               row.Role,
-		NeedChangePassword: row.NeedChangePassword,
-	}, oldAvatarURL, nil
+	return userInfoFromRow(row), oldAvatarURL, nil
 }
 
-func (s *Service) appendUserIdentityUpdatedEventTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, displayName, avatarURL string) error {
+func (s *Service) SetCustomStatus(ctx context.Context, userID uuid.UUID, text, emoji string, expiresAt time.Time) (UserInfo, error) {
+	text = userstatus.NormalizeText(text)
+	emoji = userstatus.NormalizeEmoji(emoji)
+	if text == "" {
+		return UserInfo{}, fmt.Errorf("%w: status text is required", ErrProfileBadRequest)
+	}
+	if userstatus.IsTextTooLong(text) {
+		return UserInfo{}, fmt.Errorf("%w: status text must be at most %d characters", ErrProfileBadRequest, userstatus.MaxTextRunes)
+	}
+	if userstatus.IsEmojiTooLong(emoji) {
+		return UserInfo{}, fmt.Errorf("%w: status emoji must be at most %d characters", ErrProfileBadRequest, userstatus.MaxEmojiRunes)
+	}
+	if expiresAt.IsZero() || !expiresAt.After(time.Now().UTC()) {
+		return UserInfo{}, fmt.Errorf("%w: status expiration must be in the future", ErrProfileBadRequest)
+	}
+	if s.db == nil {
+		return UserInfo{}, fmt.Errorf("%w: database is not configured", ErrProfileBadRequest)
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return UserInfo{}, fmt.Errorf("auth: begin custom status update tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var row queries.User
+	if err := tx.QueryRow(ctx,
+		`UPDATE users
+		   SET custom_status_text = $2,
+		       custom_status_emoji = $3,
+		       custom_status_expires_at = $4,
+		       updated_at = now()
+		 WHERE id = $1
+		 RETURNING id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`,
+		userID,
+		text,
+		emoji,
+		expiresAt.UTC(),
+	).Scan(
+		&row.ID,
+		&row.Email,
+		&row.DisplayName,
+		&row.AvatarUrl,
+		&row.CustomStatusText,
+		&row.CustomStatusEmoji,
+		&row.CustomStatusExpiresAt,
+		&row.Role,
+		&row.NeedChangePassword,
+	); err != nil {
+		return UserInfo{}, err
+	}
+
+	if err := s.appendUserIdentityUpdatedEventTx(ctx, tx, row.ID, row.DisplayName, row.AvatarUrl, customStatusFromRow(row)); err != nil {
+		return UserInfo{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return UserInfo{}, fmt.Errorf("auth: commit custom status update tx: %w", err)
+	}
+	return userInfoFromRow(row), nil
+}
+
+func (s *Service) ClearCustomStatus(ctx context.Context, userID uuid.UUID) (UserInfo, error) {
+	if s.db == nil {
+		return UserInfo{}, fmt.Errorf("%w: database is not configured", ErrProfileBadRequest)
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return UserInfo{}, fmt.Errorf("auth: begin custom status clear tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var row queries.User
+	if err := tx.QueryRow(ctx,
+		`UPDATE users
+		   SET custom_status_text = '',
+		       custom_status_emoji = '',
+		       custom_status_expires_at = NULL,
+		       updated_at = now()
+		 WHERE id = $1
+		 RETURNING id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`,
+		userID,
+	).Scan(
+		&row.ID,
+		&row.Email,
+		&row.DisplayName,
+		&row.AvatarUrl,
+		&row.CustomStatusText,
+		&row.CustomStatusEmoji,
+		&row.CustomStatusExpiresAt,
+		&row.Role,
+		&row.NeedChangePassword,
+	); err != nil {
+		return UserInfo{}, err
+	}
+
+	if err := s.appendUserIdentityUpdatedEventTx(ctx, tx, row.ID, row.DisplayName, row.AvatarUrl, nil); err != nil {
+		return UserInfo{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return UserInfo{}, fmt.Errorf("auth: commit custom status clear tx: %w", err)
+	}
+	return userInfoFromRow(row), nil
+}
+
+func (s *Service) appendUserIdentityUpdatedEventTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, displayName, avatarURL string, customStatus *userstatus.Status) error {
 	if s.eventStore == nil {
 		return nil
 	}
 
 	occurredAt := time.Now().UTC()
 	payload := &packetspb.UserIdentityUpdatedEvent{
-		UserId:      userID.String(),
-		DisplayName: displayName,
-		AvatarUrl:   avatarURL,
+		UserId:       userID.String(),
+		DisplayName:  displayName,
+		AvatarUrl:    avatarURL,
+		CustomStatus: userstatus.ToProto(customStatus),
 	}
 	payloadJSON, err := protojson.Marshal(payload)
 	if err != nil {
@@ -510,6 +609,27 @@ func (s *Service) appendUserIdentityUpdatedEventTx(ctx context.Context, tx pgx.T
 		return fmt.Errorf("auth: notify user_identity_updated event: %w", err)
 	}
 	return nil
+}
+
+func customStatusFromRow(row queries.User) *userstatus.Status {
+	return userstatus.ActiveFromNullTime(
+		row.CustomStatusText,
+		row.CustomStatusEmoji,
+		row.CustomStatusExpiresAt,
+		time.Now().UTC(),
+	)
+}
+
+func userInfoFromRow(row queries.User) UserInfo {
+	return UserInfo{
+		ID:                 row.ID,
+		Email:              row.Email,
+		DisplayName:        row.DisplayName,
+		AvatarURL:          row.AvatarUrl,
+		CustomStatus:       customStatusFromRow(row),
+		Role:               row.Role,
+		NeedChangePassword: row.NeedChangePassword,
+	}
 }
 
 func storageKeyFromAvatarURL(avatarURL string) string {

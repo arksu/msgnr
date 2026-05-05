@@ -126,6 +126,7 @@
           :user-id="comment.author_id"
           :display-name="authorName(comment.author_id)"
           :avatar-url="authorAvatar(comment.author_id)"
+          :custom-status="authorCustomStatus(comment.author_id)"
           size="sm"
         />
 
@@ -470,6 +471,7 @@ import UserAvatar from '@/components/UserAvatar.vue'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
 import { renderMarkdownToHtml } from '@/utils/markdown'
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 import RichTextComposer from '@/components/RichTextComposer.vue'
 import {
   tasksListComments,
@@ -927,6 +929,11 @@ function authorName(authorId: string): string {
 function authorAvatar(authorId: string): string {
   const user = tasksStore.users.find(u => u.id === authorId)
   return user?.avatar_url ?? ''
+}
+
+function authorCustomStatus(authorId: string) {
+  const user = tasksStore.users.find(u => u.id === authorId)
+  return userCustomStatusFromDto(user?.custom_status)
 }
 
 function sortCommentsNewestFirst(items: TaskComment[]): TaskComment[] {

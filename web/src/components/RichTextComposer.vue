@@ -39,6 +39,7 @@ import { MessageEntityNode } from '@/editor/messageEntity'
 import { FenceOnEnterExtension, shouldSubmitOnEnter } from '@/editor/richTextShortcuts'
 import { renderMessageEditorHtml, tiptapJsonToMessagePayload } from '@/utils/messageRichText'
 import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -109,6 +110,7 @@ const tagPickerUsers = computed<MessageTagPickerItem[]>(() =>
     href: '',
     icon: '@',
     avatarUrl: item.avatar_url,
+    customStatus: userCustomStatusFromDto(item.custom_status),
     flatIndex: index,
     meta: {
       email: item.email,

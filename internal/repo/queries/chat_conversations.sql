@@ -1,5 +1,11 @@
 -- name: ListDMCandidates :many
-SELECT id, display_name, email, avatar_url
+SELECT id,
+       display_name,
+       email,
+       avatar_url,
+       custom_status_text,
+       custom_status_emoji,
+       custom_status_expires_at
 FROM users
 WHERE id <> @requester_id
   AND status = 'active'
@@ -27,7 +33,13 @@ WHERE c.kind = 'channel'
 ORDER BY lower(COALESCE(NULLIF(c.name, ''), c.kind)), c.id;
 
 -- name: ListConversationMembers :many
-SELECT u.id, u.display_name, u.email, u.avatar_url
+SELECT u.id,
+       u.display_name,
+       u.email,
+       u.avatar_url,
+       u.custom_status_text,
+       u.custom_status_emoji,
+       u.custom_status_expires_at
 FROM channel_members cm
 JOIN users u
   ON u.id = cm.user_id
@@ -37,13 +49,16 @@ WHERE cm.channel_id = @conversation_id
 ORDER BY lower(COALESCE(NULLIF(u.display_name, ''), u.email)), u.id;
 
 -- name: ListActiveCallMembers :many
-SELECT member_id, display_name, email, avatar_url
+SELECT member_id, display_name, email, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at
 FROM (
   SELECT DISTINCT
     u.id AS member_id,
     u.display_name,
     u.email,
-    u.avatar_url
+    u.avatar_url,
+    u.custom_status_text,
+    u.custom_status_emoji,
+    u.custom_status_expires_at
   FROM calls c
   JOIN call_participants cp
     ON cp.call_id = c.id
@@ -61,6 +76,9 @@ SELECT u.id,
        u.display_name,
        u.email,
        u.avatar_url,
+       u.custom_status_text,
+       u.custom_status_emoji,
+       u.custom_status_expires_at,
        COALESCE(up.status, 'offline') AS presence
 FROM users u
 LEFT JOIN user_presence up

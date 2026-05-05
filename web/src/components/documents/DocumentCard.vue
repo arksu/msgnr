@@ -141,6 +141,7 @@
                     :user-id="item.editor.id"
                     :display-name="item.editor.display_name"
                     :avatar-url="item.editor.avatar_url"
+                    :custom-status="userCustomStatusFromDto(item.editor.custom_status)"
                     size="xs"
                   />
                   <span class="min-w-0">
@@ -209,6 +210,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useDocumentsStore } from '@/stores/documents'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 
 const DESCRIPTION_AUTOSAVE_DEBOUNCE_MS = 800
 const DESCRIPTION_MAX_FLUSH_MS = 10_000

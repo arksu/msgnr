@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,6 +14,7 @@ import (
 
 	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/gen/queries"
+	"msgnr/internal/userstatus"
 )
 
 // ListDMCandidates returns active users except the requester.
@@ -29,6 +31,12 @@ func (s *Service) ListDMCandidates(ctx context.Context, requesterID uuid.UUID) (
 			DisplayName: row.DisplayName,
 			Email:       row.Email,
 			AvatarURL:   row.AvatarUrl,
+			CustomStatus: userstatus.ActiveFromNullTime(
+				row.CustomStatusText,
+				row.CustomStatusEmoji,
+				row.CustomStatusExpiresAt,
+				time.Now().UTC(),
+			),
 		})
 	}
 	return candidates, nil
@@ -80,6 +88,12 @@ func (s *Service) ListConversationMembers(ctx context.Context, requesterID, conv
 			DisplayName: row.DisplayName,
 			Email:       row.Email,
 			AvatarURL:   row.AvatarUrl,
+			CustomStatus: userstatus.ActiveFromNullTime(
+				row.CustomStatusText,
+				row.CustomStatusEmoji,
+				row.CustomStatusExpiresAt,
+				time.Now().UTC(),
+			),
 		})
 	}
 	return members, nil
@@ -121,7 +135,13 @@ func (s *Service) SearchTagEntities(ctx context.Context, requesterID, conversati
 				DisplayName: row.DisplayName,
 				Email:       row.Email,
 				AvatarURL:   row.AvatarUrl,
-				Presence:    row.Presence,
+				CustomStatus: userstatus.ActiveFromNullTime(
+					row.CustomStatusText,
+					row.CustomStatusEmoji,
+					row.CustomStatusExpiresAt,
+					time.Now().UTC(),
+				),
+				Presence: row.Presence,
 			})
 		}
 
@@ -168,7 +188,13 @@ func (s *Service) SearchTagEntities(ctx context.Context, requesterID, conversati
 			DisplayName: row.DisplayName,
 			Email:       row.Email,
 			AvatarURL:   row.AvatarUrl,
-			Presence:    row.Presence,
+			CustomStatus: userstatus.ActiveFromNullTime(
+				row.CustomStatusText,
+				row.CustomStatusEmoji,
+				row.CustomStatusExpiresAt,
+				time.Now().UTC(),
+			),
+			Presence: row.Presence,
 		})
 	}
 
@@ -225,6 +251,12 @@ func (s *Service) ListActiveCallMembers(ctx context.Context, requesterID, conver
 			DisplayName: row.DisplayName,
 			Email:       row.Email,
 			AvatarURL:   row.AvatarUrl,
+			CustomStatus: userstatus.ActiveFromNullTime(
+				row.CustomStatusText,
+				row.CustomStatusEmoji,
+				row.CustomStatusExpiresAt,
+				time.Now().UTC(),
+			),
 		})
 	}
 	return members, nil
@@ -375,6 +407,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 			existing.DisplayName = target.DisplayName
 			existing.Email = target.Email
 			existing.AvatarURL = target.AvatarURL
+			existing.CustomStatus = target.CustomStatus
 
 			result := CreateDMResult{DM: existing}
 			if restoredRows > 0 {
@@ -403,6 +436,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 			DisplayName:    self.DisplayName,
 			Email:          self.Email,
 			AvatarURL:      self.AvatarURL,
+			CustomStatus:   self.CustomStatus,
 			Kind:           "dm",
 			Visibility:     "dm",
 		}
@@ -419,6 +453,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 		existing.DisplayName = target.DisplayName
 		existing.Email = target.Email
 		existing.AvatarURL = target.AvatarURL
+		existing.CustomStatus = target.CustomStatus
 
 		result := CreateDMResult{DM: existing}
 		if restoredRows > 0 {
@@ -448,6 +483,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 		DisplayName:    target.DisplayName,
 		Email:          target.Email,
 		AvatarURL:      target.AvatarURL,
+		CustomStatus:   target.CustomStatus,
 		Kind:           "dm",
 		Visibility:     "dm",
 	}
@@ -504,6 +540,9 @@ func (s *Service) restoreArchivedDMPeerTx(
 	channelID, senderID uuid.UUID,
 ) (*DMCandidate, error) {
 	var peer DMCandidate
+	var customStatusText string
+	var customStatusEmoji string
+	var customStatusExpiresAt sql.NullTime
 	err := tx.QueryRow(ctx, `
 		WITH dm AS (
 			SELECT id
@@ -521,19 +560,36 @@ func (s *Service) restoreArchivedDMPeerTx(
 			   AND cm.is_archived = true
 			RETURNING cm.user_id
 		)
-		SELECT u.id, u.display_name, u.email, u.avatar_url, COALESCE(up.status, 'offline')
+		SELECT u.id,
+		       u.display_name,
+		       u.email,
+		       u.avatar_url,
+		       u.custom_status_text,
+		       u.custom_status_emoji,
+		       u.custom_status_expires_at,
+		       COALESCE(up.status, 'offline')
 		  FROM restored r
 		  JOIN users u ON u.id = r.user_id
 		  LEFT JOIN user_presence up ON up.user_id = u.id
 		 LIMIT 1`,
 		channelID, senderID,
-	).Scan(&peer.UserID, &peer.DisplayName, &peer.Email, &peer.AvatarURL, &peer.Presence)
+	).Scan(
+		&peer.UserID,
+		&peer.DisplayName,
+		&peer.Email,
+		&peer.AvatarURL,
+		&customStatusText,
+		&customStatusEmoji,
+		&customStatusExpiresAt,
+		&peer.Presence,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	peer.CustomStatus = userstatus.ActiveFromNullTime(customStatusText, customStatusEmoji, customStatusExpiresAt, time.Now().UTC())
 	return &peer, nil
 }
 
@@ -563,7 +619,13 @@ func (s *Service) lookupActiveDMUser(ctx context.Context, userID uuid.UUID) (DMC
 		DisplayName: row.DisplayName,
 		Email:       row.Email,
 		AvatarURL:   row.AvatarUrl,
-		Presence:    row.Presence,
+		CustomStatus: userstatus.ActiveFromNullTime(
+			row.CustomStatusText,
+			row.CustomStatusEmoji,
+			row.CustomStatusExpiresAt,
+			time.Now().UTC(),
+		),
+		Presence: row.Presence,
 	}, nil
 }
 

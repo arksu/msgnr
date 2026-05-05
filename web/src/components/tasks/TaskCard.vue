@@ -188,6 +188,7 @@
                     :user-id="assignee.id"
                     :display-name="subtaskAssigneeLabel(assignee)"
                     :avatar-url="assignee.avatar_url"
+                    :custom-status="userCustomStatusFromDto(assignee.custom_status)"
                     size="xs"
                   />
                   <span class="min-w-0 truncate">{{ subtaskAssigneeLabel(assignee) }}</span>
@@ -380,6 +381,7 @@
               :user-id="creatorUser.id"
               :display-name="creatorUser.displayName"
               :avatar-url="creatorUser.avatarUrl"
+              :custom-status="creatorUser.customStatus"
               size="xs"
             />
             <div class="min-w-0">
@@ -396,6 +398,7 @@
               :user-id="updaterUser.id"
               :display-name="updaterUser.displayName"
               :avatar-url="updaterUser.avatarUrl"
+              :custom-status="updaterUser.customStatus"
               size="xs"
             />
             <div class="min-w-0">
@@ -446,6 +449,7 @@
                     :user-id="item.editor.id"
                     :display-name="descriptionHistoryEditorName(item)"
                     :avatar-url="item.editor.avatar_url"
+                    :custom-status="userCustomStatusFromDto(item.editor.custom_status)"
                     size="xs"
                   />
                   <span class="min-w-0">
@@ -644,6 +648,7 @@ import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
 import TaskComments from './TaskComments.vue'
 import UserAvatar from '../UserAvatar.vue'
+import { userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
 
 defineProps<{ templateFilter: string | null }>()
 const emit = defineEmits<{ back: [] }>()
@@ -1301,12 +1306,13 @@ function descriptionHistoryEditorName(item: TaskDescriptionHistoryItem): string 
   return item.editor.display_name?.trim() || 'Unknown user'
 }
 
-function userSummaryFor(userId: string): { id: string; displayName: string; avatarUrl: string } {
+function userSummaryFor(userId: string): { id: string; displayName: string; avatarUrl: string; customStatus: UserCustomStatus | null } {
   const user = tasksStore.users.find(candidate => candidate.id === userId)
   return {
     id: userId,
     displayName: user?.display_name?.trim() || userId || 'Unknown user',
     avatarUrl: user?.avatar_url ?? '',
+    customStatus: userCustomStatusFromDto(user?.custom_status),
   }
 }
 

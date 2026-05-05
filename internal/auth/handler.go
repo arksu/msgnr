@@ -8,10 +8,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	"msgnr/internal/httputil"
 	"msgnr/internal/logger"
+	"msgnr/internal/userstatus"
 )
 
 // Handler exposes HTTP auth endpoints.
@@ -30,6 +32,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/refresh", h.refresh)
 	mux.HandleFunc("/api/auth/logout", h.logout)
 	mux.HandleFunc("/api/auth/profile", h.profile)
+	mux.HandleFunc("/api/auth/custom-status", h.customStatus)
 	mux.HandleFunc("/api/auth/avatar", h.avatar)
 	mux.HandleFunc("/api/public/avatars/", h.publicAvatar)
 	mux.HandleFunc("/api/auth/change-password", h.changePassword)
@@ -51,12 +54,13 @@ type loginResponse struct {
 }
 
 type userBody struct {
-	ID                 string `json:"id"`
-	Email              string `json:"email"`
-	DisplayName        string `json:"display_name"`
-	AvatarURL          string `json:"avatar_url"`
-	Role               string `json:"role"`
-	NeedChangePassword bool   `json:"need_change_password,omitempty"`
+	ID                 string           `json:"id"`
+	Email              string           `json:"email"`
+	DisplayName        string           `json:"display_name"`
+	AvatarURL          string           `json:"avatar_url"`
+	CustomStatus       *userstatus.Body `json:"custom_status"`
+	Role               string           `json:"role"`
+	NeedChangePassword bool             `json:"need_change_password,omitempty"`
 }
 
 type changePasswordRequest struct {
@@ -76,6 +80,12 @@ type refreshResponse struct {
 type updateProfileRequest struct {
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
+}
+
+type setCustomStatusRequest struct {
+	Text      string    `json:"text"`
+	Emoji     string    `json:"emoji"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type profileResponse struct {
@@ -308,6 +318,56 @@ func (h *Handler) avatar(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) customStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodDelete {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	token := httputil.BearerToken(r)
+	if token == "" {
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("missing authorization"))
+		return
+	}
+
+	principal, err := h.svc.VerifyAccess(r.Context(), token)
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorBody("invalid or expired token"))
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		info, err := h.svc.ClearCustomStatus(r.Context(), principal.UserID)
+		if err != nil {
+			h.log.Error("clearCustomStatus error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+			return
+		}
+		httputil.WriteJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
+		return
+	}
+
+	var req setCustomStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid request body"))
+		return
+	}
+
+	info, err := h.svc.SetCustomStatus(r.Context(), principal.UserID, req.Text, req.Emoji, req.ExpiresAt)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrProfileBadRequest):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody(err.Error()))
+		default:
+			h.log.Error("setCustomStatus error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, profileResponse{User: toUserBody(info)})
+}
+
 func isRequestTooLarge(err error) bool {
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
@@ -367,6 +427,7 @@ func toUserBody(info UserInfo) userBody {
 		Email:              info.Email,
 		DisplayName:        info.DisplayName,
 		AvatarURL:          info.AvatarURL,
+		CustomStatus:       userstatus.ToBody(info.CustomStatus),
 		Role:               info.Role,
 		NeedChangePassword: info.NeedChangePassword,
 	}

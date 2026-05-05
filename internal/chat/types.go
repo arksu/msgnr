@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	packetspb "msgnr/internal/gen/proto"
+	"msgnr/internal/userstatus"
 )
 
 // AttachmentStorage is the subset of object storage required for chat attachments.
@@ -28,18 +29,20 @@ type queryer interface {
 }
 
 type DMCandidate struct {
-	UserID      uuid.UUID
-	DisplayName string
-	Email       string
-	AvatarURL   string
-	Presence    string
+	UserID       uuid.UUID
+	DisplayName  string
+	Email        string
+	AvatarURL    string
+	CustomStatus *userstatus.Status
+	Presence     string
 }
 
 type ConversationMember struct {
-	UserID      uuid.UUID
-	DisplayName string
-	Email       string
-	AvatarURL   string
+	UserID       uuid.UUID
+	DisplayName  string
+	Email        string
+	AvatarURL    string
+	CustomStatus *userstatus.Status
 }
 
 type ReactionUser struct {
@@ -54,6 +57,7 @@ type DirectMessage struct {
 	DisplayName    string
 	Email          string
 	AvatarURL      string
+	CustomStatus   *userstatus.Status
 	Kind           string
 	Visibility     string
 }
@@ -177,11 +181,12 @@ type MessageEntity struct {
 }
 
 type TagSearchUserResult struct {
-	UserID      uuid.UUID
-	DisplayName string
-	Email       string
-	AvatarURL   string
-	Presence    string
+	UserID       uuid.UUID
+	DisplayName  string
+	Email        string
+	AvatarURL    string
+	CustomStatus *userstatus.Status
+	Presence     string
 }
 
 type TagSearchTaskResult struct {

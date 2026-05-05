@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"msgnr/internal/userstatus"
 )
 
 const (
@@ -76,9 +78,10 @@ func (s *Service) SetHistoryLimit(limit int) {
 }
 
 type TeamspaceMemberPreview struct {
-	ID          uuid.UUID `json:"id"`
-	DisplayName string    `json:"display_name"`
-	AvatarURL   string    `json:"avatar_url"`
+	ID           uuid.UUID        `json:"id"`
+	DisplayName  string           `json:"display_name"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
 }
 
 type TeamspaceRow struct {
@@ -137,9 +140,10 @@ type DocumentSearchResult struct {
 }
 
 type DocumentHistoryEditor struct {
-	ID          uuid.UUID `json:"id"`
-	DisplayName string    `json:"display_name"`
-	AvatarURL   string    `json:"avatar_url"`
+	ID           uuid.UUID        `json:"id"`
+	DisplayName  string           `json:"display_name"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
 }
 
 type DocumentHistoryItem struct {
@@ -927,7 +931,10 @@ func (s *Service) ListDocumentHistory(ctx context.Context, documentID, userID uu
 		        h.created_at,
 		        u.id,
 		        COALESCE(NULLIF(u.display_name, ''), u.email),
-		        u.avatar_url
+		        u.avatar_url,
+		        u.custom_status_text,
+		        u.custom_status_emoji,
+		        u.custom_status_expires_at
 		   FROM document_history h
 		   JOIN users u
 		     ON u.id = h.edited_by
@@ -944,8 +951,11 @@ func (s *Service) ListDocumentHistory(ctx context.Context, documentID, userID uu
 	out := make([]DocumentHistoryItem, 0)
 	for rows.Next() {
 		var (
-			item    DocumentHistoryItem
-			content sql.NullString
+			item          DocumentHistoryItem
+			content       sql.NullString
+			statusText    string
+			statusEmoji   string
+			statusExpires sql.NullTime
 		)
 		if err := rows.Scan(
 			&item.Title,
@@ -955,9 +965,13 @@ func (s *Service) ListDocumentHistory(ctx context.Context, documentID, userID uu
 			&item.Editor.ID,
 			&item.Editor.DisplayName,
 			&item.Editor.AvatarURL,
+			&statusText,
+			&statusEmoji,
+			&statusExpires,
 		); err != nil {
 			return nil, fmt.Errorf("documents: scan document history: %w", err)
 		}
+		item.Editor.CustomStatus = userstatus.ToBody(userstatus.ActiveFromNullTime(statusText, statusEmoji, statusExpires, time.Now().UTC()))
 		if content.Valid {
 			value := content.String
 			item.ContentMarkdown = &value
@@ -1220,7 +1234,10 @@ func (s *Service) listVisibleTeamspaces(ctx context.Context, q queryer, userID u
 		`SELECT tm.teamspace_id,
 		        u.id,
 		        COALESCE(NULLIF(u.display_name, ''), u.email),
-		        u.avatar_url
+		        u.avatar_url,
+		        u.custom_status_text,
+		        u.custom_status_emoji,
+		        u.custom_status_expires_at
 		   FROM teamspace_member tm
 		   JOIN users u
 		     ON u.id = tm.user_id
@@ -1236,12 +1253,24 @@ func (s *Service) listVisibleTeamspaces(ctx context.Context, q queryer, userID u
 
 	for memberRows.Next() {
 		var (
-			teamspaceID uuid.UUID
-			member      TeamspaceMemberPreview
+			teamspaceID   uuid.UUID
+			member        TeamspaceMemberPreview
+			statusText    string
+			statusEmoji   string
+			statusExpires sql.NullTime
 		)
-		if err := memberRows.Scan(&teamspaceID, &member.ID, &member.DisplayName, &member.AvatarURL); err != nil {
+		if err := memberRows.Scan(
+			&teamspaceID,
+			&member.ID,
+			&member.DisplayName,
+			&member.AvatarURL,
+			&statusText,
+			&statusEmoji,
+			&statusExpires,
+		); err != nil {
 			return nil, fmt.Errorf("documents: scan teamspace member: %w", err)
 		}
+		member.CustomStatus = userstatus.ToBody(userstatus.ActiveFromNullTime(statusText, statusEmoji, statusExpires, time.Now().UTC()))
 		if index, ok := byID[teamspaceID]; ok {
 			teamspaces[index].Members = append(teamspaces[index].Members, member)
 		}

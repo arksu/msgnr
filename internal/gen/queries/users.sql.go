@@ -7,6 +7,7 @@ package queries
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/google/uuid"
 )
@@ -25,7 +26,7 @@ func (q *Queries) GetPushSenderTitle(ctx context.Context, id uuid.UUID) (string,
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, display_name, avatar_url, role, status, need_change_password, created_at, updated_at FROM users WHERE email = $1
+SELECT id, email, password_hash, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, status, need_change_password, created_at, updated_at FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -37,6 +38,9 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.PasswordHash,
 		&i.DisplayName,
 		&i.AvatarUrl,
+		&i.CustomStatusText,
+		&i.CustomStatusEmoji,
+		&i.CustomStatusExpiresAt,
 		&i.Role,
 		&i.Status,
 		&i.NeedChangePassword,
@@ -47,7 +51,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, display_name, avatar_url, role, status, need_change_password, created_at, updated_at FROM users WHERE id = $1
+SELECT id, email, password_hash, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, status, need_change_password, created_at, updated_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -59,6 +63,9 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.PasswordHash,
 		&i.DisplayName,
 		&i.AvatarUrl,
+		&i.CustomStatusText,
+		&i.CustomStatusEmoji,
+		&i.CustomStatusExpiresAt,
 		&i.Role,
 		&i.Status,
 		&i.NeedChangePassword,
@@ -69,7 +76,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 }
 
 const listActiveUsers = `-- name: ListActiveUsers :many
-SELECT id, display_name, email, avatar_url
+SELECT id,
+       display_name,
+       email,
+       avatar_url,
+       custom_status_text,
+       custom_status_emoji,
+       custom_status_expires_at
 FROM users
 WHERE status = 'active'
   AND role <> 'bot'
@@ -77,10 +90,13 @@ ORDER BY display_name ASC
 `
 
 type ListActiveUsersRow struct {
-	ID          uuid.UUID `json:"id"`
-	DisplayName string    `json:"display_name"`
-	Email       string    `json:"email"`
-	AvatarUrl   string    `json:"avatar_url"`
+	ID                    uuid.UUID    `json:"id"`
+	DisplayName           string       `json:"display_name"`
+	Email                 string       `json:"email"`
+	AvatarUrl             string       `json:"avatar_url"`
+	CustomStatusText      string       `json:"custom_status_text"`
+	CustomStatusEmoji     string       `json:"custom_status_emoji"`
+	CustomStatusExpiresAt sql.NullTime `json:"custom_status_expires_at"`
 }
 
 func (q *Queries) ListActiveUsers(ctx context.Context) ([]ListActiveUsersRow, error) {
@@ -97,6 +113,9 @@ func (q *Queries) ListActiveUsers(ctx context.Context) ([]ListActiveUsersRow, er
 			&i.DisplayName,
 			&i.Email,
 			&i.AvatarUrl,
+			&i.CustomStatusText,
+			&i.CustomStatusEmoji,
+			&i.CustomStatusExpiresAt,
 		); err != nil {
 			return nil, err
 		}

@@ -19,6 +19,7 @@ import (
 	"msgnr/internal/config"
 	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/gen/queries"
+	"msgnr/internal/userstatus"
 )
 
 var (
@@ -40,10 +41,13 @@ type pageToken struct {
 }
 
 type bootstrapSelfSummary struct {
-	UserID      uuid.UUID
-	DisplayName string
-	AvatarURL   string
-	Role        string
+	UserID                uuid.UUID
+	DisplayName           string
+	AvatarURL             string
+	CustomStatusText      string
+	CustomStatusEmoji     string
+	CustomStatusExpiresAt sql.NullTime
+	Role                  string
 }
 
 func NewService(pool *pgxpool.Pool, cfg *config.Config) *Service {
@@ -266,9 +270,10 @@ func (s *Service) fillFirstPageFields(ctx context.Context, userID uuid.UUID, res
 			WorkspaceId:   workspace.WorkspaceID.String(),
 			WorkspaceName: workspace.WorkspaceName,
 			SelfUser: &packetspb.UserSummary{
-				UserId:      workspace.SelfUserID.String(),
-				DisplayName: workspace.SelfDisplayName,
-				AvatarUrl:   workspace.SelfAvatarUrl,
+				UserId:       workspace.SelfUserID.String(),
+				DisplayName:  workspace.SelfDisplayName,
+				AvatarUrl:    workspace.SelfAvatarUrl,
+				CustomStatus: userstatus.ToProto(userstatus.ActiveFromNullTime(workspace.SelfCustomStatusText, workspace.SelfCustomStatusEmoji, workspace.SelfCustomStatusExpiresAt, time.Now().UTC())),
 			},
 			SelfRole: mapWorkspaceRole(workspace.SelfRole),
 		}
@@ -281,9 +286,10 @@ func (s *Service) fillFirstPageFields(ctx context.Context, userID uuid.UUID, res
 		resp.Workspace = &packetspb.WorkspaceSummary{
 			WorkspaceName: "Workspace",
 			SelfUser: &packetspb.UserSummary{
-				UserId:      selfSummary.UserID.String(),
-				DisplayName: selfSummary.DisplayName,
-				AvatarUrl:   selfSummary.AvatarURL,
+				UserId:       selfSummary.UserID.String(),
+				DisplayName:  selfSummary.DisplayName,
+				AvatarUrl:    selfSummary.AvatarURL,
+				CustomStatus: userstatus.ToProto(userstatus.ActiveFromNullTime(selfSummary.CustomStatusText, selfSummary.CustomStatusEmoji, selfSummary.CustomStatusExpiresAt, time.Now().UTC())),
 			},
 			SelfRole: mapWorkspaceRole(selfSummary.Role),
 		}
@@ -361,7 +367,7 @@ func (s *Service) fillFirstPageFields(ctx context.Context, userID uuid.UUID, res
 
 func (s *Service) loadBootstrapSelfSummary(ctx context.Context, userID uuid.UUID) (bootstrapSelfSummary, error) {
 	const query = `
-SELECT id, display_name, avatar_url, role
+SELECT id, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role
 FROM users
 WHERE id = $1
 `
@@ -370,6 +376,9 @@ WHERE id = $1
 		&summary.UserID,
 		&summary.DisplayName,
 		&summary.AvatarURL,
+		&summary.CustomStatusText,
+		&summary.CustomStatusEmoji,
+		&summary.CustomStatusExpiresAt,
 		&summary.Role,
 	)
 	return summary, err

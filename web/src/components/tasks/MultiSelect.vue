@@ -22,6 +22,7 @@
             :user-id="item.userId || item.value"
             :display-name="item.label"
             :avatar-url="item.avatarUrl"
+            :custom-status="item.customStatus"
             size="xs"
             :presence="item.presence"
           />
@@ -89,6 +90,7 @@
             :user-id="item.userId || item.value"
             :display-name="item.label"
             :avatar-url="item.avatarUrl"
+            :custom-status="item.customStatus"
             size="xs"
             :presence="item.presence"
           />
@@ -126,6 +128,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+import type { UserCustomStatus } from '@/types/userStatus'
 
 export interface MultiSelectOption {
   value: string
@@ -133,6 +136,7 @@ export interface MultiSelectOption {
   searchText?: string
   userId?: string
   avatarUrl?: string
+  customStatus?: UserCustomStatus | null
   presence?: 'online' | 'away' | 'offline'
 }
 

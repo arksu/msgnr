@@ -9,9 +9,12 @@ import {
   apiChangePassword,
   apiUploadAvatar,
   apiRemoveAvatar,
+  apiSetCustomStatus,
+  apiClearCustomStatus,
   AuthApiError,
   type UserDto,
   type UpdateProfileRequest,
+  type SetCustomStatusRequest,
 } from '@/services/http/authApi'
 import { refreshSharedSessionTokens } from '@/services/http/refreshSession'
 import {
@@ -34,6 +37,7 @@ import { clearCollapsedDocumentsNodeIds } from '@/services/storage/documentsNode
 import { clearAllChatDrafts } from '@/services/storage/chatDraftStorage'
 import { cacheUserProfile, loadCachedUserProfile, clearAllData as clearIndexedDb } from '@/services/db/cache'
 import { clearAllPersistedClientDataPreservingBackendUrl } from '@/services/storage/hardReset'
+import { isUserCustomStatusActive, userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
 
 export type AuthState =
   | 'ANON'
@@ -50,6 +54,7 @@ export interface AuthUser {
   displayName: string
   avatarUrl?: string
   role: string
+  customStatus?: UserCustomStatus | null
 }
 
 const AUTH_USER_STORAGE_KEY = 'auth.user'
@@ -126,6 +131,7 @@ function toUser(dto: UserDto): AuthUser {
     displayName: dto.display_name,
     avatarUrl: dto.avatar_url ?? '',
     role: dto.role,
+    customStatus: userCustomStatusFromDto(dto.custom_status),
   }
 }
 
@@ -143,6 +149,7 @@ function saveUser(user: AuthUser | null) {
       displayName: user.displayName,
       avatarUrl: user.avatarUrl,
       role: user.role,
+      customStatus: user.customStatus,
     })
   } catch {
     // best-effort persistence
@@ -162,6 +169,15 @@ function loadUser(): AuthUser | null {
       displayName: String(parsed.displayName ?? ''),
       avatarUrl: String(parsed.avatarUrl ?? ''),
       role: String(parsed.role ?? ''),
+      customStatus: userCustomStatusFromDto(
+        parsed.customStatus && typeof parsed.customStatus === 'object'
+          ? {
+              text: String((parsed.customStatus as Partial<UserCustomStatus>).text ?? ''),
+              emoji: String((parsed.customStatus as Partial<UserCustomStatus>).emoji ?? ''),
+              expires_at: String((parsed.customStatus as Partial<UserCustomStatus>).expiresAt ?? ''),
+            }
+          : null,
+      ),
     }
   } catch {
     return null
@@ -197,6 +213,7 @@ export const useAuthStore = defineStore('auth', () => {
         displayName: cached.displayName,
         avatarUrl: cached.avatarUrl,
         role: cached.role ?? '',
+        customStatus: isUserCustomStatusActive(cached.customStatus) ? cached.customStatus : null,
       }
     } catch {
       // Non-fatal — auth.refresh() will set the user when it succeeds.
@@ -352,6 +369,26 @@ export const useAuthStore = defineStore('auth', () => {
     return toUser(updated)
   }
 
+  async function setCustomStatus(payload: SetCustomStatusRequest): Promise<AuthUser> {
+    assertAuthenticated()
+    const updated = await apiSetCustomStatus({
+      text: payload.text.trim(),
+      emoji: payload.emoji?.trim(),
+      expires_at: payload.expires_at,
+    })
+    user.value = toUser(updated)
+    saveUser(user.value)
+    return toUser(updated)
+  }
+
+  async function clearCustomStatus(): Promise<AuthUser> {
+    assertAuthenticated()
+    const updated = await apiClearCustomStatus()
+    user.value = toUser(updated)
+    saveUser(user.value)
+    return toUser(updated)
+  }
+
   function clearSession(): void {
     accessToken.value = null
     user.value = null
@@ -400,6 +437,8 @@ export const useAuthStore = defineStore('auth', () => {
     updateProfile,
     uploadAvatar,
     removeAvatar,
+    setCustomStatus,
+    clearCustomStatus,
     changePassword,
     setSessionRole,
     setNeedChangePassword,

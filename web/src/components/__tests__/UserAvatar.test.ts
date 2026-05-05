@@ -61,6 +61,23 @@ describe('UserAvatar', () => {
     expect(badge.classes()).toContain('bg-green-400')
   })
 
+  it('renders active custom status badge from props', () => {
+    const wrapper = mount(UserAvatar, {
+      props: {
+        userId: 'user-8',
+        displayName: 'Grace',
+        customStatus: {
+          text: 'gone to a meeting',
+          emoji: '🌴',
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('🌴')
+    expect(wrapper.attributes('title')).toContain('gone to a meeting')
+  })
+
   it('resolves relative avatar url against backend base url in tauri runtime', () => {
     ;(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
     localStorage.setItem('msgnr.desktop.backend_base_url', 'http://localhost:8080')

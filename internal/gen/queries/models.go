@@ -420,16 +420,19 @@ type ThreadSummary struct {
 }
 
 type User struct {
-	ID                 uuid.UUID `json:"id"`
-	Email              string    `json:"email"`
-	PasswordHash       string    `json:"password_hash"`
-	DisplayName        string    `json:"display_name"`
-	AvatarUrl          string    `json:"avatar_url"`
-	Role               string    `json:"role"`
-	Status             string    `json:"status"`
-	NeedChangePassword bool      `json:"need_change_password"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                    uuid.UUID    `json:"id"`
+	Email                 string       `json:"email"`
+	PasswordHash          string       `json:"password_hash"`
+	DisplayName           string       `json:"display_name"`
+	AvatarUrl             string       `json:"avatar_url"`
+	CustomStatusText      string       `json:"custom_status_text"`
+	CustomStatusEmoji     string       `json:"custom_status_emoji"`
+	CustomStatusExpiresAt sql.NullTime `json:"custom_status_expires_at"`
+	Role                  string       `json:"role"`
+	Status                string       `json:"status"`
+	NeedChangePassword    bool         `json:"need_change_password"`
+	CreatedAt             time.Time    `json:"created_at"`
+	UpdatedAt             time.Time    `json:"updated_at"`
 }
 
 type UserPresence struct {

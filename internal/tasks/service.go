@@ -27,6 +27,7 @@ import (
 	"msgnr/internal/events"
 	packetspb "msgnr/internal/gen/proto"
 	"msgnr/internal/gen/queries"
+	"msgnr/internal/userstatus"
 )
 
 // pgErrCheckViolation is the Postgres SQLSTATE for check constraint violations.
@@ -243,10 +244,11 @@ type FieldValueRow struct {
 }
 
 type TaskAssigneeSummary struct {
-	ID          uuid.UUID `json:"id"`
-	DisplayName string    `json:"display_name"`
-	Email       string    `json:"email"`
-	AvatarURL   string    `json:"avatar_url"`
+	ID           uuid.UUID        `json:"id"`
+	DisplayName  string           `json:"display_name"`
+	Email        string           `json:"email"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
 }
 
 type TaskSubtaskSummary struct {
@@ -266,9 +268,10 @@ type TaskResponse struct {
 
 // TaskDescriptionHistoryEditor is a public editor snapshot in task history.
 type TaskDescriptionHistoryEditor struct {
-	ID          uuid.UUID `json:"id"`
-	DisplayName string    `json:"display_name"`
-	AvatarURL   string    `json:"avatar_url"`
+	ID           uuid.UUID        `json:"id"`
+	DisplayName  string           `json:"display_name"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
 }
 
 // TaskDescriptionHistoryItem is one saved description snapshot.
@@ -2354,7 +2357,8 @@ func (s *Service) loadSubtaskAssignees(ctx context.Context, subtasks []queries.T
 	}
 
 	userRows, err := s.pool.Query(ctx, `
-		SELECT id, display_name, email, avatar_url
+		SELECT id, display_name, email, avatar_url,
+		       custom_status_text, custom_status_emoji, custom_status_expires_at
 		FROM users
 		WHERE id = ANY($1::uuid[])
 	`, uuidSliceToStrings(userIDs))
@@ -2364,11 +2368,26 @@ func (s *Service) loadSubtaskAssignees(ctx context.Context, subtasks []queries.T
 	defer userRows.Close()
 
 	usersByID := make(map[uuid.UUID]TaskAssigneeSummary, len(userIDs))
+	now := time.Now().UTC()
 	for userRows.Next() {
-		var user TaskAssigneeSummary
-		if err := userRows.Scan(&user.ID, &user.DisplayName, &user.Email, &user.AvatarURL); err != nil {
+		var (
+			user                  TaskAssigneeSummary
+			customStatusText      string
+			customStatusEmoji     string
+			customStatusExpiresAt sql.NullTime
+		)
+		if err := userRows.Scan(
+			&user.ID,
+			&user.DisplayName,
+			&user.Email,
+			&user.AvatarURL,
+			&customStatusText,
+			&customStatusEmoji,
+			&customStatusExpiresAt,
+		); err != nil {
 			return nil, fmt.Errorf("tasks: scan subtask assignee user: %w", err)
 		}
+		user.CustomStatus = userstatus.ToBody(userstatus.ActiveFromNullTime(customStatusText, customStatusEmoji, customStatusExpiresAt, now))
 		usersByID[user.ID] = user
 	}
 	if err := userRows.Err(); err != nil {
@@ -2568,7 +2587,8 @@ func (s *Service) UpdateTaskDescription(ctx context.Context, id uuid.UUID, p Upd
 func (s *Service) ListTaskDescriptionHistory(ctx context.Context, id uuid.UUID) ([]TaskDescriptionHistoryItem, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT h.public_id, h.title, h.description, h.edited_by, h.created_at,
-		        u.id, u.display_name, u.avatar_url
+		        u.id, u.display_name, u.avatar_url,
+		        u.custom_status_text, u.custom_status_emoji, u.custom_status_expires_at
 		   FROM task t
 		   LEFT JOIN task_description_history h ON h.public_id = t.public_id
 		   LEFT JOIN users u ON u.id = h.edited_by
@@ -2586,14 +2606,17 @@ func (s *Service) ListTaskDescriptionHistory(ctx context.Context, id uuid.UUID) 
 	hasTask := false
 	for rows.Next() {
 		var (
-			publicID     sql.NullString
-			title        sql.NullString
-			desc         sql.NullString
-			editedBy     uuid.NullUUID
-			createdAt    sql.NullTime
-			editorID     uuid.NullUUID
-			editorName   sql.NullString
-			editorAvatar sql.NullString
+			publicID      sql.NullString
+			title         sql.NullString
+			desc          sql.NullString
+			editedBy      uuid.NullUUID
+			createdAt     sql.NullTime
+			editorID      uuid.NullUUID
+			editorName    sql.NullString
+			editorAvatar  sql.NullString
+			statusText    sql.NullString
+			statusEmoji   sql.NullString
+			statusExpires sql.NullTime
 		)
 		if err := rows.Scan(
 			&publicID,
@@ -2604,6 +2627,9 @@ func (s *Service) ListTaskDescriptionHistory(ctx context.Context, id uuid.UUID) 
 			&editorID,
 			&editorName,
 			&editorAvatar,
+			&statusText,
+			&statusEmoji,
+			&statusExpires,
 		); err != nil {
 			return nil, fmt.Errorf("tasks: scan description history row: %w", err)
 		}
@@ -2618,9 +2644,10 @@ func (s *Service) ListTaskDescriptionHistory(ctx context.Context, id uuid.UUID) 
 			EditedBy:  editedBy.UUID,
 			CreatedAt: createdAt.Time,
 			Editor: TaskDescriptionHistoryEditor{
-				ID:          editorID.UUID,
-				DisplayName: editorName.String,
-				AvatarURL:   editorAvatar.String,
+				ID:           editorID.UUID,
+				DisplayName:  editorName.String,
+				AvatarURL:    editorAvatar.String,
+				CustomStatus: userstatus.ToBody(userstatus.ActiveFromNullTime(statusText.String, statusEmoji.String, statusExpires, time.Now().UTC())),
 			},
 		}
 		if desc.Valid {
@@ -3342,9 +3369,10 @@ type TaskListStatusSummary struct {
 
 // TaskListItemCreator is the inline public creator payload for grouped items.
 type TaskListItemCreator struct {
-	ID          uuid.UUID `json:"id"`
-	DisplayName string    `json:"display_name"`
-	AvatarURL   string    `json:"avatar_url"`
+	ID           uuid.UUID        `json:"id"`
+	DisplayName  string           `json:"display_name"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
 }
 
 // TaskGroupedItem is the lightweight item payload returned by grouped endpoints.
@@ -3522,10 +3550,13 @@ func (s *Service) ListTasksGrouped(ctx context.Context, p ListTasksParams, limit
 
 	for rows.Next() {
 		var (
-			item        TaskGroupedItem
-			creatorID   uuid.UUID
-			rowNum      int
-			statusTotal int
+			item          TaskGroupedItem
+			creatorID     uuid.UUID
+			statusText    string
+			statusEmoji   string
+			statusExpires sql.NullTime
+			rowNum        int
+			statusTotal   int
 		)
 		if err := rows.Scan(
 			&item.ID,
@@ -3538,12 +3569,16 @@ func (s *Service) ListTasksGrouped(ctx context.Context, p ListTasksParams, limit
 			&creatorID,
 			&item.CreatedBy.DisplayName,
 			&item.CreatedBy.AvatarURL,
+			&statusText,
+			&statusEmoji,
+			&statusExpires,
 			&rowNum,
 			&statusTotal,
 		); err != nil {
 			return ListTasksGroupedResponse{}, fmt.Errorf("tasks: scan grouped task row: %w", err)
 		}
 		item.CreatedBy.ID = creatorID
+		item.CreatedBy.CustomStatus = userstatus.ToBody(userstatus.ActiveFromNullTime(statusText, statusEmoji, statusExpires, time.Now().UTC()))
 
 		statusKey := item.StatusID.String()
 		bucket, ok := groups[statusKey]
@@ -3600,7 +3635,7 @@ func (s *Service) ListTasksStatusPortion(
 	query := fmt.Sprintf(
 		`WITH filtered AS (`+
 			` SELECT t.id AS task_id, t.public_id, t.title, LEFT(COALESCE(t.description, ''), %d) AS description_preview, t.status_id, t.created_at, t.updated_at,`+
-			` u.id AS created_by_id, u.display_name, u.avatar_url`+
+			` u.id AS created_by_id, u.display_name, u.avatar_url, u.custom_status_text, u.custom_status_emoji, u.custom_status_expires_at`+
 			` FROM task t`+
 			` JOIN task_status ts ON ts.id = t.status_id`+
 			` JOIN users u ON u.id = t.created_by`+
@@ -3615,7 +3650,7 @@ func (s *Service) ListTasksStatusPortion(
 			` SELECT COUNT(*)::int AS total FROM filtered`+
 			`)`+
 			` SELECT totals.total, paged.task_id, paged.public_id, paged.title, paged.description_preview, paged.status_id, paged.created_at, paged.updated_at,`+
-			` paged.created_by_id, paged.display_name, paged.avatar_url`+
+			` paged.created_by_id, paged.display_name, paged.avatar_url, paged.custom_status_text, paged.custom_status_emoji, paged.custom_status_expires_at`+
 			` FROM totals LEFT JOIN paged ON TRUE`,
 		descriptionPreviewLength, whereWithStatus, offsetPH, limitPH,
 	)
@@ -3629,18 +3664,21 @@ func (s *Service) ListTasksStatusPortion(
 	total := 0
 	for rows.Next() {
 		var (
-			item       TaskGroupedItem
-			totalRow   int
-			taskID     uuid.NullUUID
-			publicID   sql.NullString
-			title      sql.NullString
-			desc       sql.NullString
-			statusIDDB uuid.NullUUID
-			createdAt  sql.NullTime
-			updatedAt  sql.NullTime
-			creatorID  uuid.NullUUID
-			display    sql.NullString
-			avatar     sql.NullString
+			item          TaskGroupedItem
+			totalRow      int
+			taskID        uuid.NullUUID
+			publicID      sql.NullString
+			title         sql.NullString
+			desc          sql.NullString
+			statusIDDB    uuid.NullUUID
+			createdAt     sql.NullTime
+			updatedAt     sql.NullTime
+			creatorID     uuid.NullUUID
+			display       sql.NullString
+			avatar        sql.NullString
+			statusText    sql.NullString
+			statusEmoji   sql.NullString
+			statusExpires sql.NullTime
 		)
 		if err := rows.Scan(
 			&totalRow,
@@ -3654,6 +3692,9 @@ func (s *Service) ListTasksStatusPortion(
 			&creatorID,
 			&display,
 			&avatar,
+			&statusText,
+			&statusEmoji,
+			&statusExpires,
 		); err != nil {
 			return ListTasksStatusPortionResponse{}, fmt.Errorf("tasks: scan grouped status portion row: %w", err)
 		}
@@ -3681,6 +3722,7 @@ func (s *Service) ListTasksStatusPortion(
 		}
 		item.CreatedBy.DisplayName = display.String
 		item.CreatedBy.AvatarURL = avatar.String
+		item.CreatedBy.CustomStatus = userstatus.ToBody(userstatus.ActiveFromNullTime(statusText.String, statusEmoji.String, statusExpires, time.Now().UTC()))
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -3755,7 +3797,7 @@ func buildGroupedInitialQuery(p ListTasksParams, limit int) (string, []any) {
 	sql := fmt.Sprintf(
 		`WITH ranked AS (`+
 			` SELECT t.id, t.public_id, t.title, LEFT(COALESCE(t.description, ''), %d) AS description_preview, t.status_id, t.created_at, t.updated_at,`+
-			` u.id AS created_by_id, u.display_name, u.avatar_url,`+
+			` u.id AS created_by_id, u.display_name, u.avatar_url, u.custom_status_text, u.custom_status_emoji, u.custom_status_expires_at,`+
 			` ROW_NUMBER() OVER (PARTITION BY t.status_id ORDER BY t.updated_at DESC, t.id DESC) AS rn,`+
 			` COUNT(*) OVER (PARTITION BY t.status_id) AS status_total`+
 			` FROM task t`+
@@ -3763,7 +3805,7 @@ func buildGroupedInitialQuery(p ListTasksParams, limit int) (string, []any) {
 			` JOIN users u ON u.id = t.created_by`+
 			` %s`+
 			` )`+
-			` SELECT id, public_id, title, description_preview, status_id, created_at, updated_at, created_by_id, display_name, avatar_url, rn, status_total`+
+			` SELECT id, public_id, title, description_preview, status_id, created_at, updated_at, created_by_id, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, rn, status_total`+
 			` FROM ranked`+
 			` WHERE rn <= %s`+
 			` ORDER BY status_id ASC, rn ASC`,
@@ -3918,10 +3960,11 @@ func uuidSliceToStrings(ids []uuid.UUID) []string {
 
 // UserRow is the public view of a user returned to all authenticated users.
 type UserRow struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
-	Email       string `json:"email"`
-	AvatarURL   string `json:"avatar_url"`
+	ID           string           `json:"id"`
+	DisplayName  string           `json:"display_name"`
+	Email        string           `json:"email"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
 }
 
 func (s *Service) ListUsers(ctx context.Context) ([]UserRow, error) {
@@ -3930,12 +3973,14 @@ func (s *Service) ListUsers(ctx context.Context) ([]UserRow, error) {
 		return nil, fmt.Errorf("tasks: list users: %w", err)
 	}
 	out := make([]UserRow, len(rows))
+	now := time.Now().UTC()
 	for i, r := range rows {
 		out[i] = UserRow{
-			ID:          r.ID.String(),
-			DisplayName: r.DisplayName,
-			Email:       r.Email,
-			AvatarURL:   r.AvatarUrl,
+			ID:           r.ID.String(),
+			DisplayName:  r.DisplayName,
+			Email:        r.Email,
+			AvatarURL:    r.AvatarUrl,
+			CustomStatus: userstatus.ToBody(userstatus.ActiveFromNullTime(r.CustomStatusText, r.CustomStatusEmoji, r.CustomStatusExpiresAt, now)),
 		}
 	}
 	return out, nil

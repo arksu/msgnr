@@ -168,6 +168,7 @@
                   :user-id="authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''"
                   :display-name="settingsDisplayName || settingsEmail || 'User'"
                   :avatar-url="authStore.user?.avatarUrl ?? chatStore.workspace?.selfAvatarUrl ?? ''"
+                  :custom-status="settingsPreviewCustomStatus"
                   size="xl"
                 />
                 <div class="flex flex-col gap-2">
@@ -216,6 +217,47 @@
                 class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
                 placeholder="you@example.com"
               />
+            </div>
+
+            <div class="rounded border border-chat-border bg-chat-input/40 p-3">
+              <div class="mb-2 flex items-center justify-between gap-3">
+                <h3 class="text-sm font-semibold text-white">Status</h3>
+                <button
+                  type="button"
+                  class="text-xs text-gray-400 transition-colors hover:text-white disabled:opacity-50"
+                  :disabled="!hasStatusDraft && !settingsInitialCustomStatusKey"
+                  @click="clearStatusDraft"
+                >
+                  Clear status
+                </button>
+              </div>
+              <div class="grid grid-cols-[auto_1fr] gap-2">
+                <button
+                  ref="statusEmojiPickerToggleButton"
+                  type="button"
+                  class="flex h-10 min-w-10 items-center justify-center rounded border border-chat-border bg-chat-input px-2 text-sm text-gray-200 transition-colors hover:bg-white/10"
+                  @click.stop="toggleStatusEmojiPicker"
+                >
+                  {{ settingsStatusEmoji || 'Emoji' }}
+                </button>
+                <input
+                  v-model="settingsStatusText"
+                  type="text"
+                  maxlength="120"
+                  class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                  placeholder="gone to a meeting"
+                />
+                <div class="col-span-2">
+                  <label class="mb-1 block text-xs text-gray-500">Until</label>
+                  <input
+                    v-model="settingsStatusExpiresAtLocal"
+                    type="datetime-local"
+                    :min="settingsStatusMinDatetime"
+                    class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                  />
+                </div>
+              </div>
+              <p v-if="settingsStatusError" class="mt-2 text-xs text-red-400">{{ settingsStatusError }}</p>
             </div>
           </div>
 
@@ -289,6 +331,37 @@
               </button>
             </div>
           </div>
+        </div>
+      </div>
+      <div
+        v-if="settingsOpen && showStatusEmojiPicker"
+        ref="statusEmojiPickerRoot"
+        class="z-[80] emoji-picker-dark"
+        :style="statusEmojiPickerStyle"
+        @click.stop
+      >
+        <component
+          :is="statusPickerComponent"
+          v-if="statusPickerComponent && statusEmojiIndex"
+          :data="statusEmojiIndex"
+          :native="true"
+          set="apple"
+          title="Set status emoji"
+          emoji="slightly_smiling_face"
+          :show-preview="true"
+          :show-skin-tones="false"
+          :infinite-scroll="true"
+          :emoji-size="26"
+          :per-line="9"
+          color="#ae65c5"
+          @select="onSelectStatusEmoji"
+          @selected="onSelectStatusEmoji"
+        />
+        <div
+          v-else
+          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+        >
+          Loading emoji...
         </div>
       </div>
     </Teleport>
@@ -375,6 +448,11 @@ import CallDock from '@/components/CallDock.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useTasksStore } from '@/stores/tasks'
 import { useDocumentsStore } from '@/stores/documents'
+import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
+import {
+  isUserCustomStatusActive,
+  type UserCustomStatus,
+} from '@/types/userStatus'
 const SettingsDialog = defineAsyncComponent(() => import('@/components/SettingsDialog.vue'))
 function createTaskTrackerShellStub() {
   return defineComponent({
@@ -506,6 +584,11 @@ const settingsDisplayName = ref('')
 const settingsEmail = ref('')
 const settingsInitialDisplayName = ref('')
 const settingsInitialEmail = ref('')
+const settingsStatusText = ref('')
+const settingsStatusEmoji = ref('')
+const settingsStatusExpiresAtLocal = ref('')
+const settingsInitialCustomStatusKey = ref('')
+const settingsStatusSaveError = ref('')
 const settingsNewPassword = ref('')
 const settingsConfirmPassword = ref('')
 const settingsPasswordLoading = ref(false)
@@ -514,6 +597,22 @@ const settingsPasswordSuccess = ref('')
 const settingsAvatarLoading = ref(false)
 const settingsAvatarError = ref('')
 const profileAvatarInput = ref<HTMLInputElement | null>(null)
+const settingsStatusMinDatetime = ref('')
+const {
+  showEmojiPicker: showStatusEmojiPicker,
+  pickerRoot: statusEmojiPickerRoot,
+  pickerToggleButton: statusEmojiPickerToggleButton,
+  pickerComponent: statusPickerComponent,
+  emojiIndex: statusEmojiIndex,
+  emojiPickerStyle: statusEmojiPickerStyle,
+  toggleEmojiPicker: toggleStatusEmojiPicker,
+  closeEmojiPicker: closeStatusEmojiPicker,
+  onSelectEmoji: onSelectStatusEmoji,
+} = useComposerEmojiPicker({
+  onSelect: (emoji) => {
+    settingsStatusEmoji.value = emoji
+  },
+})
 const sidebarCollapsed = ref(loadSidebarCollapsed())
 const wsStore = useWsStore()
 const chatStore = useChatStore()
@@ -1116,13 +1215,82 @@ watch(incomingInvite, (invite) => {
   soundEngine.stopCallInviteRing()
 }, { immediate: true })
 
+function padDatePart(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function toDatetimeLocalValue(date: Date): string {
+  return [
+    date.getFullYear(),
+    padDatePart(date.getMonth() + 1),
+    padDatePart(date.getDate()),
+  ].join('-') + `T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`
+}
+
+function defaultStatusExpiryLocal(): string {
+  const date = new Date(Date.now() + 60 * 60 * 1000)
+  return toDatetimeLocalValue(date)
+}
+
+function parseStatusExpiryLocal(): Date | null {
+  const raw = settingsStatusExpiresAtLocal.value.trim()
+  if (!raw) return null
+  const date = new Date(raw)
+  return Number.isFinite(date.getTime()) ? date : null
+}
+
+function currentStatusExpiryIso(): string {
+  const date = parseStatusExpiryLocal()
+  return date ? date.toISOString() : ''
+}
+
+function currentStatusKey(): string {
+  const text = settingsStatusText.value.trim()
+  if (!text) return ''
+  return JSON.stringify([
+    text,
+    settingsStatusEmoji.value.trim(),
+    currentStatusExpiryIso(),
+  ])
+}
+
+const hasStatusDraft = computed(() =>
+  Boolean(settingsStatusText.value.trim() || settingsStatusEmoji.value.trim() || settingsStatusExpiresAtLocal.value.trim()),
+)
+
+const settingsStatusValidationError = computed(() => {
+  if (!settingsStatusText.value.trim()) return ''
+  const expiry = parseStatusExpiryLocal()
+  if (!expiry) return 'Choose when the status should expire.'
+  if (expiry.getTime() <= Date.now()) return 'Choose a future expiry.'
+  return ''
+})
+
+const settingsStatusError = computed(() => settingsStatusValidationError.value || settingsStatusSaveError.value)
+
+const settingsPreviewCustomStatus = computed<UserCustomStatus | null>(() => {
+  const text = settingsStatusText.value.trim()
+  if (!text || settingsStatusValidationError.value) {
+    return authStore.user?.customStatus
+      ?? chatStore.resolveUserCustomStatus(authStore.user?.id ?? chatStore.workspace?.selfUserId ?? '')
+      ?? null
+  }
+  return {
+    text,
+    emoji: settingsStatusEmoji.value.trim(),
+    expiresAt: currentStatusExpiryIso(),
+  }
+})
+
 const canSaveSettings = computed(() => {
   const displayName = settingsDisplayName.value.trim()
   const email = settingsEmail.value.trim()
-  const hasChanged = displayName !== settingsInitialDisplayName.value
+  const profileChanged = displayName !== settingsInitialDisplayName.value
     || email !== settingsInitialEmail.value
   const hasValue = !!displayName || !!email
-  return hasChanged && hasValue
+  const statusChanged = currentStatusKey() !== settingsInitialCustomStatusKey.value
+  const statusValid = !settingsStatusValidationError.value
+  return (profileChanged && hasValue) || (statusChanged && statusValid)
 })
 
 async function handleLogout() {
@@ -1207,14 +1375,41 @@ function conversationNotificationBody(event: IncomingMessageNotification): strin
   return preview
 }
 
+function refreshStatusMinDatetime() {
+  settingsStatusMinDatetime.value = toDatetimeLocalValue(new Date())
+}
+
+function setStatusDraftFromStatus(status: UserCustomStatus | null) {
+  if (isUserCustomStatusActive(status)) {
+    settingsStatusText.value = status.text
+    settingsStatusEmoji.value = status.emoji
+    settingsStatusExpiresAtLocal.value = toDatetimeLocalValue(new Date(status.expiresAt))
+  } else {
+    settingsStatusText.value = ''
+    settingsStatusEmoji.value = ''
+    settingsStatusExpiresAtLocal.value = defaultStatusExpiryLocal()
+  }
+  settingsInitialCustomStatusKey.value = currentStatusKey()
+}
+
+function clearStatusDraft() {
+  settingsStatusText.value = ''
+  settingsStatusEmoji.value = ''
+  settingsStatusExpiresAtLocal.value = defaultStatusExpiryLocal()
+  settingsStatusSaveError.value = ''
+  closeStatusEmojiPicker()
+}
+
 function closeSettings() {
   settingsOpen.value = false
   settingsError.value = ''
   settingsAvatarError.value = ''
+  settingsStatusSaveError.value = ''
   settingsNewPassword.value = ''
   settingsConfirmPassword.value = ''
   settingsPasswordError.value = ''
   settingsPasswordSuccess.value = ''
+  closeStatusEmojiPicker()
 }
 
 function syncSettingsFormFromUser() {
@@ -1224,16 +1419,23 @@ function syncSettingsFormFromUser() {
   settingsEmail.value = authStore.user?.email?.trim() || ''
   settingsInitialDisplayName.value = settingsDisplayName.value.trim()
   settingsInitialEmail.value = settingsEmail.value.trim()
+  setStatusDraftFromStatus(
+    authStore.user?.customStatus
+      ?? chatStore.resolveUserCustomStatus(authStore.user?.id ?? chatStore.workspace?.selfUserId ?? '')
+      ?? null,
+  )
 }
 
 async function openSettings() {
   settingsError.value = ''
   settingsAvatarError.value = ''
+  settingsStatusSaveError.value = ''
   settingsSuccess.value = ''
   settingsNewPassword.value = ''
   settingsConfirmPassword.value = ''
   settingsPasswordError.value = ''
   settingsPasswordSuccess.value = ''
+  refreshStatusMinDatetime()
   try {
     await authStore.ensureUserLoaded()
   } catch (error) {
@@ -1251,17 +1453,47 @@ async function saveSettings() {
   if (!canSaveSettings.value || settingsLoading.value) return
   settingsLoading.value = true
   settingsError.value = ''
+  settingsStatusSaveError.value = ''
   settingsSuccess.value = ''
   try {
-    const updated = await authStore.updateProfile({
-      display_name: settingsDisplayName.value,
-      email: settingsEmail.value,
-    })
+    const displayName = settingsDisplayName.value.trim()
+    const email = settingsEmail.value.trim()
+    const profileChanged = displayName !== settingsInitialDisplayName.value
+      || email !== settingsInitialEmail.value
+    const statusChanged = currentStatusKey() !== settingsInitialCustomStatusKey.value
+    let updated = authStore.user
+    if (profileChanged) {
+      updated = await authStore.updateProfile({
+        display_name: displayName,
+        email,
+      })
+    }
+    if (statusChanged) {
+      if (settingsStatusText.value.trim()) {
+        const expiresAt = currentStatusExpiryIso()
+        if (!expiresAt) {
+          throw new Error('Choose when the status should expire.')
+        }
+        updated = await authStore.setCustomStatus({
+          text: settingsStatusText.value.trim(),
+          emoji: settingsStatusEmoji.value.trim(),
+          expires_at: expiresAt,
+        })
+      } else {
+        updated = await authStore.clearCustomStatus()
+      }
+    }
+    if (!updated) throw new Error('Failed to save settings')
     settingsSuccess.value = 'Profile updated'
-    chatStore.registerUserIdentity(updated.id, updated.displayName, updated.email, updated.avatarUrl)
+    chatStore.registerUserIdentity(updated.id, updated.displayName, updated.email, updated.avatarUrl, updated.customStatus)
     settingsOpen.value = false
   } catch (error) {
-    settingsError.value = error instanceof Error ? error.message : 'Failed to save settings'
+    const message = error instanceof Error ? error.message : 'Failed to save settings'
+    if (currentStatusKey() !== settingsInitialCustomStatusKey.value) {
+      settingsStatusSaveError.value = message
+    } else {
+      settingsError.value = message
+    }
   } finally {
     settingsLoading.value = false
   }
@@ -1282,7 +1514,7 @@ async function onProfileAvatarSelected(event: Event) {
   settingsSuccess.value = ''
   try {
     const updated = await authStore.uploadAvatar(file)
-    chatStore.registerUserIdentity(updated.id, updated.displayName, updated.email, updated.avatarUrl)
+    chatStore.registerUserIdentity(updated.id, updated.displayName, updated.email, updated.avatarUrl, updated.customStatus)
     settingsSuccess.value = 'Avatar updated'
   } catch (error) {
     settingsAvatarError.value = error instanceof Error ? error.message : 'Failed to upload avatar'
@@ -1297,7 +1529,7 @@ async function removeProfileAvatar() {
   settingsSuccess.value = ''
   try {
     const updated = await authStore.removeAvatar()
-    chatStore.registerUserIdentity(updated.id, updated.displayName, updated.email, updated.avatarUrl)
+    chatStore.registerUserIdentity(updated.id, updated.displayName, updated.email, updated.avatarUrl, updated.customStatus)
     settingsSuccess.value = 'Avatar removed'
   } catch (error) {
     settingsAvatarError.value = error instanceof Error ? error.message : 'Failed to remove avatar'
@@ -1379,7 +1611,7 @@ watch(() => chatStore.pendingInvites.map(item => item.id), (ids) => {
 
 // Register self in the user name cache
 watch(() => authStore.user, (u) => {
-  if (u) chatStore.registerUserIdentity(u.id, u.displayName, u.email, u.avatarUrl)
+  if (u) chatStore.registerUserIdentity(u.id, u.displayName, u.email, u.avatarUrl, u.customStatus)
   if (settingsOpen.value && u) {
     syncSettingsFormFromUser()
   }

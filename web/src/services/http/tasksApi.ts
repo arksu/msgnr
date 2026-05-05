@@ -1,5 +1,6 @@
 import { AxiosError } from 'axios'
 import { createAuthenticatedClient } from './client'
+import type { UserCustomStatusDto } from '@/types/userStatus'
 
 const http = createAuthenticatedClient()
 const DEBUG_TASKS_API_DESC = import.meta.env.DEV
@@ -353,6 +354,7 @@ export interface TaskUser {
   display_name: string
   email: string
   avatar_url?: string
+  custom_status?: UserCustomStatusDto | null
 }
 
 export async function tasksListUsers(): Promise<TaskUser[]> {
@@ -385,6 +387,7 @@ export interface TaskAssigneeSummary {
   display_name: string
   email: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
 }
 
 export interface TaskSubtaskSummary {
@@ -477,6 +480,7 @@ export interface TaskDescriptionHistoryEditor {
   id: string
   display_name: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
 }
 
 export interface TaskDescriptionHistoryItem {
@@ -653,6 +657,7 @@ export interface TaskGroupedItemCreator {
   id: string
   display_name: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
 }
 
 export interface TaskGroupedItem {

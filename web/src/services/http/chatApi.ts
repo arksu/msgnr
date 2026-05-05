@@ -1,6 +1,7 @@
 import { AxiosError } from 'axios'
 import type { AxiosProgressEvent } from 'axios'
 import { createAuthenticatedClient } from './client'
+import type { UserCustomStatusDto } from '@/types/userStatus'
 
 const http = createAuthenticatedClient()
 
@@ -59,6 +60,7 @@ export interface DmCandidateItem {
   display_name: string
   email: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
 }
 
 export interface ConversationMemberItem {
@@ -66,6 +68,7 @@ export interface ConversationMemberItem {
   display_name: string
   email: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
 }
 
 export interface DirectMessageItem {
@@ -74,6 +77,7 @@ export interface DirectMessageItem {
   display_name: string
   email: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
   kind: string
   visibility: string
 }
@@ -186,6 +190,7 @@ export interface TagSearchUserItem {
   display_name: string
   email: string
   avatar_url: string
+  custom_status?: UserCustomStatusDto | null
   presence: 'online' | 'away' | 'offline'
 }
 

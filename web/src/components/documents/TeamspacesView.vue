@@ -119,6 +119,7 @@
           :user-id="member.id"
           :display-name="member.display_name"
           :avatar-url="member.avatar_url"
+          :custom-status="userCustomStatusFromDto(member.custom_status)"
           size="xs"
         />
         <span class="truncate">{{ member.display_name }}</span>
@@ -214,6 +215,7 @@
                   :user-id="user.id"
                   :display-name="user.display_name || user.email"
                   :avatar-url="user.avatar_url ?? ''"
+                  :custom-status="userCustomStatusFromDto(user.custom_status)"
                   size="xs"
                 />
                 <span class="truncate">{{ user.display_name || user.email }}</span>
@@ -250,6 +252,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 import { useDocumentsStore } from '@/stores/documents'
 import type { TeamspaceMemberPreview } from '@/services/http/documentsApi'
 

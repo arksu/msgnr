@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
+import type { UserCustomStatus } from '@/types/userStatus'
 
 // ── Cached entity types ───────────────────────────────────────────────────────
 // BigInt is not supported by IndexedDB structured clone, so sequence numbers
@@ -16,6 +17,8 @@ export interface CachedConversation {
   avatarUrl?: string
   /** DM peer presence */
   presence?: string
+  /** DM peer custom status */
+  customStatus?: UserCustomStatus | null
   unread: number
   hasUnreadThreadReplies?: boolean
   /** bigint as decimal string */
@@ -66,6 +69,7 @@ export interface CachedUserProfile {
   displayName: string
   avatarUrl?: string
   role?: string
+  customStatus?: UserCustomStatus | null
 }
 
 export interface CachedDraft {

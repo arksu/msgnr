@@ -7,6 +7,7 @@ package queries
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
@@ -163,6 +164,9 @@ SELECT
   u.id AS self_user_id,
   u.display_name AS self_display_name,
   u.avatar_url AS self_avatar_url,
+  u.custom_status_text AS self_custom_status_text,
+  u.custom_status_emoji AS self_custom_status_emoji,
+  u.custom_status_expires_at AS self_custom_status_expires_at,
   u.role AS self_role
 FROM workspace w
 JOIN users u ON u.id = $1
@@ -170,12 +174,15 @@ LIMIT 1
 `
 
 type GetBootstrapWorkspaceSummaryRow struct {
-	WorkspaceID     uuid.UUID `json:"workspace_id"`
-	WorkspaceName   string    `json:"workspace_name"`
-	SelfUserID      uuid.UUID `json:"self_user_id"`
-	SelfDisplayName string    `json:"self_display_name"`
-	SelfAvatarUrl   string    `json:"self_avatar_url"`
-	SelfRole        string    `json:"self_role"`
+	WorkspaceID               uuid.UUID    `json:"workspace_id"`
+	WorkspaceName             string       `json:"workspace_name"`
+	SelfUserID                uuid.UUID    `json:"self_user_id"`
+	SelfDisplayName           string       `json:"self_display_name"`
+	SelfAvatarUrl             string       `json:"self_avatar_url"`
+	SelfCustomStatusText      string       `json:"self_custom_status_text"`
+	SelfCustomStatusEmoji     string       `json:"self_custom_status_emoji"`
+	SelfCustomStatusExpiresAt sql.NullTime `json:"self_custom_status_expires_at"`
+	SelfRole                  string       `json:"self_role"`
 }
 
 func (q *Queries) GetBootstrapWorkspaceSummary(ctx context.Context, userID uuid.UUID) (GetBootstrapWorkspaceSummaryRow, error) {
@@ -187,6 +194,9 @@ func (q *Queries) GetBootstrapWorkspaceSummary(ctx context.Context, userID uuid.
 		&i.SelfUserID,
 		&i.SelfDisplayName,
 		&i.SelfAvatarUrl,
+		&i.SelfCustomStatusText,
+		&i.SelfCustomStatusEmoji,
+		&i.SelfCustomStatusExpiresAt,
 		&i.SelfRole,
 	)
 	return i, err

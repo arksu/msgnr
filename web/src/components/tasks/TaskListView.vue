@@ -117,6 +117,7 @@
                       :user-id="item.created_by.id"
                       :display-name="creatorDisplayName(item)"
                       :avatar-url="item.created_by.avatar_url"
+                      :custom-status="userCustomStatusFromDto(item.created_by.custom_status)"
                       size="xs"
                     />
                     <span class="truncate">{{ creatorDisplayName(item) }}</span>
@@ -176,6 +177,7 @@ import type { SortBy, SortOrder, TaskFilterPayload, TaskGroupedItem, TaskListPar
 import TaskRow from './TaskRow.vue'
 import SortIcon from './SortIcon.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 import TaskTrackerFilters from './TaskTrackerFilters.vue'
 import {
   loadTaskListViewMode,

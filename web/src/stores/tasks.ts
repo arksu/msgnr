@@ -40,6 +40,8 @@ import {
   type UpdateTaskPayload,
   type UpdateTaskTitlePayload,
 } from '@/services/http/tasksApi'
+import { useChatStore } from '@/stores/chat'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 
 const DEBUG_TASKS_DESC = import.meta.env.DEV
 
@@ -240,6 +242,16 @@ export const useTasksStore = defineStore('tasks', () => {
     if (usersLoaded.value) return
     try {
       users.value = await tasksListUsers()
+      const chatStore = useChatStore()
+      for (const user of users.value) {
+        chatStore.registerUserIdentity(
+          user.id,
+          user.display_name,
+          user.email,
+          user.avatar_url ?? '',
+          userCustomStatusFromDto(user.custom_status),
+        )
+      }
       usersLoaded.value = true
     } catch {
       // non-fatal — user selectors will be empty

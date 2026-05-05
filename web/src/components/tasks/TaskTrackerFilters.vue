@@ -122,6 +122,7 @@
                 :user-id="u.value"
                 :display-name="u.label"
                 :avatar-url="u.avatarUrl"
+                :custom-status="u.customStatus"
                 size="xs"
               />
               <span class="truncate">{{ u.label }}</span>
@@ -155,6 +156,7 @@ import type { FieldFilter, TaskFilterPayload } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
 import { useTaskFilters } from '@/composables/useTaskFilters'
 import UserAvatar from '@/components/UserAvatar.vue'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 
 const props = defineProps<{
   templateFilter: string | null
@@ -185,7 +187,12 @@ const selectedTemplatePrefix = computed(() =>
 const hasAssigneeFields = computed(() => tasksStore.assigneeFieldIds.length > 0)
 
 const userOptions = computed(() =>
-  tasksStore.users.map(u => ({ value: u.id, label: u.display_name || u.email, avatarUrl: u.avatar_url })),
+  tasksStore.users.map(u => ({
+    value: u.id,
+    label: u.display_name || u.email,
+    avatarUrl: u.avatar_url,
+    customStatus: userCustomStatusFromDto(u.custom_status),
+  })),
 )
 
 const filteredUserOptions = computed(() => {

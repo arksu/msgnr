@@ -64,6 +64,7 @@
                   :user-id="member.userId"
                   :display-name="member.displayName"
                   :avatar-url="member.avatarUrl"
+                  :custom-status="member.customStatus"
                   size="sm"
                 />
                 <div class="min-w-0">
@@ -269,6 +270,7 @@
               :user-id="member.userId"
               :display-name="member.displayName || member.email"
               :avatar-url="member.avatarUrl"
+              :custom-status="member.customStatus"
               size="sm"
             />
             <div class="min-w-0">
@@ -318,6 +320,7 @@ import MessageInput from './MessageInput.vue'
 import MembersPanel from './MembersPanel.vue'
 import UserAvatar from './UserAvatar.vue'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
+import { userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
 
 const chatStore = useChatStore()
 const pinnedDialogsStore = usePinnedDialogsStore()
@@ -393,6 +396,7 @@ type ActiveCallMember = {
   userId: string
   displayName: string
   avatarUrl: string
+  customStatus: UserCustomStatus | null
   isSelf: boolean
 }
 const callMembersPopoverOpen = ref(false)
@@ -424,6 +428,7 @@ const liveActiveCallMembers = computed<ActiveCallMember[]>(() => {
       userId: selfUserId,
       displayName: chatStore.resolveDisplayName(selfUserId),
       avatarUrl: chatStore.resolveAvatarUrl(selfUserId),
+      customStatus: chatStore.resolveUserCustomStatus(selfUserId),
       isSelf: true,
     })
   }
@@ -435,6 +440,7 @@ const liveActiveCallMembers = computed<ActiveCallMember[]>(() => {
       userId,
       displayName: chatStore.resolveDisplayName(userId),
       avatarUrl: chatStore.resolveAvatarUrl(userId),
+      customStatus: chatStore.resolveUserCustomStatus(userId),
       isSelf: false,
     })
   }
@@ -470,7 +476,13 @@ const channelCallDialogOpen = ref(false)
 const channelCallLoading = ref(false)
 const startingChannelCall = ref(false)
 const channelCallError = ref('')
-const channelCallMembers = ref<Array<{ userId: string; displayName: string; email: string; avatarUrl: string }>>([])
+const channelCallMembers = ref<Array<{
+  userId: string
+  displayName: string
+  email: string
+  avatarUrl: string
+  customStatus: UserCustomStatus | null
+}>>([])
 const selectedChannelCallInvitees = ref<string[]>([])
 const statusLabel = computed(() => {
   switch (wsStore.state) {
@@ -564,6 +576,7 @@ async function refreshActiveCallMembers() {
       userId: member.user_id,
       displayName: member.display_name || member.email,
       avatarUrl: member.avatar_url,
+      customStatus: userCustomStatusFromDto(member.custom_status),
       isSelf: member.user_id === (authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''),
     }))
   } catch (err) {
@@ -897,6 +910,7 @@ async function openChannelCallDialog() {
         displayName: member.display_name,
         email: member.email,
         avatarUrl: member.avatar_url,
+        customStatus: userCustomStatusFromDto(member.custom_status),
       }))
   } catch (err) {
     channelCallError.value = err instanceof Error ? err.message : 'Failed to load members'

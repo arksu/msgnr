@@ -40,6 +40,7 @@
                 :user-id="item.id"
                 :display-name="item.label"
                 :avatar-url="item.avatarUrl"
+                :custom-status="item.customStatus"
                 size="sm"
               />
               <span v-else class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/5 text-sm">{{ item.icon }}</span>
@@ -70,6 +71,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import UserAvatar from './UserAvatar.vue'
+import type { UserCustomStatus } from '@/types/userStatus'
 
 export interface MessageTagPickerItem {
   kind: 'user' | 'task' | 'document'
@@ -79,6 +81,7 @@ export interface MessageTagPickerItem {
   href: string
   icon: string
   avatarUrl?: string
+  customStatus?: UserCustomStatus | null
   flatIndex: number
   meta?: Record<string, string>
 }

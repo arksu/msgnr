@@ -25,6 +25,8 @@ import {
   type UpdateDocumentPayload,
 } from '@/services/http/documentsApi'
 import { tasksListUsers, type TaskUser } from '@/services/http/tasksApi'
+import { useChatStore } from '@/stores/chat'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 
 export const useDocumentsStore = defineStore('documents', () => {
   const teamspaces = ref<Teamspace[]>([])
@@ -87,6 +89,16 @@ export const useDocumentsStore = defineStore('documents', () => {
     usersLoading.value = true
     try {
       users.value = await tasksListUsers()
+      const chatStore = useChatStore()
+      for (const user of users.value) {
+        chatStore.registerUserIdentity(
+          user.id,
+          user.display_name,
+          user.email,
+          user.avatar_url ?? '',
+          userCustomStatusFromDto(user.custom_status),
+        )
+      }
       usersLoaded.value = true
     } finally {
       usersLoading.value = false

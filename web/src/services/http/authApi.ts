@@ -1,5 +1,6 @@
 import { AxiosError } from 'axios'
 import { createAuthenticatedClient } from './client'
+import type { UserCustomStatusDto } from '@/types/userStatus'
 
 const http = createAuthenticatedClient()
 
@@ -10,6 +11,7 @@ export interface UserDto {
   avatar_url?: string
   role: string
   need_change_password?: boolean
+  custom_status?: UserCustomStatusDto | null
 }
 
 export interface LoginResponse {
@@ -28,6 +30,12 @@ export interface RefreshResponse {
 export interface UpdateProfileRequest {
   display_name?: string
   email?: string
+}
+
+export interface SetCustomStatusRequest {
+  text: string
+  emoji?: string
+  expires_at: string
 }
 
 export class AuthApiError extends Error {
@@ -116,6 +124,24 @@ export async function apiUploadAvatar(file: File): Promise<UserDto> {
 export async function apiRemoveAvatar(): Promise<UserDto> {
   try {
     const { data } = await http.delete<{ user: UserDto }>('/api/auth/avatar')
+    return data.user
+  } catch (e) {
+    handleError(e)
+  }
+}
+
+export async function apiSetCustomStatus(payload: SetCustomStatusRequest): Promise<UserDto> {
+  try {
+    const { data } = await http.put<{ user: UserDto }>('/api/auth/custom-status', payload)
+    return data.user
+  } catch (e) {
+    handleError(e)
+  }
+}
+
+export async function apiClearCustomStatus(): Promise<UserDto> {
+  try {
+    const { data } = await http.delete<{ user: UserDto }>('/api/auth/custom-status')
     return data.user
   } catch (e) {
     handleError(e)

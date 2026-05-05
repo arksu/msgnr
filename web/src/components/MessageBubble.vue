@@ -570,6 +570,7 @@ import UserAvatar from './UserAvatar.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
 import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
 import RichTextComposer from './RichTextComposer.vue'
+import { userCustomStatusFromDto } from '@/types/userStatus'
 
 const props = defineProps({
   message: {
@@ -769,6 +770,7 @@ async function openDirectMessageFromUserMention(userId: string) {
     userId: dm.user_id,
     displayName: dm.display_name || dm.email,
     avatarUrl: dm.avatar_url,
+    customStatus: userCustomStatusFromDto(dm.custom_status),
     presence: 'offline',
     unread: 0,
     notificationLevel: NotificationLevel.ALL,

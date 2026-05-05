@@ -1455,6 +1455,7 @@ async function saveSettings() {
   settingsError.value = ''
   settingsStatusSaveError.value = ''
   settingsSuccess.value = ''
+  let savingStatus = false
   try {
     const displayName = settingsDisplayName.value.trim()
     const email = settingsEmail.value.trim()
@@ -1468,6 +1469,7 @@ async function saveSettings() {
         email,
       })
     }
+    savingStatus = true
     if (statusChanged) {
       if (settingsStatusText.value.trim()) {
         const expiresAt = currentStatusExpiryIso()
@@ -1489,7 +1491,7 @@ async function saveSettings() {
     settingsOpen.value = false
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to save settings'
-    if (currentStatusKey() !== settingsInitialCustomStatusKey.value) {
+    if (savingStatus) {
       settingsStatusSaveError.value = message
     } else {
       settingsError.value = message

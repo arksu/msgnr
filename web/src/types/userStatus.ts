@@ -68,3 +68,13 @@ export function formatUserCustomStatusTitle(status: UserCustomStatus): string {
   const expiry = formatUserCustomStatusExpiry(status)
   return expiry ? `${status.text} until ${expiry}` : status.text
 }
+
+export function userCustomStatusFromStored(raw: unknown): UserCustomStatus | null {
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as Record<string, unknown>
+  return userCustomStatusFromDto({
+    text: String(obj.text ?? ''),
+    emoji: String(obj.emoji ?? ''),
+    expires_at: String(obj.expiresAt ?? ''),
+  })
+}

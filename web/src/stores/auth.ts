@@ -37,7 +37,7 @@ import { clearCollapsedDocumentsNodeIds } from '@/services/storage/documentsNode
 import { clearAllChatDrafts } from '@/services/storage/chatDraftStorage'
 import { cacheUserProfile, loadCachedUserProfile, clearAllData as clearIndexedDb } from '@/services/db/cache'
 import { clearAllPersistedClientDataPreservingBackendUrl } from '@/services/storage/hardReset'
-import { isUserCustomStatusActive, userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
+import { isUserCustomStatusActive, userCustomStatusFromDto, userCustomStatusFromStored, type UserCustomStatus } from '@/types/userStatus'
 
 export type AuthState =
   | 'ANON'
@@ -169,15 +169,7 @@ function loadUser(): AuthUser | null {
       displayName: String(parsed.displayName ?? ''),
       avatarUrl: String(parsed.avatarUrl ?? ''),
       role: String(parsed.role ?? ''),
-      customStatus: userCustomStatusFromDto(
-        parsed.customStatus && typeof parsed.customStatus === 'object'
-          ? {
-              text: String((parsed.customStatus as Partial<UserCustomStatus>).text ?? ''),
-              emoji: String((parsed.customStatus as Partial<UserCustomStatus>).emoji ?? ''),
-              expires_at: String((parsed.customStatus as Partial<UserCustomStatus>).expiresAt ?? ''),
-            }
-          : null,
-      ),
+      customStatus: userCustomStatusFromStored(parsed.customStatus),
     }
   } catch {
     return null
@@ -350,7 +342,7 @@ export const useAuthStore = defineStore('auth', () => {
     const updated = await apiUpdateProfile(request)
     user.value = toUser(updated)
     saveUser(user.value)
-    return toUser(updated)
+    return user.value
   }
 
   async function uploadAvatar(file: File): Promise<AuthUser> {
@@ -358,7 +350,7 @@ export const useAuthStore = defineStore('auth', () => {
     const updated = await apiUploadAvatar(file)
     user.value = toUser(updated)
     saveUser(user.value)
-    return toUser(updated)
+    return user.value
   }
 
   async function removeAvatar(): Promise<AuthUser> {
@@ -366,19 +358,15 @@ export const useAuthStore = defineStore('auth', () => {
     const updated = await apiRemoveAvatar()
     user.value = toUser(updated)
     saveUser(user.value)
-    return toUser(updated)
+    return user.value
   }
 
   async function setCustomStatus(payload: SetCustomStatusRequest): Promise<AuthUser> {
     assertAuthenticated()
-    const updated = await apiSetCustomStatus({
-      text: payload.text.trim(),
-      emoji: payload.emoji?.trim(),
-      expires_at: payload.expires_at,
-    })
+    const updated = await apiSetCustomStatus(payload)
     user.value = toUser(updated)
     saveUser(user.value)
-    return toUser(updated)
+    return user.value
   }
 
   async function clearCustomStatus(): Promise<AuthUser> {
@@ -386,7 +374,7 @@ export const useAuthStore = defineStore('auth', () => {
     const updated = await apiClearCustomStatus()
     user.value = toUser(updated)
     saveUser(user.value)
-    return toUser(updated)
+    return user.value
   }
 
   function clearSession(): void {

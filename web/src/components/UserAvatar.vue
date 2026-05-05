@@ -21,7 +21,7 @@
       :class="presenceClass"
     />
     <span
-      v-if="activeCustomStatus"
+      v-if="statusIndicator"
       class="absolute -right-1 -top-1 inline-flex items-center justify-center rounded-full border border-chat-header bg-chat-panel text-white shadow-sm"
       :class="statusBadgeClass"
       :title="customStatusTitle"
@@ -75,14 +75,12 @@ const displayLabel = computed(() => {
   return name || 'Unknown user'
 })
 
-const chatStore = computed(() => {
-  if (import.meta.env.MODE === 'test') return null
-  return getActivePinia() ? useChatStore() : null
-})
+const chatStore = import.meta.env.MODE === 'test' ? null
+  : (getActivePinia() ? useChatStore() : null)
 
 const resolvedCustomStatus = computed(() => {
   if (props.customStatus !== undefined) return props.customStatus
-  return chatStore.value?.resolveUserCustomStatus(props.userId) ?? null
+  return chatStore?.resolveUserCustomStatus(props.userId) ?? null
 })
 
 const activeCustomStatus = computed(() => {
@@ -157,7 +155,7 @@ const presenceClass = computed(() => {
 
 const statusBadgeClass = computed(() => statusBadgeClasses[props.size])
 
-const statusIndicator = computed(() => activeCustomStatus.value?.emoji?.trim() || '!')
+const statusIndicator = computed(() => activeCustomStatus.value?.emoji?.trim() ?? '')
 
 const palette = [
   '#E8912D', '#D9B51C', '#3AA3A0', '#EC4899',

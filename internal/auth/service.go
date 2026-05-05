@@ -30,6 +30,8 @@ import (
 const (
 	defaultAvatarMaxSizeMB = 5
 	avatarPublicPathPrefix = "/api/public/avatars/"
+
+	userProfileReturningCols = `id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`
 )
 
 var (
@@ -292,28 +294,18 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, displayNa
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var row queries.User
-	if err := tx.QueryRow(
+	if err := scanUserRow(tx.QueryRow(
 		ctx,
 		`UPDATE users
 		   SET email = COALESCE(NULLIF($1, ''), email),
 		       display_name = COALESCE(NULLIF($2, ''), display_name),
 		       updated_at = now()
 		 WHERE id = $3
-		 RETURNING id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`,
+		 RETURNING `+userProfileReturningCols,
 		email,
 		displayName,
 		userID,
-	).Scan(
-		&row.ID,
-		&row.Email,
-		&row.DisplayName,
-		&row.AvatarUrl,
-		&row.CustomStatusText,
-		&row.CustomStatusEmoji,
-		&row.CustomStatusExpiresAt,
-		&row.Role,
-		&row.NeedChangePassword,
-	); err != nil {
+	), &row); err != nil {
 		if isEmailAlreadyInUse(err) {
 			return UserInfo{}, ErrProfileConflict
 		}
@@ -432,25 +424,15 @@ func (s *Service) updateAvatarURL(ctx context.Context, userID uuid.UUID, avatarU
 	}
 
 	var row queries.User
-	if err := tx.QueryRow(ctx,
+	if err := scanUserRow(tx.QueryRow(ctx,
 		`UPDATE users
 		   SET avatar_url = $2,
 		       updated_at = now()
 		 WHERE id = $1
-		 RETURNING id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`,
+		 RETURNING `+userProfileReturningCols,
 		userID,
 		avatarURL,
-	).Scan(
-		&row.ID,
-		&row.Email,
-		&row.DisplayName,
-		&row.AvatarUrl,
-		&row.CustomStatusText,
-		&row.CustomStatusEmoji,
-		&row.CustomStatusExpiresAt,
-		&row.Role,
-		&row.NeedChangePassword,
-	); err != nil {
+	), &row); err != nil {
 		return UserInfo{}, "", err
 	}
 
@@ -490,29 +472,19 @@ func (s *Service) SetCustomStatus(ctx context.Context, userID uuid.UUID, text, e
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var row queries.User
-	if err := tx.QueryRow(ctx,
+	if err := scanUserRow(tx.QueryRow(ctx,
 		`UPDATE users
 		   SET custom_status_text = $2,
 		       custom_status_emoji = $3,
 		       custom_status_expires_at = $4,
 		       updated_at = now()
 		 WHERE id = $1
-		 RETURNING id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`,
+		 RETURNING `+userProfileReturningCols,
 		userID,
 		text,
 		emoji,
 		expiresAt.UTC(),
-	).Scan(
-		&row.ID,
-		&row.Email,
-		&row.DisplayName,
-		&row.AvatarUrl,
-		&row.CustomStatusText,
-		&row.CustomStatusEmoji,
-		&row.CustomStatusExpiresAt,
-		&row.Role,
-		&row.NeedChangePassword,
-	); err != nil {
+	), &row); err != nil {
 		return UserInfo{}, err
 	}
 
@@ -537,26 +509,16 @@ func (s *Service) ClearCustomStatus(ctx context.Context, userID uuid.UUID) (User
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var row queries.User
-	if err := tx.QueryRow(ctx,
+	if err := scanUserRow(tx.QueryRow(ctx,
 		`UPDATE users
 		   SET custom_status_text = '',
 		       custom_status_emoji = '',
 		       custom_status_expires_at = NULL,
 		       updated_at = now()
 		 WHERE id = $1
-		 RETURNING id, email, display_name, avatar_url, custom_status_text, custom_status_emoji, custom_status_expires_at, role, need_change_password`,
+		 RETURNING `+userProfileReturningCols,
 		userID,
-	).Scan(
-		&row.ID,
-		&row.Email,
-		&row.DisplayName,
-		&row.AvatarUrl,
-		&row.CustomStatusText,
-		&row.CustomStatusEmoji,
-		&row.CustomStatusExpiresAt,
-		&row.Role,
-		&row.NeedChangePassword,
-	); err != nil {
+	), &row); err != nil {
 		return UserInfo{}, err
 	}
 
@@ -617,6 +579,20 @@ func customStatusFromRow(row queries.User) *userstatus.Status {
 		row.CustomStatusEmoji,
 		row.CustomStatusExpiresAt,
 		time.Now().UTC(),
+	)
+}
+
+func scanUserRow(row pgx.Row, dest *queries.User) error {
+	return row.Scan(
+		&dest.ID,
+		&dest.Email,
+		&dest.DisplayName,
+		&dest.AvatarUrl,
+		&dest.CustomStatusText,
+		&dest.CustomStatusEmoji,
+		&dest.CustomStatusExpiresAt,
+		&dest.Role,
+		&dest.NeedChangePassword,
 	)
 }
 

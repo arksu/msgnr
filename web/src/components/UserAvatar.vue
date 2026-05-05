@@ -1,5 +1,9 @@
 <template>
-  <div class="relative inline-flex shrink-0" :class="wrapperClass" :title="avatarTitle">
+  <div
+    class="relative inline-flex shrink-0"
+    :class="wrapperClass"
+    :title="avatarTitle"
+  >
     <img
       v-if="showImage"
       :src="avatarUrl"
@@ -22,8 +26,8 @@
     />
     <span
       v-if="statusIndicator"
-      class="absolute -right-1 -top-1 inline-flex items-center justify-center rounded-full border border-chat-header bg-chat-panel text-white shadow-sm"
-      :class="statusBadgeClass"
+      class="pointer-events-none absolute left-[72%] top-1/2 z-10 inline-flex -translate-y-1/2 items-center justify-center leading-none drop-shadow"
+      :class="statusIconClass"
       :title="customStatusTitle"
       :aria-label="customStatusTitle"
     >
@@ -132,12 +136,12 @@ const avatarSizeClasses: Record<AvatarSize, string> = {
   xl: 'h-14 w-14 text-xl',
 }
 
-const statusBadgeClasses: Record<AvatarSize, string> = {
-  xs: 'h-3 min-w-3 px-0.5 text-[8px]',
-  sm: 'h-4 min-w-4 px-0.5 text-[10px]',
-  md: 'h-4 min-w-4 px-0.5 text-[10px]',
-  lg: 'h-5 min-w-5 px-1 text-xs',
-  xl: 'h-6 min-w-6 px-1 text-sm',
+const statusIconTextClasses: Record<AvatarSize, string> = {
+  xs: 'text-base',
+  sm: 'text-xl',
+  md: 'text-2xl',
+  lg: 'text-3xl',
+  xl: 'text-4xl',
 }
 
 const presenceStateClasses: Record<AvatarPresence, string> = {
@@ -153,7 +157,7 @@ const presenceClass = computed(() => {
   return presenceStateClasses[props.presence]
 })
 
-const statusBadgeClass = computed(() => statusBadgeClasses[props.size])
+const statusIconClass = computed(() => statusIconTextClasses[props.size])
 
 const statusIndicator = computed(() => activeCustomStatus.value?.emoji?.trim() ?? '')
 

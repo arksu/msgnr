@@ -205,15 +205,24 @@
                 :user-id="dm.userId"
                 :display-name="dm.displayName"
                 :avatar-url="dm.avatarUrl"
-                :custom-status="dm.customStatus"
+                :custom-status="null"
                 size="sm"
                 :presence="dm.presence"
               />
             </template>
-            <span class="inline-flex items-center gap-1">
-              <span>{{ dm.displayName }}</span>
+            <span class="inline-flex min-w-0 items-center gap-1.5">
+              <span
+                v-if="activeStatus(dm.customStatus)"
+                class="shrink-0 text-lg leading-none"
+                :title="statusTitle(activeStatus(dm.customStatus))"
+                :aria-label="statusTitle(activeStatus(dm.customStatus))"
+              >
+                {{ activeStatus(dm.customStatus)?.emoji }}
+              </span>
+              <span class="min-w-0 truncate">{{ dm.displayName }}</span>
               <CallPresenceIcon
                 v-if="hasUserInCall(dm.userId)"
+                class="shrink-0"
                 :testid="`active-call-icon-dm-${dm.id}`"
                 title="In a call"
               />
@@ -488,7 +497,12 @@ import SidebarItem from './SidebarItem.vue'
 import NotificationLevelSelector from './NotificationLevelSelector.vue'
 import UserAvatar from './UserAvatar.vue'
 import CallPresenceIcon from './CallPresenceIcon.vue'
-import { userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
+import {
+  formatUserCustomStatusTitle,
+  isUserCustomStatusActive,
+  userCustomStatusFromDto,
+  type UserCustomStatus,
+} from '@/types/userStatus'
 
 defineEmits<{ profile: []; settings: [] }>()
 
@@ -573,6 +587,14 @@ function hasActiveCall(conversationId: string): boolean {
 
 function hasUserInCall(userId: string): boolean {
   return (chatStore.userCallPresenceByUserId[userId] ?? 0) > 0
+}
+
+function activeStatus(status: UserCustomStatus | null | undefined): UserCustomStatus | null {
+  return isUserCustomStatusActive(status) && status.emoji.trim() ? status : null
+}
+
+function statusTitle(status: UserCustomStatus | null): string {
+  return status ? formatUserCustomStatusTitle(status) : ''
 }
 
 function isConversationActive(conversationId: string): boolean {

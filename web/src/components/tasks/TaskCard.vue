@@ -188,9 +188,17 @@
                     :user-id="assignee.id"
                     :display-name="subtaskAssigneeLabel(assignee)"
                     :avatar-url="assignee.avatar_url"
-                    :custom-status="userCustomStatusFromDto(assignee.custom_status)"
+                    :custom-status="null"
                     size="xs"
                   />
+                  <span
+                    v-if="activeStatus(userCustomStatusFromDto(assignee.custom_status))"
+                    class="shrink-0 text-base leading-none"
+                    :title="statusTitle(activeStatus(userCustomStatusFromDto(assignee.custom_status)))"
+                    :aria-label="statusTitle(activeStatus(userCustomStatusFromDto(assignee.custom_status)))"
+                  >
+                    {{ activeStatus(userCustomStatusFromDto(assignee.custom_status))?.emoji }}
+                  </span>
                   <span class="min-w-0 truncate">{{ subtaskAssigneeLabel(assignee) }}</span>
                 </span>
               </template>
@@ -648,7 +656,12 @@ import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
 import TaskComments from './TaskComments.vue'
 import UserAvatar from '../UserAvatar.vue'
-import { userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
+import {
+  formatUserCustomStatusTitle,
+  isUserCustomStatusActive,
+  userCustomStatusFromDto,
+  type UserCustomStatus,
+} from '@/types/userStatus'
 
 defineProps<{ templateFilter: string | null }>()
 const emit = defineEmits<{ back: [] }>()
@@ -1314,6 +1327,14 @@ function userSummaryFor(userId: string): { id: string; displayName: string; avat
     avatarUrl: user?.avatar_url ?? '',
     customStatus: userCustomStatusFromDto(user?.custom_status),
   }
+}
+
+function activeStatus(status: UserCustomStatus | null | undefined): UserCustomStatus | null {
+  return isUserCustomStatusActive(status) && status.emoji.trim() ? status : null
+}
+
+function statusTitle(status: UserCustomStatus | null): string {
+  return status ? formatUserCustomStatusTitle(status) : ''
 }
 
 function subtaskAssigneeLabel(assignee: TaskAssigneeSummary): string {

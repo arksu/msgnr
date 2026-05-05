@@ -23,6 +23,7 @@
         :user-id="message.senderId"
         :display-name="message.senderName"
         :avatar-url="message.senderAvatarUrl"
+        :custom-status="null"
         size="lg"
       />
     </div>
@@ -32,6 +33,14 @@
 
       <!-- Header row: name + timestamp + hover actions -->
       <div v-if="showHeader" class="flex items-baseline gap-2 mb-0.5">
+        <span
+          v-if="senderStatus"
+          class="inline-flex shrink-0 self-center text-lg leading-none"
+          :title="senderStatusTitle"
+          :aria-label="senderStatusTitle"
+        >
+          {{ senderStatus.emoji }}
+        </span>
         <span class="font-bold text-white">{{ message.senderName }}</span>
         <span class="text-xs text-gray-500">{{ formattedTime }}</span>
         <span
@@ -570,7 +579,11 @@ import UserAvatar from './UserAvatar.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
 import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
 import RichTextComposer from './RichTextComposer.vue'
-import { userCustomStatusFromDto } from '@/types/userStatus'
+import {
+  formatUserCustomStatusTitle,
+  isUserCustomStatusActive,
+  userCustomStatusFromDto,
+} from '@/types/userStatus'
 
 const props = defineProps({
   message: {
@@ -694,6 +707,15 @@ const formattedTime = computed(() => {
     minute: '2-digit',
   })
 })
+
+const senderStatus = computed(() => {
+  const status = chat.resolveUserCustomStatus(props.message.senderId)
+  return isUserCustomStatusActive(status) && status.emoji.trim() ? status : null
+})
+
+const senderStatusTitle = computed(() =>
+  senderStatus.value ? formatUserCustomStatusTitle(senderStatus.value) : '',
+)
 
 const hasReactions = computed(() => props.message.reactions.length > 0)
 const reactionPopupVisible = computed(() => Boolean(activeReactionEmoji.value))

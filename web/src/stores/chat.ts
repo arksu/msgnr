@@ -973,8 +973,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function resolveUserCustomStatus(userId: string): UserCustomStatus | null {
-    const fromDirectory = userCustomStatuses.value[userId]
-    if (isUserCustomStatusActive(fromDirectory)) return fromDirectory
+    if (Object.prototype.hasOwnProperty.call(userCustomStatuses.value, userId)) {
+      const fromDirectory = userCustomStatuses.value[userId]
+      return isUserCustomStatusActive(fromDirectory) ? fromDirectory : null
+    }
     const fromDm = directMessages.value.find(dm => dm.userId === userId)?.customStatus
     if (isUserCustomStatusActive(fromDm)) return fromDm
     if (workspace.value?.selfUserId === userId && isUserCustomStatusActive(workspace.value.selfCustomStatus)) {
@@ -1004,7 +1006,15 @@ export const useChatStore = defineStore('chat', () => {
       userAvatars.value[userId] = normalizedAvatar
     }
     if (customStatus !== undefined) {
-      userCustomStatuses.value[userId] = isUserCustomStatusActive(customStatus) ? customStatus : null
+      const resolvedCustomStatus = isUserCustomStatusActive(customStatus) ? customStatus : null
+      userCustomStatuses.value[userId] = resolvedCustomStatus
+      const dm = directMessages.value.find(item => item.userId === userId)
+      if (dm) {
+        dm.customStatus = resolvedCustomStatus
+      }
+      if (workspace.value?.selfUserId === userId) {
+        workspace.value.selfCustomStatus = resolvedCustomStatus
+      }
     }
   }
 

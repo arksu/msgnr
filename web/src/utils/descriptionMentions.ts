@@ -1,9 +1,10 @@
 import type { TaskListItem, TaskUser } from '@/services/http/tasksApi'
 import { tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
+import { documentsSearchDocuments, type DocumentSearchResult } from '@/services/http/documentsApi'
 import { taskSlugFromPublicId } from '@/services/taskRoute'
 
 export interface DescriptionMentionSuggestion {
-  kind: 'user' | 'task'
+  kind: 'user' | 'task' | 'document'
   id: string
   label: string
   subtitle: string
@@ -16,6 +17,7 @@ export interface DescriptionMentionSuggestion {
 const USER_MENTION_PREFIX = 'msgnr-mention://user/'
 const TASK_MENTION_LIMIT = 6
 const USER_MENTION_LIMIT = 6
+const DOCUMENT_MENTION_LIMIT = 6
 const MENTION_BASE_CLASSES = [
   'mention-link',
   'inline-flex',
@@ -45,6 +47,15 @@ const TASK_MENTION_CLASSES = [
   'text-public_id',
   'hover:border-public_id/50',
   'hover:bg-public_id/15',
+  'hover:text-white',
+]
+const DOCUMENT_MENTION_CLASSES = [
+  ...MENTION_BASE_CLASSES,
+  'border-emerald-400/25',
+  'bg-emerald-400/10',
+  'text-emerald-200',
+  'hover:border-emerald-400/50',
+  'hover:bg-emerald-400/15',
   'hover:text-white',
 ]
 
@@ -101,6 +112,13 @@ function flattenTaskSearch(groups: { tasks: TaskListItem[] }[]): TaskListItem[] 
   return Array.from(unique.values())
 }
 
+function documentSubtitle(document: DocumentSearchResult): string {
+  const teamspaceName = document.teamspace_name.trim()
+  const snippet = document.snippet.trim()
+  if (teamspaceName && snippet) return `${teamspaceName} - ${snippet}`
+  return teamspaceName || snippet
+}
+
 export function buildUserMentionHref(userId: string): string {
   return `${USER_MENTION_PREFIX}${encodeURIComponent(userId)}`
 }
@@ -127,6 +145,15 @@ export function buildTaskMentionLabel(publicId: string, title: string): string {
   return safeTitle ? `@${safePublicId} ${safeTitle}` : `@${safePublicId}`
 }
 
+export function buildDocumentMentionHref(documentId: string): string {
+  return `/documents/${encodeURIComponent(documentId)}`
+}
+
+export function buildDocumentMentionLabel(title: string): string {
+  const safeTitle = title.trim()
+  return safeTitle ? `@${safeTitle}` : '@Document'
+}
+
 export function isTaskMentionHref(href: string): boolean {
   if (typeof window === 'undefined') {
     return href.trim().startsWith('/tasks/')
@@ -145,6 +172,31 @@ export function isTaskMentionLabel(label: string): boolean {
 
 export function isTaskMentionLink(href: string, label: string): boolean {
   return isTaskMentionHref(href) && isTaskMentionLabel(label)
+}
+
+export function isDocumentMentionHref(href: string): boolean {
+  if (typeof window === 'undefined') {
+    const path = href.trim()
+    return path.startsWith('/documents/') &&
+      !path.startsWith('/documents/teamspaces/') &&
+      !path.startsWith('/documents/search')
+  }
+  try {
+    const url = new URL(href.trim(), window.location.href)
+    return url.pathname.startsWith('/documents/') &&
+      !url.pathname.startsWith('/documents/teamspaces/') &&
+      url.pathname !== '/documents/search'
+  } catch {
+    return false
+  }
+}
+
+export function isDocumentMentionLabel(label: string): boolean {
+  return label.trim().startsWith('@')
+}
+
+export function isDocumentMentionLink(href: string, label: string): boolean {
+  return isDocumentMentionHref(href) && isDocumentMentionLabel(label)
 }
 
 export async function loadDescriptionMentionUsers(): Promise<TaskUser[]> {
@@ -174,7 +226,7 @@ export async function warmDescriptionMentionUsersCache(): Promise<void> {
 
 export async function searchDescriptionMentionSuggestions(query: string): Promise<DescriptionMentionSuggestion[]> {
   const normalized = query.trim()
-  const [users, taskResponse] = await Promise.all([
+  const [users, taskResponse, documents] = await Promise.all([
     loadDescriptionMentionUsers(),
     tasksListTasks({
       search: normalized || undefined,
@@ -183,6 +235,7 @@ export async function searchDescriptionMentionSuggestions(query: string): Promis
       sort_by: 'updated_at',
       sort_order: 'desc',
     }),
+    normalized ? documentsSearchDocuments(normalized) : Promise.resolve([]),
   ])
 
   const userItems = filterUsers(users, normalized, USER_MENTION_LIMIT).map((user, index) => ({
@@ -206,7 +259,17 @@ export async function searchDescriptionMentionSuggestions(query: string): Promis
     flatIndex: userItems.length + index,
   }))
 
-  return [...userItems, ...taskItems]
+  const documentItems = documents.slice(0, DOCUMENT_MENTION_LIMIT).map((document, index) => ({
+    kind: 'document' as const,
+    id: document.id,
+    label: buildDocumentMentionLabel(document.title),
+    subtitle: documentSubtitle(document),
+    href: buildDocumentMentionHref(document.id),
+    icon: 'D',
+    flatIndex: userItems.length + taskItems.length + index,
+  }))
+
+  return [...userItems, ...taskItems, ...documentItems]
 }
 
 export function decorateDescriptionMentionAnchors(root: ParentNode) {
@@ -216,7 +279,7 @@ export function decorateDescriptionMentionAnchors(root: ParentNode) {
     const href = anchor.getAttribute('href') ?? ''
     const label = anchor.textContent ?? ''
 
-    anchor.classList.remove(...USER_MENTION_CLASSES, ...TASK_MENTION_CLASSES)
+    anchor.classList.remove(...USER_MENTION_CLASSES, ...TASK_MENTION_CLASSES, ...DOCUMENT_MENTION_CLASSES)
     delete anchor.dataset.descriptionMentionKind
     delete anchor.dataset.userId
 
@@ -231,6 +294,12 @@ export function decorateDescriptionMentionAnchors(root: ParentNode) {
     if (isTaskMentionLink(href, label)) {
       anchor.dataset.descriptionMentionKind = 'task'
       anchor.classList.add(...TASK_MENTION_CLASSES)
+      continue
+    }
+
+    if (isDocumentMentionLink(href, label)) {
+      anchor.dataset.descriptionMentionKind = 'document'
+      anchor.classList.add(...DOCUMENT_MENTION_CLASSES)
     }
   }
 }

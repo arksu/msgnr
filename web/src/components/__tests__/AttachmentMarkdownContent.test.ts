@@ -16,6 +16,10 @@ vi.mock('@/services/http/tasksApi', () => ({
   tasksFetchStagedAttachmentBlob: vi.fn(),
 }))
 
+vi.mock('@/services/http/documentsApi', () => ({
+  documentsSearchDocuments: vi.fn(),
+}))
+
 describe('AttachmentMarkdownContent', () => {
   beforeEach(() => {
     vi.clearAllMocks()

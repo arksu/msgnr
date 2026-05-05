@@ -22,11 +22,19 @@
             :user-id="item.userId || item.value"
             :display-name="item.label"
             :avatar-url="item.avatarUrl"
-            :custom-status="item.customStatus"
+            :custom-status="null"
             size="xs"
             :presence="item.presence"
           />
-          {{ item.label }}
+          <span
+            v-if="activeStatus(item.customStatus)"
+            class="shrink-0 text-base leading-none"
+            :title="statusTitle(activeStatus(item.customStatus))"
+            :aria-label="statusTitle(activeStatus(item.customStatus))"
+          >
+            {{ activeStatus(item.customStatus)?.emoji }}
+          </span>
+          <span class="min-w-0 truncate">{{ item.label }}</span>
           <span
             class="leading-none hover:text-white"
             role="button"
@@ -90,10 +98,18 @@
             :user-id="item.userId || item.value"
             :display-name="item.label"
             :avatar-url="item.avatarUrl"
-            :custom-status="item.customStatus"
+            :custom-status="null"
             size="xs"
             :presence="item.presence"
           />
+          <span
+            v-if="activeStatus(item.customStatus)"
+            class="shrink-0 text-base leading-none"
+            :title="statusTitle(activeStatus(item.customStatus))"
+            :aria-label="statusTitle(activeStatus(item.customStatus))"
+          >
+            {{ activeStatus(item.customStatus)?.emoji }}
+          </span>
           <span class="min-w-0 flex-1 truncate text-sm text-gray-200">{{ item.label }}</span>
         </li>
 
@@ -128,7 +144,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import UserAvatar from '@/components/UserAvatar.vue'
-import type { UserCustomStatus } from '@/types/userStatus'
+import {
+  formatUserCustomStatusTitle,
+  isUserCustomStatusActive,
+  type UserCustomStatus,
+} from '@/types/userStatus'
 
 export interface MultiSelectOption {
   value: string
@@ -236,6 +256,14 @@ const searchHintText = computed(() =>
 
 function isSelected(value: string): boolean {
   return props.modelValue.includes(value)
+}
+
+function activeStatus(status: UserCustomStatus | null | undefined): UserCustomStatus | null {
+  return isUserCustomStatusActive(status) && status.emoji.trim() ? status : null
+}
+
+function statusTitle(status: UserCustomStatus | null): string {
+  return status ? formatUserCustomStatusTitle(status) : ''
 }
 
 function resetActiveIndex() {

@@ -192,6 +192,30 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.userCallPresenceByUserId).toEqual({ 'user-2': 2 })
   })
 
+  it('does not fall back to stale workspace custom status after an explicit clear', () => {
+    const chat = useChatStore()
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfAvatarUrl: '',
+      selfCustomStatus: {
+        text: 'In a meeting',
+        emoji: 'M',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      },
+      selfRole: 'member',
+    }
+
+    expect(chat.resolveUserCustomStatus('user-1')?.text).toBe('In a meeting')
+
+    chat.registerUserIdentity('user-1', 'Ada', undefined, '', null)
+
+    expect(chat.resolveUserCustomStatus('user-1')).toBeNull()
+    expect(chat.workspace?.selfCustomStatus).toBeNull()
+  })
+
   it('restores last opened conversation from local storage on bootstrap when still accessible', () => {
     const chat = useChatStore()
     const ws = useWsStore()

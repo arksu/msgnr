@@ -1271,9 +1271,7 @@ const settingsStatusError = computed(() => settingsStatusValidationError.value |
 const settingsPreviewCustomStatus = computed<UserCustomStatus | null>(() => {
   const text = settingsStatusText.value.trim()
   if (!text || settingsStatusValidationError.value) {
-    return authStore.user?.customStatus
-      ?? chatStore.resolveUserCustomStatus(authStore.user?.id ?? chatStore.workspace?.selfUserId ?? '')
-      ?? null
+    return null
   }
   return {
     text,
@@ -1419,10 +1417,9 @@ function syncSettingsFormFromUser() {
   settingsEmail.value = authStore.user?.email?.trim() || ''
   settingsInitialDisplayName.value = settingsDisplayName.value.trim()
   settingsInitialEmail.value = settingsEmail.value.trim()
+  const selfUserId = authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''
   setStatusDraftFromStatus(
-    authStore.user?.customStatus
-      ?? chatStore.resolveUserCustomStatus(authStore.user?.id ?? chatStore.workspace?.selfUserId ?? '')
-      ?? null,
+    authStore.user ? (authStore.user.customStatus ?? null) : chatStore.resolveUserCustomStatus(selfUserId),
   )
 }
 

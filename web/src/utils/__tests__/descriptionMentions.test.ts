@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { documentsSearchDocuments } from '@/services/http/documentsApi'
 import { tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
 import {
+  buildDocumentMentionHref,
   buildTaskMentionHref,
   buildUserMentionHref,
   decorateDescriptionMentionAnchors,
@@ -13,6 +15,10 @@ import {
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListUsers: vi.fn(),
   tasksListTasks: vi.fn(),
+}))
+
+vi.mock('@/services/http/documentsApi', () => ({
+  documentsSearchDocuments: vi.fn(),
 }))
 
 describe('descriptionMentions', () => {
@@ -55,6 +61,15 @@ describe('descriptionMentions', () => {
       ],
       grand_total: 1,
     })
+    vi.mocked(documentsSearchDocuments).mockResolvedValue([
+      {
+        id: 'doc-1',
+        teamspace_id: 'teamspace-1',
+        teamspace_name: 'Product',
+        title: 'Release notes',
+        snippet: 'Current rollout notes',
+      },
+    ])
   })
 
   it('builds and parses user mention hrefs', () => {
@@ -64,7 +79,7 @@ describe('descriptionMentions', () => {
     expect(parseUserMentionHref(href)).toEqual({ userId: 'user-1' })
   })
 
-  it('returns filtered user suggestions and task suggestions', async () => {
+  it('returns filtered user, task, and document suggestions', async () => {
     const results = await searchDescriptionMentionSuggestions('ali')
 
     expect(results[0]).toMatchObject({
@@ -79,17 +94,31 @@ describe('descriptionMentions', () => {
       label: '@TASK-123 Fix search',
       href: buildTaskMentionHref('TASK-123'),
     }))
+    expect(results).toContainEqual(expect.objectContaining({
+      kind: 'document',
+      id: 'doc-1',
+      label: '@Release notes',
+      href: buildDocumentMentionHref('doc-1'),
+    }))
     expect(tasksListTasks).toHaveBeenCalledWith(expect.objectContaining({
       search: 'ali',
       include_subtasks: true,
     }))
+    expect(documentsSearchDocuments).toHaveBeenCalledWith('ali')
   })
 
-  it('decorates rendered user and task mention anchors', () => {
+  it('skips document search for empty mention queries because document search requires text', async () => {
+    await searchDescriptionMentionSuggestions('')
+
+    expect(documentsSearchDocuments).not.toHaveBeenCalled()
+  })
+
+  it('decorates rendered user, task, and document mention anchors', () => {
     const root = document.createElement('div')
     root.innerHTML = [
       '<a href="msgnr-mention://user/user-1">@Alice Example</a>',
       '<a href="/tasks/task-123">@TASK-123 Fix search</a>',
+      '<a href="/documents/doc-1">@Release notes</a>',
     ].join('')
 
     decorateDescriptionMentionAnchors(root)
@@ -100,6 +129,8 @@ describe('descriptionMentions', () => {
     expect(anchors[0].className).toContain('mention-link')
     expect(anchors[1].dataset.descriptionMentionKind).toBe('task')
     expect(anchors[1].className).toContain('mention-link')
+    expect(anchors[2].dataset.descriptionMentionKind).toBe('document')
+    expect(anchors[2].className).toContain('mention-link')
   })
 
   it('decorates mention html strings', () => {

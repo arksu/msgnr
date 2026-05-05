@@ -40,12 +40,22 @@
                 :user-id="item.id"
                 :display-name="item.label"
                 :avatar-url="item.avatarUrl"
-                :custom-status="item.customStatus"
+                :custom-status="null"
                 size="sm"
               />
               <span v-else class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/5 text-sm">{{ item.icon }}</span>
               <div class="min-w-0">
-                <div class="truncate text-sm">{{ item.label }}</div>
+                <div class="flex min-w-0 items-center gap-1.5 text-sm">
+                  <span
+                    v-if="item.kind === 'user' && activeStatus(item.customStatus)"
+                    class="shrink-0 text-lg leading-none"
+                    :title="statusTitle(activeStatus(item.customStatus))"
+                    :aria-label="statusTitle(activeStatus(item.customStatus))"
+                  >
+                    {{ activeStatus(item.customStatus)?.emoji }}
+                  </span>
+                  <span class="min-w-0 truncate">{{ item.label }}</span>
+                </div>
                 <div class="truncate text-xs text-gray-500">{{ item.subtitle }}</div>
               </div>
             </button>
@@ -71,7 +81,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import UserAvatar from './UserAvatar.vue'
-import type { UserCustomStatus } from '@/types/userStatus'
+import {
+  formatUserCustomStatusTitle,
+  isUserCustomStatusActive,
+  type UserCustomStatus,
+} from '@/types/userStatus'
 
 export interface MessageTagPickerItem {
   kind: 'user' | 'task' | 'document'
@@ -108,4 +122,12 @@ const groups = computed(() => [
 ].filter(group => group.items.length > 0))
 
 const flatItems = computed(() => [...props.users, ...props.tasks, ...props.documents])
+
+function activeStatus(status: UserCustomStatus | null | undefined): UserCustomStatus | null {
+  return isUserCustomStatusActive(status) && status.emoji.trim() ? status : null
+}
+
+function statusTitle(status: UserCustomStatus | null): string {
+  return status ? formatUserCustomStatusTitle(status) : ''
+}
 </script>

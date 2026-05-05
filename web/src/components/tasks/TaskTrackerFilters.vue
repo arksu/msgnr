@@ -122,9 +122,17 @@
                 :user-id="u.value"
                 :display-name="u.label"
                 :avatar-url="u.avatarUrl"
-                :custom-status="u.customStatus"
+                :custom-status="null"
                 size="xs"
               />
+              <span
+                v-if="activeStatus(u.customStatus)"
+                class="shrink-0 text-base leading-none"
+                :title="statusTitle(activeStatus(u.customStatus))"
+                :aria-label="statusTitle(activeStatus(u.customStatus))"
+              >
+                {{ activeStatus(u.customStatus)?.emoji }}
+              </span>
               <span class="truncate">{{ u.label }}</span>
             </label>
           </div>
@@ -156,7 +164,12 @@ import type { FieldFilter, TaskFilterPayload } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
 import { useTaskFilters } from '@/composables/useTaskFilters'
 import UserAvatar from '@/components/UserAvatar.vue'
-import { userCustomStatusFromDto } from '@/types/userStatus'
+import {
+  formatUserCustomStatusTitle,
+  isUserCustomStatusActive,
+  userCustomStatusFromDto,
+  type UserCustomStatus,
+} from '@/types/userStatus'
 
 const props = defineProps<{
   templateFilter: string | null
@@ -199,6 +212,14 @@ const filteredUserOptions = computed(() => {
   const q = assigneeSearch.value.trim().toLowerCase()
   return q ? userOptions.value.filter(o => o.label.toLowerCase().includes(q)) : userOptions.value
 })
+
+function activeStatus(status: UserCustomStatus | null | undefined): UserCustomStatus | null {
+  return isUserCustomStatusActive(status) && status.emoji.trim() ? status : null
+}
+
+function statusTitle(status: UserCustomStatus | null): string {
+  return status ? formatUserCustomStatusTitle(status) : ''
+}
 
 const activeFilterCount = computed(() =>
   (selectedStatusIds.value.length > 0 ? 1 : 0) +

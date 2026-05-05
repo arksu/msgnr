@@ -28,6 +28,10 @@ vi.mock('@/services/http/tasksApi', () => ({
   tasksFetchStagedAttachmentBlob: vi.fn(),
 }))
 
+vi.mock('@/services/http/documentsApi', () => ({
+  documentsSearchDocuments: vi.fn(),
+}))
+
 describe('TaskDescriptionEditor', () => {
   async function waitForRenderedEditor(wrapper: ReturnType<typeof mount>) {
     for (let i = 0; i < 10; i += 1) {

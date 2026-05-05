@@ -16,21 +16,37 @@
         :user-id="(value as string) || ''"
         :display-name="resolveUser(value as string)"
         :avatar-url="resolveUserAvatar(value as string)"
-        :custom-status="resolveUserCustomStatus(value as string)"
+        :custom-status="null"
         size="xs"
       />
+      <span
+        v-if="activeStatus(resolveUserCustomStatus(value as string))"
+        class="shrink-0 text-base leading-none"
+        :title="statusTitle(activeStatus(resolveUserCustomStatus(value as string)))"
+        :aria-label="statusTitle(activeStatus(resolveUserCustomStatus(value as string)))"
+      >
+        {{ activeStatus(resolveUserCustomStatus(value as string))?.emoji }}
+      </span>
       <span>{{ resolveUser(value as string) }}</span>
     </span>
 
     <span v-else-if="field.type === 'users'" class="inline-flex flex-wrap gap-2 text-sm text-gray-200">
-      <span v-for="userId in ((value as string[]) ?? [])" :key="userId" class="inline-flex items-center gap-1">
+      <span v-for="userId in ((value as string[]) ?? [])" :key="userId" class="inline-flex items-center gap-1.5">
         <UserAvatar
           :user-id="userId"
           :display-name="resolveUser(userId)"
           :avatar-url="resolveUserAvatar(userId)"
-          :custom-status="resolveUserCustomStatus(userId)"
+          :custom-status="null"
           size="xs"
         />
+        <span
+          v-if="activeStatus(resolveUserCustomStatus(userId))"
+          class="shrink-0 text-base leading-none"
+          :title="statusTitle(activeStatus(resolveUserCustomStatus(userId)))"
+          :aria-label="statusTitle(activeStatus(resolveUserCustomStatus(userId)))"
+        >
+          {{ activeStatus(resolveUserCustomStatus(userId))?.emoji }}
+        </span>
         <span>{{ resolveUser(userId) }}</span>
       </span>
     </span>
@@ -131,7 +147,12 @@ import { computed } from 'vue'
 import type { TaskFieldDefinition, TaskUser, EnumDictionary, EnumDictionaryVersionItem } from '@/services/http/tasksApi'
 import MultiSelect from './MultiSelect.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
-import { userCustomStatusFromDto } from '@/types/userStatus'
+import {
+  formatUserCustomStatusTitle,
+  isUserCustomStatusActive,
+  userCustomStatusFromDto,
+  type UserCustomStatus,
+} from '@/types/userStatus'
 
 interface SelectOption {
   value: string
@@ -190,6 +211,14 @@ function resolveUserAvatar(id: string): string {
 function resolveUserCustomStatus(id: string) {
   const u = props.users?.find(u => u.id === id)
   return userCustomStatusFromDto(u?.custom_status)
+}
+
+function activeStatus(status: UserCustomStatus | null | undefined): UserCustomStatus | null {
+  return isUserCustomStatusActive(status) && status.emoji.trim() ? status : null
+}
+
+function statusTitle(status: UserCustomStatus | null): string {
+  return status ? formatUserCustomStatusTitle(status) : ''
 }
 
 // ---- Enum ----

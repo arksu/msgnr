@@ -243,7 +243,7 @@
       :selected-index="selectedMentionIndex"
       :users="mentionPickerUsers"
       :tasks="mentionPickerTasks"
-      :documents="[]"
+      :documents="mentionPickerDocuments"
       @select="selectMentionItem"
     />
   </div>
@@ -368,6 +368,7 @@ let mentionSearchRequestToken = 0
 
 const mentionPickerUsers = computed(() => mentionPickerItems.value.filter(item => item.kind === 'user'))
 const mentionPickerTasks = computed(() => mentionPickerItems.value.filter(item => item.kind === 'task'))
+const mentionPickerDocuments = computed(() => mentionPickerItems.value.filter(item => item.kind === 'document'))
 const tableToolbarVisible = computed(() => {
   editorViewVersion.value
   return !!editor.value && editable.value && editor.value.isActive('table')

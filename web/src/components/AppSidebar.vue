@@ -311,12 +311,22 @@
           :user-id="sidebarIdentity.userId"
           :display-name="sidebarIdentity.displayName || sidebarIdentity.fallback"
           :avatar-url="sidebarIdentity.avatarUrl"
-          :custom-status="sidebarIdentity.customStatus"
+          :custom-status="null"
           size="sm"
           :presence="selfPresence"
         />
         <div class="min-w-0">
-          <div class="text-sm text-sidebar-text truncate font-medium">{{ sidebarIdentity.displayName }}</div>
+          <div class="flex min-w-0 items-center gap-1.5 text-sm font-medium text-sidebar-text">
+            <span
+              v-if="activeStatus(sidebarIdentity.customStatus)"
+              class="shrink-0 text-lg leading-none"
+              :title="statusTitle(activeStatus(sidebarIdentity.customStatus))"
+              :aria-label="statusTitle(activeStatus(sidebarIdentity.customStatus))"
+            >
+              {{ activeStatus(sidebarIdentity.customStatus)?.emoji }}
+            </span>
+            <span class="min-w-0 truncate">{{ sidebarIdentity.displayName }}</span>
+          </div>
           <div class="text-xs text-sidebar-textMuted truncate flex items-center gap-1">
             <span>{{ sidebarIdentity.role }}</span>
             <span>·</span>
@@ -566,7 +576,7 @@ const sidebarIdentity = computed(() => ({
   userId: authStore.user?.id ?? chatStore.workspace?.selfUserId ?? '',
   displayName: authStore.user?.displayName ?? chatStore.workspace?.selfDisplayName ?? '',
   avatarUrl: authStore.user?.avatarUrl ?? chatStore.workspace?.selfAvatarUrl ?? '',
-  customStatus: authStore.user?.customStatus ?? chatStore.workspace?.selfCustomStatus ?? null,
+  customStatus: authStore.user ? (authStore.user.customStatus ?? null) : (chatStore.workspace?.selfCustomStatus ?? null),
   role: authStore.effectiveRole ?? chatStore.workspace?.selfRole ?? '',
   fallback: authStore.user?.email ?? chatStore.workspace?.name ?? '?',
 }))

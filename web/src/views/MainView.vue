@@ -158,69 +158,90 @@
         class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
         @click.self="closeSettings"
       >
-        <div class="w-full max-w-md rounded-xl border border-chat-border bg-chat-header px-6 py-5 shadow-2xl">
-          <h2 class="text-lg font-semibold text-app-text mb-4">Profile</h2>
+        <div class="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-chat-border bg-chat-header shadow-2xl max-h-[90vh]">
+          <div class="shrink-0 border-b border-chat-border px-5 pt-4">
+            <h2 class="text-lg font-semibold text-app-text">Profile</h2>
+            <div class="mt-4 flex gap-1 overflow-x-auto" role="tablist" aria-label="Profile settings sections">
+              <button
+                v-for="tab in profileSettingsTabs"
+                :key="tab.id"
+                type="button"
+                role="tab"
+                class="whitespace-nowrap rounded-t-md border-x border-t px-3 py-2 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent"
+                :class="settingsActiveTab === tab.id
+                  ? 'border-chat-border bg-chat-input text-app-text'
+                  : 'border-transparent text-app-muted hover:bg-chat-msgHover hover:text-app-text'"
+                :aria-selected="settingsActiveTab === tab.id"
+                :data-testid="`profile-tab-${tab.id}`"
+                @click="setSettingsActiveTab(tab.id)"
+              >
+                {{ tab.label }}
+              </button>
+            </div>
+          </div>
 
-          <div class="space-y-3">
-            <div class="rounded border border-chat-border bg-chat-input/60 p-3">
-              <div class="flex items-center gap-3">
-                <UserAvatar
-                  :user-id="authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''"
-                  :display-name="settingsDisplayName || settingsEmail || 'User'"
-                  :avatar-url="authStore.user?.avatarUrl ?? chatStore.workspace?.selfAvatarUrl ?? ''"
-                  :custom-status="settingsPreviewCustomStatus"
-                  size="xl"
-                />
-                <div class="flex flex-col gap-2">
-                  <input
-                    ref="profileAvatarInput"
-                    type="file"
-                    class="hidden"
-                    accept="image/png,image/jpeg,image/webp,image/gif"
-                    @change="onProfileAvatarSelected"
-                  >
-                  <button
-                    type="button"
-                    class="rounded border border-chat-border px-3 py-1.5 text-xs text-app-secondaryText hover:bg-chat-msgHover disabled:opacity-50"
-                    :disabled="settingsAvatarLoading"
-                    @click="openProfileAvatarPicker"
-                  >
-                    {{ settingsAvatarLoading ? 'Uploading...' : 'Upload avatar' }}
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded border border-chat-border px-3 py-1.5 text-xs text-app-secondaryText hover:bg-chat-msgHover disabled:opacity-50"
-                    :disabled="settingsAvatarLoading || !(authStore.user?.avatarUrl ?? '').trim()"
-                    @click="removeProfileAvatar"
-                  >
-                    Remove avatar
-                  </button>
+          <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <section v-if="settingsActiveTab === 'profile'" class="space-y-4" role="tabpanel" aria-label="Profile">
+              <div class="rounded border border-chat-border bg-chat-input/60 p-3">
+                <div class="flex items-center gap-3">
+                  <UserAvatar
+                    :user-id="authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''"
+                    :display-name="settingsDisplayName || settingsEmail || 'User'"
+                    :avatar-url="authStore.user?.avatarUrl ?? chatStore.workspace?.selfAvatarUrl ?? ''"
+                    :custom-status="settingsPreviewCustomStatus"
+                    size="xl"
+                  />
+                  <div class="flex flex-col gap-2">
+                    <input
+                      ref="profileAvatarInput"
+                      type="file"
+                      class="hidden"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      @change="onProfileAvatarSelected"
+                    >
+                    <button
+                      type="button"
+                      class="rounded border border-chat-border px-3 py-1.5 text-xs text-app-secondaryText hover:bg-chat-msgHover disabled:opacity-50"
+                      :disabled="settingsAvatarLoading"
+                      @click="openProfileAvatarPicker"
+                    >
+                      {{ settingsAvatarLoading ? 'Uploading...' : 'Upload avatar' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded border border-chat-border px-3 py-1.5 text-xs text-app-secondaryText hover:bg-chat-msgHover disabled:opacity-50"
+                      :disabled="settingsAvatarLoading || !(authStore.user?.avatarUrl ?? '').trim()"
+                      @click="removeProfileAvatar"
+                    >
+                      Remove avatar
+                    </button>
+                  </div>
                 </div>
+                <p class="mt-2 text-[11px] text-app-muted">Max 5 MB. JPG, PNG, WEBP, GIF.</p>
               </div>
-              <p class="mt-2 text-[11px] text-app-muted">Max 5 MB. JPG, PNG, WEBP, GIF.</p>
-            </div>
 
-            <div>
-              <label class="block text-sm text-app-muted mb-1">Display name</label>
-              <input
-                v-model="settingsDisplayName"
-                type="text"
-                class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
-                placeholder="Display name"
-              />
-            </div>
-            <div>
-              <label class="block text-sm text-app-muted mb-1">Email</label>
-              <input
-                v-model="settingsEmail"
-                type="email"
-                class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
-                placeholder="you@example.com"
-              />
-            </div>
+              <div>
+                <label class="block text-sm text-app-muted mb-1">Display name</label>
+                <input
+                  v-model="settingsDisplayName"
+                  type="text"
+                  class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
+                  placeholder="Display name"
+                />
+              </div>
+              <div>
+                <label class="block text-sm text-app-muted mb-1">Email</label>
+                <input
+                  v-model="settingsEmail"
+                  type="email"
+                  class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
+                  placeholder="you@example.com"
+                />
+              </div>
+            </section>
 
-            <div class="rounded border border-chat-border bg-chat-input/40 p-3">
-              <div class="mb-2 flex items-center justify-between gap-3">
+            <section v-else-if="settingsActiveTab === 'status'" class="rounded border border-chat-border bg-chat-input/40 p-3" role="tabpanel" aria-label="Status">
+              <div class="mb-3 flex items-center justify-between gap-3">
                 <h3 class="text-sm font-semibold text-app-text">Status</h3>
                 <button
                   type="button"
@@ -289,9 +310,9 @@
                 </div>
               </div>
               <p v-if="settingsStatusError" class="mt-2 text-xs text-red-400">{{ settingsStatusError }}</p>
-            </div>
+            </section>
 
-            <div class="rounded border border-chat-border bg-chat-input/40 p-3" aria-labelledby="profile-color-theme-heading">
+            <section v-else-if="settingsActiveTab === 'theme'" aria-labelledby="profile-color-theme-heading" role="tabpanel">
               <h3 id="profile-color-theme-heading" class="text-sm font-semibold text-app-text">Color theme</h3>
               <div class="mt-3 grid grid-cols-3 gap-2">
                 <button
@@ -317,40 +338,9 @@
                   <span class="block truncate font-medium">{{ theme.label }}</span>
                 </button>
               </div>
-            </div>
-          </div>
+            </section>
 
-          <div v-if="settingsError" class="text-red-400 text-sm mt-3">
-            {{ settingsError }}
-          </div>
-          <div v-if="settingsAvatarError" class="text-red-400 text-sm mt-3">
-            {{ settingsAvatarError }}
-          </div>
-          <div v-if="settingsSuccess" class="text-emerald-300 text-sm mt-3">
-            {{ settingsSuccess }}
-          </div>
-
-          <div class="flex gap-3 mt-5">
-            <button
-              class="flex-1 py-2 rounded bg-chat-msgHover hover:bg-app-tertiary text-app-secondaryText text-sm transition-colors"
-              :disabled="settingsLoading"
-              @click="closeSettings"
-            >
-              Cancel
-            </button>
-            <button
-              class="flex-1 py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="!canSaveSettings || settingsLoading"
-              @click="saveSettings"
-            >
-              {{ settingsLoading ? 'Saving...' : 'Save' }}
-            </button>
-          </div>
-
-          <!-- Change password section -->
-          <div class="border-t border-chat-border mt-6 pt-5">
-            <h3 class="text-sm font-semibold text-app-text mb-3">Change password</h3>
-            <div class="space-y-3">
+            <section v-else class="space-y-3" role="tabpanel" aria-label="Password">
               <div>
                 <label class="block text-sm text-app-muted mb-1">New password</label>
                 <input
@@ -373,22 +363,49 @@
                   @keyup.enter="savePassword"
                 />
               </div>
-            </div>
-            <div v-if="settingsPasswordError" class="text-red-400 text-sm mt-3">
-              {{ settingsPasswordError }}
-            </div>
-            <div v-if="settingsPasswordSuccess" class="text-emerald-300 text-sm mt-3">
-              {{ settingsPasswordSuccess }}
-            </div>
-            <div class="flex justify-end mt-4">
-              <button
-                class="px-4 py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="settingsPasswordLoading || (!settingsNewPassword && !settingsConfirmPassword)"
-                @click="savePassword"
-              >
-                {{ settingsPasswordLoading ? 'Changing...' : 'Change password' }}
-              </button>
-            </div>
+            </section>
+          </div>
+
+          <div v-if="settingsError" class="px-5 text-red-400 text-sm">
+            {{ settingsError }}
+          </div>
+          <div v-if="settingsAvatarError" class="px-5 text-red-400 text-sm">
+            {{ settingsAvatarError }}
+          </div>
+          <div v-if="settingsSuccess" class="px-5 text-emerald-300 text-sm">
+            {{ settingsSuccess }}
+          </div>
+          <div v-if="settingsPasswordError" class="px-5 text-red-400 text-sm">
+            {{ settingsPasswordError }}
+          </div>
+          <div v-if="settingsPasswordSuccess" class="px-5 text-emerald-300 text-sm">
+            {{ settingsPasswordSuccess }}
+          </div>
+
+          <div class="flex shrink-0 gap-3 border-t border-chat-border px-5 py-4">
+            <button
+              class="flex-1 py-2 rounded bg-chat-msgHover hover:bg-app-tertiary text-app-secondaryText text-sm transition-colors"
+              :disabled="settingsLoading"
+              @click="closeSettings"
+            >
+              Cancel
+            </button>
+            <button
+              v-if="settingsActiveTab !== 'password'"
+              class="flex-1 py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="!canSaveSettings || settingsLoading"
+              @click="saveSettings"
+            >
+              {{ settingsLoading ? 'Saving...' : 'Save' }}
+            </button>
+            <button
+              v-if="settingsActiveTab === 'password'"
+              class="flex-1 py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="settingsPasswordLoading || (!settingsNewPassword && !settingsConfirmPassword)"
+              @click="savePassword"
+            >
+              {{ settingsPasswordLoading ? 'Changing...' : 'Change password' }}
+            </button>
           </div>
         </div>
       </div>
@@ -635,7 +652,15 @@ import { useCallStore } from '@/stores/call'
 
 const route = useRoute()
 const router = useRouter()
+type ProfileSettingsTab = 'profile' | 'status' | 'theme' | 'password'
+const profileSettingsTabs: Array<{ id: ProfileSettingsTab; label: string }> = [
+  { id: 'profile', label: 'Profile' },
+  { id: 'status', label: 'Status' },
+  { id: 'theme', label: 'Theme' },
+  { id: 'password', label: 'Password' },
+]
 const settingsOpen = ref(false)
+const settingsActiveTab = ref<ProfileSettingsTab>('profile')
 const audioSettingsOpen = ref(false)
 const settingsLoading = ref(false)
 const settingsError = ref('')
@@ -1477,6 +1502,13 @@ function closeSettings() {
   closeStatusEmojiPicker()
 }
 
+function setSettingsActiveTab(tab: ProfileSettingsTab) {
+  settingsActiveTab.value = tab
+  if (tab !== 'status') {
+    closeStatusEmojiPicker()
+  }
+}
+
 function syncSettingsFormFromUser() {
   const displayName = authStore.user?.displayName?.trim()
     || chatStore.workspace?.selfDisplayName?.trim()
@@ -1505,6 +1537,7 @@ async function openSettings() {
     settingsError.value = error instanceof Error ? error.message : 'Failed to load profile'
   }
   syncSettingsFormFromUser()
+  settingsActiveTab.value = 'profile'
   settingsOpen.value = true
 }
 

@@ -406,6 +406,11 @@ describe('MainView server unavailable state', () => {
     await (wrapper.findComponent(MainView).vm as any).openSettings()
     await flushUi()
 
+    const themeTab = document.body.querySelector('[data-testid="profile-tab-theme"]') as HTMLButtonElement | null
+    expect(themeTab).not.toBeNull()
+    themeTab?.click()
+    await flushUi()
+
     const pinkButton = document.body.querySelector('[data-testid="profile-theme-pink"]') as HTMLButtonElement | null
     expect(pinkButton).not.toBeNull()
 
@@ -415,6 +420,41 @@ describe('MainView server unavailable state', () => {
     expect(storage.getItem(COLOR_THEME_STORAGE_KEY)).toBe('pink')
     expect(document.documentElement.dataset.colorTheme).toBe('pink')
     expect(pinkButton?.getAttribute('aria-pressed')).toBe('true')
+
+    wrapper.unmount()
+  })
+
+  it('keeps profile settings sections in tabs instead of one tall form', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const authStore = useAuthStore()
+    authStore.user = {
+      id: 'user-1',
+      email: 'user@example.com',
+      displayName: 'User One',
+      avatarUrl: '',
+      role: 'member',
+      customStatus: null,
+    }
+
+    const wrapper = mountAtRoute(router)
+    await (wrapper.findComponent(MainView).vm as any).openSettings()
+    await flushUi()
+
+    expect(document.body.querySelector('[data-testid="profile-tab-profile"]')?.getAttribute('aria-selected')).toBe('true')
+    expect(document.body.textContent).toContain('Display name')
+    expect(document.body.textContent).not.toContain('Change password')
+    expect(document.body.querySelector('[data-testid="profile-theme-pink"]')).toBeNull()
+
+    const passwordTab = document.body.querySelector('[data-testid="profile-tab-password"]') as HTMLButtonElement | null
+    passwordTab?.click()
+    await flushUi()
+
+    expect(passwordTab?.getAttribute('aria-selected')).toBe('true')
+    expect(document.body.textContent).toContain('Change password')
+    expect(document.body.textContent).not.toContain('Display name')
 
     wrapper.unmount()
   })

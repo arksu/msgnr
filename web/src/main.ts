@@ -6,6 +6,9 @@ import './style.css'
 import 'emoji-mart-vue-fast/css/emoji-mart.css'
 import { initPlatform } from '@/platform'
 import { hydrateTokenStorageFromSecureStore } from '@/services/storage/tokenStorage'
+import { applyStoredColorTheme } from '@/composables/useColorTheme'
+
+applyStoredColorTheme()
 
 async function bootstrap() {
   try {

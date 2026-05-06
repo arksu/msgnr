@@ -16,8 +16,8 @@
           <circle cx="12" cy="12" r="9" class="opacity-30" stroke="currentColor" stroke-width="3" />
           <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
         </svg>
-        <div class="text-sm font-semibold text-white">{{ startupLoaderMessage }}</div>
-        <div class="text-xs text-gray-400">Slow connection detected. Please wait.</div>
+        <div class="text-sm font-semibold text-app-text">{{ startupLoaderMessage }}</div>
+        <div class="text-xs text-app-muted">Slow connection detected. Please wait.</div>
       </div>
     </div>
   </Teleport>
@@ -28,30 +28,30 @@
       v-if="authStore.needChangePassword"
       class="fixed inset-0 bg-black/70 flex items-center justify-center z-[9999] p-4"
     >
-      <div class="bg-[#222529] border border-chat-border rounded-xl shadow-2xl w-full max-w-sm p-6">
-        <h3 class="text-lg font-bold text-white mb-1">Change your password</h3>
-        <p class="text-sm text-gray-400 mb-4">
+      <div class="bg-chat-input border border-chat-border rounded-xl shadow-2xl w-full max-w-sm p-6">
+        <h3 class="text-lg font-bold text-app-text mb-1">Change your password</h3>
+        <p class="text-sm text-app-muted mb-4">
           You must set a new password before continuing.
         </p>
         <div class="space-y-3">
           <div>
-            <label class="block text-sm text-gray-400 mb-1">New password</label>
+            <label class="block text-sm text-app-muted mb-1">New password</label>
             <input
               v-model="newPassword"
               type="password"
               autocomplete="new-password"
-              class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
+              class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
               placeholder="••••••••"
               @keyup.enter="submitChangePassword"
             />
           </div>
           <div>
-            <label class="block text-sm text-gray-400 mb-1">Confirm password</label>
+            <label class="block text-sm text-app-muted mb-1">Confirm password</label>
             <input
               v-model="confirmPassword"
               type="password"
               autocomplete="new-password"
-              class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
+              class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
               placeholder="••••••••"
               @keyup.enter="submitChangePassword"
             />
@@ -60,7 +60,7 @@
         <div v-if="changeError" class="text-red-400 text-sm mt-3">{{ changeError }}</div>
         <div class="mt-5">
           <button
-            class="w-full py-2 rounded bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors disabled:opacity-50"
+            class="w-full py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:opacity-50"
             :disabled="changeLoading"
             @click="submitChangePassword"
           >

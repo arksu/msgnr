@@ -4,7 +4,7 @@
     @click="emit('click')"
   >
     <td class="px-4 py-2.5 shrink-0">
-      <span class="font-mono text-public_id border border-public_id/20 px-1.5 py-0.5 rounded whitespace-nowrap">
+      <span class="font-mono text-public_id bg-app-taskIdBg border border-public_id/20 px-1.5 py-0.5 rounded whitespace-nowrap">
         {{ item.public_id }}
       </span>
     </td>

@@ -5,13 +5,7 @@ type StorageLike = {
   clear(): void
 }
 
-function resolveGlobalStorage(): unknown {
-  const target = globalThis as { localStorage?: any }
-  return target.localStorage
-}
-
 function normalizeStorage(raw: unknown): StorageLike {
-  const target = globalThis as { localStorage?: StorageLike }
   if (raw
     && typeof (raw as any).getItem === 'function'
     && typeof (raw as any).setItem === 'function'
@@ -45,16 +39,14 @@ function normalizeStorage(raw: unknown): StorageLike {
       }
     },
   }
-  try {
-    Object.defineProperty(target, 'localStorage', {
-      value: normalized,
-      configurable: true,
-      writable: true,
-    })
-  } catch {
-    // In very restricted runtimes localStorage may be non-configurable.
-  }
   return normalized
 }
 
-export const storage: StorageLike = normalizeStorage(resolveGlobalStorage())
+let rawStorage: unknown
+try {
+  rawStorage = (globalThis as { localStorage?: unknown }).localStorage
+} catch {
+  rawStorage = undefined
+}
+
+export const storage: StorageLike = normalizeStorage(rawStorage)

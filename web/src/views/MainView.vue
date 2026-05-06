@@ -159,7 +159,7 @@
         @click.self="closeSettings"
       >
         <div class="w-full max-w-md rounded-xl border border-chat-border bg-chat-header px-6 py-5 shadow-2xl">
-          <h2 class="text-lg font-semibold text-white mb-4">Profile</h2>
+          <h2 class="text-lg font-semibold text-app-text mb-4">Profile</h2>
 
           <div class="space-y-3">
             <div class="rounded border border-chat-border bg-chat-input/60 p-3">
@@ -181,7 +181,7 @@
                   >
                   <button
                     type="button"
-                    class="rounded border border-chat-border px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 disabled:opacity-50"
+                    class="rounded border border-chat-border px-3 py-1.5 text-xs text-app-secondaryText hover:bg-chat-msgHover disabled:opacity-50"
                     :disabled="settingsAvatarLoading"
                     @click="openProfileAvatarPicker"
                   >
@@ -189,7 +189,7 @@
                   </button>
                   <button
                     type="button"
-                    class="rounded border border-chat-border px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 disabled:opacity-50"
+                    class="rounded border border-chat-border px-3 py-1.5 text-xs text-app-secondaryText hover:bg-chat-msgHover disabled:opacity-50"
                     :disabled="settingsAvatarLoading || !(authStore.user?.avatarUrl ?? '').trim()"
                     @click="removeProfileAvatar"
                   >
@@ -197,34 +197,34 @@
                   </button>
                 </div>
               </div>
-              <p class="mt-2 text-[11px] text-gray-500">Max 5 MB. JPG, PNG, WEBP, GIF.</p>
+              <p class="mt-2 text-[11px] text-app-muted">Max 5 MB. JPG, PNG, WEBP, GIF.</p>
             </div>
 
             <div>
-              <label class="block text-sm text-gray-400 mb-1">Display name</label>
+              <label class="block text-sm text-app-muted mb-1">Display name</label>
               <input
                 v-model="settingsDisplayName"
                 type="text"
-                class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
+                class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
                 placeholder="Display name"
               />
             </div>
             <div>
-              <label class="block text-sm text-gray-400 mb-1">Email</label>
+              <label class="block text-sm text-app-muted mb-1">Email</label>
               <input
                 v-model="settingsEmail"
                 type="email"
-                class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
+                class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
                 placeholder="you@example.com"
               />
             </div>
 
             <div class="rounded border border-chat-border bg-chat-input/40 p-3">
               <div class="mb-2 flex items-center justify-between gap-3">
-                <h3 class="text-sm font-semibold text-white">Status</h3>
+                <h3 class="text-sm font-semibold text-app-text">Status</h3>
                 <button
                   type="button"
-                  class="text-xs text-gray-400 transition-colors hover:text-white disabled:opacity-50"
+                  class="text-xs text-app-muted transition-colors hover:text-app-text disabled:opacity-50"
                   :disabled="!hasStatusDraft && !settingsInitialCustomStatusKey"
                   @click="clearStatusDraft"
                 >
@@ -235,7 +235,7 @@
                 <button
                   ref="statusEmojiPickerToggleButton"
                   type="button"
-                  class="flex h-10 min-w-10 items-center justify-center rounded border border-chat-border bg-chat-input px-2 text-sm text-gray-200 transition-colors hover:bg-white/10"
+                  class="flex h-10 min-w-10 items-center justify-center rounded border border-chat-border bg-chat-input px-2 text-sm text-app-secondaryText transition-colors hover:bg-chat-msgHover"
                   @click.stop="toggleStatusEmojiPicker"
                 >
                   {{ settingsStatusEmoji || 'Emoji' }}
@@ -244,25 +244,25 @@
                   v-model="settingsStatusText"
                   type="text"
                   maxlength="120"
-                  class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                  class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text outline-none focus:border-accent"
                   placeholder="gone to a meeting"
                 />
                 <div class="col-span-2">
-                  <label class="mb-1 block text-xs text-gray-500">Valid for</label>
+                  <label class="mb-1 block text-xs text-app-muted">Valid for</label>
                   <div class="grid grid-cols-3 gap-2">
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[11px] text-gray-500">Days</span>
+                      <span class="mb-1 block text-[11px] text-app-muted">Days</span>
                       <input
                         v-model.number="settingsStatusDurationDays"
                         type="number"
                         min="0"
                         step="1"
                         inputmode="numeric"
-                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text outline-none focus:border-accent"
                       />
                     </label>
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[11px] text-gray-500">Hours</span>
+                      <span class="mb-1 block text-[11px] text-app-muted">Hours</span>
                       <input
                         v-model.number="settingsStatusDurationHours"
                         type="number"
@@ -270,11 +270,11 @@
                         max="23"
                         step="1"
                         inputmode="numeric"
-                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text outline-none focus:border-accent"
                       />
                     </label>
                     <label class="min-w-0">
-                      <span class="mb-1 block text-[11px] text-gray-500">Minutes</span>
+                      <span class="mb-1 block text-[11px] text-app-muted">Minutes</span>
                       <input
                         v-model.number="settingsStatusDurationMinutes"
                         type="number"
@@ -282,13 +282,41 @@
                         max="59"
                         step="1"
                         inputmode="numeric"
-                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text outline-none focus:border-accent"
                       />
                     </label>
                   </div>
                 </div>
               </div>
               <p v-if="settingsStatusError" class="mt-2 text-xs text-red-400">{{ settingsStatusError }}</p>
+            </div>
+
+            <div class="rounded border border-chat-border bg-chat-input/40 p-3" aria-labelledby="profile-color-theme-heading">
+              <h3 id="profile-color-theme-heading" class="text-sm font-semibold text-app-text">Color theme</h3>
+              <div class="mt-3 grid grid-cols-3 gap-2">
+                <button
+                  v-for="theme in colorThemes"
+                  :key="theme.id"
+                  type="button"
+                  class="rounded border px-2 py-2 text-left text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-accent"
+                  :class="currentThemeId === theme.id
+                    ? 'border-accent bg-app-selection text-app-selectionText'
+                    : 'border-chat-border bg-chat-input text-app-secondaryText hover:bg-chat-msgHover'"
+                  :aria-pressed="currentThemeId === theme.id"
+                  :data-testid="`profile-theme-${theme.id}`"
+                  @click="setColorTheme(theme.id)"
+                >
+                  <span class="mb-2 flex gap-1" aria-hidden="true">
+                    <span
+                      v-for="swatch in theme.swatches"
+                      :key="swatch"
+                      class="h-4 flex-1 rounded-sm border border-chat-border"
+                      :style="{ backgroundColor: swatch }"
+                    />
+                  </span>
+                  <span class="block truncate font-medium">{{ theme.label }}</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -304,14 +332,14 @@
 
           <div class="flex gap-3 mt-5">
             <button
-              class="flex-1 py-2 rounded bg-white/10 hover:bg-white/20 text-gray-200 text-sm transition-colors"
+              class="flex-1 py-2 rounded bg-chat-msgHover hover:bg-app-tertiary text-app-secondaryText text-sm transition-colors"
               :disabled="settingsLoading"
               @click="closeSettings"
             >
               Cancel
             </button>
             <button
-              class="flex-1 py-2 rounded bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              class="flex-1 py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="!canSaveSettings || settingsLoading"
               @click="saveSettings"
             >
@@ -321,26 +349,26 @@
 
           <!-- Change password section -->
           <div class="border-t border-chat-border mt-6 pt-5">
-            <h3 class="text-sm font-semibold text-white mb-3">Change password</h3>
+            <h3 class="text-sm font-semibold text-app-text mb-3">Change password</h3>
             <div class="space-y-3">
               <div>
-                <label class="block text-sm text-gray-400 mb-1">New password</label>
+                <label class="block text-sm text-app-muted mb-1">New password</label>
                 <input
                   v-model="settingsNewPassword"
                   type="password"
                   autocomplete="new-password"
-                  class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
+                  class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
                   placeholder="••••••••"
                   @keyup.enter="savePassword"
                 />
               </div>
               <div>
-                <label class="block text-sm text-gray-400 mb-1">Confirm new password</label>
+                <label class="block text-sm text-app-muted mb-1">Confirm new password</label>
                 <input
                   v-model="settingsConfirmPassword"
                   type="password"
                   autocomplete="new-password"
-                  class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent"
+                  class="w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text text-sm outline-none focus:border-accent"
                   placeholder="••••••••"
                   @keyup.enter="savePassword"
                 />
@@ -354,7 +382,7 @@
             </div>
             <div class="flex justify-end mt-4">
               <button
-                class="px-4 py-2 rounded bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                class="px-4 py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="settingsPasswordLoading || (!settingsNewPassword && !settingsConfirmPassword)"
                 @click="savePassword"
               >
@@ -446,6 +474,7 @@ import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import { usePushNotifications, pushSupported } from '@/composables/usePushNotifications'
+import { useColorTheme } from '@/composables/useColorTheme'
 import { loadPushEndpoint } from '@/services/storage/pushStorage'
 import { loadManualPresencePreference } from '@/services/storage/manualPresenceStorage'
 import { useNotificationSoundEngine } from '@/services/sound'
@@ -652,6 +681,7 @@ const pinnedDialogsStore = usePinnedDialogsStore()
 const callStore = useCallStore()
 const authStore = useAuthStore()
 const { logout, isReconnecting, reconnectAttempt, reconnectNow } = useSessionOrchestrator()
+const { themes: colorThemes, currentThemeId, setTheme: setColorTheme } = useColorTheme()
 const offlineQueue = useOfflineQueue()
 const soundEngine = useNotificationSoundEngine()
 const platform = getPlatformOrNull()

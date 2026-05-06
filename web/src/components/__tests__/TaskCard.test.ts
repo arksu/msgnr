@@ -7,6 +7,7 @@ import {
   loadSubtaskCreateDraft,
   saveSubtaskCreateDraft,
 } from '@/services/storage/taskCreateDraftStorage'
+import { storage } from '@/services/storage/storageAdapter'
 
 const platformMocks = vi.hoisted(() => ({
   getPlatformOrNull: vi.fn(),
@@ -195,7 +196,7 @@ function mountTaskCard() {
 
 describe('TaskCard', () => {
   beforeEach(() => {
-    localStorage.clear()
+    storage.clear()
     vi.clearAllMocks()
     const platform = {
       files: {

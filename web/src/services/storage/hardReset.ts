@@ -2,6 +2,7 @@ import { getBackendBaseUrl, setBackendBaseUrl } from '@/services/runtime/backend
 import { clearAllData, deleteDatabase } from '@/services/db/cache'
 import { storage } from '@/services/storage/storageAdapter'
 import { clearStoredTokensAsync } from '@/services/storage/tokenStorage'
+import { COLOR_THEME_STORAGE_KEY } from '@/services/storage/colorThemeStorage'
 
 async function clearCacheStorage(): Promise<void> {
   if (typeof caches === 'undefined') return
@@ -27,6 +28,12 @@ function clearSessionStorage(): void {
  */
 export async function clearAllPersistedClientDataPreservingBackendUrl(): Promise<void> {
   const preservedBackendUrl = getBackendBaseUrl()
+  let preservedColorTheme: string | null = null
+  try {
+    preservedColorTheme = storage.getItem(COLOR_THEME_STORAGE_KEY)
+  } catch {
+    preservedColorTheme = null
+  }
 
   await clearStoredTokensAsync()
 
@@ -49,6 +56,14 @@ export async function clearAllPersistedClientDataPreservingBackendUrl(): Promise
       setBackendBaseUrl(preservedBackendUrl)
     } catch {
       // Ignore invalid persisted value.
+    }
+  }
+
+  if (preservedColorTheme) {
+    try {
+      storage.setItem(COLOR_THEME_STORAGE_KEY, preservedColorTheme)
+    } catch {
+      // Best-effort preference restore.
     }
   }
 }

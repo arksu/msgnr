@@ -222,7 +222,7 @@ onBeforeUnmount(() => {
 }
 
 .kanban-card-id {
-  @apply inline-block rounded border border-public_id/20 px-1.5 py-0.5 font-mono text-public_id;
+  @apply inline-block rounded border border-public_id/20 bg-app-taskIdBg px-1.5 py-0.5 font-mono text-public_id;
 }
 
 .kanban-card-title {

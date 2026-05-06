@@ -12,6 +12,8 @@ import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { isUuidTaskRouteValue, taskSlugFromPublicId } from '@/services/taskRoute'
+import { COLOR_THEME_STORAGE_KEY } from '@/services/storage/colorThemeStorage'
+import { storage } from '@/services/storage/storageAdapter'
 import * as chatApi from '@/services/http/chatApi'
 import { toNotificationOpenMessage } from '@/services/notificationOpen'
 import MainView from '@/views/MainView.vue'
@@ -264,7 +266,7 @@ let serviceWorkerContainerMock: ReturnType<typeof createServiceWorkerContainerMo
 
 describe('MainView server unavailable state', () => {
   beforeEach(() => {
-    localStorage.clear()
+    storage.clear()
     pinia = createPinia()
     setActivePinia(pinia)
     serviceWorkerContainerMock = createServiceWorkerContainerMock()
@@ -339,7 +341,7 @@ describe('MainView server unavailable state', () => {
   })
 
   it('applies stored manual away preference when auth completes', async () => {
-    localStorage.setItem('msgnr:manual-presence', 'away')
+    storage.setItem('msgnr:manual-presence', 'away')
     const router = createMainRouter()
     router.push('/')
     await router.isReady()
@@ -385,6 +387,38 @@ describe('MainView server unavailable state', () => {
     expect(wrapper.get('[data-testid="mode-collapse"]').attributes('aria-label')).toBe('Collapse sidebar')
   })
 
+  it('applies profile color theme selection immediately', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const authStore = useAuthStore()
+    authStore.user = {
+      id: 'user-1',
+      email: 'user@example.com',
+      displayName: 'User One',
+      avatarUrl: '',
+      role: 'member',
+      customStatus: null,
+    }
+
+    const wrapper = mountAtRoute(router)
+    await (wrapper.findComponent(MainView).vm as any).openSettings()
+    await flushUi()
+
+    const pinkButton = document.body.querySelector('[data-testid="profile-theme-pink"]') as HTMLButtonElement | null
+    expect(pinkButton).not.toBeNull()
+
+    pinkButton?.click()
+    await flushUi()
+
+    expect(storage.getItem(COLOR_THEME_STORAGE_KEY)).toBe('pink')
+    expect(document.documentElement.dataset.colorTheme).toBe('pink')
+    expect(pinkButton?.getAttribute('aria-pressed')).toBe('true')
+
+    wrapper.unmount()
+  })
+
   it('toggles the chat sidebar from the collapse button', async () => {
     const router = createMainRouter()
     router.push('/')
@@ -408,7 +442,7 @@ describe('MainView server unavailable state', () => {
   })
 
   it('restores persisted collapsed sidebar state on mount', async () => {
-    localStorage.setItem('msgnr:sidebar-collapsed:v1', 'true')
+    storage.setItem('msgnr:sidebar-collapsed:v1', 'true')
     const router = createMainRouter()
     router.push('/')
     await router.isReady()

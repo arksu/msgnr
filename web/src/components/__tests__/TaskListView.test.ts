@@ -2,6 +2,7 @@ import { reactive } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskListView from '@/components/tasks/TaskListView.vue'
+import { storage } from '@/services/storage/storageAdapter'
 
 const tasksStoreMock = reactive({
   activeStatuses: [] as Array<{ id: string; name: string }>,
@@ -60,7 +61,7 @@ vi.mock('@/stores/tasks', () => ({
 
 describe('TaskListView', () => {
   beforeEach(() => {
-    localStorage.clear()
+    storage.clear()
     vi.clearAllMocks()
   })
 
@@ -84,7 +85,7 @@ describe('TaskListView', () => {
   })
 
   it('shows only non-zero groups and triggers show-more loading', async () => {
-    localStorage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
+    storage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
     const wrapper = mount(TaskListView, {
       props: { templateFilter: null },
       global: {
@@ -109,7 +110,7 @@ describe('TaskListView', () => {
   })
 
   it('shows updated date in grouped mode', async () => {
-    localStorage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
+    storage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
     const wrapper = mount(TaskListView, {
       props: { templateFilter: null },
       global: {
@@ -139,7 +140,7 @@ describe('TaskListView', () => {
   })
 
   it('applies shared filter payload in grouped mode', async () => {
-    localStorage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
+    storage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
     const wrapper = mount(TaskListView, {
       props: { templateFilter: null },
       global: {
@@ -168,7 +169,7 @@ describe('TaskListView', () => {
   })
 
   it('emits task public id when a grouped row is clicked', async () => {
-    localStorage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
+    storage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
     const wrapper = mount(TaskListView, {
       props: { templateFilter: null },
       global: {

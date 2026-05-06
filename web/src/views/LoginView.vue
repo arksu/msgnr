@@ -5,11 +5,11 @@
       <!-- Logo / brand -->
       <div class="text-center mb-8">
         <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-accent mb-4">
-          <svg class="w-7 h-7 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <svg class="w-7 h-7 text-app-onAccent" fill="currentColor" viewBox="0 0 24 24">
             <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
           </svg>
         </div>
-        <h1 class="text-2xl font-bold text-white">Sign in to Msgnr</h1>
+        <h1 class="text-2xl font-bold text-app-text">Sign in to Msgnr</h1>
         <p class="text-sidebar-textMuted text-sm mt-1">Your team messaging platform</p>
       </div>
 
@@ -17,30 +17,30 @@
       <div class="bg-chat-input border border-chat-border rounded-xl p-7 shadow-2xl">
         <form @submit.prevent="handleSubmit" novalidate>
           <div v-if="isDesktopLogin" class="mb-4">
-            <label class="block text-sm font-medium text-gray-300 mb-1.5">Backend URL</label>
+            <label class="block text-sm font-medium text-app-secondaryText mb-1.5">Backend URL</label>
             <input
               v-model="form.backendUrl"
               type="url"
               autocomplete="url"
               placeholder="https://chat.company.internal"
               required
-              class="w-full bg-sidebar-bg border border-chat-border rounded-lg px-3 py-2.5 text-white placeholder-gray-600 text-sm outline-none focus:border-accent transition-colors"
+              class="w-full bg-sidebar-bg border border-chat-border rounded-lg px-3 py-2.5 text-app-text placeholder-gray-600 text-sm outline-none focus:border-accent transition-colors"
               :class="errors.backendUrl ? 'border-red-500' : ''"
               @blur="validateBackendUrl"
             />
-            <p class="text-gray-500 text-xs mt-1">Desktop client connects to this Msgnr server.</p>
+            <p class="text-app-muted text-xs mt-1">Desktop client connects to this Msgnr server.</p>
             <p v-if="errors.backendUrl" class="text-red-400 text-xs mt-1">{{ errors.backendUrl }}</p>
           </div>
 
           <div class="mb-4">
-            <label class="block text-sm font-medium text-gray-300 mb-1.5">Email</label>
+            <label class="block text-sm font-medium text-app-secondaryText mb-1.5">Email</label>
             <input
               v-model="form.email"
               type="email"
               autocomplete="email"
               placeholder="you@example.com"
               required
-              class="w-full bg-sidebar-bg border border-chat-border rounded-lg px-3 py-2.5 text-white placeholder-gray-600 text-sm outline-none focus:border-accent transition-colors"
+              class="w-full bg-sidebar-bg border border-chat-border rounded-lg px-3 py-2.5 text-app-text placeholder-gray-600 text-sm outline-none focus:border-accent transition-colors"
               :class="errors.email ? 'border-red-500' : ''"
               @blur="validateEmail"
             />
@@ -48,7 +48,7 @@
           </div>
 
           <div class="mb-5">
-            <label class="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+            <label class="block text-sm font-medium text-app-secondaryText mb-1.5">Password</label>
             <div class="relative">
               <input
                 v-model="form.password"
@@ -56,7 +56,7 @@
                 autocomplete="current-password"
                 placeholder="••••••••"
                 required
-                class="w-full bg-sidebar-bg border border-chat-border rounded-lg px-3 py-2.5 text-white placeholder-gray-600 text-sm outline-none focus:border-accent transition-colors pr-10"
+                class="w-full bg-sidebar-bg border border-chat-border rounded-lg px-3 py-2.5 text-app-text placeholder-gray-600 text-sm outline-none focus:border-accent transition-colors pr-10"
                 :class="errors.password ? 'border-red-500' : ''"
                 @blur="validatePassword"
               />
@@ -89,7 +89,7 @@
 
           <button
             type="submit"
-            class="w-full py-2.5 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            class="w-full py-2.5 rounded-lg bg-accent hover:bg-accent-hover text-app-onAccent font-semibold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             :disabled="authStore.authState === 'LOGGING_IN'"
           >
             <svg v-if="authStore.authState === 'LOGGING_IN'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">

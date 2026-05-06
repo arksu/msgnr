@@ -43,7 +43,7 @@ const USER_MENTION_CLASSES = [
 const TASK_MENTION_CLASSES = [
   ...MENTION_BASE_CLASSES,
   'border-public_id/25',
-  'bg-public_id/10',
+  'bg-app-taskIdBg',
   'text-public_id',
   'hover:border-public_id/50',
   'hover:bg-public_id/15',

@@ -40,7 +40,7 @@
           {{ task.parent_public_id ?? 'Parent task' }}
         </button>
 
-        <span class="font-mono text-public_id border border-public_id/20 px-2 py-0.5 rounded shrink-0">
+        <span class="font-mono text-public_id bg-app-taskIdBg border border-public_id/20 px-2 py-0.5 rounded shrink-0">
           {{ task.public_id }}
         </span>
         <input
@@ -172,7 +172,7 @@
             class="flex items-center gap-2 px-3 py-2 rounded bg-chat-input border border-chat-border hover:border-accent/40 transition-colors cursor-pointer group"
             @click="tasksStore.selectTask(sub.id)"
           >
-            <span class="font-mono text-public_id border border-public_id/20 px-1.5 py-0.5 rounded shrink-0">
+            <span class="font-mono text-public_id bg-app-taskIdBg border border-public_id/20 px-1.5 py-0.5 rounded shrink-0">
               {{ sub.public_id }}
             </span>
             <span class="flex-1 min-w-0 text-sm text-gray-200 truncate">{{ sub.title }}</span>

@@ -98,7 +98,7 @@
           <div class="field-label">Status</div>
           <select
             v-model="viewStatusId"
-            class="field-select"
+            class="field-select text-app-text"
             :disabled="statusSaving"
             @change="onViewStatusChange"
           >
@@ -267,7 +267,7 @@
           <!-- Status -->
           <div>
             <label class="form-label">Status <span class="text-red-400">*</span></label>
-            <select v-model="subtaskForm.statusId" class="w-full bg-chat-bg border border-chat-border rounded px-3 py-1.5 text-white text-sm outline-none focus:border-accent transition-colors">
+            <select v-model="subtaskForm.statusId" class="w-full bg-chat-bg border border-chat-border rounded px-3 py-1.5 text-app-text text-sm outline-none focus:border-accent transition-colors">
               <option value="">— select status —</option>
               <option v-for="s in tasksStore.activeStatuses" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
@@ -1543,13 +1543,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .field-label {
-  @apply text-xs text-gray-500 uppercase tracking-wide mb-1;
+  @apply text-xs text-app-muted uppercase tracking-wide mb-1;
 }
 .form-label {
-  @apply block text-xs text-gray-400 mb-1;
+  @apply block text-xs text-app-muted mb-1;
 }
 .field-select {
-  @apply bg-chat-input border border-chat-border rounded px-2 py-1 text-white text-sm outline-none focus:border-accent;
+  @apply bg-chat-input border border-chat-border rounded px-2 py-1 text-app-text text-sm outline-none focus:border-accent;
 }
 .btn-primary {
   @apply px-3 py-1.5 rounded bg-accent hover:bg-accent-hover text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed;

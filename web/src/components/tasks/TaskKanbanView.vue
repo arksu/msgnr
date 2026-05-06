@@ -42,7 +42,7 @@
               @click="emit('openTask', item.public_id)"
             >
               <div class="kanban-card-id">{{ item.public_id }}</div>
-              <div class="kanban-card-title">{{ item.title }}</div>
+              <div class="kanban-card-title text-app-text">{{ item.title }}</div>
               <div class="kanban-card-description">{{ item.description_preview }}</div>
             </button>
 
@@ -206,11 +206,11 @@ onBeforeUnmount(() => {
 }
 
 .kanban-column-header {
-  @apply flex items-center justify-between gap-2 border-b border-chat-border px-3 py-2 text-sm font-semibold text-gray-200;
+  @apply flex items-center justify-between gap-2 border-b border-chat-border px-3 py-2 text-sm font-semibold text-app-text;
 }
 
 .kanban-count {
-  @apply rounded bg-chat-bg px-2 py-0.5 text-xs text-gray-400;
+  @apply rounded bg-chat-bg px-2 py-0.5 text-xs text-app-muted;
 }
 
 .kanban-cards {
@@ -226,11 +226,11 @@ onBeforeUnmount(() => {
 }
 
 .kanban-card-title {
-  @apply mt-1 whitespace-normal break-words text-sm font-medium text-gray-100;
+  @apply mt-1 whitespace-normal break-words text-sm font-medium text-app-text;
 }
 
 .kanban-card-description {
-  @apply mt-1 text-xs leading-5 text-gray-400;
+  @apply mt-1 text-xs leading-5 text-app-muted;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -238,7 +238,7 @@ onBeforeUnmount(() => {
 }
 
 .kanban-empty {
-  @apply rounded border border-dashed border-chat-border p-3 text-center text-xs text-gray-500;
+  @apply rounded border border-dashed border-chat-border p-3 text-center text-xs text-app-muted;
 }
 
 .kanban-more {

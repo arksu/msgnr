@@ -413,6 +413,7 @@ describe('MainView server unavailable state', () => {
 
     const pinkButton = document.body.querySelector('[data-testid="profile-theme-pink"]') as HTMLButtonElement | null
     expect(pinkButton).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="profile-theme-rose"]')).not.toBeNull()
 
     pinkButton?.click()
     await flushUi()

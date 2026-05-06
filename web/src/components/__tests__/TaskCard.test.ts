@@ -239,6 +239,13 @@ describe('TaskCard', () => {
     expect(wrapper.text()).not.toContain('Edit')
   })
 
+  it('uses theme text token for the task status select', async () => {
+    const wrapper = mountTaskCard()
+    await flushPromises()
+
+    expect(wrapper.get('select.field-select').classes()).toContain('text-app-text')
+  })
+
   it('autosaves trimmed markdown description without edit mode', async () => {
     vi.useFakeTimers()
     const wrapper = mount(TaskCard, {

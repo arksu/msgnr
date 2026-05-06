@@ -1,4 +1,4 @@
-export const COLOR_THEME_IDS = ['dark', 'light', 'pink'] as const
+export const COLOR_THEME_IDS = ['dark', 'light', 'pink', 'rose'] as const
 
 export type ThemeId = typeof COLOR_THEME_IDS[number]
 
@@ -147,6 +147,41 @@ export const colorThemes: readonly ColorTheme[] = [
       sidebarText: '#4A2438',
       sidebarTextMuted: '#87536F',
       sidebarHeading: '#A53D72',
+      sidebarUnreadBadge: '#FFFFFF',
+    },
+  },
+  {
+    id: 'rose',
+    label: 'Rose',
+    colorScheme: 'light',
+    swatches: ['#FFF5F7', '#FFE9F4', '#F1B3BE', '#D598A3'],
+    tokens: {
+      bgPrimary: '#FFF5F7',
+      bgSecondary: '#FFE9F4',
+      bgTertiary: '#FFDBE6',
+      surface: '#FFFFFF',
+      surfaceHover: '#FFE9F4',
+      input: '#FFFFFF',
+      divider: '#FFDBE6',
+      textPrimary: '#4A3539',
+      textSecondary: '#8E767A',
+      textMuted: '#A99095',
+      textOnAccent: '#FFFFFF',
+      accent: '#F1B3BE',
+      accentHover: '#E3A5B0',
+      selectionBg: '#FFCED9',
+      selectionText: '#4A3539',
+      selectionBorder: '#D598A3',
+      taskIdText: '#8E4F5A',
+      taskIdBg: '#FFE9F4',
+      statusGreen: '#2FBF7B',
+      statusRed: '#E05268',
+      statusAmber: '#B87838',
+      sidebarBg: '#FFE9F4',
+      sidebarHover: '#FFDBE6',
+      sidebarText: '#5E4449',
+      sidebarTextMuted: '#8E767A',
+      sidebarHeading: '#B86F7C',
       sidebarUnreadBadge: '#FFFFFF',
     },
   },

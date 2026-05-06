@@ -108,6 +108,15 @@ describe('TaskKanbanView', () => {
     expect(wrapper.text()).toContain('First task preview text')
   })
 
+  it('uses theme text tokens for kanban task titles', async () => {
+    const wrapper = mountKanban()
+    await flushPromises()
+
+    const title = wrapper.get('.kanban-card-title')
+    expect(title.classes()).toContain('text-app-text')
+    expect(title.classes()).not.toContain('text-gray-100')
+  })
+
   it('applies filter payload in grouped mode and supports show more', async () => {
     const wrapper = mountKanban()
     await flushPromises()

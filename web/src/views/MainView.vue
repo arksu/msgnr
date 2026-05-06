@@ -248,13 +248,44 @@
                   placeholder="gone to a meeting"
                 />
                 <div class="col-span-2">
-                  <label class="mb-1 block text-xs text-gray-500">Until</label>
-                  <input
-                    v-model="settingsStatusExpiresAtLocal"
-                    type="datetime-local"
-                    :min="settingsStatusMinDatetime"
-                    class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
-                  />
+                  <label class="mb-1 block text-xs text-gray-500">Valid for</label>
+                  <div class="grid grid-cols-3 gap-2">
+                    <label class="min-w-0">
+                      <span class="mb-1 block text-[11px] text-gray-500">Days</span>
+                      <input
+                        v-model.number="settingsStatusDurationDays"
+                        type="number"
+                        min="0"
+                        step="1"
+                        inputmode="numeric"
+                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                      />
+                    </label>
+                    <label class="min-w-0">
+                      <span class="mb-1 block text-[11px] text-gray-500">Hours</span>
+                      <input
+                        v-model.number="settingsStatusDurationHours"
+                        type="number"
+                        min="0"
+                        max="23"
+                        step="1"
+                        inputmode="numeric"
+                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                      />
+                    </label>
+                    <label class="min-w-0">
+                      <span class="mb-1 block text-[11px] text-gray-500">Minutes</span>
+                      <input
+                        v-model.number="settingsStatusDurationMinutes"
+                        type="number"
+                        min="0"
+                        max="59"
+                        step="1"
+                        inputmode="numeric"
+                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+                      />
+                    </label>
+                  </div>
                 </div>
               </div>
               <p v-if="settingsStatusError" class="mt-2 text-xs text-red-400">{{ settingsStatusError }}</p>
@@ -586,7 +617,9 @@ const settingsInitialDisplayName = ref('')
 const settingsInitialEmail = ref('')
 const settingsStatusText = ref('')
 const settingsStatusEmoji = ref('')
-const settingsStatusExpiresAtLocal = ref('')
+const settingsStatusDurationDays = ref(0)
+const settingsStatusDurationHours = ref(1)
+const settingsStatusDurationMinutes = ref(0)
 const settingsInitialCustomStatusKey = ref('')
 const settingsStatusSaveError = ref('')
 const settingsNewPassword = ref('')
@@ -597,7 +630,6 @@ const settingsPasswordSuccess = ref('')
 const settingsAvatarLoading = ref(false)
 const settingsAvatarError = ref('')
 const profileAvatarInput = ref<HTMLInputElement | null>(null)
-const settingsStatusMinDatetime = ref('')
 const {
   showEmojiPicker: showStatusEmojiPicker,
   pickerRoot: statusEmojiPickerRoot,
@@ -1215,54 +1247,62 @@ watch(incomingInvite, (invite) => {
   soundEngine.stopCallInviteRing()
 }, { immediate: true })
 
-function padDatePart(value: number): string {
-  return String(value).padStart(2, '0')
+const DEFAULT_STATUS_DURATION_MINUTES = 60
+
+function statusDurationPart(value: unknown): number | null {
+  if (value === '') return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) return null
+  return parsed
 }
 
-function toDatetimeLocalValue(date: Date): string {
-  return [
-    date.getFullYear(),
-    padDatePart(date.getMonth() + 1),
-    padDatePart(date.getDate()),
-  ].join('-') + `T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`
+function currentStatusDurationTotalMinutes(): number | null {
+  const days = statusDurationPart(settingsStatusDurationDays.value)
+  const hours = statusDurationPart(settingsStatusDurationHours.value)
+  const minutes = statusDurationPart(settingsStatusDurationMinutes.value)
+  if (days === null || hours === null || minutes === null) return null
+  if (hours > 23 || minutes > 59) return null
+  return days * 24 * 60 + hours * 60 + minutes
 }
 
-function defaultStatusExpiryLocal(): string {
-  const date = new Date(Date.now() + 60 * 60 * 1000)
-  return toDatetimeLocalValue(date)
+function setStatusDurationFromMinutes(totalMinutes: number) {
+  const normalized = Math.max(1, Math.floor(totalMinutes))
+  settingsStatusDurationDays.value = Math.floor(normalized / (24 * 60))
+  const dayRemainder = normalized % (24 * 60)
+  settingsStatusDurationHours.value = Math.floor(dayRemainder / 60)
+  settingsStatusDurationMinutes.value = dayRemainder % 60
 }
 
-function parseStatusExpiryLocal(): Date | null {
-  const raw = settingsStatusExpiresAtLocal.value.trim()
-  if (!raw) return null
-  const date = new Date(raw)
-  return Number.isFinite(date.getTime()) ? date : null
+function resetStatusDuration() {
+  setStatusDurationFromMinutes(DEFAULT_STATUS_DURATION_MINUTES)
 }
 
 function currentStatusExpiryIso(): string {
-  const date = parseStatusExpiryLocal()
-  return date ? date.toISOString() : ''
+  const totalMinutes = currentStatusDurationTotalMinutes()
+  if (totalMinutes === null || totalMinutes <= 0) return ''
+  return new Date(Date.now() + totalMinutes * 60 * 1000).toISOString()
 }
 
 function currentStatusKey(): string {
   const text = settingsStatusText.value.trim()
   if (!text) return ''
+  const totalMinutes = currentStatusDurationTotalMinutes()
   return JSON.stringify([
     text,
     settingsStatusEmoji.value.trim(),
-    currentStatusExpiryIso(),
+    totalMinutes,
   ])
 }
 
 const hasStatusDraft = computed(() =>
-  Boolean(settingsStatusText.value.trim() || settingsStatusEmoji.value.trim() || settingsStatusExpiresAtLocal.value.trim()),
+  Boolean(settingsStatusText.value.trim() || settingsStatusEmoji.value.trim()),
 )
 
 const settingsStatusValidationError = computed(() => {
   if (!settingsStatusText.value.trim()) return ''
-  const expiry = parseStatusExpiryLocal()
-  if (!expiry) return 'Choose when the status should expire.'
-  if (expiry.getTime() <= Date.now()) return 'Choose a future expiry.'
+  const totalMinutes = currentStatusDurationTotalMinutes()
+  if (totalMinutes === null) return 'Enter a valid status duration.'
+  if (totalMinutes <= 0) return 'Status duration must be at least 1 minute.'
   return ''
 })
 
@@ -1373,19 +1413,16 @@ function conversationNotificationBody(event: IncomingMessageNotification): strin
   return preview
 }
 
-function refreshStatusMinDatetime() {
-  settingsStatusMinDatetime.value = toDatetimeLocalValue(new Date())
-}
-
 function setStatusDraftFromStatus(status: UserCustomStatus | null) {
   if (isUserCustomStatusActive(status)) {
     settingsStatusText.value = status.text
     settingsStatusEmoji.value = status.emoji
-    settingsStatusExpiresAtLocal.value = toDatetimeLocalValue(new Date(status.expiresAt))
+    const remainingMinutes = Math.ceil((Date.parse(status.expiresAt) - Date.now()) / (60 * 1000))
+    setStatusDurationFromMinutes(remainingMinutes)
   } else {
     settingsStatusText.value = ''
     settingsStatusEmoji.value = ''
-    settingsStatusExpiresAtLocal.value = defaultStatusExpiryLocal()
+    resetStatusDuration()
   }
   settingsInitialCustomStatusKey.value = currentStatusKey()
 }
@@ -1393,7 +1430,7 @@ function setStatusDraftFromStatus(status: UserCustomStatus | null) {
 function clearStatusDraft() {
   settingsStatusText.value = ''
   settingsStatusEmoji.value = ''
-  settingsStatusExpiresAtLocal.value = defaultStatusExpiryLocal()
+  resetStatusDuration()
   settingsStatusSaveError.value = ''
   closeStatusEmojiPicker()
 }
@@ -1432,7 +1469,6 @@ async function openSettings() {
   settingsConfirmPassword.value = ''
   settingsPasswordError.value = ''
   settingsPasswordSuccess.value = ''
-  refreshStatusMinDatetime()
   try {
     await authStore.ensureUserLoaded()
   } catch (error) {

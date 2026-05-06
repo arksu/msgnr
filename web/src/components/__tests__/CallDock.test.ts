@@ -277,11 +277,27 @@ describe('CallDock invite modal', () => {
     expect(modalText).toContain('Eve')
     expect(modalText).not.toContain('ada@example.com')
 
+    const searchInput = document.body.querySelector('[data-testid="calldock-invite-search"]') as HTMLInputElement | null
+    expect(searchInput).not.toBeNull()
+    searchInput!.value = 'bob'
+    searchInput!.dispatchEvent(new Event('input'))
+    await flushAll()
+
+    expect(document.body.querySelector('[data-testid="calldock-invite-candidate-user-2"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="calldock-invite-candidate-user-3"]')).toBeNull()
+
     const candidate2 = document.body.querySelector('[data-testid="calldock-invite-candidate-user-2"]') as HTMLElement | null
-    const candidate3 = document.body.querySelector('[data-testid="calldock-invite-candidate-user-3"]') as HTMLElement | null
     expect(candidate2).not.toBeNull()
-    expect(candidate3).not.toBeNull()
     await candidate2?.click()
+    await flushAll()
+
+    searchInput!.value = 'eve@'
+    searchInput!.dispatchEvent(new Event('input'))
+    await flushAll()
+
+    expect(document.body.querySelector('[data-testid="calldock-invite-candidate-user-2"]')).toBeNull()
+    const candidate3 = document.body.querySelector('[data-testid="calldock-invite-candidate-user-3"]') as HTMLElement | null
+    expect(candidate3).not.toBeNull()
     await candidate3?.click()
     await flushAll()
 

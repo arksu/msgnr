@@ -252,39 +252,54 @@
           {{ channelCallError }}
         </div>
 
-        <div class="max-h-72 overflow-y-auto">
-          <button
-            v-for="member in channelCallMembers"
-            :key="member.userId"
-            class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-white/5"
-            @click="toggleChannelCallInvitee(member.userId)"
+        <div class="border-b border-chat-border px-4 py-3">
+          <input
+            v-model="channelCallSearch"
+            type="text"
+            data-testid="channel-call-invite-search"
+            placeholder="Search by nickname or email..."
+            class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text placeholder-app-muted outline-none focus:border-accent"
+            autofocus
           >
-            <input
-              type="checkbox"
-              class="h-4 w-4"
-              :checked="selectedChannelCallInvitees.includes(member.userId)"
-              @click.stop
-              @change="toggleChannelCallInvitee(member.userId)"
-            >
-            <UserAvatar
-              :user-id="member.userId"
-              :display-name="member.displayName || member.email"
-              :avatar-url="member.avatarUrl"
-              :custom-status="member.customStatus"
-              size="sm"
-            />
-            <div class="min-w-0">
-              <div class="truncate text-sm text-white">{{ member.displayName || member.email }}</div>
-              <div class="truncate text-xs text-gray-400">{{ member.email }}</div>
-            </div>
-          </button>
+        </div>
 
-          <div v-if="!channelCallLoading && channelCallMembers.length === 0" class="px-4 py-6 text-center text-xs text-gray-400">
-            No other members available
-          </div>
+        <div class="max-h-72 overflow-y-auto">
           <div v-if="channelCallLoading" class="px-4 py-6 text-center text-xs text-gray-400">
             Loading members...
           </div>
+          <div v-else-if="channelCallMembers.length === 0" class="px-4 py-6 text-center text-xs text-gray-400">
+            No other members available
+          </div>
+          <div v-else-if="filteredChannelCallMembers.length === 0" class="px-4 py-6 text-center text-xs text-gray-400">
+            No members match your search.
+          </div>
+          <template v-else>
+            <button
+              v-for="member in filteredChannelCallMembers"
+              :key="member.userId"
+              class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-white/5"
+              @click="toggleChannelCallInvitee(member.userId)"
+            >
+              <input
+                type="checkbox"
+                class="h-4 w-4"
+                :checked="selectedChannelCallInvitees.includes(member.userId)"
+                @click.stop
+                @change="toggleChannelCallInvitee(member.userId)"
+              >
+              <UserAvatar
+                :user-id="member.userId"
+                :display-name="member.displayName || member.email"
+                :avatar-url="member.avatarUrl"
+                :custom-status="member.customStatus"
+                size="sm"
+              />
+              <div class="min-w-0">
+                <div class="truncate text-sm text-white">{{ member.displayName || member.email }}</div>
+                <div class="truncate text-xs text-gray-400">{{ member.email }}</div>
+              </div>
+            </button>
+          </template>
         </div>
 
         <div class="flex justify-end gap-2 border-t border-chat-border px-4 py-3">
@@ -315,6 +330,7 @@ import { useWsStore } from '@/stores/ws'
 import { useCallStore } from '@/stores/call'
 import { listActiveCallMembers, listConversationMembers } from '@/services/http/chatApi'
 import { generateId } from '@/services/id'
+import { matchesCallInviteSearch, normalizeCallInviteSearchQuery } from '@/utils/callInviteSearch'
 import MessageBubble from './MessageBubble.vue'
 import MessageInput from './MessageInput.vue'
 import MembersPanel from './MembersPanel.vue'
@@ -476,6 +492,7 @@ const channelCallDialogOpen = ref(false)
 const channelCallLoading = ref(false)
 const startingChannelCall = ref(false)
 const channelCallError = ref('')
+const channelCallSearch = ref('')
 const channelCallMembers = ref<Array<{
   userId: string
   displayName: string
@@ -484,6 +501,11 @@ const channelCallMembers = ref<Array<{
   customStatus: UserCustomStatus | null
 }>>([])
 const selectedChannelCallInvitees = ref<string[]>([])
+const filteredChannelCallMembers = computed(() => {
+  const query = normalizeCallInviteSearchQuery(channelCallSearch.value)
+  if (!query) return channelCallMembers.value
+  return channelCallMembers.value.filter(member => matchesCallInviteSearch(member, query))
+})
 const statusLabel = computed(() => {
   switch (wsStore.state) {
     case 'BOOTSTRAPPING':
@@ -899,6 +921,7 @@ async function openChannelCallDialog() {
   channelCallDialogOpen.value = true
   channelCallLoading.value = true
   channelCallError.value = ''
+  channelCallSearch.value = ''
   selectedChannelCallInvitees.value = []
   try {
     const members = await listConversationMembers(conversation.value.id)
@@ -923,6 +946,7 @@ async function openChannelCallDialog() {
 function closeChannelCallDialog() {
   channelCallDialogOpen.value = false
   channelCallError.value = ''
+  channelCallSearch.value = ''
 }
 
 function toggleChannelCallInvitee(userId: string) {

@@ -1369,6 +1369,13 @@ describe('ChatArea', () => {
     expect(wrapper.find('[data-testid="invite-avatar-user-2"]').attributes('data-avatar-url')).toBe('/api/public/avatars/a/bob.png')
     expect(wrapper.find('[data-testid="invite-avatar-user-2"]').attributes('data-display-name')).toBe('Bob')
     expect(wrapper.find('[data-testid="invite-avatar-user-3"]').attributes('data-display-name')).toBe('eve@example.com')
+
+    const searchInput = wrapper.get('[data-testid="channel-call-invite-search"]')
+    await searchInput.setValue('bob')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="invite-avatar-user-2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="invite-avatar-user-3"]').exists()).toBe(false)
   })
 
   it('shows the active call member roster on hover and includes the current user', async () => {

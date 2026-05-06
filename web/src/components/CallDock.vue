@@ -604,6 +604,17 @@
           {{ inviteResultSummary }}
         </div>
 
+        <div class="border-b border-slate-700 px-4 py-3">
+          <input
+            v-model="inviteSearch"
+            type="text"
+            data-testid="calldock-invite-search"
+            placeholder="Search by nickname or email..."
+            class="w-full rounded border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-emerald-500"
+            autofocus
+          >
+        </div>
+
         <div class="max-h-72 overflow-y-auto">
           <div v-if="inviteLoading" class="px-4 py-6 text-center text-xs text-slate-400">
             Loading members...
@@ -611,9 +622,12 @@
           <div v-else-if="inviteCandidates.length === 0" class="px-4 py-6 text-center text-xs text-slate-400">
             No members are available to invite.
           </div>
+          <div v-else-if="filteredInviteCandidates.length === 0" class="px-4 py-6 text-center text-xs text-slate-400">
+            No members match your search.
+          </div>
           <template v-else>
             <button
-              v-for="candidate in inviteCandidates"
+              v-for="candidate in filteredInviteCandidates"
               :key="candidate.userId"
               :data-testid="`calldock-invite-candidate-${candidate.userId}`"
               class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-white/5"
@@ -666,6 +680,7 @@ import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { listDmCandidates, type DmCandidateItem } from '@/services/http/chatApi'
 import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
+import { matchesCallInviteSearch, normalizeCallInviteSearchQuery } from '@/utils/callInviteSearch'
 import { useFloatingDockPosition } from '@/composables/useFloatingDockPosition'
 import UserAvatar from './UserAvatar.vue'
 
@@ -772,6 +787,7 @@ const maximized = ref(false)
 const pinnedSid = ref<string | null>(null)
 const inviteDialogOpen = ref(false)
 const inviteCandidates = ref<InviteCandidate[]>([])
+const inviteSearch = ref('')
 const selectedInviteeIds = ref<string[]>([])
 const inviteLoading = ref(false)
 const inviteSubmitting = ref(false)
@@ -1011,6 +1027,12 @@ function handleDocumentPointerDown(event: PointerEvent) {
 // ── Computed layout ───────────────────────────────────────────────────────────
 
 const isVisible = computed(() => callStore.connected || callStore.connecting || Boolean(callStore.errorMessage))
+
+const filteredInviteCandidates = computed(() => {
+  const query = normalizeCallInviteSearchQuery(inviteSearch.value)
+  if (!query) return inviteCandidates.value
+  return inviteCandidates.value.filter(candidate => matchesCallInviteSearch(candidate, query))
+})
 
 const containerClass = computed(() =>
   maximized.value ? 'fixed inset-0 z-50' : 'fixed inset-0 z-50 pointer-events-none'
@@ -2238,6 +2260,7 @@ function toggleMaximized() {
 
 function closeInviteDialog() {
   inviteDialogOpen.value = false
+  inviteSearch.value = ''
 }
 
 function activeCallParticipantIds(): Set<string> {
@@ -2269,6 +2292,7 @@ async function openInviteDialog() {
   inviteLoading.value = true
   inviteError.value = ''
   inviteResultSummary.value = ''
+  inviteSearch.value = ''
   selectedInviteeIds.value = []
 
   const conversationId = callStore.activeConversationId

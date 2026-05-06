@@ -16,6 +16,8 @@ This directory contains UI components and interaction surfaces.
 4. Chat- and task-comment markdown display should stay consistent: rendered markdown surfaces use the shared marked-based helper path and `markdown-body` styling.
 5. Image lightboxes should support both backdrop-click close and `Escape` close for keyboard parity.
 6. Chat composers must accept explicit focus requests from parent orchestration; do not rely on global DOM queries to move focus into message inputs.
+7. The web UI supports multiple color themes; component text/background/border colors should use semantic Tailwind tokens (`text-app-text`, `text-app-muted`, `bg-chat-*`, `border-chat-border`, `text-public_id`) instead of hard-coded dark-only grays where readability matters.
+8. Task surfaces must keep task titles, status selects, task IDs, and Kanban/list metadata readable in light, pink, and rose themes; avoid scoped `@apply text-white` / `text-gray-100` for user-facing task text.
 
 ## Change Guidance
 
@@ -24,3 +26,4 @@ This directory contains UI components and interaction surfaces.
 3. Maintain consistency with existing design language unless a deliberate redesign is requested.
 4. When adding markdown rendering to a component, add/adjust tests to assert rendered HTML output rather than plain-text rendering.
 5. For message-composer focus behavior, prefer explicit props/tokens or exposed methods over ad hoc `document.querySelector(...).focus()` logic.
+6. When fixing theme readability, prefer semantic token substitutions and a targeted component regression over broad palette-specific CSS overrides.

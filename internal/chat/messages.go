@@ -101,8 +101,13 @@ func (s *Service) ListSavedMessages(ctx context.Context, userID uuid.UUID) ([]Sa
 			SenderID:               parseUUIDOrNil(row.SenderID),
 			SenderName:             row.SenderName,
 			Body:                   row.Body,
-			CreatedAt:              row.CreatedAt,
-			SavedAt:                row.SavedAt,
+			ForwardedFrom: forwardedMessageInfoFromStrings(
+				row.ForwardedFromMessageID,
+				row.ForwardedFromSenderID,
+				row.ForwardedFromSenderName,
+			),
+			CreatedAt: row.CreatedAt,
+			SavedAt:   row.SavedAt,
 		})
 	}
 	entitiesByMessageID, err := s.loadMessageEntitiesByMessageIDs(ctx, messageIDs)
@@ -163,6 +168,7 @@ func (s *Service) ListMessagePage(
 			SenderID:         row.SenderID,
 			SenderName:       row.DisplayName,
 			Body:             row.Body,
+			ForwardedFrom:    forwardedMessageInfoFromRow(row.ForwardedFromMessageID, row.ForwardedFromSenderID, row.ForwardedFromSenderName),
 			ChannelSeq:       row.ChannelSeq,
 			ThreadSeq:        row.ThreadSeq,
 			ThreadReplyCount: int32(row.ThreadReplyCount),
@@ -206,6 +212,243 @@ func (s *Service) ListMessagePage(
 	return messages, hasMore, nil
 }
 
+func forwardedMessageInfoFromRow(messageID uuid.NullUUID, senderID uuid.NullUUID, senderName sql.NullString) *ForwardedMessageInfo {
+	if !messageID.Valid || !senderID.Valid || !senderName.Valid || strings.TrimSpace(senderName.String) == "" {
+		return nil
+	}
+	return &ForwardedMessageInfo{
+		MessageID:  messageID.UUID,
+		SenderID:   senderID.UUID,
+		SenderName: senderName.String,
+	}
+}
+
+func forwardedMessageInfoFromStrings(messageIDRaw, senderIDRaw, senderNameRaw string) *ForwardedMessageInfo {
+	messageID := parseUUIDOrNil(messageIDRaw)
+	senderID := parseUUIDOrNil(senderIDRaw)
+	senderName := strings.TrimSpace(senderNameRaw)
+	if messageID == uuid.Nil || senderID == uuid.Nil || senderName == "" {
+		return nil
+	}
+	return &ForwardedMessageInfo{
+		MessageID:  messageID,
+		SenderID:   senderID,
+		SenderName: senderName,
+	}
+}
+
+// ForwardMessage copies one existing message into a destination conversation or thread.
+// The forwarded message is authored by ActorID while preserving source attribution.
+func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (ForwardMessageResult, error) {
+	var source struct {
+		ID         uuid.UUID
+		ChannelID  uuid.UUID
+		SenderID   uuid.UUID
+		SenderName string
+		Body       string
+	}
+	if err := s.pool.QueryRow(ctx, `
+		SELECT m.id, m.channel_id, m.sender_id, COALESCE(NULLIF(u.display_name, ''), u.email), m.body
+		  FROM messages m
+		  JOIN users u ON u.id = m.sender_id
+		 WHERE m.id = $1`,
+		p.SourceMessageID,
+	).Scan(&source.ID, &source.ChannelID, &source.SenderID, &source.SenderName, &source.Body); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ForwardMessageResult{}, ErrMessageNotFound
+		}
+		return ForwardMessageResult{}, fmt.Errorf("chat.ForwardMessage load source: %w", err)
+	}
+
+	isSourceMember, err := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
+		ChannelID: source.ChannelID,
+		UserID:    p.ActorID,
+	})
+	if err != nil {
+		return ForwardMessageResult{}, fmt.Errorf("chat.ForwardMessage source membership: %w", err)
+	}
+	if !isSourceMember {
+		return ForwardMessageResult{}, ErrNotMember
+	}
+
+	entitiesByMessageID, err := s.loadMessageEntitiesByMessageIDs(ctx, []uuid.UUID{p.SourceMessageID})
+	if err != nil {
+		return ForwardMessageResult{}, fmt.Errorf("chat.ForwardMessage load entities: %w", err)
+	}
+	attachments, err := s.loadMessageAttachmentsForForward(ctx, p.SourceMessageID)
+	if err != nil {
+		return ForwardMessageResult{}, fmt.Errorf("chat.ForwardMessage load attachments: %w", err)
+	}
+
+	result, err := s.SendMessage(ctx, SendMessageParams{
+		ChannelID: p.DestinationConversationID,
+		SenderID:  p.ActorID,
+		// Forwarding is intentionally non-idempotent in v1: each user action creates a new destination message.
+		ClientMsgID:         "forward:" + uuid.NewString(),
+		Body:                source.Body,
+		Entities:            entitiesByMessageID[p.SourceMessageID.String()],
+		ThreadRootMessageID: p.DestinationThreadRootMessageID,
+		AttachmentCopies:    attachments,
+		ForwardedFrom: &ForwardedMessageInfo{
+			MessageID:  source.ID,
+			SenderID:   source.SenderID,
+			SenderName: source.SenderName,
+		},
+		SuppressMentions: true,
+	})
+	if err != nil {
+		return ForwardMessageResult{}, err
+	}
+	return ForwardMessageResult{
+		MessageID:        result.MessageID,
+		ChannelSeq:       result.ChannelSeq,
+		CreatedAt:        result.CreatedAt,
+		DirectDeliveries: result.DirectDeliveries,
+	}, nil
+}
+
+func (s *Service) loadMessageAttachmentsForForward(ctx context.Context, messageID uuid.UUID) ([]MessageAttachment, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, conversation_id, message_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+		  FROM message_attachment
+		 WHERE message_id = $1
+		 ORDER BY created_at ASC, id ASC`,
+		messageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	attachments := make([]MessageAttachment, 0)
+	for rows.Next() {
+		attachment, err := scanMessageAttachment(rows)
+		if err != nil {
+			return nil, err
+		}
+		attachments = append(attachments, attachment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return attachments, nil
+}
+
+func (s *Service) ListForwardTargets(ctx context.Context, requesterID uuid.UUID) (ForwardTargets, error) {
+	conversationRows, err := s.pool.Query(ctx, `
+		SELECT c.id,
+		       COALESCE(
+		         NULLIF(CASE
+		           WHEN c.kind = 'dm' THEN COALESCE(NULLIF(peer.display_name, ''), peer.email, c.name)
+		           ELSE c.name
+		         END, ''),
+		         c.kind
+		       ) AS title,
+		       c.kind,
+		       c.visibility
+		  FROM channels c
+		  JOIN channel_members self_member
+		    ON self_member.channel_id = c.id
+		   AND self_member.user_id = $1
+		   AND self_member.is_archived = false
+		  LEFT JOIN LATERAL (
+		    SELECT u.display_name, u.email
+		      FROM channel_members peer_member
+		      JOIN users u ON u.id = peer_member.user_id
+		     WHERE peer_member.channel_id = c.id
+		       AND peer_member.is_archived = false
+		       AND peer_member.user_id <> $1
+		     ORDER BY u.display_name, u.email
+		     LIMIT 1
+		  ) peer ON c.kind = 'dm'
+		 WHERE c.hidden = false
+		   AND c.is_archived = false
+		 ORDER BY title ASC`,
+		requesterID,
+	)
+	if err != nil {
+		return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets conversations: %w", err)
+	}
+	defer conversationRows.Close()
+
+	result := ForwardTargets{
+		Conversations: make([]ForwardTargetConversation, 0),
+		Threads:       make([]ForwardTargetThread, 0),
+	}
+	for conversationRows.Next() {
+		var item ForwardTargetConversation
+		if err := conversationRows.Scan(&item.ConversationID, &item.Title, &item.Kind, &item.Visibility); err != nil {
+			return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets scan conversation: %w", err)
+		}
+		result.Conversations = append(result.Conversations, item)
+	}
+	if err := conversationRows.Err(); err != nil {
+		return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets conversation rows: %w", err)
+	}
+
+	threadRows, err := s.pool.Query(ctx, `
+		SELECT root.channel_id,
+		       COALESCE(
+		         NULLIF(CASE
+		           WHEN c.kind = 'dm' THEN COALESCE(NULLIF(peer.display_name, ''), peer.email, c.name)
+		           ELSE c.name
+		         END, ''),
+		         c.kind
+		       ) AS conversation_title,
+		       root.id,
+		       COALESCE(NULLIF(sender.display_name, ''), sender.email) AS root_sender_name,
+		       root.body,
+		       ts.reply_count,
+		       COALESCE(ts.last_reply_at, root.created_at) AS last_reply_at
+		  FROM thread_summaries ts
+		  JOIN messages root ON root.id = ts.root_message_id
+		  JOIN channels c ON c.id = root.channel_id
+		  JOIN users sender ON sender.id = root.sender_id
+		  JOIN channel_members self_member
+		    ON self_member.channel_id = c.id
+		   AND self_member.user_id = $1
+		   AND self_member.is_archived = false
+		  LEFT JOIN LATERAL (
+		    SELECT u.display_name, u.email
+		      FROM channel_members peer_member
+		      JOIN users u ON u.id = peer_member.user_id
+		     WHERE peer_member.channel_id = c.id
+		       AND peer_member.is_archived = false
+		       AND peer_member.user_id <> $1
+		     ORDER BY u.display_name, u.email
+		     LIMIT 1
+		  ) peer ON c.kind = 'dm'
+		 WHERE c.hidden = false
+		   AND c.is_archived = false
+		 ORDER BY COALESCE(ts.last_reply_at, root.created_at) DESC
+		 LIMIT 80`,
+		requesterID,
+	)
+	if err != nil {
+		return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets threads: %w", err)
+	}
+	defer threadRows.Close()
+	for threadRows.Next() {
+		var item ForwardTargetThread
+		if err := threadRows.Scan(
+			&item.ConversationID,
+			&item.ConversationTitle,
+			&item.ThreadRootMessageID,
+			&item.RootSenderName,
+			&item.RootBody,
+			&item.ReplyCount,
+			&item.LastReplyAt,
+		); err != nil {
+			return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets scan thread: %w", err)
+		}
+		result.Threads = append(result.Threads, item)
+	}
+	if err := threadRows.Err(); err != nil {
+		return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets thread rows: %w", err)
+	}
+	return result, nil
+}
+
 // SendMessage persists a message and emits message_created (and optionally
 // thread_summary_updated) events. It manages its own pgx transaction.
 func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMessageResult, error) {
@@ -213,7 +456,13 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	if len(p.AttachmentIDs) > maxMessageAttachments {
 		return SendMessageResult{}, fmt.Errorf("%w: too many attachments (max %d)", ErrInvalidAttachment, maxMessageAttachments)
 	}
-	if p.Body == "" && len(p.AttachmentIDs) == 0 {
+	if len(p.AttachmentCopies) > maxMessageAttachments {
+		return SendMessageResult{}, fmt.Errorf("%w: too many attachments (max %d)", ErrInvalidAttachment, maxMessageAttachments)
+	}
+	if len(p.AttachmentIDs) > 0 && len(p.AttachmentCopies) > 0 {
+		return SendMessageResult{}, fmt.Errorf("%w: cannot mix staged and copied attachments", ErrInvalidAttachment)
+	}
+	if p.Body == "" && len(p.AttachmentIDs) == 0 && len(p.AttachmentCopies) == 0 {
 		return SendMessageResult{}, ErrEmptyMessage
 	}
 
@@ -261,12 +510,21 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	if err != nil {
 		return SendMessageResult{}, err
 	}
-	normalizedEntities, err := s.validateAndNormalizeMessageEntities(ctx, tx, p.ChannelID, p.SenderID, p.Body, p.Entities)
-	if err != nil {
-		return SendMessageResult{}, err
+	if len(p.AttachmentCopies) > 0 {
+		attachments = make([]MessageAttachment, len(p.AttachmentCopies))
+		copy(attachments, p.AttachmentCopies)
+	}
+	var normalizedEntities []MessageEntity
+	if p.SuppressMentions {
+		normalizedEntities = append([]MessageEntity(nil), p.Entities...)
+	} else {
+		normalizedEntities, err = s.validateAndNormalizeMessageEntities(ctx, tx, p.ChannelID, p.SenderID, p.Body, p.Entities)
+		if err != nil {
+			return SendMessageResult{}, err
+		}
 	}
 
-	mentionEveryone := detectMentionEveryone(p.Body)
+	mentionEveryone := !p.SuppressMentions && detectMentionEveryone(p.Body)
 
 	var threadSeq int64
 	var threadReplyAt time.Time
@@ -308,6 +566,14 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	if isReply {
 		threadRootArg = p.ThreadRootMessageID
 	}
+	var forwardedFromMessageArg interface{} = nil
+	var forwardedFromSenderArg interface{} = nil
+	var forwardedFromSenderNameArg interface{} = nil
+	if p.ForwardedFrom != nil {
+		forwardedFromMessageArg = p.ForwardedFrom.MessageID
+		forwardedFromSenderArg = p.ForwardedFrom.SenderID
+		forwardedFromSenderNameArg = p.ForwardedFrom.SenderName
+	}
 
 	var msgID uuid.UUID
 	var channelSeq int64
@@ -323,10 +589,12 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		    RETURNING next_seq
 		)
 		INSERT INTO messages (channel_id, channel_seq, sender_id, client_msg_id, body,
+		                      forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
 		                      thread_root_id, thread_seq, mention_everyone, created_at)
-		VALUES ($1, (SELECT next_seq FROM seq), $2, $3, $4, $5, $6, $7, now())
+		VALUES ($1, (SELECT next_seq FROM seq), $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 		RETURNING id, channel_seq, client_msg_id, created_at`,
 		p.ChannelID, p.SenderID, p.ClientMsgID, p.Body,
+		forwardedFromMessageArg, forwardedFromSenderArg, forwardedFromSenderNameArg,
 		threadRootArg, threadSeq, mentionEveryone,
 	).Scan(&msgID, &channelSeq, &clientMsgID, &createdAt); err != nil {
 		if isUniqueViolation(err) {
@@ -344,7 +612,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		return SendMessageResult{}, fmt.Errorf("chat.SendMessage insert message: %w", err)
 	}
 
-	if len(attachments) > 0 {
+	if len(attachments) > 0 && len(p.AttachmentCopies) == 0 {
 		ids := make([]uuid.UUID, 0, len(attachments))
 		for _, attachment := range attachments {
 			ids = append(ids, attachment.ID)
@@ -364,6 +632,42 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		}
 		for i := range attachments {
 			attachments[i].MessageID = msgID
+		}
+	} else if len(attachments) > 0 {
+		batch := &pgx.Batch{}
+		now := time.Now().UTC()
+		for i := range attachments {
+			attachments[i].ID = uuid.New()
+			attachments[i].ConversationID = p.ChannelID
+			attachments[i].MessageID = msgID
+			attachments[i].UploadedBy = p.SenderID
+			attachments[i].CreatedAt = now
+			batch.Queue(`
+				INSERT INTO message_attachment (
+					id, conversation_id, message_id, file_name, file_size,
+					mime_type, storage_key, uploaded_by, created_at
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				attachments[i].ID,
+				attachments[i].ConversationID,
+				attachments[i].MessageID,
+				attachments[i].FileName,
+				attachments[i].FileSize,
+				attachments[i].MimeType,
+				attachments[i].StorageKey,
+				attachments[i].UploadedBy,
+				attachments[i].CreatedAt,
+			)
+		}
+		results := tx.SendBatch(ctx, batch)
+		for range attachments {
+			if _, err := results.Exec(); err != nil {
+				_ = results.Close()
+				return SendMessageResult{}, fmt.Errorf("chat.SendMessage copy attachments: %w", err)
+			}
+		}
+		if err := results.Close(); err != nil {
+			return SendMessageResult{}, fmt.Errorf("chat.SendMessage copy attachments: %w", err)
 		}
 	}
 	if err := s.insertMessageEntitiesTx(ctx, tx, msgID, normalizedEntities); err != nil {
@@ -399,6 +703,9 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	isDMConversation := conversationKind == "dm"
 
 	mentionedIDs := mentionedUserIDsFromEntities(normalizedEntities)
+	if p.SuppressMentions {
+		mentionedIDs = nil
+	}
 	if err := s.insertMessageMentionRowsTx(ctx, tx, msgID, mentionedIDs); err != nil {
 		return SendMessageResult{}, fmt.Errorf("chat.SendMessage %w", err)
 	}
@@ -431,6 +738,11 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		MentionEveryone:  mentionEveryone,
 		Attachments:      toProtoMessageAttachments(attachments),
 		Entities:         toProtoMessageEntities(normalizedEntities),
+	}
+	if p.ForwardedFrom != nil {
+		msgProto.ForwardedFromMessageId = p.ForwardedFrom.MessageID.String()
+		msgProto.ForwardedFromSenderId = p.ForwardedFrom.SenderID.String()
+		msgProto.ForwardedFromSenderName = p.ForwardedFrom.SenderName
 	}
 	if isReply {
 		msgProto.ThreadRootMessageId = p.ThreadRootMessageID.String()
@@ -1034,6 +1346,7 @@ func (s *Service) ListMessageContext(
 			SenderID:         row.SenderID,
 			SenderName:       row.DisplayName,
 			Body:             row.Body,
+			ForwardedFrom:    forwardedMessageInfoFromRow(row.ForwardedFromMessageID, row.ForwardedFromSenderID, row.ForwardedFromSenderName),
 			ChannelSeq:       row.ChannelSeq,
 			ThreadSeq:        row.ThreadSeq,
 			ThreadReplyCount: int32(row.ThreadReplyCount),

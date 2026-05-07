@@ -47,7 +47,7 @@ import {
   saveLastOpenedConversation,
   clearLastOpenedConversation,
 } from '@/services/storage/lastConversationStorage'
-import { ChatApiError, getMessageContext, listConversationMessages, listDmCandidates, listSavedMessages, listUnreadFeed, resolveUnreadFeedNotification, saveMessage as saveMessageApi, unsaveMessage as unsaveMessageApi } from '@/services/http/chatApi'
+import { ChatApiError, forwardMessage as forwardMessageApi, getMessageContext, listConversationMessages, listDmCandidates, listSavedMessages, listUnreadFeed, resolveUnreadFeedNotification, saveMessage as saveMessageApi, unsaveMessage as unsaveMessageApi } from '@/services/http/chatApi'
 import type {
   ConversationMessageItem,
   MessageEntityItem,
@@ -132,6 +132,12 @@ export interface MessageEntity {
   end: number
 }
 
+export interface ForwardedMessage {
+  messageId: string
+  senderId: string
+  senderName: string
+}
+
 export type SendStatus = 'sending' | 'queued' | 'failed'
 
 export interface Message {
@@ -141,6 +147,7 @@ export interface Message {
   senderName: string
   senderAvatarUrl?: string
   body: string
+  forwardedFrom?: ForwardedMessage
   entities?: MessageEntity[]
   channelSeq: bigint
   threadSeq: bigint
@@ -233,6 +240,7 @@ export interface SavedMessageItem {
   senderId: string
   senderName: string
   body: string
+  forwardedFrom?: ForwardedMessage
   entities?: MessageEntity[]
   createdAt: string
   savedAt: string
@@ -322,6 +330,24 @@ function normalizeMessageEntities(raw: Array<MessageEntityItem | ProtoMessageEnt
   }))
 }
 
+function normalizeForwardedMessage(raw: ConversationMessageItem['forwarded_from'] | HttpSavedMessageItem['forwarded_from'] | undefined | null): ForwardedMessage | undefined {
+  if (!raw?.message_id || !raw.sender_id || !raw.sender_name?.trim()) return undefined
+  return {
+    messageId: raw.message_id,
+    senderId: raw.sender_id,
+    senderName: decodeNotificationText(raw.sender_name),
+  }
+}
+
+function forwardedMessageFromProto(evt: ProtoMessageEvent): ForwardedMessage | undefined {
+  if (!evt.forwardedFromMessageId || !evt.forwardedFromSenderId || !evt.forwardedFromSenderName.trim()) return undefined
+  return {
+    messageId: evt.forwardedFromMessageId,
+    senderId: evt.forwardedFromSenderId,
+    senderName: decodeNotificationText(evt.forwardedFromSenderName),
+  }
+}
+
 function mentionedUserIdsFromEntities(entities: MessageEntity[]): string[] {
   return entities.filter(entity => entity.kind === 'user').map(entity => entity.targetId)
 }
@@ -402,6 +428,7 @@ function savedMessageItemFromHttp(item: HttpSavedMessageItem): SavedMessageItem 
     senderId: item.sender_id,
     senderName: decodeNotificationText(item.sender_name),
     body: item.body,
+    forwardedFrom: normalizeForwardedMessage(item.forwarded_from),
     entities: normalizeMessageEntities(item.entities),
     createdAt: item.created_at,
     savedAt: item.saved_at,
@@ -2200,6 +2227,20 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function forwardMessageToTarget(
+    message: Message,
+    destinationConversationId: string,
+    destinationThreadRootMessageId = '',
+  ): Promise<void> {
+    if (!message.id || message.sendStatus || message.pending || !destinationConversationId) return
+    try {
+      await forwardMessageApi(message.id, destinationConversationId, destinationThreadRootMessageId)
+      showToast('Message forwarded')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to forward message')
+    }
+  }
+
   function scheduleUnreadFeedRefresh() {
     if (!bootstrapped.value) return
     unreadFeedRefreshQueued.value = true
@@ -3284,6 +3325,7 @@ export const useChatStore = defineStore('chat', () => {
       senderName: resolveDisplayName(evt.senderId),
       senderAvatarUrl: resolveAvatarUrl(evt.senderId),
       body: evt.body,
+      forwardedFrom: forwardedMessageFromProto(evt),
       entities: normalizeMessageEntities(evt.entities),
       channelSeq: evt.channelSeq,
       threadSeq: evt.threadSeq,
@@ -3330,6 +3372,7 @@ export const useChatStore = defineStore('chat', () => {
         senderName: item.sender_name || resolveDisplayName(item.sender_id),
         senderAvatarUrl: resolveAvatarUrl(item.sender_id),
         body: item.body,
+        forwardedFrom: normalizeForwardedMessage(item.forwarded_from),
         entities: normalizeMessageEntities(item.entities),
         channelSeq: BigInt(item.channel_seq),
         threadSeq: BigInt(item.thread_seq),
@@ -3492,6 +3535,7 @@ export const useChatStore = defineStore('chat', () => {
     sendThreadReply,
     sendMessageToConversation,
     sendThreadReplyToRoot,
+    forwardMessageToTarget,
     startRealtimeFlow,
     setCachedBootstrap,
     startBootstrap,

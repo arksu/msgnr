@@ -88,6 +88,7 @@ export interface ConversationMessageItem {
   sender_id: string
   sender_name: string
   body: string
+  forwarded_from?: ForwardedMessageItem
   entities: MessageEntityItem[]
   channel_seq: string | number
   thread_seq: string | number
@@ -100,6 +101,12 @@ export interface ConversationMessageItem {
   my_reactions?: string[]
   attachments?: ChatMessageAttachmentItem[]
   is_saved?: boolean
+}
+
+export interface ForwardedMessageItem {
+  message_id: string
+  sender_id: string
+  sender_name: string
 }
 
 export interface ChatMessageAttachmentItem {
@@ -159,9 +166,32 @@ export interface SavedMessageItem {
   sender_id: string
   sender_name: string
   body: string
+  forwarded_from?: ForwardedMessageItem
   entities?: MessageEntityItem[]
   created_at: string
   saved_at: string
+}
+
+export interface ForwardTargetConversationItem {
+  conversation_id: string
+  title: string
+  kind: 'channel' | 'dm'
+  visibility: 'public' | 'private' | 'dm'
+}
+
+export interface ForwardTargetThreadItem {
+  conversation_id: string
+  conversation_title: string
+  thread_root_message_id: string
+  root_sender_name: string
+  root_body: string
+  reply_count: number
+  last_reply_at: string
+}
+
+export interface ForwardTargetsResponse {
+  conversations: ForwardTargetConversationItem[]
+  threads: ForwardTargetThreadItem[]
 }
 
 export interface SavedMessagesResponse {
@@ -318,6 +348,16 @@ export async function listSavedMessages(): Promise<SavedMessagesResponse> {
   } catch (e) { handleError(e) }
 }
 
+export async function listForwardTargets(): Promise<ForwardTargetsResponse> {
+  try {
+    const { data } = await http.get<ForwardTargetsResponse>('/api/chat/forward-targets')
+    return {
+      conversations: data.conversations ?? [],
+      threads: data.threads ?? [],
+    }
+  } catch (e) { handleError(e) }
+}
+
 export async function saveMessage(messageId: string): Promise<void> {
   try {
     await http.post(`/api/messages/${messageId}/save`)
@@ -327,6 +367,19 @@ export async function saveMessage(messageId: string): Promise<void> {
 export async function unsaveMessage(messageId: string): Promise<void> {
   try {
     await http.delete(`/api/messages/${messageId}/save`)
+  } catch (e) { handleError(e) }
+}
+
+export async function forwardMessage(
+  messageId: string,
+  destinationConversationId: string,
+  destinationThreadRootMessageId = '',
+): Promise<void> {
+  try {
+    await http.post(`/api/messages/${messageId}/forward`, {
+      destination_conversation_id: destinationConversationId,
+      destination_thread_root_message_id: destinationThreadRootMessageId,
+    })
   } catch (e) { handleError(e) }
 }
 

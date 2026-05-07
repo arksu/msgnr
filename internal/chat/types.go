@@ -89,6 +89,7 @@ type ConversationMessage struct {
 	SenderID            uuid.UUID
 	SenderName          string
 	Body                string
+	ForwardedFrom       *ForwardedMessageInfo
 	Entities            []MessageEntity
 	ChannelSeq          int64
 	ThreadSeq           int64
@@ -101,6 +102,48 @@ type ConversationMessage struct {
 	MyReactions         []string
 	Attachments         []MessageAttachment
 	IsSaved             bool
+}
+
+type ForwardedMessageInfo struct {
+	MessageID  uuid.UUID
+	SenderID   uuid.UUID
+	SenderName string
+}
+
+type ForwardMessageParams struct {
+	SourceMessageID                uuid.UUID
+	ActorID                        uuid.UUID
+	DestinationConversationID      uuid.UUID
+	DestinationThreadRootMessageID uuid.UUID
+}
+
+type ForwardMessageResult struct {
+	MessageID        uuid.UUID
+	ChannelSeq       int64
+	CreatedAt        *timestamppb.Timestamp
+	DirectDeliveries []DirectDelivery
+}
+
+type ForwardTargetConversation struct {
+	ConversationID uuid.UUID
+	Title          string
+	Kind           string
+	Visibility     string
+}
+
+type ForwardTargetThread struct {
+	ConversationID      uuid.UUID
+	ConversationTitle   string
+	ThreadRootMessageID uuid.UUID
+	RootSenderName      string
+	RootBody            string
+	ReplyCount          int32
+	LastReplyAt         time.Time
+}
+
+type ForwardTargets struct {
+	Conversations []ForwardTargetConversation
+	Threads       []ForwardTargetThread
 }
 
 type UnreadFeedItem struct {
@@ -130,6 +173,7 @@ type SavedMessageItem struct {
 	SenderID               uuid.UUID
 	SenderName             string
 	Body                   string
+	ForwardedFrom          *ForwardedMessageInfo
 	Entities               []MessageEntity
 	CreatedAt              time.Time
 	SavedAt                time.Time
@@ -233,6 +277,9 @@ type SendMessageParams struct {
 	Entities            []MessageEntity
 	ThreadRootMessageID uuid.UUID // zero value = not a thread reply
 	AttachmentIDs       []uuid.UUID
+	ForwardedFrom       *ForwardedMessageInfo
+	SuppressMentions    bool
+	AttachmentCopies    []MessageAttachment
 }
 
 // SendMessageResult is the output of SendMessage.

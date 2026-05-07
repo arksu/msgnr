@@ -18,10 +18,12 @@ VALUES (@channel_id,
         @mention_everyone,
         now())
 RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
           thread_root_id, thread_seq, mention_everyone, edited_at, created_at;
 
 -- name: GetMessageByClientMsgID :one
 SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
+       forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
        thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 FROM messages
 WHERE channel_id = @channel_id
@@ -30,6 +32,7 @@ LIMIT 1;
 
 -- name: GetMessageByID :one
 SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
+       forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
        thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 FROM messages
 WHERE id = @message_id;
@@ -41,12 +44,14 @@ SET body = @body,
     edited_at = now()
 WHERE id = @message_id
 RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
           thread_root_id, thread_seq, mention_everyone, edited_at, created_at;
 
 -- name: DeleteMessageByID :one
 DELETE FROM messages
 WHERE id = @message_id
 RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
           thread_root_id, thread_seq, mention_everyone, edited_at, created_at;
 
 -- name: InsertMessageMention :exec
@@ -61,6 +66,7 @@ WHERE root_message_id = @root_message_id;
 
 -- name: GetThreadMessages :many
 SELECT m.id, m.channel_id, m.channel_seq, m.sender_id, m.client_msg_id, m.body,
+       m.forwarded_from_message_id, m.forwarded_from_sender_id, m.forwarded_from_sender_name,
        m.thread_root_id, m.thread_seq, m.mention_everyone, m.edited_at, m.created_at
 FROM messages m
 WHERE m.thread_root_id = @root_message_id

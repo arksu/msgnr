@@ -21,6 +21,7 @@ declare module 'vue' {
     DocumentsSidebar: typeof import('./src/components/documents/DocumentsSidebar.vue')['default']
     DocumentsTreeNode: typeof import('./src/components/documents/DocumentsTreeNode.vue')['default']
     FieldsPanel: typeof import('./src/components/admin/FieldsPanel.vue')['default']
+    ForwardMessageDialog: typeof import('./src/components/ForwardMessageDialog.vue')['default']
     IosInstallGuide: typeof import('./src/components/IosInstallGuide.vue')['default']
     MembersPanel: typeof import('./src/components/MembersPanel.vue')['default']
     MessageBubble: typeof import('./src/components/MessageBubble.vue')['default']

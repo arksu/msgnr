@@ -309,6 +309,9 @@ message MessageEvent {
   google.protobuf.Timestamp edited_at = 13;
   repeated MessageEntity entities = 14;
   repeated string my_reactions = 15;
+  string forwarded_from_message_id = 16;
+  string forwarded_from_sender_id = 17;
+  string forwarded_from_sender_name = 18;
 }
 
 message MessageAttachment {

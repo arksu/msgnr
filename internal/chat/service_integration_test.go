@@ -244,6 +244,225 @@ func TestIntegration_SendMessage_Basic(t *testing.T) {
 	assert.Equal(t, "message_created", evtType)
 }
 
+func TestIntegration_ForwardMessage_ChatToChatCopiesMetadataAndAttachments(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	forwarderID, sourceChannelID := seedUserAndChannel(t, ctx, pool)
+	originalSenderID := createMemberInChannel(t, ctx, pool, sourceChannelID, "Original Sender")
+	destinationChannelID := seedChannelForUser(t, ctx, pool, forwarderID, "destination")
+
+	source, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   sourceChannelID,
+		SenderID:    originalSenderID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "source body",
+	})
+	require.NoError(t, err)
+	var sourceAttachmentID uuid.UUID
+	err = pool.QueryRow(ctx, `
+		INSERT INTO message_attachment (conversation_id, message_id, file_name, file_size, mime_type, storage_key, uploaded_by)
+		VALUES ($1, $2, 'source.txt', 12, 'text/plain', 'objects/source.txt', $3)
+		RETURNING id`,
+		sourceChannelID, source.MessageID, originalSenderID,
+	).Scan(&sourceAttachmentID)
+	require.NoError(t, err)
+
+	forwarded, err := svc.ForwardMessage(ctx, chat.ForwardMessageParams{
+		SourceMessageID:           source.MessageID,
+		ActorID:                   forwarderID,
+		DestinationConversationID: destinationChannelID,
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, source.MessageID, forwarded.MessageID)
+
+	page, hasMore, err := svc.ListMessagePage(ctx, forwarderID, destinationChannelID, nil, 20)
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.Len(t, page, 1)
+	assert.Equal(t, "source body", page[0].Body)
+	require.NotNil(t, page[0].ForwardedFrom)
+	assert.Equal(t, source.MessageID, page[0].ForwardedFrom.MessageID)
+	assert.Equal(t, originalSenderID, page[0].ForwardedFrom.SenderID)
+	assert.Equal(t, "Original Sender", page[0].ForwardedFrom.SenderName)
+	require.Len(t, page[0].Attachments, 1)
+	assert.NotEqual(t, sourceAttachmentID, page[0].Attachments[0].ID)
+	assert.Equal(t, "source.txt", page[0].Attachments[0].FileName)
+
+	var sourceStorageKey string
+	err = pool.QueryRow(ctx,
+		`SELECT storage_key FROM message_attachment WHERE id = $1`,
+		sourceAttachmentID,
+	).Scan(&sourceStorageKey)
+	require.NoError(t, err)
+	var copiedStorageKey string
+	err = pool.QueryRow(ctx,
+		`SELECT storage_key FROM message_attachment WHERE id = $1`,
+		page[0].Attachments[0].ID,
+	).Scan(&copiedStorageKey)
+	require.NoError(t, err)
+	assert.Equal(t, sourceStorageKey, copiedStorageKey)
+}
+
+func TestIntegration_ForwardMessage_ThreadReplyToThreadAndReplay(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	forwarderID, channelID := seedUserAndChannel(t, ctx, pool)
+	originalSenderID := createMemberInChannel(t, ctx, pool, channelID, "Reply Author")
+
+	sourceRoot, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    forwarderID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "source root",
+	})
+	require.NoError(t, err)
+	sourceReply, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            originalSenderID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "reply body",
+		ThreadRootMessageID: sourceRoot.MessageID,
+	})
+	require.NoError(t, err)
+	destinationRoot, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    forwarderID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "destination root",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.ForwardMessage(ctx, chat.ForwardMessageParams{
+		SourceMessageID:                sourceReply.MessageID,
+		ActorID:                        forwarderID,
+		DestinationConversationID:      channelID,
+		DestinationThreadRootMessageID: destinationRoot.MessageID,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.SubscribeThread(ctx, chat.SubscribeThreadParams{
+		ChannelID:           channelID,
+		ThreadRootMessageID: destinationRoot.MessageID,
+		RequesterID:         forwarderID,
+		LastThreadSeq:       0,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Replay, 1)
+	assert.Equal(t, "reply body", resp.Replay[0].Body)
+	assert.Equal(t, sourceReply.MessageID.String(), resp.Replay[0].ForwardedFromMessageId)
+	assert.Equal(t, originalSenderID.String(), resp.Replay[0].ForwardedFromSenderId)
+	assert.Equal(t, "Reply Author", resp.Replay[0].ForwardedFromSenderName)
+}
+
+func TestIntegration_ForwardMessage_RejectsUnreadableSourceAndInvalidDestinationThread(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	forwarderID, sourceChannelID := seedUserAndChannel(t, ctx, pool)
+	originalSenderID := createMemberInChannel(t, ctx, pool, sourceChannelID, "Source Author")
+	outsiderID := seedChatUserWithAttrs(t, ctx, pool, "Outsider", "member", "active")
+	destinationOwnerID := seedChatUserWithAttrs(t, ctx, pool, "Destination Owner", "member", "active")
+	destinationChannelID := seedChannelForUser(t, ctx, pool, forwarderID, "destination")
+	nonMemberDestinationChannelID := seedChannelForUser(t, ctx, pool, destinationOwnerID, "private destination")
+	otherChannelID := seedChannelForUser(t, ctx, pool, forwarderID, "other")
+	otherRoot, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   otherChannelID,
+		SenderID:    forwarderID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "other root",
+	})
+	require.NoError(t, err)
+	source, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   sourceChannelID,
+		SenderID:    originalSenderID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "source body",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.ForwardMessage(ctx, chat.ForwardMessageParams{
+		SourceMessageID:           source.MessageID,
+		ActorID:                   outsiderID,
+		DestinationConversationID: destinationChannelID,
+	})
+	require.ErrorIs(t, err, chat.ErrNotMember)
+
+	_, err = svc.ForwardMessage(ctx, chat.ForwardMessageParams{
+		SourceMessageID:           source.MessageID,
+		ActorID:                   forwarderID,
+		DestinationConversationID: nonMemberDestinationChannelID,
+	})
+	require.ErrorIs(t, err, chat.ErrNotMember)
+
+	_, err = svc.ForwardMessage(ctx, chat.ForwardMessageParams{
+		SourceMessageID:                source.MessageID,
+		ActorID:                        forwarderID,
+		DestinationConversationID:      destinationChannelID,
+		DestinationThreadRootMessageID: otherRoot.MessageID,
+	})
+	require.ErrorIs(t, err, chat.ErrInvalidThread)
+}
+
+func TestIntegration_ForwardMessage_PreservesEntitiesWithoutMentionNotifications(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	forwarderID, channelID := seedUserAndChannel(t, ctx, pool)
+	mentionedID := createMemberInChannel(t, ctx, pool, channelID, "Mentioned User")
+	originalSenderID := createMemberInChannel(t, ctx, pool, channelID, "Original Sender")
+	body := "@Mentioned User hello"
+	source, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    originalSenderID,
+		ClientMsgID: uuid.New().String(),
+		Body:        body,
+		Entities: []chat.MessageEntity{{
+			Kind:     chat.MessageEntityKindUser,
+			TargetID: mentionedID,
+			Label:    "@Mentioned User",
+			Start:    0,
+			End:      int32(len([]rune("@Mentioned User"))),
+		}},
+	})
+	require.NoError(t, err)
+
+	forwarded, err := svc.ForwardMessage(ctx, chat.ForwardMessageParams{
+		SourceMessageID:           source.MessageID,
+		ActorID:                   forwarderID,
+		DestinationConversationID: channelID,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, filterDirectDeliveriesByType(forwarded.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED))
+
+	page, _, err := svc.ListMessagePage(ctx, forwarderID, channelID, nil, 20)
+	require.NoError(t, err)
+	var forwardedMessage chat.ConversationMessage
+	for _, item := range page {
+		if item.ID == forwarded.MessageID {
+			forwardedMessage = item
+			break
+		}
+	}
+	require.Equal(t, forwarded.MessageID, forwardedMessage.ID)
+	require.Len(t, forwardedMessage.Entities, 1)
+	assert.Equal(t, mentionedID, forwardedMessage.Entities[0].TargetID)
+	assert.False(t, forwardedMessage.MentionEveryone)
+}
+
 func TestIntegration_SavedMessages_SaveListUnsave(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

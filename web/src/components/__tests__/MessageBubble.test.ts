@@ -15,6 +15,8 @@ const chatApiMocks = vi.hoisted(() => ({
   editMessage: vi.fn(),
   deleteMessage: vi.fn(),
   listSavedMessages: vi.fn(),
+  listForwardTargets: vi.fn(),
+  forwardMessage: vi.fn(),
   saveMessage: vi.fn(),
   unsaveMessage: vi.fn(),
 }))
@@ -26,6 +28,8 @@ vi.mock('@/services/http/chatApi', () => ({
   editMessage: chatApiMocks.editMessage,
   deleteMessage: chatApiMocks.deleteMessage,
   listSavedMessages: chatApiMocks.listSavedMessages,
+  listForwardTargets: chatApiMocks.listForwardTargets,
+  forwardMessage: chatApiMocks.forwardMessage,
   saveMessage: chatApiMocks.saveMessage,
   unsaveMessage: chatApiMocks.unsaveMessage,
 }))
@@ -133,6 +137,10 @@ describe('MessageBubble reactions', () => {
     chatApiMocks.deleteMessage.mockResolvedValue(undefined)
     chatApiMocks.listSavedMessages.mockReset()
     chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.listForwardTargets.mockReset()
+    chatApiMocks.listForwardTargets.mockResolvedValue({ conversations: [], threads: [] })
+    chatApiMocks.forwardMessage.mockReset()
+    chatApiMocks.forwardMessage.mockResolvedValue(undefined)
     chatApiMocks.saveMessage.mockReset()
     chatApiMocks.saveMessage.mockResolvedValue(undefined)
     chatApiMocks.unsaveMessage.mockReset()
@@ -405,6 +413,46 @@ describe('MessageBubble reactions', () => {
     expect(document.body.querySelector('[data-testid="message-menu-edit"]')).toBeNull()
     expect(document.body.querySelector('[data-testid="message-menu-delete"]')).toBeNull()
     pendingWrapper.unmount()
+  })
+
+  it('shows forward action for confirmed messages and hides it for pending messages', async () => {
+    const confirmed = buildMessage({ reactions: [], myReactions: [] })
+    const confirmedWrapper = mount(MessageBubble, {
+      props: { message: confirmed, showHeader: true },
+      attachTo: document.body,
+    })
+    await confirmedWrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-menu-forward"]')).toBeTruthy()
+    confirmedWrapper.unmount()
+
+    const pending = buildMessage({ reactions: [], myReactions: [], sendStatus: 'sending' })
+    const pendingWrapper = mount(MessageBubble, {
+      props: { message: pending, showHeader: true },
+      attachTo: document.body,
+    })
+    await pendingWrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    expect(document.body.querySelector('[data-testid="message-menu-forward"]')).toBeNull()
+    pendingWrapper.unmount()
+  })
+
+  it('renders forwarded attribution above the message body', () => {
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      forwardedFrom: {
+        messageId: 'source-1',
+        senderId: 'user-9',
+        senderName: 'Original Sender',
+      },
+    })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+    })
+
+    expect(wrapper.get('[data-testid="message-forwarded-banner"]').text()).toContain('Forwarded from Original Sender')
+    expect(wrapper.text()).toContain('hello')
   })
 
   it('opens inline edit when editRequestToken changes for an own confirmed message', async () => {

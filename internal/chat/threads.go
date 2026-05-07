@@ -65,6 +65,7 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 
 	rows, err := tx.Query(ctx, `
 		SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
+		       forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
 		       thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 		  FROM messages
 		 WHERE thread_root_id = $1
@@ -80,6 +81,9 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 	msgs := make([]queries.Message, 0)
 	for rows.Next() {
 		var m queries.Message
+		var forwardedFromMessageID uuid.NullUUID
+		var forwardedFromSenderID uuid.NullUUID
+		var forwardedFromSenderName sql.NullString
 		if err := rows.Scan(
 			&m.ID,
 			&m.ChannelID,
@@ -87,6 +91,9 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 			&m.SenderID,
 			&m.ClientMsgID,
 			&m.Body,
+			&forwardedFromMessageID,
+			&forwardedFromSenderID,
+			&forwardedFromSenderName,
 			&m.ThreadRootID,
 			&m.ThreadSeq,
 			&m.MentionEveryone,
@@ -95,6 +102,9 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 		); err != nil {
 			return SubscribeThreadResult{}, fmt.Errorf("chat.SubscribeThread scan messages: %w", err)
 		}
+		m.ForwardedFromMessageID = forwardedFromMessageID
+		m.ForwardedFromSenderID = forwardedFromSenderID
+		m.ForwardedFromSenderName = forwardedFromSenderName
 		msgs = append(msgs, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -146,6 +156,11 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 		}
 		if m.ThreadRootID.Valid {
 			evt.ThreadRootMessageId = m.ThreadRootID.UUID.String()
+		}
+		if m.ForwardedFromMessageID.Valid && m.ForwardedFromSenderID.Valid && m.ForwardedFromSenderName.Valid {
+			evt.ForwardedFromMessageId = m.ForwardedFromMessageID.UUID.String()
+			evt.ForwardedFromSenderId = m.ForwardedFromSenderID.UUID.String()
+			evt.ForwardedFromSenderName = m.ForwardedFromSenderName.String
 		}
 		replay = append(replay, evt)
 	}

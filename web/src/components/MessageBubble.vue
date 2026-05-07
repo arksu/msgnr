@@ -222,6 +222,18 @@
 
       <template v-else>
         <div
+          v-if="message.forwardedFrom"
+          data-testid="message-forwarded-banner"
+          class="mb-1 inline-flex max-w-full items-center gap-1 rounded border border-chat-border bg-chat-input/70 px-2 py-0.5 text-[11px] text-app-muted"
+          :title="`Forwarded from ${message.forwardedFrom.senderName}`"
+        >
+          <svg class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M15 17h5l-5 5v-5z" />
+            <path d="M4 4h7a4 4 0 0 1 4 4v9" />
+          </svg>
+          <span class="truncate">Forwarded from {{ message.forwardedFrom.senderName }}</span>
+        </div>
+        <div
           v-if="message.body"
           class="markdown-body"
           :class="bodyTextClass"
@@ -509,6 +521,15 @@
         Delete message
       </button>
       <button
+        v-if="canForwardMessage"
+        data-testid="message-menu-forward"
+        class="w-full text-left px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10 transition-colors"
+        :disabled="isDeleting"
+        @click="openForwardDialog"
+      >
+        Forward message
+      </button>
+      <button
         class="w-full text-left px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10 transition-colors"
         :disabled="isDeleting"
         @click="copyMessage"
@@ -517,6 +538,12 @@
       </button>
     </div>
   </Teleport>
+
+  <ForwardMessageDialog
+    :open="forwardDialogOpen"
+    :message="message"
+    @close="forwardDialogOpen = false"
+  />
 
   <Teleport to="body">
     <div
@@ -576,6 +603,7 @@ import {
   deleteMessage as deleteMessageApi,
 } from '@/services/http/chatApi'
 import UserAvatar from './UserAvatar.vue'
+import ForwardMessageDialog from './ForwardMessageDialog.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
 import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
 import RichTextComposer from './RichTextComposer.vue'
@@ -684,6 +712,7 @@ const editError = ref('')
 const editComposer = ref<InstanceType<typeof RichTextComposer> | null>(null)
 const editTagPickerOpen = ref(false)
 const isDeleting = ref(false)
+const forwardDialogOpen = ref(false)
 const ws = useWsStore()
 const chat = useChatStore()
 const auth = useAuthStore()
@@ -746,6 +775,7 @@ const selfUserId = computed(() => auth.user?.id || chat.workspace?.selfUserId ||
 const isOwnMessage = computed(() => Boolean(selfUserId.value) && props.message.senderId === selfUserId.value)
 const isServerConfirmed = computed(() => !props.message.sendStatus && !props.message.pending)
 const canModifyMessage = computed(() => isOwnMessage.value && isServerConfirmed.value)
+const canForwardMessage = computed(() => isServerConfirmed.value)
 const canSaveEdit = computed(() =>
   !editSaving.value
   && (editBody.value.trim().length > 0 || messageAttachments.value.length > 0),
@@ -819,6 +849,11 @@ function onMarkdownClick(event: MouseEvent) {
 
 function closeEditTagPicker() {
   editTagPickerOpen.value = false
+}
+
+function openForwardDialog() {
+  showContextMenu.value = false
+  forwardDialogOpen.value = true
 }
 
 // ── Send status actions ──────────────────────────────────────────────────────

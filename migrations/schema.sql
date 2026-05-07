@@ -148,6 +148,9 @@ CREATE TABLE IF NOT EXISTS messages (
   sender_id        UUID    NOT NULL REFERENCES users(id),
   client_msg_id    TEXT    NOT NULL,
   body             TEXT    NOT NULL,
+  forwarded_from_message_id UUID,
+  forwarded_from_sender_id  UUID    REFERENCES users(id),
+  forwarded_from_sender_name TEXT,
   -- NULL for channel-level messages; FK to root message for thread replies
   thread_root_id   UUID    REFERENCES messages(id) ON DELETE CASCADE,
   -- monotonic within a thread; 0 for non-thread messages
@@ -165,6 +168,18 @@ CREATE TABLE IF NOT EXISTS messages (
   CONSTRAINT chk_thread_consistency CHECK (
     (thread_root_id IS NULL     AND thread_seq = 0) OR
     (thread_root_id IS NOT NULL AND thread_seq > 0)
+  ),
+
+  CONSTRAINT chk_forward_metadata CHECK (
+    (
+      forwarded_from_message_id IS NULL
+      AND forwarded_from_sender_id IS NULL
+      AND forwarded_from_sender_name IS NULL
+    ) OR (
+      forwarded_from_message_id IS NOT NULL
+      AND forwarded_from_sender_id IS NOT NULL
+      AND btrim(forwarded_from_sender_name) <> ''
+    )
   )
 );
 

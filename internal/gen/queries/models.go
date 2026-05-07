@@ -154,17 +154,20 @@ type IntegrationToken struct {
 }
 
 type Message struct {
-	ID              uuid.UUID     `json:"id"`
-	ChannelID       uuid.UUID     `json:"channel_id"`
-	ChannelSeq      int64         `json:"channel_seq"`
-	SenderID        uuid.UUID     `json:"sender_id"`
-	ClientMsgID     string        `json:"client_msg_id"`
-	Body            string        `json:"body"`
-	ThreadRootID    uuid.NullUUID `json:"thread_root_id"`
-	ThreadSeq       int64         `json:"thread_seq"`
-	MentionEveryone bool          `json:"mention_everyone"`
-	EditedAt        sql.NullTime  `json:"edited_at"`
-	CreatedAt       time.Time     `json:"created_at"`
+	ID                      uuid.UUID      `json:"id"`
+	ChannelID               uuid.UUID      `json:"channel_id"`
+	ChannelSeq              int64          `json:"channel_seq"`
+	SenderID                uuid.UUID      `json:"sender_id"`
+	ClientMsgID             string         `json:"client_msg_id"`
+	Body                    string         `json:"body"`
+	ForwardedFromMessageID  uuid.NullUUID  `json:"forwarded_from_message_id"`
+	ForwardedFromSenderID   uuid.NullUUID  `json:"forwarded_from_sender_id"`
+	ForwardedFromSenderName sql.NullString `json:"forwarded_from_sender_name"`
+	ThreadRootID            uuid.NullUUID  `json:"thread_root_id"`
+	ThreadSeq               int64          `json:"thread_seq"`
+	MentionEveryone         bool           `json:"mention_everyone"`
+	EditedAt                sql.NullTime   `json:"edited_at"`
+	CreatedAt               time.Time      `json:"created_at"`
 }
 
 type MessageAttachment struct {

@@ -52,6 +52,14 @@
                 {{ item.senderName || item.conversationTitle }}
               </div>
               <div
+                v-if="item.forwardedFrom"
+                data-testid="saved-message-forwarded-banner"
+                class="mt-1 inline-flex max-w-full items-center rounded border border-chat-border bg-chat-input/70 px-2 py-0.5 text-[11px] text-app-muted"
+                :title="`Forwarded from ${item.forwardedFrom.senderName}`"
+              >
+                <span class="truncate">Forwarded from {{ item.forwardedFrom.senderName }}</span>
+              </div>
+              <div
                 v-if="item.body"
                 class="markdown-body mt-1 line-clamp-2 text-sm text-gray-300"
                 v-html="renderSavedMessageBody(item)"

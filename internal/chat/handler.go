@@ -57,6 +57,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chat/unread-feed", h.requireAuth(h.listUnreadFeed))
 	mux.HandleFunc("/api/chat/unread-feed/resolve", h.requireAuth(h.resolveUnreadFeedItem))
 	mux.HandleFunc("/api/chat/saved-messages", h.requireAuth(h.listSavedMessages))
+	mux.HandleFunc("/api/chat/forward-targets", h.requireAuth(h.listForwardTargets))
 	mux.HandleFunc("/api/messages", h.requireAuth(h.listConversationMessages))
 	mux.HandleFunc("/api/messages/context", h.requireAuth(h.getMessageContext))
 	mux.HandleFunc("/api/messages/reaction-users", h.requireAuth(h.listMessageReactionUsers))
@@ -126,6 +127,7 @@ type conversationMessageResponse struct {
 	SenderID            string                      `json:"sender_id"`
 	SenderName          string                      `json:"sender_name"`
 	Body                string                      `json:"body"`
+	ForwardedFrom       *forwardedMessageResponse   `json:"forwarded_from,omitempty"`
 	Entities            []messageEntityResponse     `json:"entities"`
 	ChannelSeq          int64                       `json:"channel_seq"`
 	ThreadSeq           int64                       `json:"thread_seq"`
@@ -138,6 +140,12 @@ type conversationMessageResponse struct {
 	MyReactions         []string                    `json:"my_reactions"`
 	Attachments         []messageAttachmentResponse `json:"attachments"`
 	IsSaved             bool                        `json:"is_saved"`
+}
+
+type forwardedMessageResponse struct {
+	MessageID  string `json:"message_id"`
+	SenderID   string `json:"sender_id"`
+	SenderName string `json:"sender_name"`
 }
 
 type messageAttachmentResponse struct {
@@ -209,19 +217,20 @@ type unreadFeedResponse struct {
 }
 
 type savedMessageItemResponse struct {
-	ID                     string                  `json:"id"`
-	ConversationID         string                  `json:"conversation_id"`
-	ConversationKind       string                  `json:"conversation_kind"`
-	ConversationVisibility string                  `json:"conversation_visibility"`
-	ConversationTitle      string                  `json:"conversation_title"`
-	MessageID              string                  `json:"message_id"`
-	ThreadRootMessageID    string                  `json:"thread_root_message_id,omitempty"`
-	SenderID               string                  `json:"sender_id"`
-	SenderName             string                  `json:"sender_name"`
-	Body                   string                  `json:"body"`
-	Entities               []messageEntityResponse `json:"entities"`
-	CreatedAt              string                  `json:"created_at"`
-	SavedAt                string                  `json:"saved_at"`
+	ID                     string                    `json:"id"`
+	ConversationID         string                    `json:"conversation_id"`
+	ConversationKind       string                    `json:"conversation_kind"`
+	ConversationVisibility string                    `json:"conversation_visibility"`
+	ConversationTitle      string                    `json:"conversation_title"`
+	MessageID              string                    `json:"message_id"`
+	ThreadRootMessageID    string                    `json:"thread_root_message_id,omitempty"`
+	SenderID               string                    `json:"sender_id"`
+	SenderName             string                    `json:"sender_name"`
+	Body                   string                    `json:"body"`
+	ForwardedFrom          *forwardedMessageResponse `json:"forwarded_from,omitempty"`
+	Entities               []messageEntityResponse   `json:"entities"`
+	CreatedAt              string                    `json:"created_at"`
+	SavedAt                string                    `json:"saved_at"`
 }
 
 type savedMessagesResponse struct {
@@ -229,8 +238,41 @@ type savedMessagesResponse struct {
 	Items      []savedMessageItemResponse `json:"items"`
 }
 
+type forwardTargetConversationResponse struct {
+	ConversationID string `json:"conversation_id"`
+	Title          string `json:"title"`
+	Kind           string `json:"kind"`
+	Visibility     string `json:"visibility"`
+}
+
+type forwardTargetThreadResponse struct {
+	ConversationID      string `json:"conversation_id"`
+	ConversationTitle   string `json:"conversation_title"`
+	ThreadRootMessageID string `json:"thread_root_message_id"`
+	RootSenderName      string `json:"root_sender_name"`
+	RootBody            string `json:"root_body"`
+	ReplyCount          int32  `json:"reply_count"`
+	LastReplyAt         string `json:"last_reply_at"`
+}
+
+type forwardTargetsResponse struct {
+	Conversations []forwardTargetConversationResponse `json:"conversations"`
+	Threads       []forwardTargetThreadResponse       `json:"threads"`
+}
+
 type resolveUnreadFeedItemRequest struct {
 	NotificationID string `json:"notification_id"`
+}
+
+type forwardMessageRequest struct {
+	DestinationConversationID      string `json:"destination_conversation_id"`
+	DestinationThreadRootMessageID string `json:"destination_thread_root_message_id"`
+}
+
+type forwardMessageResponseBody struct {
+	MessageID  string `json:"message_id"`
+	ChannelSeq int64  `json:"channel_seq"`
+	CreatedAt  string `json:"created_at"`
 }
 
 type editMessageRequest struct {
@@ -291,6 +333,17 @@ func decodeMessageEntities(raw []messageEntityRequest) ([]MessageEntity, error) 
 		})
 	}
 	return entities, nil
+}
+
+func encodeForwardedMessage(info *ForwardedMessageInfo) *forwardedMessageResponse {
+	if info == nil || info.MessageID == uuid.Nil || info.SenderID == uuid.Nil || strings.TrimSpace(info.SenderName) == "" {
+		return nil
+	}
+	return &forwardedMessageResponse{
+		MessageID:  info.MessageID.String(),
+		SenderID:   info.SenderID.String(),
+		SenderName: info.SenderName,
+	}
 }
 
 func encodeMessageEntities(raw []MessageEntity) []messageEntityResponse {
@@ -665,6 +718,7 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 			SenderID:            msg.SenderID.String(),
 			SenderName:          msg.SenderName,
 			Body:                msg.Body,
+			ForwardedFrom:       encodeForwardedMessage(msg.ForwardedFrom),
 			Entities:            encodeMessageEntities(msg.Entities),
 			ChannelSeq:          msg.ChannelSeq,
 			ThreadSeq:           msg.ThreadSeq,
@@ -757,6 +811,7 @@ func (h *Handler) getMessageContext(w http.ResponseWriter, r *http.Request, prin
 			SenderID:            msg.SenderID.String(),
 			SenderName:          msg.SenderName,
 			Body:                msg.Body,
+			ForwardedFrom:       encodeForwardedMessage(msg.ForwardedFrom),
 			Entities:            encodeMessageEntities(msg.Entities),
 			ChannelSeq:          msg.ChannelSeq,
 			ThreadSeq:           msg.ThreadSeq,
@@ -854,6 +909,7 @@ func (h *Handler) listSavedMessages(w http.ResponseWriter, r *http.Request, prin
 			SenderID:               item.SenderID.String(),
 			SenderName:             item.SenderName,
 			Body:                   item.Body,
+			ForwardedFrom:          encodeForwardedMessage(item.ForwardedFrom),
 			Entities:               encodeMessageEntities(item.Entities),
 			CreatedAt:              item.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			SavedAt:                item.SavedAt.UTC().Format("2006-01-02T15:04:05Z"),
@@ -864,6 +920,45 @@ func (h *Handler) listSavedMessages(w http.ResponseWriter, r *http.Request, prin
 		resp.Items = append(resp.Items, payload)
 	}
 
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listForwardTargets(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodGet {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	targets, err := h.svc.ListForwardTargets(r.Context(), principal.UserID)
+	if err != nil {
+		h.log.Error("listForwardTargets error", zap.Error(err))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		return
+	}
+
+	resp := forwardTargetsResponse{
+		Conversations: make([]forwardTargetConversationResponse, 0, len(targets.Conversations)),
+		Threads:       make([]forwardTargetThreadResponse, 0, len(targets.Threads)),
+	}
+	for _, item := range targets.Conversations {
+		resp.Conversations = append(resp.Conversations, forwardTargetConversationResponse{
+			ConversationID: item.ConversationID.String(),
+			Title:          item.Title,
+			Kind:           item.Kind,
+			Visibility:     item.Visibility,
+		})
+	}
+	for _, item := range targets.Threads {
+		resp.Threads = append(resp.Threads, forwardTargetThreadResponse{
+			ConversationID:      item.ConversationID.String(),
+			ConversationTitle:   item.ConversationTitle,
+			ThreadRootMessageID: item.ThreadRootMessageID.String(),
+			RootSenderName:      item.RootSenderName,
+			RootBody:            item.RootBody,
+			ReplyCount:          item.ReplyCount,
+			LastReplyAt:         item.LastReplyAt.UTC().Format("2006-01-02T15:04:05Z"),
+		})
+	}
 	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -1095,6 +1190,20 @@ func (h *Handler) messageItem(w http.ResponseWriter, r *http.Request, principal 
 		}
 	}
 
+	if len(parts) == 2 && parts[1] == "forward" {
+		messageID, err := uuid.Parse(parts[0])
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid message_id"))
+			return
+		}
+		if r.Method != http.MethodPost {
+			httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+			return
+		}
+		h.forwardMessage(w, r, principal, messageID)
+		return
+	}
+
 	// GET /api/messages/:message_id/attachments/:attachment_id/download
 	if len(parts) == 4 && parts[1] == "attachments" && parts[3] == "download" {
 		if r.Method != http.MethodGet {
@@ -1142,6 +1251,62 @@ func (h *Handler) unsaveMessage(w http.ResponseWriter, r *http.Request, principa
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) forwardMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal, sourceMessageID uuid.UUID) {
+	var req forwardMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
+		return
+	}
+	destinationConversationID, err := uuid.Parse(strings.TrimSpace(req.DestinationConversationID))
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid destination_conversation_id"))
+		return
+	}
+	var destinationThreadRootMessageID uuid.UUID
+	if strings.TrimSpace(req.DestinationThreadRootMessageID) != "" {
+		destinationThreadRootMessageID, err = uuid.Parse(strings.TrimSpace(req.DestinationThreadRootMessageID))
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid destination_thread_root_message_id"))
+			return
+		}
+	}
+
+	result, err := h.svc.ForwardMessage(r.Context(), ForwardMessageParams{
+		SourceMessageID:                sourceMessageID,
+		ActorID:                        principal.UserID,
+		DestinationConversationID:      destinationConversationID,
+		DestinationThreadRootMessageID: destinationThreadRootMessageID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrMessageNotFound):
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("message not found"))
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
+		case errors.Is(err, ErrInvalidThread):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid destination thread"))
+		case errors.Is(err, ErrInvalidAttachment), errors.Is(err, ErrInvalidMessageEntity), errors.Is(err, ErrEmptyMessage):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("message cannot be forwarded"))
+		default:
+			h.log.Error("forwardMessage error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+	if len(result.DirectDeliveries) > 0 && h.notifier != nil {
+		h.notifier.SendChatDirectServerEvents(result.DirectDeliveries)
+	}
+	createdAt := ""
+	if result.CreatedAt != nil {
+		createdAt = result.CreatedAt.AsTime().UTC().Format("2006-01-02T15:04:05Z")
+	}
+	httputil.WriteJSON(w, http.StatusCreated, forwardMessageResponseBody{
+		MessageID:  result.MessageID.String(),
+		ChannelSeq: result.ChannelSeq,
+		CreatedAt:  createdAt,
+	})
 }
 
 func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal, messageID uuid.UUID) {

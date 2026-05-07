@@ -36,6 +36,11 @@ export interface CachedMessage {
   senderName: string
   senderAvatarUrl?: string
   body: string
+  forwardedFrom?: {
+    messageId: string
+    senderId: string
+    senderName: string
+  }
   entities?: Array<{
     kind: 'user' | 'task' | 'document'
     targetId: string

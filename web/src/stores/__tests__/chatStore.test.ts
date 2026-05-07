@@ -7,6 +7,7 @@ import {
   loadLastOpenedConversation,
   saveLastOpenedConversation,
 } from '@/services/storage/lastConversationStorage'
+import { storage } from '@/services/storage/storageAdapter'
 import {
   BootstrapResponseSchema,
   SyncSinceResponseSchema,
@@ -43,6 +44,7 @@ const chatApiMocks = vi.hoisted(() => ({
   listMessageReactionUsers: vi.fn(),
   listUnreadFeed: vi.fn(),
   listSavedMessages: vi.fn(),
+  forwardMessage: vi.fn(),
   saveMessage: vi.fn(),
   unsaveMessage: vi.fn(),
   getMessageContext: vi.fn(),
@@ -55,11 +57,39 @@ vi.mock('@/services/http/chatApi', () => ({
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
   listUnreadFeed: chatApiMocks.listUnreadFeed,
   listSavedMessages: chatApiMocks.listSavedMessages,
+  forwardMessage: chatApiMocks.forwardMessage,
   saveMessage: chatApiMocks.saveMessage,
   unsaveMessage: chatApiMocks.unsaveMessage,
   getMessageContext: chatApiMocks.getMessageContext,
   resolveUnreadFeedNotification: chatApiMocks.resolveUnreadFeedNotification,
 }))
+
+function ensureLocalStorageMock() {
+  if (
+    typeof globalThis.localStorage?.clear === 'function'
+    && typeof globalThis.localStorage?.getItem === 'function'
+    && typeof globalThis.localStorage?.setItem === 'function'
+    && typeof globalThis.localStorage?.removeItem === 'function'
+  ) {
+    return
+  }
+  const values = new Map<string, string>()
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, String(value))
+      },
+      removeItem: (key: string) => {
+        values.delete(key)
+      },
+      clear: () => {
+        values.clear()
+      },
+    },
+  })
+}
 
 function buildMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -81,12 +111,15 @@ function buildMessage(overrides: Partial<Message> = {}): Message {
 
 describe('chatStore phase 6 flows', () => {
   beforeEach(() => {
+    ensureLocalStorageMock()
     setActivePinia(createPinia())
     localStorage.clear()
+    storage.clear()
     chatApiMocks.listConversationMessages.mockReset()
     chatApiMocks.listDmCandidates.mockReset()
     chatApiMocks.listUnreadFeed.mockReset()
     chatApiMocks.listSavedMessages.mockReset()
+    chatApiMocks.forwardMessage.mockReset()
     chatApiMocks.saveMessage.mockReset()
     chatApiMocks.unsaveMessage.mockReset()
     chatApiMocks.getMessageContext.mockReset()
@@ -94,6 +127,7 @@ describe('chatStore phase 6 flows', () => {
     chatApiMocks.listDmCandidates.mockResolvedValue([])
     chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
     chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
+    chatApiMocks.forwardMessage.mockResolvedValue(undefined)
     chatApiMocks.saveMessage.mockResolvedValue(undefined)
     chatApiMocks.unsaveMessage.mockResolvedValue(undefined)
     chatApiMocks.getMessageContext.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
@@ -452,6 +486,44 @@ describe('chatStore phase 6 flows', () => {
     expect(ws.sendSyncSince).not.toHaveBeenCalled()
     expect(chat.lastAppliedEventSeq).toBe(7n)
     expect(chat.messages['channel-1']).toHaveLength(1)
+  })
+
+  it('maps forwarded metadata from message_created events', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSyncSince = vi.fn()
+    ws.setRecoveringGap = vi.fn()
+
+    chat.bootstrapped = true
+    chat.lastAppliedEventSeq = 5n
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 6n,
+      eventId: 'evt-6',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-6',
+          senderId: 'user-1',
+          body: 'forwarded body',
+          channelSeq: 6n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          forwardedFromMessageId: 'source-1',
+          forwardedFromSenderId: 'user-9',
+          forwardedFromSenderName: 'Original Sender',
+        }),
+      },
+    }))
+
+    expect(chat.messages['channel-1'][0].forwardedFrom).toEqual({
+      messageId: 'source-1',
+      senderId: 'user-9',
+      senderName: 'Original Sender',
+    })
   })
 
   it('continues sync pagination when auth-filtered replay returns fewer than the page size', () => {
@@ -2583,7 +2655,7 @@ describe('chatStore phase 6 flows', () => {
   })
 
   it('restores persisted thread summaries after bootstrap refresh', () => {
-    localStorage.setItem('msgnr:thread-summaries:v1', JSON.stringify({
+    storage.setItem('msgnr:thread-summaries:v1', JSON.stringify({
       'user-1': {
         'root-1': {
           replyCount: 4,
@@ -3351,5 +3423,39 @@ describe('chatStore.onTaskStatusChanged', () => {
     await chat.refreshSavedMessages()
 
     expect(chat.savedMessageItems[0].body).toBe(String.raw`literal\nslash \\u0041`)
+  })
+
+  it('maps forwarded metadata from saved messages', async () => {
+    const chat = useChatStore()
+    chat.bootstrapped = true
+    chatApiMocks.listSavedMessages.mockResolvedValueOnce({
+      total_count: 1,
+      items: [{
+        id: 'saved:message-1',
+        conversation_id: 'channel-1',
+        conversation_kind: 'channel',
+        conversation_visibility: 'public',
+        conversation_title: 'general',
+        message_id: 'message-1',
+        sender_id: 'user-2',
+        sender_name: 'Bob',
+        body: 'forwarded body',
+        forwarded_from: {
+          message_id: 'source-1',
+          sender_id: 'user-9',
+          sender_name: 'Original Sender',
+        },
+        created_at: '2026-03-06T00:00:00Z',
+        saved_at: '2026-03-06T00:01:00Z',
+      }],
+    })
+
+    await chat.refreshSavedMessages()
+
+    expect(chat.savedMessageItems[0].forwardedFrom).toEqual({
+      messageId: 'source-1',
+      senderId: 'user-9',
+      senderName: 'Original Sender',
+    })
   })
 })

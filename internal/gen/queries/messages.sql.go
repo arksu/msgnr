@@ -37,6 +37,7 @@ const deleteMessageByID = `-- name: DeleteMessageByID :one
 DELETE FROM messages
 WHERE id = $1
 RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
           thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 `
 
@@ -50,6 +51,9 @@ func (q *Queries) DeleteMessageByID(ctx context.Context, messageID uuid.UUID) (M
 		&i.SenderID,
 		&i.ClientMsgID,
 		&i.Body,
+		&i.ForwardedFromMessageID,
+		&i.ForwardedFromSenderID,
+		&i.ForwardedFromSenderName,
 		&i.ThreadRootID,
 		&i.ThreadSeq,
 		&i.MentionEveryone,
@@ -114,6 +118,7 @@ func (q *Queries) DeleteReactionCountIfZero(ctx context.Context, arg DeleteReact
 
 const getMessageByClientMsgID = `-- name: GetMessageByClientMsgID :one
 SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
+       forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
        thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 FROM messages
 WHERE channel_id = $1
@@ -136,6 +141,9 @@ func (q *Queries) GetMessageByClientMsgID(ctx context.Context, arg GetMessageByC
 		&i.SenderID,
 		&i.ClientMsgID,
 		&i.Body,
+		&i.ForwardedFromMessageID,
+		&i.ForwardedFromSenderID,
+		&i.ForwardedFromSenderName,
 		&i.ThreadRootID,
 		&i.ThreadSeq,
 		&i.MentionEveryone,
@@ -147,6 +155,7 @@ func (q *Queries) GetMessageByClientMsgID(ctx context.Context, arg GetMessageByC
 
 const getMessageByID = `-- name: GetMessageByID :one
 SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
+       forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
        thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 FROM messages
 WHERE id = $1
@@ -162,6 +171,9 @@ func (q *Queries) GetMessageByID(ctx context.Context, messageID uuid.UUID) (Mess
 		&i.SenderID,
 		&i.ClientMsgID,
 		&i.Body,
+		&i.ForwardedFromMessageID,
+		&i.ForwardedFromSenderID,
+		&i.ForwardedFromSenderName,
 		&i.ThreadRootID,
 		&i.ThreadSeq,
 		&i.MentionEveryone,
@@ -203,6 +215,7 @@ func (q *Queries) GetReactionCounts(ctx context.Context, messageID uuid.UUID) ([
 
 const getThreadMessages = `-- name: GetThreadMessages :many
 SELECT m.id, m.channel_id, m.channel_seq, m.sender_id, m.client_msg_id, m.body,
+       m.forwarded_from_message_id, m.forwarded_from_sender_id, m.forwarded_from_sender_name,
        m.thread_root_id, m.thread_seq, m.mention_everyone, m.edited_at, m.created_at
 FROM messages m
 WHERE m.thread_root_id = $1
@@ -231,6 +244,9 @@ func (q *Queries) GetThreadMessages(ctx context.Context, arg GetThreadMessagesPa
 			&i.SenderID,
 			&i.ClientMsgID,
 			&i.Body,
+			&i.ForwardedFromMessageID,
+			&i.ForwardedFromSenderID,
+			&i.ForwardedFromSenderName,
 			&i.ThreadRootID,
 			&i.ThreadSeq,
 			&i.MentionEveryone,
@@ -317,6 +333,7 @@ VALUES ($1,
         $7,
         now())
 RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
           thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 `
 
@@ -348,6 +365,9 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (M
 		&i.SenderID,
 		&i.ClientMsgID,
 		&i.Body,
+		&i.ForwardedFromMessageID,
+		&i.ForwardedFromSenderID,
+		&i.ForwardedFromSenderName,
 		&i.ThreadRootID,
 		&i.ThreadSeq,
 		&i.MentionEveryone,
@@ -591,6 +611,7 @@ SET body = $1,
     edited_at = now()
 WHERE id = $3
 RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
+          forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
           thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 `
 
@@ -610,6 +631,9 @@ func (q *Queries) UpdateMessageBody(ctx context.Context, arg UpdateMessageBodyPa
 		&i.SenderID,
 		&i.ClientMsgID,
 		&i.Body,
+		&i.ForwardedFromMessageID,
+		&i.ForwardedFromSenderID,
+		&i.ForwardedFromSenderName,
 		&i.ThreadRootID,
 		&i.ThreadSeq,
 		&i.MentionEveryone,

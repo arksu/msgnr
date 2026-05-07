@@ -55,9 +55,9 @@
                 v-if="item.forwardedFrom"
                 data-testid="saved-message-forwarded-banner"
                 class="mt-1 inline-flex max-w-full items-center rounded border border-chat-border bg-chat-input/70 px-2 py-0.5 text-[11px] text-app-muted"
-                :title="`Forwarded from ${item.forwardedFrom.senderName}`"
+                :title="formatForwardedMessageLabel(item.forwardedFrom)"
               >
-                <span class="truncate">Forwarded from {{ item.forwardedFrom.senderName }}</span>
+                <span class="truncate">{{ formatForwardedMessageLabel(item.forwardedFrom) }}</span>
               </div>
               <div
                 v-if="item.body"
@@ -78,6 +78,7 @@
 <script setup lang="ts">
 import { useChatStore, type SavedMessageItem } from '@/stores/chat'
 import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
+import { formatForwardedMessageLabel } from '@/utils/forwardedMessages'
 
 defineEmits<{
   'open-item': [item: SavedMessageItem]

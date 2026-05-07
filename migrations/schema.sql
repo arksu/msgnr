@@ -151,6 +151,9 @@ CREATE TABLE IF NOT EXISTS messages (
   forwarded_from_message_id UUID,
   forwarded_from_sender_id  UUID    REFERENCES users(id),
   forwarded_from_sender_name TEXT,
+  forwarded_from_conversation_kind TEXT,
+  forwarded_from_conversation_title TEXT,
+  forwarded_from_thread_title TEXT,
   -- NULL for channel-level messages; FK to root message for thread replies
   thread_root_id   UUID    REFERENCES messages(id) ON DELETE CASCADE,
   -- monotonic within a thread; 0 for non-thread messages
@@ -175,6 +178,9 @@ CREATE TABLE IF NOT EXISTS messages (
       forwarded_from_message_id IS NULL
       AND forwarded_from_sender_id IS NULL
       AND forwarded_from_sender_name IS NULL
+      AND forwarded_from_conversation_kind IS NULL
+      AND forwarded_from_conversation_title IS NULL
+      AND forwarded_from_thread_title IS NULL
     ) OR (
       forwarded_from_message_id IS NOT NULL
       AND forwarded_from_sender_id IS NOT NULL

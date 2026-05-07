@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,6 +67,8 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 	rows, err := tx.Query(ctx, `
 		SELECT id, channel_id, channel_seq, sender_id, client_msg_id, body,
 		       forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
+		       forwarded_from_conversation_kind,
+		       forwarded_from_conversation_title, forwarded_from_thread_title,
 		       thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 		  FROM messages
 		 WHERE thread_root_id = $1
@@ -84,6 +87,9 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 		var forwardedFromMessageID uuid.NullUUID
 		var forwardedFromSenderID uuid.NullUUID
 		var forwardedFromSenderName sql.NullString
+		var forwardedFromConversationKind sql.NullString
+		var forwardedFromConversationTitle sql.NullString
+		var forwardedFromThreadTitle sql.NullString
 		if err := rows.Scan(
 			&m.ID,
 			&m.ChannelID,
@@ -94,6 +100,9 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 			&forwardedFromMessageID,
 			&forwardedFromSenderID,
 			&forwardedFromSenderName,
+			&forwardedFromConversationKind,
+			&forwardedFromConversationTitle,
+			&forwardedFromThreadTitle,
 			&m.ThreadRootID,
 			&m.ThreadSeq,
 			&m.MentionEveryone,
@@ -105,6 +114,9 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 		m.ForwardedFromMessageID = forwardedFromMessageID
 		m.ForwardedFromSenderID = forwardedFromSenderID
 		m.ForwardedFromSenderName = forwardedFromSenderName
+		m.ForwardedFromConversationKind = forwardedFromConversationKind
+		m.ForwardedFromConversationTitle = forwardedFromConversationTitle
+		m.ForwardedFromThreadTitle = forwardedFromThreadTitle
 		msgs = append(msgs, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -161,6 +173,9 @@ func (s *Service) SubscribeThread(ctx context.Context, p SubscribeThreadParams) 
 			evt.ForwardedFromMessageId = m.ForwardedFromMessageID.UUID.String()
 			evt.ForwardedFromSenderId = m.ForwardedFromSenderID.UUID.String()
 			evt.ForwardedFromSenderName = m.ForwardedFromSenderName.String
+			evt.ForwardedFromConversationKind = strings.TrimSpace(m.ForwardedFromConversationKind.String)
+			evt.ForwardedFromConversationTitle = strings.TrimSpace(m.ForwardedFromConversationTitle.String)
+			evt.ForwardedFromThreadTitle = strings.TrimSpace(m.ForwardedFromThreadTitle.String)
 		}
 		replay = append(replay, evt)
 	}

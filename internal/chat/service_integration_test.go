@@ -288,6 +288,9 @@ func TestIntegration_ForwardMessage_ChatToChatCopiesMetadataAndAttachments(t *te
 	assert.Equal(t, source.MessageID, page[0].ForwardedFrom.MessageID)
 	assert.Equal(t, originalSenderID, page[0].ForwardedFrom.SenderID)
 	assert.Equal(t, "Original Sender", page[0].ForwardedFrom.SenderName)
+	assert.Equal(t, "channel", page[0].ForwardedFrom.ConversationKind)
+	assert.Equal(t, "test", page[0].ForwardedFrom.ConversationTitle)
+	assert.Empty(t, page[0].ForwardedFrom.ThreadTitle)
 	require.Len(t, page[0].Attachments, 1)
 	assert.NotEqual(t, sourceAttachmentID, page[0].Attachments[0].ID)
 	assert.Equal(t, "source.txt", page[0].Attachments[0].FileName)
@@ -307,7 +310,7 @@ func TestIntegration_ForwardMessage_ChatToChatCopiesMetadataAndAttachments(t *te
 	assert.Equal(t, sourceStorageKey, copiedStorageKey)
 }
 
-func TestIntegration_ForwardMessage_ThreadReplyToThreadAndReplay(t *testing.T) {
+func TestIntegration_ForwardMessage_ThreadReplyToChatPreservesSourceThreadMetadata(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 
@@ -332,34 +335,32 @@ func TestIntegration_ForwardMessage_ThreadReplyToThreadAndReplay(t *testing.T) {
 		ThreadRootMessageID: sourceRoot.MessageID,
 	})
 	require.NoError(t, err)
-	destinationRoot, err := svc.SendMessage(ctx, chat.SendMessageParams{
-		ChannelID:   channelID,
-		SenderID:    forwarderID,
-		ClientMsgID: uuid.New().String(),
-		Body:        "destination root",
+	forwarded, err := svc.ForwardMessage(ctx, chat.ForwardMessageParams{
+		SourceMessageID:           sourceReply.MessageID,
+		ActorID:                   forwarderID,
+		DestinationConversationID: channelID,
 	})
 	require.NoError(t, err)
 
-	_, err = svc.ForwardMessage(ctx, chat.ForwardMessageParams{
-		SourceMessageID:                sourceReply.MessageID,
-		ActorID:                        forwarderID,
-		DestinationConversationID:      channelID,
-		DestinationThreadRootMessageID: destinationRoot.MessageID,
-	})
+	page, _, err := svc.ListMessagePage(ctx, forwarderID, channelID, nil, 20)
 	require.NoError(t, err)
-
-	resp, err := svc.SubscribeThread(ctx, chat.SubscribeThreadParams{
-		ChannelID:           channelID,
-		ThreadRootMessageID: destinationRoot.MessageID,
-		RequesterID:         forwarderID,
-		LastThreadSeq:       0,
-	})
-	require.NoError(t, err)
-	require.Len(t, resp.Replay, 1)
-	assert.Equal(t, "reply body", resp.Replay[0].Body)
-	assert.Equal(t, sourceReply.MessageID.String(), resp.Replay[0].ForwardedFromMessageId)
-	assert.Equal(t, originalSenderID.String(), resp.Replay[0].ForwardedFromSenderId)
-	assert.Equal(t, "Reply Author", resp.Replay[0].ForwardedFromSenderName)
+	var forwardedMessage chat.ConversationMessage
+	for _, item := range page {
+		if item.ID == forwarded.MessageID {
+			forwardedMessage = item
+			break
+		}
+	}
+	require.Equal(t, forwarded.MessageID, forwardedMessage.ID)
+	assert.Equal(t, "reply body", forwardedMessage.Body)
+	assert.Equal(t, uuid.Nil, forwardedMessage.ThreadRootMessageID)
+	require.NotNil(t, forwardedMessage.ForwardedFrom)
+	assert.Equal(t, sourceReply.MessageID, forwardedMessage.ForwardedFrom.MessageID)
+	assert.Equal(t, originalSenderID, forwardedMessage.ForwardedFrom.SenderID)
+	assert.Equal(t, "Reply Author", forwardedMessage.ForwardedFrom.SenderName)
+	assert.Equal(t, "channel", forwardedMessage.ForwardedFrom.ConversationKind)
+	assert.Equal(t, "test", forwardedMessage.ForwardedFrom.ConversationTitle)
+	assert.Equal(t, "source root", forwardedMessage.ForwardedFrom.ThreadTitle)
 }
 
 func TestIntegration_ForwardMessage_RejectsUnreadableSourceAndInvalidDestinationThread(t *testing.T) {

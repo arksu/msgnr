@@ -107,6 +107,9 @@ export interface ForwardedMessageItem {
   message_id: string
   sender_id: string
   sender_name: string
+  conversation_kind?: string
+  conversation_title?: string
+  thread_title?: string
 }
 
 export interface ChatMessageAttachmentItem {

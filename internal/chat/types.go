@@ -105,9 +105,12 @@ type ConversationMessage struct {
 }
 
 type ForwardedMessageInfo struct {
-	MessageID  uuid.UUID
-	SenderID   uuid.UUID
-	SenderName string
+	MessageID         uuid.UUID
+	SenderID          uuid.UUID
+	SenderName        string
+	ConversationKind  string
+	ConversationTitle string
+	ThreadTitle       string
 }
 
 type ForwardMessageParams struct {

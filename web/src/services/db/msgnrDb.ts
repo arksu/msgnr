@@ -40,6 +40,9 @@ export interface CachedMessage {
     messageId: string
     senderId: string
     senderName: string
+    conversationKind?: string
+    conversationTitle?: string
+    threadTitle?: string
   }
   entities?: Array<{
     kind: 'user' | 'task' | 'document'

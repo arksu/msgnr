@@ -445,13 +445,16 @@ describe('MessageBubble reactions', () => {
         messageId: 'source-1',
         senderId: 'user-9',
         senderName: 'Original Sender',
+        conversationKind: 'channel',
+        conversationTitle: 'general',
+        threadTitle: 'Launch thread',
       },
     })
     const wrapper = mount(MessageBubble, {
       props: { message: msg, showHeader: true },
     })
 
-    expect(wrapper.get('[data-testid="message-forwarded-banner"]').text()).toContain('Forwarded from Original Sender')
+    expect(wrapper.get('[data-testid="message-forwarded-banner"]').text()).toContain('Forwarded from Original Sender in thread "Launch thread" (#general)')
     expect(wrapper.text()).toContain('hello')
   })
 

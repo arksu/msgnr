@@ -105,6 +105,9 @@ func (s *Service) ListSavedMessages(ctx context.Context, userID uuid.UUID) ([]Sa
 				row.ForwardedFromMessageID,
 				row.ForwardedFromSenderID,
 				row.ForwardedFromSenderName,
+				row.ForwardedFromConversationKind,
+				row.ForwardedFromConversationTitle,
+				row.ForwardedFromThreadTitle,
 			),
 			CreatedAt: row.CreatedAt,
 			SavedAt:   row.SavedAt,
@@ -168,7 +171,7 @@ func (s *Service) ListMessagePage(
 			SenderID:         row.SenderID,
 			SenderName:       row.DisplayName,
 			Body:             row.Body,
-			ForwardedFrom:    forwardedMessageInfoFromRow(row.ForwardedFromMessageID, row.ForwardedFromSenderID, row.ForwardedFromSenderName),
+			ForwardedFrom:    forwardedMessageInfoFromRow(row.ForwardedFromMessageID, row.ForwardedFromSenderID, row.ForwardedFromSenderName, row.ForwardedFromConversationKind, row.ForwardedFromConversationTitle, row.ForwardedFromThreadTitle),
 			ChannelSeq:       row.ChannelSeq,
 			ThreadSeq:        row.ThreadSeq,
 			ThreadReplyCount: int32(row.ThreadReplyCount),
@@ -212,18 +215,21 @@ func (s *Service) ListMessagePage(
 	return messages, hasMore, nil
 }
 
-func forwardedMessageInfoFromRow(messageID uuid.NullUUID, senderID uuid.NullUUID, senderName sql.NullString) *ForwardedMessageInfo {
+func forwardedMessageInfoFromRow(messageID uuid.NullUUID, senderID uuid.NullUUID, senderName, conversationKind, conversationTitle, threadTitle sql.NullString) *ForwardedMessageInfo {
 	if !messageID.Valid || !senderID.Valid || !senderName.Valid || strings.TrimSpace(senderName.String) == "" {
 		return nil
 	}
 	return &ForwardedMessageInfo{
-		MessageID:  messageID.UUID,
-		SenderID:   senderID.UUID,
-		SenderName: senderName.String,
+		MessageID:         messageID.UUID,
+		SenderID:          senderID.UUID,
+		SenderName:        senderName.String,
+		ConversationKind:  strings.TrimSpace(conversationKind.String),
+		ConversationTitle: strings.TrimSpace(conversationTitle.String),
+		ThreadTitle:       strings.TrimSpace(threadTitle.String),
 	}
 }
 
-func forwardedMessageInfoFromStrings(messageIDRaw, senderIDRaw, senderNameRaw string) *ForwardedMessageInfo {
+func forwardedMessageInfoFromStrings(messageIDRaw, senderIDRaw, senderNameRaw, conversationKindRaw, conversationTitleRaw, threadTitleRaw string) *ForwardedMessageInfo {
 	messageID := parseUUIDOrNil(messageIDRaw)
 	senderID := parseUUIDOrNil(senderIDRaw)
 	senderName := strings.TrimSpace(senderNameRaw)
@@ -231,29 +237,77 @@ func forwardedMessageInfoFromStrings(messageIDRaw, senderIDRaw, senderNameRaw st
 		return nil
 	}
 	return &ForwardedMessageInfo{
-		MessageID:  messageID,
-		SenderID:   senderID,
-		SenderName: senderName,
+		MessageID:         messageID,
+		SenderID:          senderID,
+		SenderName:        senderName,
+		ConversationKind:  strings.TrimSpace(conversationKindRaw),
+		ConversationTitle: strings.TrimSpace(conversationTitleRaw),
+		ThreadTitle:       strings.TrimSpace(threadTitleRaw),
 	}
 }
 
 // ForwardMessage copies one existing message into a destination conversation or thread.
 // The forwarded message is authored by ActorID while preserving source attribution.
 func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (ForwardMessageResult, error) {
+	if p.DestinationThreadRootMessageID != uuid.Nil {
+		return ForwardMessageResult{}, ErrInvalidThread
+	}
+
 	var source struct {
-		ID         uuid.UUID
-		ChannelID  uuid.UUID
-		SenderID   uuid.UUID
-		SenderName string
-		Body       string
+		ID                uuid.UUID
+		ChannelID         uuid.UUID
+		SenderID          uuid.UUID
+		SenderName        string
+		Body              string
+		ConversationKind  string
+		ConversationTitle string
+		ThreadTitle       sql.NullString
 	}
 	if err := s.pool.QueryRow(ctx, `
-		SELECT m.id, m.channel_id, m.sender_id, COALESCE(NULLIF(u.display_name, ''), u.email), m.body
+		SELECT m.id,
+		       m.channel_id,
+		       m.sender_id,
+		       COALESCE(NULLIF(u.display_name, ''), u.email),
+		       m.body,
+		       c.kind,
+		       COALESCE(
+		         NULLIF(CASE
+		           WHEN c.kind = 'dm' THEN COALESCE(NULLIF(peer.display_name, ''), peer.email, c.name)
+		           ELSE c.name
+		         END, ''),
+		         c.kind
+		       ) AS conversation_title,
+		       CASE
+		         WHEN m.thread_root_id IS NOT NULL THEN COALESCE(NULLIF(root.body, ''), 'Attachment')
+		         ELSE NULL
+		       END AS thread_title
 		  FROM messages m
 		  JOIN users u ON u.id = m.sender_id
+		  JOIN channels c ON c.id = m.channel_id
+		  LEFT JOIN LATERAL (
+		    SELECT peer_user.display_name, peer_user.email
+		      FROM channel_members peer_member
+		      JOIN users peer_user ON peer_user.id = peer_member.user_id
+		     WHERE peer_member.channel_id = c.id
+		       AND peer_member.is_archived = false
+		       AND peer_member.user_id <> $2
+		     ORDER BY peer_user.display_name, peer_user.email
+		     LIMIT 1
+		  ) peer ON c.kind = 'dm'
+		  LEFT JOIN messages root ON root.id = m.thread_root_id
 		 WHERE m.id = $1`,
 		p.SourceMessageID,
-	).Scan(&source.ID, &source.ChannelID, &source.SenderID, &source.SenderName, &source.Body); err != nil {
+		p.ActorID,
+	).Scan(
+		&source.ID,
+		&source.ChannelID,
+		&source.SenderID,
+		&source.SenderName,
+		&source.Body,
+		&source.ConversationKind,
+		&source.ConversationTitle,
+		&source.ThreadTitle,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ForwardMessageResult{}, ErrMessageNotFound
 		}
@@ -290,9 +344,12 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 		ThreadRootMessageID: p.DestinationThreadRootMessageID,
 		AttachmentCopies:    attachments,
 		ForwardedFrom: &ForwardedMessageInfo{
-			MessageID:  source.ID,
-			SenderID:   source.SenderID,
-			SenderName: source.SenderName,
+			MessageID:         source.ID,
+			SenderID:          source.SenderID,
+			SenderName:        source.SenderName,
+			ConversationKind:  source.ConversationKind,
+			ConversationTitle: source.ConversationTitle,
+			ThreadTitle:       source.ThreadTitle.String,
 		},
 		SuppressMentions: true,
 	})
@@ -363,7 +420,8 @@ func (s *Service) ListForwardTargets(ctx context.Context, requesterID uuid.UUID)
 		  ) peer ON c.kind = 'dm'
 		 WHERE c.hidden = false
 		   AND c.is_archived = false
-		 ORDER BY title ASC`,
+		 ORDER BY CASE WHEN c.kind = 'channel' THEN 0 WHEN c.kind = 'dm' THEN 1 ELSE 2 END,
+		          title ASC`,
 		requesterID,
 	)
 	if err != nil {
@@ -384,67 +442,6 @@ func (s *Service) ListForwardTargets(ctx context.Context, requesterID uuid.UUID)
 	}
 	if err := conversationRows.Err(); err != nil {
 		return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets conversation rows: %w", err)
-	}
-
-	threadRows, err := s.pool.Query(ctx, `
-		SELECT root.channel_id,
-		       COALESCE(
-		         NULLIF(CASE
-		           WHEN c.kind = 'dm' THEN COALESCE(NULLIF(peer.display_name, ''), peer.email, c.name)
-		           ELSE c.name
-		         END, ''),
-		         c.kind
-		       ) AS conversation_title,
-		       root.id,
-		       COALESCE(NULLIF(sender.display_name, ''), sender.email) AS root_sender_name,
-		       root.body,
-		       ts.reply_count,
-		       COALESCE(ts.last_reply_at, root.created_at) AS last_reply_at
-		  FROM thread_summaries ts
-		  JOIN messages root ON root.id = ts.root_message_id
-		  JOIN channels c ON c.id = root.channel_id
-		  JOIN users sender ON sender.id = root.sender_id
-		  JOIN channel_members self_member
-		    ON self_member.channel_id = c.id
-		   AND self_member.user_id = $1
-		   AND self_member.is_archived = false
-		  LEFT JOIN LATERAL (
-		    SELECT u.display_name, u.email
-		      FROM channel_members peer_member
-		      JOIN users u ON u.id = peer_member.user_id
-		     WHERE peer_member.channel_id = c.id
-		       AND peer_member.is_archived = false
-		       AND peer_member.user_id <> $1
-		     ORDER BY u.display_name, u.email
-		     LIMIT 1
-		  ) peer ON c.kind = 'dm'
-		 WHERE c.hidden = false
-		   AND c.is_archived = false
-		 ORDER BY COALESCE(ts.last_reply_at, root.created_at) DESC
-		 LIMIT 80`,
-		requesterID,
-	)
-	if err != nil {
-		return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets threads: %w", err)
-	}
-	defer threadRows.Close()
-	for threadRows.Next() {
-		var item ForwardTargetThread
-		if err := threadRows.Scan(
-			&item.ConversationID,
-			&item.ConversationTitle,
-			&item.ThreadRootMessageID,
-			&item.RootSenderName,
-			&item.RootBody,
-			&item.ReplyCount,
-			&item.LastReplyAt,
-		); err != nil {
-			return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets scan thread: %w", err)
-		}
-		result.Threads = append(result.Threads, item)
-	}
-	if err := threadRows.Err(); err != nil {
-		return ForwardTargets{}, fmt.Errorf("chat.ListForwardTargets thread rows: %w", err)
 	}
 	return result, nil
 }
@@ -569,10 +566,19 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	var forwardedFromMessageArg interface{} = nil
 	var forwardedFromSenderArg interface{} = nil
 	var forwardedFromSenderNameArg interface{} = nil
+	var forwardedFromConversationKindArg interface{} = nil
+	var forwardedFromConversationTitleArg interface{} = nil
+	var forwardedFromThreadTitleArg interface{} = nil
 	if p.ForwardedFrom != nil {
 		forwardedFromMessageArg = p.ForwardedFrom.MessageID
 		forwardedFromSenderArg = p.ForwardedFrom.SenderID
 		forwardedFromSenderNameArg = p.ForwardedFrom.SenderName
+		forwardedFromConversationKindArg = strings.TrimSpace(p.ForwardedFrom.ConversationKind)
+		forwardedFromConversationTitleArg = strings.TrimSpace(p.ForwardedFrom.ConversationTitle)
+		threadTitle := strings.TrimSpace(p.ForwardedFrom.ThreadTitle)
+		if threadTitle != "" {
+			forwardedFromThreadTitleArg = threadTitle
+		}
 	}
 
 	var msgID uuid.UUID
@@ -590,11 +596,14 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		)
 		INSERT INTO messages (channel_id, channel_seq, sender_id, client_msg_id, body,
 		                      forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
+		                      forwarded_from_conversation_kind,
+		                      forwarded_from_conversation_title, forwarded_from_thread_title,
 		                      thread_root_id, thread_seq, mention_everyone, created_at)
-		VALUES ($1, (SELECT next_seq FROM seq), $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		VALUES ($1, (SELECT next_seq FROM seq), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
 		RETURNING id, channel_seq, client_msg_id, created_at`,
 		p.ChannelID, p.SenderID, p.ClientMsgID, p.Body,
 		forwardedFromMessageArg, forwardedFromSenderArg, forwardedFromSenderNameArg,
+		forwardedFromConversationKindArg, forwardedFromConversationTitleArg, forwardedFromThreadTitleArg,
 		threadRootArg, threadSeq, mentionEveryone,
 	).Scan(&msgID, &channelSeq, &clientMsgID, &createdAt); err != nil {
 		if isUniqueViolation(err) {
@@ -743,6 +752,9 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		msgProto.ForwardedFromMessageId = p.ForwardedFrom.MessageID.String()
 		msgProto.ForwardedFromSenderId = p.ForwardedFrom.SenderID.String()
 		msgProto.ForwardedFromSenderName = p.ForwardedFrom.SenderName
+		msgProto.ForwardedFromConversationKind = strings.TrimSpace(p.ForwardedFrom.ConversationKind)
+		msgProto.ForwardedFromConversationTitle = strings.TrimSpace(p.ForwardedFrom.ConversationTitle)
+		msgProto.ForwardedFromThreadTitle = strings.TrimSpace(p.ForwardedFrom.ThreadTitle)
 	}
 	if isReply {
 		msgProto.ThreadRootMessageId = p.ThreadRootMessageID.String()
@@ -1346,7 +1358,7 @@ func (s *Service) ListMessageContext(
 			SenderID:         row.SenderID,
 			SenderName:       row.DisplayName,
 			Body:             row.Body,
-			ForwardedFrom:    forwardedMessageInfoFromRow(row.ForwardedFromMessageID, row.ForwardedFromSenderID, row.ForwardedFromSenderName),
+			ForwardedFrom:    forwardedMessageInfoFromRow(row.ForwardedFromMessageID, row.ForwardedFromSenderID, row.ForwardedFromSenderName, row.ForwardedFromConversationKind, row.ForwardedFromConversationTitle, row.ForwardedFromThreadTitle),
 			ChannelSeq:       row.ChannelSeq,
 			ThreadSeq:        row.ThreadSeq,
 			ThreadReplyCount: int32(row.ThreadReplyCount),

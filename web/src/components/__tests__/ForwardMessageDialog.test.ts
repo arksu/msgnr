@@ -60,6 +60,7 @@ describe('ForwardMessageDialog', () => {
     chatApiMocks.listForwardTargets.mockResolvedValue({
       conversations: [
         { conversation_id: 'channel-2', title: 'General', kind: 'channel', visibility: 'public' },
+        { conversation_id: 'channel-4', title: 'Alice', kind: 'dm', visibility: 'dm' },
       ],
       threads: [
         {
@@ -77,7 +78,7 @@ describe('ForwardMessageDialog', () => {
     chatApiMocks.forwardMessage.mockResolvedValue(undefined)
   })
 
-  it('loads conversations and threads when opened', async () => {
+  it('loads conversation targets when opened and ignores thread targets', async () => {
     const wrapper = mount(ForwardMessageDialog, {
       props: { open: true, message: buildMessage() },
       attachTo: document.body,
@@ -86,27 +87,32 @@ describe('ForwardMessageDialog', () => {
 
     expect(chatApiMocks.listForwardTargets).toHaveBeenCalled()
     expect(document.body.textContent).toContain('General')
-    expect(document.body.textContent).toContain('Project')
+    expect(document.body.textContent).toContain('Alice')
+    expect(document.body.textContent).not.toContain('Project')
     wrapper.unmount()
   })
 
-  it('forwards to a selected thread target', async () => {
-    const chat = useChatStore()
+  it('renders channels before DMs', async () => {
+    chatApiMocks.listForwardTargets.mockResolvedValue({
+      conversations: [
+        { conversation_id: 'dm-1', title: 'Alice', kind: 'dm', visibility: 'dm' },
+        { conversation_id: 'channel-1', title: 'Zebra', kind: 'channel', visibility: 'public' },
+      ],
+      threads: [],
+    })
     const wrapper = mount(ForwardMessageDialog, {
       props: { open: true, message: buildMessage() },
       attachTo: document.body,
     })
     await flushAll()
 
-    const projectButton = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('Project')) as HTMLButtonElement
-    projectButton.click()
-    await flushAll()
-    const forwardButton = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent === 'Forward') as HTMLButtonElement
-    forwardButton.click()
-    await flushAll()
-
-    expect(chatApiMocks.forwardMessage).toHaveBeenCalledWith('message-1', 'channel-3', 'root-1')
-    expect(chat.toast?.message).toBe('Message forwarded')
+    const targetButtons = Array.from(document.body.querySelectorAll('button')).filter(button =>
+      button.textContent?.includes('Alice') || button.textContent?.includes('Zebra'),
+    )
+    expect(targetButtons.map(button => button.textContent)).toEqual([
+      expect.stringContaining('Zebra'),
+      expect.stringContaining('Alice'),
+    ])
     wrapper.unmount()
   })
 
@@ -137,11 +143,11 @@ describe('ForwardMessageDialog', () => {
     })
     await flushAll()
 
-    const projectButton = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('Project')) as HTMLButtonElement
-    projectButton.click()
+    const generalButton = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('General')) as HTMLButtonElement
+    generalButton.click()
     await flushAll()
     const input = document.body.querySelector('input') as HTMLInputElement
-    input.value = 'General'
+    input.value = 'Missing'
     input.dispatchEvent(new Event('input'))
     await flushAll()
 

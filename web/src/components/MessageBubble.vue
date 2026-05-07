@@ -225,13 +225,13 @@
           v-if="message.forwardedFrom"
           data-testid="message-forwarded-banner"
           class="mb-1 inline-flex max-w-full items-center gap-1 rounded border border-chat-border bg-chat-input/70 px-2 py-0.5 text-[11px] text-app-muted"
-          :title="`Forwarded from ${message.forwardedFrom.senderName}`"
+          :title="formatForwardedMessageLabel(message.forwardedFrom)"
         >
           <svg class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path d="M15 17h5l-5 5v-5z" />
             <path d="M4 4h7a4 4 0 0 1 4 4v9" />
           </svg>
-          <span class="truncate">Forwarded from {{ message.forwardedFrom.senderName }}</span>
+          <span class="truncate">{{ formatForwardedMessageLabel(message.forwardedFrom) }}</span>
         </div>
         <div
           v-if="message.body"
@@ -606,6 +606,7 @@ import UserAvatar from './UserAvatar.vue'
 import ForwardMessageDialog from './ForwardMessageDialog.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
 import { renderMessageBodyWithEntities } from '@/utils/renderMessageEntities'
+import { formatForwardedMessageLabel } from '@/utils/forwardedMessages'
 import RichTextComposer from './RichTextComposer.vue'
 import {
   formatUserCustomStatusTitle,

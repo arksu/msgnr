@@ -143,9 +143,12 @@ type conversationMessageResponse struct {
 }
 
 type forwardedMessageResponse struct {
-	MessageID  string `json:"message_id"`
-	SenderID   string `json:"sender_id"`
-	SenderName string `json:"sender_name"`
+	MessageID         string `json:"message_id"`
+	SenderID          string `json:"sender_id"`
+	SenderName        string `json:"sender_name"`
+	ConversationKind  string `json:"conversation_kind,omitempty"`
+	ConversationTitle string `json:"conversation_title,omitempty"`
+	ThreadTitle       string `json:"thread_title,omitempty"`
 }
 
 type messageAttachmentResponse struct {
@@ -340,9 +343,12 @@ func encodeForwardedMessage(info *ForwardedMessageInfo) *forwardedMessageRespons
 		return nil
 	}
 	return &forwardedMessageResponse{
-		MessageID:  info.MessageID.String(),
-		SenderID:   info.SenderID.String(),
-		SenderName: info.SenderName,
+		MessageID:         info.MessageID.String(),
+		SenderID:          info.SenderID.String(),
+		SenderName:        info.SenderName,
+		ConversationKind:  strings.TrimSpace(info.ConversationKind),
+		ConversationTitle: strings.TrimSpace(info.ConversationTitle),
+		ThreadTitle:       strings.TrimSpace(info.ThreadTitle),
 	}
 }
 

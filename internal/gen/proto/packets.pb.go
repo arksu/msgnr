@@ -2511,19 +2511,22 @@ type MessageEvent struct {
 	// Empty for channel-level messages; set for thread replies.
 	ThreadRootMessageId string `protobuf:"bytes,7,opt,name=thread_root_message_id,json=threadRootMessageId,proto3" json:"thread_root_message_id,omitempty"`
 	// Monotonic ordering inside the thread. Zero for non-thread messages.
-	ThreadSeq               int64                  `protobuf:"varint,8,opt,name=thread_seq,json=threadSeq,proto3" json:"thread_seq,omitempty"`
-	MentionedUserIds        []string               `protobuf:"bytes,9,rep,name=mentioned_user_ids,json=mentionedUserIds,proto3" json:"mentioned_user_ids,omitempty"`
-	MentionEveryone         bool                   `protobuf:"varint,10,opt,name=mention_everyone,json=mentionEveryone,proto3" json:"mention_everyone,omitempty"`
-	Reactions               []*ReactionAggregate   `protobuf:"bytes,11,rep,name=reactions,proto3" json:"reactions,omitempty"`
-	Attachments             []*MessageAttachment   `protobuf:"bytes,12,rep,name=attachments,proto3" json:"attachments,omitempty"`
-	EditedAt                *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=edited_at,json=editedAt,proto3" json:"edited_at,omitempty"`
-	Entities                []*MessageEntity       `protobuf:"bytes,14,rep,name=entities,proto3" json:"entities,omitempty"`
-	MyReactions             []string               `protobuf:"bytes,15,rep,name=my_reactions,json=myReactions,proto3" json:"my_reactions,omitempty"`
-	ForwardedFromMessageId  string                 `protobuf:"bytes,16,opt,name=forwarded_from_message_id,json=forwardedFromMessageId,proto3" json:"forwarded_from_message_id,omitempty"`
-	ForwardedFromSenderId   string                 `protobuf:"bytes,17,opt,name=forwarded_from_sender_id,json=forwardedFromSenderId,proto3" json:"forwarded_from_sender_id,omitempty"`
-	ForwardedFromSenderName string                 `protobuf:"bytes,18,opt,name=forwarded_from_sender_name,json=forwardedFromSenderName,proto3" json:"forwarded_from_sender_name,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	ThreadSeq                      int64                  `protobuf:"varint,8,opt,name=thread_seq,json=threadSeq,proto3" json:"thread_seq,omitempty"`
+	MentionedUserIds               []string               `protobuf:"bytes,9,rep,name=mentioned_user_ids,json=mentionedUserIds,proto3" json:"mentioned_user_ids,omitempty"`
+	MentionEveryone                bool                   `protobuf:"varint,10,opt,name=mention_everyone,json=mentionEveryone,proto3" json:"mention_everyone,omitempty"`
+	Reactions                      []*ReactionAggregate   `protobuf:"bytes,11,rep,name=reactions,proto3" json:"reactions,omitempty"`
+	Attachments                    []*MessageAttachment   `protobuf:"bytes,12,rep,name=attachments,proto3" json:"attachments,omitempty"`
+	EditedAt                       *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=edited_at,json=editedAt,proto3" json:"edited_at,omitempty"`
+	Entities                       []*MessageEntity       `protobuf:"bytes,14,rep,name=entities,proto3" json:"entities,omitempty"`
+	MyReactions                    []string               `protobuf:"bytes,15,rep,name=my_reactions,json=myReactions,proto3" json:"my_reactions,omitempty"`
+	ForwardedFromMessageId         string                 `protobuf:"bytes,16,opt,name=forwarded_from_message_id,json=forwardedFromMessageId,proto3" json:"forwarded_from_message_id,omitempty"`
+	ForwardedFromSenderId          string                 `protobuf:"bytes,17,opt,name=forwarded_from_sender_id,json=forwardedFromSenderId,proto3" json:"forwarded_from_sender_id,omitempty"`
+	ForwardedFromSenderName        string                 `protobuf:"bytes,18,opt,name=forwarded_from_sender_name,json=forwardedFromSenderName,proto3" json:"forwarded_from_sender_name,omitempty"`
+	ForwardedFromConversationTitle string                 `protobuf:"bytes,19,opt,name=forwarded_from_conversation_title,json=forwardedFromConversationTitle,proto3" json:"forwarded_from_conversation_title,omitempty"`
+	ForwardedFromThreadTitle       string                 `protobuf:"bytes,20,opt,name=forwarded_from_thread_title,json=forwardedFromThreadTitle,proto3" json:"forwarded_from_thread_title,omitempty"`
+	ForwardedFromConversationKind  string                 `protobuf:"bytes,21,opt,name=forwarded_from_conversation_kind,json=forwardedFromConversationKind,proto3" json:"forwarded_from_conversation_kind,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
 }
 
 func (x *MessageEvent) Reset() {
@@ -2678,6 +2681,27 @@ func (x *MessageEvent) GetForwardedFromSenderId() string {
 func (x *MessageEvent) GetForwardedFromSenderName() string {
 	if x != nil {
 		return x.ForwardedFromSenderName
+	}
+	return ""
+}
+
+func (x *MessageEvent) GetForwardedFromConversationTitle() string {
+	if x != nil {
+		return x.ForwardedFromConversationTitle
+	}
+	return ""
+}
+
+func (x *MessageEvent) GetForwardedFromThreadTitle() string {
+	if x != nil {
+		return x.ForwardedFromThreadTitle
+	}
+	return ""
+}
+
+func (x *MessageEvent) GetForwardedFromConversationKind() string {
+	if x != nil {
+		return x.ForwardedFromConversationKind
 	}
 	return ""
 }
@@ -7587,7 +7611,7 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x05label\x18\x03 \x01(\tR\x05label\x12\x12\n" +
 	"\x04href\x18\x04 \x01(\tR\x04href\x12\x14\n" +
 	"\x05start\x18\x05 \x01(\x05R\x05start\x12\x10\n" +
-	"\x03end\x18\x06 \x01(\x05R\x03end\"\xd2\x06\n" +
+	"\x03end\x18\x06 \x01(\x05R\x03end\"\xa5\b\n" +
 	"\fMessageEvent\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1d\n" +
 	"\n" +
@@ -7611,7 +7635,10 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\fmy_reactions\x18\x0f \x03(\tR\vmyReactions\x129\n" +
 	"\x19forwarded_from_message_id\x18\x10 \x01(\tR\x16forwardedFromMessageId\x127\n" +
 	"\x18forwarded_from_sender_id\x18\x11 \x01(\tR\x15forwardedFromSenderId\x12;\n" +
-	"\x1aforwarded_from_sender_name\x18\x12 \x01(\tR\x17forwardedFromSenderName\"\x8f\x01\n" +
+	"\x1aforwarded_from_sender_name\x18\x12 \x01(\tR\x17forwardedFromSenderName\x12I\n" +
+	"!forwarded_from_conversation_title\x18\x13 \x01(\tR\x1eforwardedFromConversationTitle\x12=\n" +
+	"\x1bforwarded_from_thread_title\x18\x14 \x01(\tR\x18forwardedFromThreadTitle\x12G\n" +
+	" forwarded_from_conversation_kind\x18\x15 \x01(\tR\x1dforwardedFromConversationKind\"\x8f\x01\n" +
 	"\x11MessageAttachment\x12#\n" +
 	"\rattachment_id\x18\x01 \x01(\tR\fattachmentId\x12\x1b\n" +
 	"\tfile_name\x18\x02 \x01(\tR\bfileName\x12\x1b\n" +

@@ -515,6 +515,9 @@ describe('chatStore phase 6 flows', () => {
           forwardedFromMessageId: 'source-1',
           forwardedFromSenderId: 'user-9',
           forwardedFromSenderName: 'Original Sender',
+          forwardedFromConversationKind: 'channel',
+          forwardedFromConversationTitle: 'general',
+          forwardedFromThreadTitle: 'Launch thread',
         }),
       },
     }))
@@ -523,6 +526,9 @@ describe('chatStore phase 6 flows', () => {
       messageId: 'source-1',
       senderId: 'user-9',
       senderName: 'Original Sender',
+      conversationKind: 'channel',
+      conversationTitle: 'general',
+      threadTitle: 'Launch thread',
     })
   })
 
@@ -3444,6 +3450,9 @@ describe('chatStore.onTaskStatusChanged', () => {
           message_id: 'source-1',
           sender_id: 'user-9',
           sender_name: 'Original Sender',
+          conversation_kind: 'channel',
+          conversation_title: 'general',
+          thread_title: 'Launch thread',
         },
         created_at: '2026-03-06T00:00:00Z',
         saved_at: '2026-03-06T00:01:00Z',
@@ -3456,6 +3465,9 @@ describe('chatStore.onTaskStatusChanged', () => {
       messageId: 'source-1',
       senderId: 'user-9',
       senderName: 'Original Sender',
+      conversationKind: 'channel',
+      conversationTitle: 'general',
+      threadTitle: 'Launch thread',
     })
   })
 })

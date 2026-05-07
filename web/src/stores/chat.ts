@@ -136,6 +136,9 @@ export interface ForwardedMessage {
   messageId: string
   senderId: string
   senderName: string
+  conversationKind?: string
+  conversationTitle?: string
+  threadTitle?: string
 }
 
 export type SendStatus = 'sending' | 'queued' | 'failed'
@@ -336,6 +339,9 @@ function normalizeForwardedMessage(raw: ConversationMessageItem['forwarded_from'
     messageId: raw.message_id,
     senderId: raw.sender_id,
     senderName: decodeNotificationText(raw.sender_name),
+    conversationKind: raw.conversation_kind?.trim() || undefined,
+    conversationTitle: raw.conversation_title?.trim() ? decodeNotificationText(raw.conversation_title) : undefined,
+    threadTitle: raw.thread_title?.trim() ? decodeNotificationText(raw.thread_title) : undefined,
   }
 }
 
@@ -345,6 +351,9 @@ function forwardedMessageFromProto(evt: ProtoMessageEvent): ForwardedMessage | u
     messageId: evt.forwardedFromMessageId,
     senderId: evt.forwardedFromSenderId,
     senderName: decodeNotificationText(evt.forwardedFromSenderName),
+    conversationKind: evt.forwardedFromConversationKind.trim() || undefined,
+    conversationTitle: evt.forwardedFromConversationTitle.trim() ? decodeNotificationText(evt.forwardedFromConversationTitle) : undefined,
+    threadTitle: evt.forwardedFromThreadTitle.trim() ? decodeNotificationText(evt.forwardedFromThreadTitle) : undefined,
   }
 }
 

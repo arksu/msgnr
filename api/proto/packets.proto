@@ -312,6 +312,9 @@ message MessageEvent {
   string forwarded_from_message_id = 16;
   string forwarded_from_sender_id = 17;
   string forwarded_from_sender_name = 18;
+  string forwarded_from_conversation_title = 19;
+  string forwarded_from_thread_title = 20;
+  string forwarded_from_conversation_kind = 21;
 }
 
 message MessageAttachment {

@@ -28,9 +28,11 @@
     <script>
       const SEGMENT_TTL_MS = 20000;
       const FADE_MS = 300;
-      const STROKE_COLOR = '#f59e0b';
+      const FALLBACK_STROKE_COLOR = '#f59e0b';
       const STROKE_WIDTH = 3;
       const segments = [];
+      const segmentKeys = new Set();
+      let renderFrame = 0;
 
       const canvas = document.getElementById('overlay');
       const ctx = canvas.getContext('2d', { alpha: true });
@@ -43,14 +45,91 @@
         canvas.height = Math.floor(height * dpr);
         if (!ctx) return;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        requestDraw();
       }
 
       function prune(now) {
         for (let i = segments.length - 1; i >= 0; i -= 1) {
           if (segments[i].expiresAt <= now) {
+            segmentKeys.delete(segments[i].key);
             segments.splice(i, 1);
           }
         }
+      }
+
+      function clamp01(value) {
+        if (value < 0) return 0;
+        if (value > 1) return 1;
+        return value;
+      }
+
+      function segmentKey(segment) {
+        return `${segment.senderIdentity || ''}:${segment.strokeId || ''}:${segment.seq ?? 0}`;
+      }
+
+      function strokeKey(segment) {
+        return `${segment.senderIdentity || ''}:${segment.strokeId || ''}`;
+      }
+
+      function toPoint(point, width, height) {
+        return {
+          x: clamp01(Number(point.x)) * width,
+          y: clamp01(Number(point.y)) * height,
+        };
+      }
+
+      function buildStrokeGroups(width, height, now) {
+        const grouped = new Map();
+        for (const segment of segments) {
+          const msLeft = segment.expiresAt - now;
+          if (msLeft <= 0) continue;
+          const key = strokeKey(segment);
+          const group = grouped.get(key);
+          if (group) {
+            group.push(segment);
+          } else {
+            grouped.set(key, [segment]);
+          }
+        }
+
+        return Array.from(grouped.entries()).map(([key, groupSegments]) => {
+          const ordered = groupSegments.slice().sort((a, b) => a.seq - b.seq);
+          const points = [];
+          let alpha = 1;
+          for (const segment of ordered) {
+            const msLeft = segment.expiresAt - now;
+            alpha = Math.min(alpha, msLeft < FADE_MS ? Math.max(0, msLeft / FADE_MS) : 1);
+            if (points.length === 0) {
+              points.push(toPoint(segment.from, width, height));
+            }
+            points.push(toPoint(segment.to, width, height));
+          }
+          return {
+            key,
+            color: ordered[0]?.color || FALLBACK_STROKE_COLOR,
+            alpha,
+            points,
+          };
+        });
+      }
+
+      function strokeSmoothedPath(points) {
+        if (points.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        if (points.length === 2) {
+          ctx.lineTo(points[1].x, points[1].y);
+          ctx.stroke();
+          return;
+        }
+        for (let index = 1; index < points.length - 1; index += 1) {
+          const current = points[index];
+          const next = points[index + 1];
+          ctx.quadraticCurveTo(current.x, current.y, (current.x + next.x) / 2, (current.y + next.y) / 2);
+        }
+        const last = points[points.length - 1];
+        ctx.lineTo(last.x, last.y);
+        ctx.stroke();
       }
 
       function draw() {
@@ -63,30 +142,45 @@
         ctx.clearRect(0, 0, width, height);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = STROKE_COLOR;
         ctx.lineWidth = STROKE_WIDTH;
 
-        for (const segment of segments) {
-          const msLeft = segment.expiresAt - now;
-          if (msLeft <= 0) continue;
-          const alpha = msLeft < FADE_MS ? Math.max(0, msLeft / FADE_MS) : 1;
-          ctx.globalAlpha = alpha;
-          ctx.beginPath();
-          ctx.moveTo(segment.from.x * width, segment.from.y * height);
-          ctx.lineTo(segment.to.x * width, segment.to.y * height);
-          ctx.stroke();
+        for (const group of buildStrokeGroups(width, height, now)) {
+          ctx.globalAlpha = group.alpha;
+          ctx.strokeStyle = group.color;
+          strokeSmoothedPath(group.points);
         }
         ctx.globalAlpha = 1;
+      }
+
+      function requestDraw() {
+        if (renderFrame) return;
+        const requestFrame = window.requestAnimationFrame || ((callback) => window.setTimeout(() => callback(Date.now()), 16));
+        renderFrame = requestFrame(() => {
+          renderFrame = 0;
+          draw();
+          if (segments.length > 0) {
+            requestDraw();
+          }
+        });
       }
 
       function pushSegment(segment) {
         if (!segment || typeof segment !== 'object') return;
         if (!segment.from || !segment.to) return;
+        const key = segmentKey(segment);
+        if (segmentKeys.has(key)) return;
+        segmentKeys.add(key);
         segments.push({
+          key,
           from: segment.from,
           to: segment.to,
+          senderIdentity: String(segment.senderIdentity || ''),
+          strokeId: String(segment.strokeId || ''),
+          seq: Number.isInteger(segment.seq) ? segment.seq : 0,
+          color: typeof segment.color === 'string' && segment.color.trim() ? segment.color : FALLBACK_STROKE_COLOR,
           expiresAt: Date.now() + SEGMENT_TTL_MS,
         });
+        requestDraw();
       }
 
       window.__overlayPushSegmentFromJson = function overlayPushSegmentFromJson(raw) {
@@ -100,12 +194,12 @@
 
       window.__overlayClear = function overlayClear() {
         segments.length = 0;
+        segmentKeys.clear();
         draw();
       };
 
       window.addEventListener('resize', resize);
       resize();
-      setInterval(draw, 50);
       draw();
     </script>
   </body>

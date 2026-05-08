@@ -8,6 +8,7 @@ import { useNotificationSoundEngine } from '@/services/sound'
 import { loadAudioPrefs, saveAudioPrefs } from '@/services/storage/audioPrefsStorage'
 import { getPlatformOrNull } from '@/platform'
 import { getRuntimePlatformType } from '@/platform/runtime'
+import { resolveScreenAnnotationStrokeColor } from '@/utils/color'
 
 // RNNoise blob URL is built once per page load and reused across all mute/unmute
 // cycles. Fetching + Blob-URL creation is expensive (~network round trip + WASM
@@ -266,6 +267,10 @@ export interface ScreenAnnotationSegmentV1 {
 
 export interface ScreenAnnotationEvent extends ScreenAnnotationSegmentV1 {
   receivedAtMs: number
+}
+
+interface ScreenAnnotationOverlaySegment extends ScreenAnnotationEvent {
+  color: string
 }
 
 type ScreenAnnotationPacketV1 = ScreenAnnotationSessionState | ScreenAnnotationSegmentV1
@@ -677,10 +682,14 @@ export const useCallStore = defineStore('call', () => {
     segment: ScreenAnnotationEvent,
   ): Promise<void> {
     if (localRuntimePlatform() !== 'tauri') return
+    const overlaySegment: ScreenAnnotationOverlaySegment = {
+      ...segment,
+      color: resolveScreenAnnotationStrokeColor(segment.senderIdentity),
+    }
     try {
       await platform?.system.invokeNative?.('annotation_overlay_push_segment', {
         overlayLabel,
-        segmentJson: JSON.stringify(segment),
+        segmentJson: JSON.stringify(overlaySegment),
       })
     } catch (err) {
       callDebug('annotation overlay segment push failed', { error: toErrorMessage(err) })

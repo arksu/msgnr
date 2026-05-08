@@ -8,6 +8,7 @@ import CallDock from '@/components/CallDock.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
+import { resolveScreenAnnotationStrokeColor } from '@/utils/color'
 
 const chatApiMocks = vi.hoisted(() => ({
   listDmCandidates: vi.fn(),
@@ -78,6 +79,14 @@ function mockElementRect(element: HTMLElement, rect: { width: number; height: nu
       height: rect.height,
       toJSON: () => ({}),
     }),
+  })
+  Object.defineProperty(element, 'clientWidth', {
+    configurable: true,
+    value: rect.width,
+  })
+  Object.defineProperty(element, 'clientHeight', {
+    configurable: true,
+    value: rect.height,
   })
 }
 
@@ -1247,6 +1256,101 @@ describe('CallDock screen annotation overlay', () => {
     expect(overlay.attributes('data-active-segments')).toBe('1')
 
     wrapper.unmount()
+  })
+
+  it('renders preview-fallback strokes with smoothed per-sender colors', async () => {
+    const originalGetContext = HTMLCanvasElement.prototype.getContext
+    const canvasContextStub = {
+      setTransform: vi.fn(),
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      beginPath: vi.fn(),
+      rect: vi.fn(),
+      clip: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      stroke: vi.fn(),
+      restore: vi.fn(),
+      globalAlpha: 1,
+      lineCap: 'round',
+      lineJoin: 'round',
+      strokeStyle: '',
+      lineWidth: 1,
+    } as unknown as CanvasRenderingContext2D
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value: vi.fn(() => canvasContextStub) as unknown as typeof HTMLCanvasElement.prototype.getContext,
+    })
+
+    const callStore = useCallStore()
+    const localShare = createLocalShareRoom()
+    const emitAnnotation = installAnnotationEmitter(callStore)
+    seedUserState()
+
+    callStore.connected = true
+    callStore.screenShareEnabled = true
+    callStore.room = localShare.room as never
+    callStore.mediaVersion = 1
+    setAnnotationSession(callStore, {
+      sharerIdentity: 'user-a',
+      sharerPlatform: 'tauri',
+      shareType: 'window',
+    })
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    try {
+      await flushAll()
+      const overlay = wrapper.get('[data-testid="calldock-annotation-overlay"]')
+      const stage = overlay.element.parentElement as HTMLElement
+      mockElementRect(stage, { width: 640, height: 360 })
+      for (const video of wrapper.findAll('video')) {
+        mockElementRect(video.element as HTMLVideoElement, { width: 640, height: 360 })
+        Object.defineProperty(video.element, 'videoWidth', { configurable: true, value: 640 })
+        Object.defineProperty(video.element, 'videoHeight', { configurable: true, value: 360 })
+      }
+
+      const baseSegment = {
+        version: 1 as const,
+        kind: 'segment' as const,
+        shareTrackSid: localShare.trackSid,
+        senderIdentity: 'user-b',
+        strokeId: 'stroke-smooth',
+        sentAtMs: Date.now(),
+        receivedAtMs: Date.now(),
+      }
+      emitAnnotation({
+        ...baseSegment,
+        seq: 0,
+        from: { x: 0.05, y: 0.05 },
+        to: { x: 0.25, y: 0.25 },
+      })
+      emitAnnotation({
+        ...baseSegment,
+        seq: 1,
+        from: { x: 0.25, y: 0.25 },
+        to: { x: 0.45, y: 0.35 },
+      })
+      await flushAll()
+
+      expect(overlay.attributes('data-active-segments')).toBe('2')
+      expect(canvasContextStub.strokeStyle).toBe(resolveScreenAnnotationStrokeColor('user-b'))
+      expect(canvasContextStub.quadraticCurveTo).toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+        configurable: true,
+        value: originalGetContext,
+      })
+    }
   })
 
   it('expires preview-fallback segments after 20 seconds and reports fade window', async () => {

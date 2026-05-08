@@ -6,6 +6,7 @@ import { useCallStore } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { loadAudioPrefs, saveAudioPrefs } from '@/services/storage/audioPrefsStorage'
+import { resolveScreenAnnotationStrokeColor } from '@/utils/color'
 
 const platformMocks = vi.hoisted(() => ({
   getPlatformOrNull: vi.fn(),
@@ -530,6 +531,7 @@ describe('callStore screen annotations', () => {
     const decoded = JSON.parse(new TextDecoder().decode(encodedPayload)) as Record<string, unknown>
     expect(decoded.kind).toBe('segment')
     expect(decoded.senderIdentity).toBe('user-b')
+    expect(decoded.color).toBeUndefined()
   })
 
   it('blocks annotation publish for the screen sharer', async () => {
@@ -814,6 +816,10 @@ describe('callStore screen annotations', () => {
     expect(invokeNative).toHaveBeenCalledWith('annotation_overlay_push_segment', expect.objectContaining({
       overlayLabel: 'annotation_overlay_monitor-1',
     }))
+    const pushCall = invokeNative.mock.calls.find(([command]) => command === 'annotation_overlay_push_segment')
+    const pushedSegment = JSON.parse(pushCall?.[1]?.segmentJson ?? '{}') as Record<string, unknown>
+    expect(pushedSegment.senderIdentity).toBe('user-b')
+    expect(pushedSegment.color).toBe(resolveScreenAnnotationStrokeColor('user-b'))
 
     callStore.ingestScreenAnnotationPacket(buildInactiveSessionPacket(), 'user-a')
     await flushAsync()

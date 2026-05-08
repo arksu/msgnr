@@ -681,6 +681,7 @@ import { useAuthStore } from '@/stores/auth'
 import { listDmCandidates, type DmCandidateItem } from '@/services/http/chatApi'
 import { loadAudioPrefs } from '@/services/storage/audioPrefsStorage'
 import { matchesCallInviteSearch, normalizeCallInviteSearchQuery } from '@/utils/callInviteSearch'
+import { resolveScreenAnnotationStrokeColor } from '@/utils/color'
 import { useFloatingDockPosition } from '@/composables/useFloatingDockPosition'
 import UserAvatar from './UserAvatar.vue'
 
@@ -733,7 +734,15 @@ interface AnnotationSurfaceGeometry {
 
 interface RenderedAnnotationSegment extends ScreenAnnotationEvent {
   key: string
+  color: string
   expiresAtMs: number
+}
+
+interface RenderedAnnotationStrokeGroup {
+  key: string
+  color: string
+  alpha: number
+  points: NormalizedPoint[]
 }
 
 interface ActiveAnnotationStroke {
@@ -753,7 +762,6 @@ interface PausedRemoteScreenFrame {
 const ANNOTATION_SEGMENT_TTL_MS = 20_000
 const ANNOTATION_SEGMENT_FADE_MS = 300
 const ANNOTATION_STROKE_WIDTH_PX = 3
-const ANNOTATION_STROKE_COLOR = '#f59e0b'
 
 // ── Stores ────────────────────────────────────────────────────────────────────
 
@@ -819,7 +827,7 @@ const remoteTileEls = new Map<string, HTMLVideoElement | null>()
 const remoteScreenOwnerLabel = ref('Screen share')
 const annotationSegments: RenderedAnnotationSegment[] = []
 const annotationSegmentKeys = new Set<string>()
-let annotationRenderTimer: ReturnType<typeof setInterval> | null = null
+let annotationRenderFrame: number | null = null
 let annotationStrokeCounter = 0
 let activeAnnotationStroke: ActiveAnnotationStroke | null = null
 let canvas2dSupported: boolean | null = null
@@ -1582,6 +1590,94 @@ function pruneExpiredAnnotationSegments(nowMs: number): number {
   return removed
 }
 
+function annotationFrameRequest(callback: FrameRequestCallback): number {
+  if (typeof window.requestAnimationFrame === 'function') {
+    return window.requestAnimationFrame(callback)
+  }
+  return window.setTimeout(() => callback(Date.now()), 16)
+}
+
+function annotationFrameCancel(frameId: number) {
+  if (typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(frameId)
+    return
+  }
+  window.clearTimeout(frameId)
+}
+
+function toRenderedAnnotationPoint(point: NormalizedPoint, rect: OverlayRect): NormalizedPoint {
+  return {
+    x: rect.left + (point.x * rect.width),
+    y: rect.top + (point.y * rect.height),
+  }
+}
+
+function buildAnnotationStrokeGroups(
+  trackSid: string,
+  contentRect: OverlayRect,
+  nowMs: number,
+): RenderedAnnotationStrokeGroup[] {
+  const groups = new Map<string, RenderedAnnotationSegment[]>()
+  for (const segment of annotationSegments) {
+    if (segment.shareTrackSid !== trackSid) continue
+    const msLeft = segment.expiresAtMs - nowMs
+    if (msLeft <= 0) continue
+    const groupKey = `${segment.senderIdentity}:${segment.strokeId}`
+    const group = groups.get(groupKey)
+    if (group) {
+      group.push(segment)
+    } else {
+      groups.set(groupKey, [segment])
+    }
+  }
+
+  return Array.from(groups.entries()).map(([key, segments]) => {
+    const ordered = segments.slice().sort((a, b) => a.seq - b.seq)
+    const points: NormalizedPoint[] = []
+    let alpha = 1
+    for (const segment of ordered) {
+      const msLeft = segment.expiresAtMs - nowMs
+      alpha = Math.min(alpha, msLeft < ANNOTATION_SEGMENT_FADE_MS
+        ? clamp01(msLeft / ANNOTATION_SEGMENT_FADE_MS)
+        : 1)
+      if (points.length === 0) {
+        points.push(toRenderedAnnotationPoint(segment.from, contentRect))
+      }
+      points.push(toRenderedAnnotationPoint(segment.to, contentRect))
+    }
+    return {
+      key,
+      color: ordered[0]?.color ?? resolveScreenAnnotationStrokeColor(''),
+      alpha,
+      points,
+    }
+  })
+}
+
+function strokeSmoothedAnnotationPath(
+  ctx: CanvasRenderingContext2D,
+  points: NormalizedPoint[],
+) {
+  if (points.length < 2) return
+  ctx.beginPath()
+  ctx.moveTo(points[0].x, points[0].y)
+  if (points.length === 2) {
+    ctx.lineTo(points[1].x, points[1].y)
+    ctx.stroke()
+    return
+  }
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const current = points[index]
+    const next = points[index + 1]
+    const midX = (current.x + next.x) / 2
+    const midY = (current.y + next.y) / 2
+    ctx.quadraticCurveTo(current.x, current.y, midX, midY)
+  }
+  const last = points[points.length - 1]
+  ctx.lineTo(last.x, last.y)
+  ctx.stroke()
+}
+
 function renderAnnotationOverlay() {
   const canvas = annotationCanvasEl.value
   const stage = unwrapEl(stageEl.value)
@@ -1614,27 +1710,13 @@ function renderAnnotationOverlay() {
 
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
-  ctx.strokeStyle = ANNOTATION_STROKE_COLOR
   ctx.lineWidth = ANNOTATION_STROKE_WIDTH_PX
 
-  for (const segment of annotationSegments) {
-    if (segment.shareTrackSid !== surface.trackSid) continue
-    const msLeft = segment.expiresAtMs - nowMs
-    if (msLeft <= 0) continue
-    const fadeAlpha = msLeft < ANNOTATION_SEGMENT_FADE_MS
-      ? clamp01(msLeft / ANNOTATION_SEGMENT_FADE_MS)
-      : 1
-    ctx.globalAlpha = fadeAlpha
-    ctx.beginPath()
-    ctx.moveTo(
-      surface.contentRect.left + (segment.from.x * surface.contentRect.width),
-      surface.contentRect.top + (segment.from.y * surface.contentRect.height),
-    )
-    ctx.lineTo(
-      surface.contentRect.left + (segment.to.x * surface.contentRect.width),
-      surface.contentRect.top + (segment.to.y * surface.contentRect.height),
-    )
-    ctx.stroke()
+  const strokeGroups = buildAnnotationStrokeGroups(surface.trackSid, surface.contentRect, nowMs)
+  for (const strokeGroup of strokeGroups) {
+    ctx.globalAlpha = strokeGroup.alpha
+    ctx.strokeStyle = strokeGroup.color
+    strokeSmoothedAnnotationPath(ctx, strokeGroup.points)
   }
 
   ctx.restore()
@@ -1642,19 +1724,20 @@ function renderAnnotationOverlay() {
 }
 
 function stopAnnotationRenderLoop() {
-  if (!annotationRenderTimer) return
-  clearInterval(annotationRenderTimer)
-  annotationRenderTimer = null
+  if (annotationRenderFrame === null) return
+  annotationFrameCancel(annotationRenderFrame)
+  annotationRenderFrame = null
 }
 
 function ensureAnnotationRenderLoop() {
-  if (annotationRenderTimer) return
-  annotationRenderTimer = setInterval(() => {
+  if (annotationRenderFrame !== null) return
+  annotationRenderFrame = annotationFrameRequest(() => {
+    annotationRenderFrame = null
     renderAnnotationOverlay()
-    if (annotationSegments.length === 0 && !activeAnnotationStroke) {
-      stopAnnotationRenderLoop()
+    if (annotationSegments.length > 0 || activeAnnotationStroke) {
+      ensureAnnotationRenderLoop()
     }
-  }, 50)
+  })
 }
 
 function clearRenderedAnnotationSegments() {
@@ -1674,11 +1757,12 @@ function addRenderedAnnotationSegment(segment: ScreenAnnotationEvent) {
   annotationSegments.push({
     ...segment,
     key,
+    color: resolveScreenAnnotationStrokeColor(segment.senderIdentity),
     expiresAtMs: segment.receivedAtMs + ANNOTATION_SEGMENT_TTL_MS,
   })
   annotationActiveSegmentCount.value = annotationSegments.length
-  ensureAnnotationRenderLoop()
   renderAnnotationOverlay()
+  ensureAnnotationRenderLoop()
 }
 
 function toggleAnnotationDrawMode() {

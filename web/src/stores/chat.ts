@@ -73,6 +73,7 @@ import {
   userCustomStatusFromProto,
   type UserCustomStatus,
 } from '@/types/userStatus'
+import { invalidateUserAvatar } from '@/services/avatar/avatarCache'
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -1032,14 +1033,17 @@ export const useChatStore = defineStore('chat', () => {
     const normalizedEmail = (email ?? '').trim()
     const normalizedAvatar = (avatarUrl ?? '').trim()
     const resolved = normalizedName || normalizedEmail
+    const hasAvatarUpdate = avatarUrl !== undefined
+    const previousAvatar = hasAvatarUpdate ? resolveAvatarUrl(userId) : ''
     if (resolved) {
       userNames.value[userId] = resolved
     }
     if (normalizedEmail) {
       userEmails.value[userId] = normalizedEmail
     }
-    if (normalizedAvatar || avatarUrl === '') {
+    if (hasAvatarUpdate) {
       userAvatars.value[userId] = normalizedAvatar
+      void invalidateUserAvatar(previousAvatar, normalizedAvatar)
     }
     if (customStatus !== undefined) {
       const resolvedCustomStatus = isUserCustomStatusActive(customStatus) ? customStatus : null
@@ -1051,6 +1055,9 @@ export const useChatStore = defineStore('chat', () => {
       if (workspace.value?.selfUserId === userId) {
         workspace.value.selfCustomStatus = resolvedCustomStatus
       }
+    }
+    if (resolved || hasAvatarUpdate || customStatus !== undefined) {
+      refreshSenderLabels(userId)
     }
   }
 
@@ -1452,6 +1459,31 @@ export const useChatStore = defineStore('chat', () => {
     focusedThreadMessageId.value = ''
   }
 
+  function buildSelfSendContext(ws: ReturnType<typeof useWsStore>, attachmentIds: string[] = []) {
+    const isOffline = ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING'
+    if (isOffline && attachmentIds.length > 0) return null
+
+    const authStore = useAuthStore()
+    const senderId = authStore.user?.id ?? workspace.value?.selfUserId ?? ''
+    if (!senderId) return null
+
+    return {
+      senderId,
+      senderName: (
+        (authStore.user?.displayName?.trim() || '')
+        || (workspace.value?.selfDisplayName?.trim() || '')
+        || (authStore.user?.email?.trim() || '')
+        || senderId.slice(0, 8)
+      ),
+      senderAvatarUrl: (
+        (authStore.user?.avatarUrl?.trim() || '')
+        || (workspace.value?.selfAvatarUrl?.trim() || '')
+        || (resolveAvatarUrl(senderId).trim() || '')
+      ),
+      isOffline,
+    }
+  }
+
   function sendThreadReply(body: string, attachmentIds: string[] = [], attachments: MessageAttachment[] = [], entities: MessageEntity[] = []) {
     const text = body.trim()
     if (!text && attachmentIds.length === 0) return
@@ -1460,29 +1492,20 @@ export const useChatStore = defineStore('chat', () => {
     const rootId = activeThreadRootId.value
     if (!channelId || !rootId) return
     const ws = useWsStore()
-    if ((ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING') && attachmentIds.length > 0) return
-
-    const authStore = useAuthStore()
-    const senderId = authStore.user?.id ?? workspace.value?.selfUserId ?? ''
-    if (!senderId) return
-    const senderName = (
-      (authStore.user?.displayName?.trim() || '')
-      || (workspace.value?.selfDisplayName?.trim() || '')
-      || (authStore.user?.email?.trim() || '')
-      || senderId.slice(0, 8)
-    )
+    const sendContext = buildSelfSendContext(ws, attachmentIds)
+    if (!sendContext) return
+    const { senderId, senderName, senderAvatarUrl, isOffline } = sendContext
 
     const clientMsgId = generateId()
     const now = new Date().toISOString()
     const nextThreadSeq = (threadSummaries.value[rootId]?.lastThreadSeq ?? 0n) + 1n
-
-    const isOffline = ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING'
 
     _upsertThreadMessage(rootId, {
       id: clientMsgId,
       channelId,
       senderId,
       senderName,
+      senderAvatarUrl,
       body: text,
       entities,
       channelSeq: 0n,
@@ -1535,26 +1558,12 @@ export const useChatStore = defineStore('chat', () => {
     if (!conversationId || (!text && attachmentIds.length === 0)) return
 
     const ws = useWsStore()
-    if ((ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING') && attachmentIds.length > 0) return
-
-    const authStore = useAuthStore()
-    const senderId = authStore.user?.id ?? workspace.value?.selfUserId ?? ''
-    if (!senderId) return
-    const senderName = (
-      (authStore.user?.displayName?.trim() || '')
-      || (workspace.value?.selfDisplayName?.trim() || '')
-      || (authStore.user?.email?.trim() || '')
-      || senderId.slice(0, 8)
-    )
-    const senderAvatarUrl = (
-      (authStore.user?.avatarUrl?.trim() || '')
-      || (workspace.value?.selfAvatarUrl?.trim() || '')
-      || (resolveAvatarUrl(senderId).trim() || '')
-    )
+    const sendContext = buildSelfSendContext(ws, attachmentIds)
+    if (!sendContext) return
+    const { senderId, senderName, senderAvatarUrl, isOffline } = sendContext
 
     const clientMsgId = generateId()
     const now = new Date().toISOString()
-    const isOffline = ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING'
 
     addOptimisticMessage({
       id: clientMsgId,
@@ -1605,28 +1614,20 @@ export const useChatStore = defineStore('chat', () => {
     const text = body.trim()
     if (!conversationId || !rootMessageId || (!text && attachmentIds.length === 0)) return
     const ws = useWsStore()
-    if ((ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING') && attachmentIds.length > 0) return
-
-    const authStore = useAuthStore()
-    const senderId = authStore.user?.id ?? workspace.value?.selfUserId ?? ''
-    if (!senderId) return
-    const senderName = (
-      (authStore.user?.displayName?.trim() || '')
-      || (workspace.value?.selfDisplayName?.trim() || '')
-      || (authStore.user?.email?.trim() || '')
-      || senderId.slice(0, 8)
-    )
+    const sendContext = buildSelfSendContext(ws, attachmentIds)
+    if (!sendContext) return
+    const { senderId, senderName, senderAvatarUrl, isOffline } = sendContext
 
     const clientMsgId = generateId()
     const now = new Date().toISOString()
     const nextThreadSeq = (threadSummaries.value[rootMessageId]?.lastThreadSeq ?? 0n) + 1n
-    const isOffline = ws.state === 'DISCONNECTED' || ws.state === 'CONNECTING'
 
     _upsertThreadMessage(rootMessageId, {
       id: clientMsgId,
       channelId: conversationId,
       senderId,
       senderName,
+      senderAvatarUrl,
       body: text,
       entities,
       channelSeq: 0n,
@@ -2912,7 +2913,6 @@ export const useChatStore = defineStore('chat', () => {
     customStatus?: Parameters<typeof userCustomStatusFromProto>[0]
   }) {
     registerUserIdentity(evt.userId, evt.displayName, undefined, evt.avatarUrl, userCustomStatusFromProto(evt.customStatus))
-    refreshSenderLabels(evt.userId)
   }
 
   function removeConversation(conversationId: string) {

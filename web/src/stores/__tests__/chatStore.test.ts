@@ -3,11 +3,13 @@ import { setActivePinia, createPinia } from 'pinia'
 import { create } from '@bufbuild/protobuf'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
+import { useAuthStore } from '@/stores/auth'
 import {
   loadLastOpenedConversation,
   saveLastOpenedConversation,
 } from '@/services/storage/lastConversationStorage'
 import { storage } from '@/services/storage/storageAdapter'
+import { ensureLocalStorageMock } from '@/__tests__/testUtils'
 import {
   BootstrapResponseSchema,
   SyncSinceResponseSchema,
@@ -51,6 +53,10 @@ const chatApiMocks = vi.hoisted(() => ({
   resolveUnreadFeedNotification: vi.fn(),
 }))
 
+const avatarCacheMocks = vi.hoisted(() => ({
+  invalidateUserAvatar: vi.fn(),
+}))
+
 vi.mock('@/services/http/chatApi', () => ({
   listConversationMessages: chatApiMocks.listConversationMessages,
   listDmCandidates: chatApiMocks.listDmCandidates,
@@ -64,32 +70,9 @@ vi.mock('@/services/http/chatApi', () => ({
   resolveUnreadFeedNotification: chatApiMocks.resolveUnreadFeedNotification,
 }))
 
-function ensureLocalStorageMock() {
-  if (
-    typeof globalThis.localStorage?.clear === 'function'
-    && typeof globalThis.localStorage?.getItem === 'function'
-    && typeof globalThis.localStorage?.setItem === 'function'
-    && typeof globalThis.localStorage?.removeItem === 'function'
-  ) {
-    return
-  }
-  const values = new Map<string, string>()
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => {
-        values.set(key, String(value))
-      },
-      removeItem: (key: string) => {
-        values.delete(key)
-      },
-      clear: () => {
-        values.clear()
-      },
-    },
-  })
-}
+vi.mock('@/services/avatar/avatarCache', () => ({
+  invalidateUserAvatar: avatarCacheMocks.invalidateUserAvatar,
+}))
 
 function buildMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -124,6 +107,7 @@ describe('chatStore phase 6 flows', () => {
     chatApiMocks.unsaveMessage.mockReset()
     chatApiMocks.getMessageContext.mockReset()
     chatApiMocks.resolveUnreadFeedNotification.mockReset()
+    avatarCacheMocks.invalidateUserAvatar.mockReset()
     chatApiMocks.listDmCandidates.mockResolvedValue([])
     chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
     chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
@@ -248,6 +232,84 @@ describe('chatStore phase 6 flows', () => {
 
     expect(chat.resolveUserCustomStatus('user-1')).toBeNull()
     expect(chat.workspace?.selfCustomStatus).toBeNull()
+  })
+
+  it('updates existing sender avatars and invalidates the previous cached avatar on identity update', () => {
+    const chat = useChatStore()
+    chat.userAvatars = {
+      'user-2': '/api/public/avatars/avatars/user-2/old.png',
+    }
+    chat.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      avatarUrl: '/api/public/avatars/avatars/user-2/old.png',
+      presence: 'offline',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.messages = {
+      'channel-1': [
+        buildMessage({
+          id: 'message-1',
+          senderId: 'user-2',
+          senderAvatarUrl: '/api/public/avatars/avatars/user-2/old.png',
+        }),
+      ],
+    }
+    chat.threadMessages = {
+      'root-1': [
+        buildMessage({
+          id: 'reply-1',
+          senderId: 'user-2',
+          threadRootMessageId: 'root-1',
+          senderAvatarUrl: '/api/public/avatars/avatars/user-2/old.png',
+        }),
+      ],
+    }
+
+    chat.registerUserIdentity('user-2', 'Bob', undefined, '/api/public/avatars/avatars/user-2/new.png')
+
+    expect(chat.messages['channel-1'][0].senderAvatarUrl).toBe('/api/public/avatars/avatars/user-2/new.png')
+    expect(chat.threadMessages['root-1'][0].senderAvatarUrl).toBe('/api/public/avatars/avatars/user-2/new.png')
+    expect(chat.directMessages[0].avatarUrl).toBe('/api/public/avatars/avatars/user-2/new.png')
+    expect(avatarCacheMocks.invalidateUserAvatar).toHaveBeenCalledWith(
+      '/api/public/avatars/avatars/user-2/old.png',
+      '/api/public/avatars/avatars/user-2/new.png',
+    )
+  })
+
+  it('clears existing sender avatars and invalidates the cached avatar when avatar is removed', () => {
+    const chat = useChatStore()
+    chat.userAvatars = {
+      'user-2': '/api/public/avatars/avatars/user-2/old.png',
+    }
+    chat.messages = {
+      'channel-1': [
+        buildMessage({
+          id: 'message-1',
+          senderId: 'user-2',
+          senderAvatarUrl: '/api/public/avatars/avatars/user-2/old.png',
+        }),
+      ],
+    }
+    chat.threadMessages = {
+      'root-1': [
+        buildMessage({
+          id: 'reply-1',
+          senderId: 'user-2',
+          threadRootMessageId: 'root-1',
+          senderAvatarUrl: '/api/public/avatars/avatars/user-2/old.png',
+        }),
+      ],
+    }
+
+    chat.registerUserIdentity('user-2', 'Bob', undefined, '')
+
+    expect(chat.resolveAvatarUrl('user-2')).toBe('')
+    expect(chat.messages['channel-1'][0].senderAvatarUrl).toBe('')
+    expect(chat.threadMessages['root-1'][0].senderAvatarUrl).toBe('')
+    expect(avatarCacheMocks.invalidateUserAvatar).toHaveBeenCalledWith('/api/public/avatars/avatars/user-2/old.png', '')
   })
 
   it('restores last opened conversation from local storage on bootstrap when still accessible', () => {
@@ -2024,6 +2086,42 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.threadSummaries['root-1'].replyCount).toBe(10)
     expect(chat.threadSummaries['root-1'].lastThreadSeq).toBe(10n)
     expect(chat.threadMessages['root-1'].every(message => message.serverConfirmed === true)).toBe(true)
+  })
+
+  it('includes the current self avatar on optimistic thread replies immediately', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    const auth = useAuthStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn()
+    ws.sendMessage = vi.fn(() => false)
+    auth.user = {
+      id: 'user-1',
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      avatarUrl: '/api/public/avatars/avatars/user-1/self.png',
+      role: 'member',
+      customStatus: null,
+    }
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada Workspace',
+      selfAvatarUrl: '/api/public/avatars/avatars/user-1/stale-workspace.png',
+      selfRole: 'member',
+    }
+    chat.openThread(buildMessage({
+      id: 'root-1',
+      channelId: 'channel-1',
+      senderId: 'user-2',
+      threadSeq: 0n,
+    }))
+
+    chat.sendThreadReply('reply body')
+
+    expect(chat.threadMessages['root-1'][0].senderAvatarUrl).toBe('/api/public/avatars/avatars/user-1/self.png')
+    expect(chat.threadMessages['root-1'][0].sendStatus).toBe('failed')
   })
 
   it('hydrates thread replay reactions and myReactions', () => {

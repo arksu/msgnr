@@ -6,7 +6,7 @@
   >
     <img
       v-if="showImage"
-      :src="avatarUrl"
+      :src="avatarSrc"
       :alt="displayLabel"
       class="h-full w-full rounded-full object-cover"
       @error="onImageError"
@@ -39,9 +39,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getActivePinia } from 'pinia'
-import { resolveApiBaseUrl } from '@/services/runtime/backendEndpoint'
-import { isTauriRuntime } from '@/platform/runtime'
 import { useChatStore } from '@/stores/chat'
+import {
+  getCachedAvatarObjectUrl,
+  loadCachedAvatarUrl,
+  resolveAvatarUrlForDisplay,
+} from '@/services/avatar/avatarCache'
 import {
   formatUserCustomStatusTitle,
   isUserCustomStatusActive,
@@ -67,20 +70,37 @@ type AvatarSize = NonNullable<(typeof props)['size']>
 type AvatarPresence = NonNullable<(typeof props)['presence']>
 
 const errored = ref(false)
+const avatarSrc = ref('')
 const nowMs = ref(Date.now())
 let expiryTimer: ReturnType<typeof setTimeout> | null = null
+let avatarLoadToken = 0
 
-watch(() => props.avatarUrl, () => {
+watch(() => props.avatarUrl, (nextUrl) => {
   errored.value = false
-})
+  const token = ++avatarLoadToken
+  const rawUrl = nextUrl ?? ''
+  const displayUrl = resolveAvatarUrlForDisplay(rawUrl)
+  avatarSrc.value = getCachedAvatarObjectUrl(rawUrl)
+
+  if (!displayUrl) return
+
+  void loadCachedAvatarUrl(rawUrl)
+    .then((cachedUrl) => {
+      if (token !== avatarLoadToken) return
+      avatarSrc.value = cachedUrl || displayUrl
+    })
+    .catch(() => {
+      if (token !== avatarLoadToken) return
+      avatarSrc.value = displayUrl
+    })
+}, { immediate: true })
 
 const displayLabel = computed(() => {
   const name = (props.displayName ?? '').trim()
   return name || 'Unknown user'
 })
 
-const chatStore = import.meta.env.MODE === 'test' ? null
-  : (getActivePinia() ? useChatStore() : null)
+const chatStore = getActivePinia() ? useChatStore() : null
 
 const resolvedCustomStatus = computed(() => {
   if (props.customStatus !== undefined) return props.customStatus
@@ -102,24 +122,8 @@ const avatarTitle = computed(() => {
   return status ? `${displayLabel.value}: ${status}` : displayLabel.value
 })
 
-const avatarUrl = computed(() => {
-  const raw = (props.avatarUrl ?? '').trim()
-  if (!raw) return ''
-  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(raw) || raw.startsWith('//')) return raw
-  if (!isTauriRuntime()) return raw
-
-  const base = resolveApiBaseUrl().trim()
-  if (!base || base === '/') return raw
-
-  try {
-    return new URL(raw, `${base.replace(/\/+$/, '')}/`).toString()
-  } catch {
-    return raw
-  }
-})
-
 const showImage = computed(() => {
-  const url = avatarUrl.value
+  const url = avatarSrc.value
   return url.length > 0 && !errored.value
 })
 

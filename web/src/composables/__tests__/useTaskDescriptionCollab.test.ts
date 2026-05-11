@@ -108,7 +108,7 @@ describe('useTaskDescriptionCollab', () => {
     wrapper.unmount()
   })
 
-  it('seeds persisted markdown when the room has no active snapshot', async () => {
+  it('does not seed persisted markdown from an additional subscriber without a room snapshot', async () => {
     const { wrapper, getCollabState } = mountHost()
     await nextTick()
 
@@ -120,7 +120,10 @@ describe('useTaskDescriptionCollab', () => {
     })
     await vi.advanceTimersByTimeAsync(260)
 
-    expect(getCollabState().serverMarkdown.value).toBe('aabb')
+    expect(getCollabState().serverMarkdown.value).toBeNull()
+    expect(getCollabState().allowLocalDraftSeed.value).toBe(false)
+    expect(getCollabState().hasRemotePeers.value).toBe(true)
+    expect(getCollabState().subscriberCount.value).toBe(2)
     const syncSends = mockWsStore.sendTaskDescriptionCollabMessage.mock.calls.filter(
       (call) => call[1] === TaskDescriptionCollabMessageKind.SYNC,
     )

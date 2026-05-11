@@ -148,6 +148,8 @@ export function useRichTextCollab<SubscribeResponse, Message, Kind extends numbe
   const subscribedEntityId = ref<string | null>(null)
   const serverMarkdown = ref<string | null>(null)
   const allowLocalDraftSeed = ref(false)
+  const hasRemotePeersRef = ref(false)
+  const subscriberCount = ref(0)
 
   const pending: CollabPayload<Kind>[] = []
   let awarenessListener: ((payload: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => void) | null = null
@@ -181,6 +183,7 @@ export function useRichTextCollab<SubscribeResponse, Message, Kind extends numbe
   function refreshRemotePeerPresence(reason: string, entityId: string) {
     const snapshot = awarenessPeerSnapshot(provider.value?.awareness)
     hasRemotePeers = snapshot.hasRemote
+    hasRemotePeersRef.value = snapshot.hasRemote
     collabLog(params.logLabel, 'awareness:peers', {
       entityId,
       reason,
@@ -352,6 +355,8 @@ export function useRichTextCollab<SubscribeResponse, Message, Kind extends numbe
     clearFullStateSnapshotTimer()
     serverMarkdown.value = null
     allowLocalDraftSeed.value = false
+    hasRemotePeersRef.value = false
+    subscriberCount.value = 0
     subscriptionReady = false
     pending.length = 0
     collabLog(params.logLabel, 'cleanupDoc:done', { entityId: params.entityId.value })
@@ -453,14 +458,20 @@ export function useRichTextCollab<SubscribeResponse, Message, Kind extends numbe
     const roomSnapshot = transport.getSubscribeResponseRoomSnapshot(resp) ?? new Uint8Array()
     const hasRoomSnapshot = roomSnapshot.length > 0
     const persistedMarkdown = transport.getSubscribeResponsePersistedMarkdown(resp)
+    const nextSubscriberCount = transport.getSubscribeResponseSubscriberCount(resp)
+    const canSeedPersistedMarkdown = !hasRoomSnapshot && nextSubscriberCount <= 1
     subscriptionReady = true
-    allowLocalDraftSeed.value = !hasRoomSnapshot
+    subscriberCount.value = nextSubscriberCount
+    hasRemotePeers = nextSubscriberCount > 1
+    hasRemotePeersRef.value = hasRemotePeers
+    allowLocalDraftSeed.value = canSeedPersistedMarkdown
     collabLog(params.logLabel, 'onSubscribeResponse', {
       entityId,
       subscribeAttempt,
       subscribeResponseCount,
-      subscriberCount: transport.getSubscribeResponseSubscriberCount(resp),
+      subscriberCount: nextSubscriberCount,
       hasRoomSnapshot,
+      canSeedPersistedMarkdown,
       roomSnapshotBytes: roomSnapshot.length,
       hasLocalEdits,
       persisted: markdownSignature(persistedMarkdown),
@@ -482,9 +493,11 @@ export function useRichTextCollab<SubscribeResponse, Message, Kind extends numbe
         after,
       })
     } else {
-      pendingPersistedMarkdown = persistedMarkdown
+      pendingPersistedMarkdown = canSeedPersistedMarkdown ? persistedMarkdown : null
       requestPeerState(entityId, 'subscribe-response')
-      schedulePersistedSeed(entityId)
+      if (canSeedPersistedMarkdown) {
+        schedulePersistedSeed(entityId)
+      }
     }
     flushPending(entityId)
   })
@@ -624,6 +637,8 @@ export function useRichTextCollab<SubscribeResponse, Message, Kind extends numbe
     subscribeError,
     serverMarkdown,
     allowLocalDraftSeed,
+    hasRemotePeers: hasRemotePeersRef,
+    subscriberCount,
     restart,
   }
 }

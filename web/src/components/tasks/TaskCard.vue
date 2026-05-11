@@ -352,6 +352,7 @@
           :collab-doc="taskDescriptionDoc"
           :collab-provider="taskDescriptionProvider"
           :allow-local-draft-seed="taskDescriptionAllowLocalDraftSeed"
+          :collab-has-remote-peers="taskDescriptionHasRemotePeers"
           :collab-user="collabUser"
           :force-local-sync-token="descriptionForceLocalSyncToken"
           placeholder="Description"
@@ -737,6 +738,7 @@ const taskDescriptionDoc = computed(() => descriptionCollab.doc.value)
 const taskDescriptionProvider = computed(() => descriptionCollab.provider.value)
 const taskDescriptionCollabError = computed(() => descriptionCollab.subscribeError.value)
 const taskDescriptionAllowLocalDraftSeed = computed(() => descriptionCollab.allowLocalDraftSeed.value)
+const taskDescriptionHasRemotePeers = computed(() => descriptionCollab.hasRemotePeers.value)
 
 const creatorUser = computed(() => userSummaryFor(task.value?.created_by ?? ''))
 const updaterUser = computed(() => userSummaryFor(task.value?.updated_by ?? ''))

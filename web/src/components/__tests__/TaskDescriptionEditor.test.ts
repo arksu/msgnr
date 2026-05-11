@@ -366,6 +366,34 @@ describe('TaskDescriptionEditor', () => {
     expect(collabDoc.getXmlFragment('task_description').length).toBeGreaterThan(0)
   })
 
+  it('disables markdown editing while remote collaborators are active', async () => {
+    const collabDoc = new Y.Doc()
+    collabDoc.getXmlFragment('task_description')
+
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '**Old** text',
+        defaultTab: 'markdown',
+        collabDoc,
+        collabHasRemotePeers: true,
+      },
+      attachTo: document.body,
+      global: {
+        stubs: {
+          TaskDescriptionRichEditor: defineComponent({
+            name: 'TaskDescriptionRichEditor',
+            template: '<div data-testid="task-description-editor-content"><div class="ProseMirror">Old text</div></div>',
+          }),
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="task-description-tab-markdown"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="task-description-markdown-input"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="task-description-attachment-note"]').text()).toContain('collaborators are active')
+  })
+
   it('syncs markdown-tab edits through the real rich editor into the Yjs collab doc', async () => {
     const collabDoc = new Y.Doc()
     const collabFragment = collabDoc.getXmlFragment('task_description')

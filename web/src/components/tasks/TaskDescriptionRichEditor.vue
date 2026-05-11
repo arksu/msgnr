@@ -306,6 +306,7 @@ const props = withDefaults(defineProps<{
   collabProvider?: { awareness: Awareness } | null
   collabField?: string
   allowLocalDraftSeed?: boolean
+  collabHasRemotePeers?: boolean
   forceLocalSyncToken?: number
   ownerKind?: AttachmentOwnerKind | null
   ownerId?: string | null
@@ -322,6 +323,7 @@ const props = withDefaults(defineProps<{
   collabProvider: null,
   collabField: 'task_description',
   allowLocalDraftSeed: true,
+  collabHasRemotePeers: false,
   forceLocalSyncToken: 0,
   ownerKind: null,
   ownerId: null,
@@ -1015,6 +1017,10 @@ function normalizeMarkdownForSyncComparison(markdown: string): string {
 
 function syncCollabEditorFromDraftIfNeeded(reason: string) {
   if (!collabEnabled.value || !editor.value) return
+  if (props.collabHasRemotePeers) {
+    descLog('syncCollabEditorFromDraftIfNeeded:skip-remote-peers', { reason })
+    return
+  }
   const currentMarkdown = tiptapJsonToMarkdown(editor.value.getJSON())
   const normalizedCurrent = normalizeMarkdownForSyncComparison(currentMarkdown)
   const normalizedDraft = normalizeMarkdownForSyncComparison(markdownDraft.value)

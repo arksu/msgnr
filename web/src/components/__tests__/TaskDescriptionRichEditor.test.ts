@@ -471,6 +471,38 @@ describe('TaskDescriptionRichEditor', () => {
     expect(updateCount).toBe(0)
   })
 
+  it('does not force a whole-document markdown replacement while remote collaborators are active', async () => {
+    const collabDoc = new Y.Doc()
+    const collabFragment = collabDoc.getXmlFragment('task_description')
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '**Old** text',
+        collabDoc,
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    await waitForEditorText(wrapper, 'Old')
+
+    let updateCount = 0
+    collabDoc.on('update', () => {
+      updateCount += 1
+    })
+
+    await wrapper.setProps({
+      modelValue: '## New\n\nBody',
+      forceLocalSyncToken: 1,
+      collabHasRemotePeers: true,
+    })
+    await flushPromises()
+
+    expect(updateCount).toBe(0)
+    expect(String(collabFragment)).not.toContain('New')
+    expect(String(collabFragment)).toContain('Old')
+  })
+
   it('uploads image files from the rendered editor and serializes them back to markdown tokens', async () => {
     vi.mocked(uploadOwnedAttachment).mockResolvedValue({
       id: 'att-image',

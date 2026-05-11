@@ -13,7 +13,12 @@
       <button
         type="button"
         class="border-l border-chat-border px-2 py-0.5"
-        :class="tab === 'markdown' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
+        :class="tab === 'markdown'
+          ? 'bg-accent text-white'
+          : markdownTabDisabled
+            ? 'cursor-not-allowed bg-chat-input text-gray-500'
+            : 'bg-chat-input text-gray-300 hover:text-white'"
+        :disabled="markdownTabDisabled"
         data-testid="task-description-tab-markdown"
         @click="switchTab('markdown')"
       >
@@ -38,6 +43,7 @@
         :collab-provider="collabProvider"
         :collab-field="collabField"
         :allow-local-draft-seed="allowLocalDraftSeed"
+        :collab-has-remote-peers="collabHasRemotePeers"
         :force-local-sync-token="combinedForceLocalSyncToken"
         :owner-kind="ownerKind"
         :owner-id="ownerId"
@@ -57,7 +63,7 @@
         v-model="markdownDraft"
         class="min-h-[140px] w-full resize-none overflow-hidden rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
         :placeholder="placeholder"
-        :disabled="!editable"
+        :disabled="!editable || markdownTabDisabled"
         data-testid="task-description-markdown-input"
         @blur="onMarkdownBlur"
         @input="onMarkdownInput"
@@ -104,6 +110,7 @@ const props = withDefaults(defineProps<{
   collabProvider?: { awareness: Awareness } | null
   collabField?: string
   allowLocalDraftSeed?: boolean
+  collabHasRemotePeers?: boolean
   forceLocalSyncToken?: number
   ownerKind?: AttachmentOwnerKind | null
   ownerId?: string | null
@@ -121,6 +128,7 @@ const props = withDefaults(defineProps<{
   collabProvider: null,
   collabField: 'task_description',
   allowLocalDraftSeed: true,
+  collabHasRemotePeers: false,
   forceLocalSyncToken: 0,
   ownerKind: null,
   ownerId: null,
@@ -139,9 +147,11 @@ const markdownInputRef = ref<HTMLTextAreaElement | null>(null)
 const attachmentNotice = ref('')
 const attachmentNoticeIsError = ref(false)
 const editable = computed(() => !!props.editable)
+const markdownTabDisabled = computed(() => !!props.collabDoc && !!props.collabHasRemotePeers && editable.value)
 const markdownDraftSyncToken = ref(0)
 const combinedForceLocalSyncToken = computed(() => props.forceLocalSyncToken + markdownDraftSyncToken.value)
 let markdownDraftSyncTimer: ReturnType<typeof setTimeout> | null = null
+const MARKDOWN_COLLAB_NOTICE = 'Markdown editing is disabled while collaborators are active.'
 
 function setAttachmentNotice(message: string, isError = false) {
   attachmentNotice.value = message
@@ -151,6 +161,10 @@ function setAttachmentNotice(message: string, isError = false) {
 function clearAttachmentNotice() {
   attachmentNotice.value = ''
   attachmentNoticeIsError.value = false
+}
+
+function showMarkdownCollabNotice() {
+  setAttachmentNotice(MARKDOWN_COLLAB_NOTICE)
 }
 
 function resizeMarkdownTextarea() {
@@ -187,6 +201,10 @@ function scheduleMarkdownDraftSync() {
 }
 
 function onMarkdownInput() {
+  if (markdownTabDisabled.value) {
+    showMarkdownCollabNotice()
+    return
+  }
   resizeMarkdownTextarea()
   scheduleMarkdownDraftSync()
 }
@@ -279,6 +297,11 @@ function insertMarkdownAtCursor(value: string) {
 }
 
 async function onMarkdownPaste(event: ClipboardEvent) {
+  if (markdownTabDisabled.value) {
+    event.preventDefault()
+    showMarkdownCollabNotice()
+    return
+  }
   const files = Array.from(event.clipboardData?.files ?? [])
   if (!files.length) return
   event.preventDefault()
@@ -295,6 +318,11 @@ function onMarkdownDragOver(event: DragEvent) {
 }
 
 async function onMarkdownDrop(event: DragEvent) {
+  if (markdownTabDisabled.value) {
+    event.preventDefault()
+    showMarkdownCollabNotice()
+    return
+  }
   const files = Array.from(event.dataTransfer?.files ?? [])
   if (!files.length) return
   event.preventDefault()
@@ -304,6 +332,10 @@ async function onMarkdownDrop(event: DragEvent) {
 }
 
 function switchTab(nextTab: DescriptionTab) {
+  if (nextTab === 'markdown' && markdownTabDisabled.value) {
+    showMarkdownCollabNotice()
+    return
+  }
   if (nextTab === 'rendered') {
     flushMarkdownDraftSync()
   }
@@ -363,6 +395,24 @@ watch(
     if (!attachmentNoticeIsError.value) {
       clearAttachmentNotice()
     }
+  },
+  { immediate: true },
+)
+
+watch(
+  markdownTabDisabled,
+  (disabled) => {
+    if (!disabled) {
+      if (attachmentNotice.value === MARKDOWN_COLLAB_NOTICE) {
+        clearAttachmentNotice()
+      }
+      return
+    }
+    clearMarkdownDraftSyncTimer()
+    if (tab.value === 'markdown') {
+      tab.value = 'rendered'
+    }
+    showMarkdownCollabNotice()
   },
   { immediate: true },
 )

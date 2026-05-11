@@ -1394,7 +1394,7 @@ describe('chatStore phase 6 flows', () => {
             notificationId: 'notification-decode-1',
             type: NotificationType.MENTION,
             title: 'Mention \\/ \\"Boss\\" \\u263A',
-            body: 'Line 1\\nLine 2\\/done\\\\folder',
+            body: 'Line 1\\\\nLine 2\\/done\\\\folder',
             conversationId: 'channel-1',
             isRead: false,
           }),

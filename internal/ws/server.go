@@ -31,6 +31,7 @@ import (
 	"msgnr/internal/metrics"
 	syncsvc "msgnr/internal/sync"
 	"msgnr/internal/tasks"
+	"msgnr/internal/userstatus"
 )
 
 const protocolVersion uint32 = 1
@@ -68,6 +69,16 @@ func markdownSignatureForLog(input string) string {
 	}
 	preview = strings.ReplaceAll(preview, "\n", "\\n")
 	return fmt.Sprintf("len=%d,hash=%d,preview=%q", len(input), hasher.Sum32(), preview)
+}
+
+func conversationMemberSummaryFromChat(member chat.ConversationMember) *packetspb.ConversationMemberSummary {
+	return &packetspb.ConversationMemberSummary{
+		UserId:       member.UserID.String(),
+		DisplayName:  member.DisplayName,
+		Email:        member.Email,
+		AvatarUrl:    member.AvatarURL,
+		CustomStatus: userstatus.ToProto(member.CustomStatus),
+	}
 }
 
 var supportedCapabilities = map[packetspb.FeatureCapability]struct{}{
@@ -1967,6 +1978,84 @@ func (s *Server) handleDomainPayload(
 			},
 		})
 		s.sendDirectCallServerEvents(result.DirectDeliveries)
+
+	case *packetspb.Envelope_ListConversationMembersRequest:
+		req := p.ListConversationMembersRequest
+		if req == nil || s.chatSvc == nil {
+			badReq("list_conversation_members_request: missing payload")
+			return
+		}
+		conversationID, err := uuid.Parse(req.GetConversationId())
+		if err != nil {
+			badReq("list_conversation_members_request: invalid conversation_id")
+			return
+		}
+
+		members, err := s.chatSvc.ListConversationMembers(ctx, principal.UserID, conversationID)
+		if err != nil {
+			if errors.Is(err, chat.ErrNotMember) {
+				forbidden("not a member of this conversation")
+				return
+			}
+			s.log.Error("ws: ListConversationMembers error", zap.Error(err), zap.String("user_id", principal.UserID.String()))
+			badReq("list_conversation_members_request: internal error")
+			return
+		}
+
+		respMembers := make([]*packetspb.ConversationMemberSummary, 0, len(members))
+		for _, member := range members {
+			respMembers = append(respMembers, conversationMemberSummaryFromChat(member))
+		}
+
+		enqueue(&packetspb.Envelope{
+			RequestId:       reqID,
+			TraceId:         traceID,
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_ListConversationMembersResponse{
+				ListConversationMembersResponse: &packetspb.ListConversationMembersResponse{
+					Members: respMembers,
+				},
+			},
+		})
+
+	case *packetspb.Envelope_ListActiveCallMembersRequest:
+		req := p.ListActiveCallMembersRequest
+		if req == nil || s.chatSvc == nil {
+			badReq("list_active_call_members_request: missing payload")
+			return
+		}
+		conversationID, err := uuid.Parse(req.GetConversationId())
+		if err != nil {
+			badReq("list_active_call_members_request: invalid conversation_id")
+			return
+		}
+
+		members, err := s.chatSvc.ListActiveCallMembers(ctx, principal.UserID, conversationID)
+		if err != nil {
+			if errors.Is(err, chat.ErrNotMember) {
+				forbidden("not a member of this conversation")
+				return
+			}
+			s.log.Error("ws: ListActiveCallMembers error", zap.Error(err), zap.String("user_id", principal.UserID.String()))
+			badReq("list_active_call_members_request: internal error")
+			return
+		}
+
+		respMembers := make([]*packetspb.ConversationMemberSummary, 0, len(members))
+		for _, member := range members {
+			respMembers = append(respMembers, conversationMemberSummaryFromChat(member))
+		}
+
+		enqueue(&packetspb.Envelope{
+			RequestId:       reqID,
+			TraceId:         traceID,
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_ListActiveCallMembersResponse{
+				ListActiveCallMembersResponse: &packetspb.ListActiveCallMembersResponse{
+					Members: respMembers,
+				},
+			},
+		})
 
 	case *packetspb.Envelope_JoinCallTokenRequest:
 		req := p.JoinCallTokenRequest

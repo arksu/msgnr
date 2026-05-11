@@ -209,6 +209,10 @@ message Envelope {
     DocumentContentCollabSubscribeResponse document_content_collab_subscribe_response = 67;
     DocumentContentCollabUnsubscribeRequest document_content_collab_unsubscribe_request = 68;
     DocumentContentCollabMessage document_content_collab_message = 69;
+    ListConversationMembersRequest list_conversation_members_request = 70;
+    ListConversationMembersResponse list_conversation_members_response = 71;
+    ListActiveCallMembersRequest list_active_call_members_request = 72;
+    ListActiveCallMembersResponse list_active_call_members_response = 73;
   }
 }
 
@@ -437,6 +441,22 @@ message InviteCallMembersResponse {
   repeated string skipped_user_ids = 4;
 }
 
+message ListConversationMembersRequest {
+  string conversation_id = 1;
+}
+
+message ListConversationMembersResponse {
+  repeated ConversationMemberSummary members = 1;
+}
+
+message ListActiveCallMembersRequest {
+  string conversation_id = 1;
+}
+
+message ListActiveCallMembersResponse {
+  repeated ConversationMemberSummary members = 1;
+}
+
 message JoinCallTokenRequest {
   string conversation_id = 1;
   ConversationType conversation_type = 2;
@@ -486,6 +506,14 @@ message UserCustomStatus {
   string text = 1;
   string emoji = 2;
   google.protobuf.Timestamp expires_at = 3;
+}
+
+message ConversationMemberSummary {
+  string user_id = 1;
+  string display_name = 2;
+  string email = 3;
+  string avatar_url = 4;
+  UserCustomStatus custom_status = 5;
 }
 
 message ConversationSummary {

@@ -68,13 +68,55 @@ function makeAuthResponseEnvelope(ok: boolean): ArrayBuffer {
   return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
 }
 
-function makeErrorEnvelope(code: ErrorCode, message: string): ArrayBuffer {
+function makeErrorEnvelope(code: ErrorCode, message: string, requestId = '3'): ArrayBuffer {
   const env = create(EnvelopeSchema, {
-    requestId: '3',
+    requestId,
     protocolVersion: 1,
     payload: {
       case: 'error',
       value: { code, message },
+    },
+  })
+  return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
+}
+
+function makeListConversationMembersResponseEnvelope(requestId: string): ArrayBuffer {
+  const env = create(EnvelopeSchema, {
+    requestId,
+    protocolVersion: 1,
+    payload: {
+      case: 'listConversationMembersResponse',
+      value: {
+        members: [
+          {
+            userId: 'user-2',
+            displayName: 'Bob',
+            email: 'bob@example.com',
+            avatarUrl: '/avatars/bob.png',
+          },
+        ],
+      },
+    },
+  })
+  return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
+}
+
+function makeListActiveCallMembersResponseEnvelope(requestId: string): ArrayBuffer {
+  const env = create(EnvelopeSchema, {
+    requestId,
+    protocolVersion: 1,
+    payload: {
+      case: 'listActiveCallMembersResponse',
+      value: {
+        members: [
+          {
+            userId: 'user-3',
+            displayName: 'Eve',
+            email: 'eve@example.com',
+            avatarUrl: '',
+          },
+        ],
+      },
     },
   })
   return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
@@ -509,6 +551,106 @@ describe('wsStore state machine', () => {
       code: ErrorCode.CALL_NOT_ACTIVE,
       message: 'call is not active',
     }))
+  })
+
+  it('sends listActiveCallMembersRequest envelopes and resolves the matching response', async () => {
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+
+    const promise = store.requestActiveCallMembers('channel-1')
+    const envelope = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
+
+    expect(envelope.payload.case).toBe('listActiveCallMembersRequest')
+    expect(envelope.payload.value).toEqual(expect.objectContaining({
+      conversationId: 'channel-1',
+    }))
+
+    mockSocket.simulateMessage(makeListActiveCallMembersResponseEnvelope(envelope.requestId))
+
+    await expect(promise).resolves.toEqual(expect.objectContaining({
+      members: [
+        expect.objectContaining({
+          userId: 'user-3',
+          displayName: 'Eve',
+        }),
+      ],
+    }))
+  })
+
+  it('sends listConversationMembersRequest envelopes and resolves the matching response', async () => {
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+
+    const promise = store.requestConversationMembers('channel-1')
+    const envelope = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
+
+    expect(envelope.payload.case).toBe('listConversationMembersRequest')
+    expect(envelope.payload.value).toEqual(expect.objectContaining({
+      conversationId: 'channel-1',
+    }))
+
+    mockSocket.simulateMessage(makeListConversationMembersResponseEnvelope(envelope.requestId))
+
+    await expect(promise).resolves.toEqual(expect.objectContaining({
+      members: [
+        expect.objectContaining({
+          userId: 'user-2',
+          displayName: 'Bob',
+        }),
+      ],
+    }))
+  })
+
+  it('rejects managed requests on matching protocol errors', async () => {
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+
+    const promise = store.requestConversationMembers('channel-1')
+    const envelope = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
+    mockSocket.simulateMessage(makeErrorEnvelope(ErrorCode.FORBIDDEN, 'not a member of this conversation', envelope.requestId))
+
+    await expect(promise).rejects.toThrow('not a member of this conversation')
+  })
+
+  it('rejects managed requests on unexpected response cases', async () => {
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+
+    const promise = store.requestActiveCallMembers('channel-1')
+    const envelope = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
+    const wrongResponse = create(EnvelopeSchema, {
+      requestId: envelope.requestId,
+      protocolVersion: 1,
+      payload: {
+        case: 'inviteCallMembersResponse',
+        value: {
+          callId: 'call-1',
+          conversationId: 'channel-1',
+        },
+      },
+    })
+    mockSocket.simulateMessage(toBinary(EnvelopeSchema, wrongResponse).buffer as ArrayBuffer)
+
+    await expect(promise).rejects.toThrow('Unexpected response inviteCallMembersResponse')
+  })
+
+  it('rejects managed requests on timeout and reset cleanup', async () => {
+    vi.useFakeTimers()
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+
+    const timedOut = store.requestActiveCallMembers('channel-1')
+    vi.advanceTimersByTime(15_000)
+    await expect(timedOut).rejects.toThrow('timed out')
+
+    const resetRejected = store.requestConversationMembers('channel-1')
+    store.resetRuntimeState()
+    await expect(resetRejected).rejects.toThrow('WebSocket reset')
   })
 
   it('sends task collab subscribe and collab message envelopes', () => {

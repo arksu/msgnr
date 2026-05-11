@@ -9,19 +9,13 @@ import { useChatStore, type Message } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useWsStore } from '@/stores/ws'
-import { listActiveCallMembers, listConversationMembers } from '@/services/http/chatApi'
 
 vi.mock('@/services/http/chatApi', () => ({
-  listActiveCallMembers: vi.fn(),
-  listConversationMembers: vi.fn(),
   listMessageReactionUsers: vi.fn(),
   listSavedMessages: vi.fn(),
   saveMessage: vi.fn(),
   unsaveMessage: vi.fn(),
 }))
-
-const listActiveCallMembersMock = vi.mocked(listActiveCallMembers)
-const listConversationMembersMock = vi.mocked(listConversationMembers)
 
 async function flushAll() {
   await Promise.resolve()
@@ -85,8 +79,9 @@ describe('ChatArea', () => {
       configurable: true,
       writable: true,
     })
-    listActiveCallMembersMock.mockResolvedValue([])
-    listConversationMembersMock.mockResolvedValue([])
+    const wsStore = useWsStore()
+    wsStore.requestActiveCallMembers = vi.fn().mockResolvedValue({ members: [] })
+    wsStore.requestConversationMembers = vi.fn().mockResolvedValue({ members: [] })
   })
 
   afterEach(() => {
@@ -1324,10 +1319,12 @@ describe('ChatArea', () => {
     const chatStore = useChatStore()
     const wsStore = useWsStore()
     wsStore.state = 'LIVE_SYNCED'
-    listConversationMembersMock.mockResolvedValue([
-      { user_id: 'user-2', display_name: 'Bob', email: 'bob@example.com', avatar_url: '/api/public/avatars/a/bob.png' },
-      { user_id: 'user-3', display_name: '', email: 'eve@example.com', avatar_url: '' },
-    ])
+    wsStore.requestConversationMembers = vi.fn().mockResolvedValue({
+      members: [
+        { userId: 'user-2', displayName: 'Bob', email: 'bob@example.com', avatarUrl: '/api/public/avatars/a/bob.png' },
+        { userId: 'user-3', displayName: '', email: 'eve@example.com', avatarUrl: '' },
+      ],
+    })
 
     chatStore.workspace = {
       id: 'workspace-1',
@@ -1365,7 +1362,7 @@ describe('ChatArea', () => {
     await Promise.resolve()
     await nextTick()
 
-    expect(listConversationMembersMock).toHaveBeenCalledWith('channel-1')
+    expect(wsStore.requestConversationMembers).toHaveBeenCalledWith('channel-1')
     expect(wrapper.find('[data-testid="invite-avatar-user-2"]').attributes('data-avatar-url')).toBe('/api/public/avatars/a/bob.png')
     expect(wrapper.find('[data-testid="invite-avatar-user-2"]').attributes('data-display-name')).toBe('Bob')
     expect(wrapper.find('[data-testid="invite-avatar-user-3"]').attributes('data-display-name')).toBe('eve@example.com')
@@ -1507,10 +1504,12 @@ describe('ChatArea', () => {
       localParticipant: { identity: 'user-1' },
       remoteParticipants: new Map(),
     } as never
-    listActiveCallMembersMock.mockResolvedValue([
-      { user_id: 'user-2', display_name: 'Bob', email: 'bob@example.com', avatar_url: '/api/public/avatars/avatars/user-2/bob.png' },
-      { user_id: 'user-3', display_name: '', email: 'eve@example.com', avatar_url: '' },
-    ])
+    wsStore.requestActiveCallMembers = vi.fn().mockResolvedValue({
+      members: [
+        { userId: 'user-2', displayName: 'Bob', email: 'bob@example.com', avatarUrl: '/api/public/avatars/avatars/user-2/bob.png' },
+        { userId: 'user-3', displayName: '', email: 'eve@example.com', avatarUrl: '' },
+      ],
+    })
 
     const wrapper = mount(ChatArea, {
       global: {
@@ -1529,8 +1528,8 @@ describe('ChatArea', () => {
     await Promise.resolve()
     await nextTick()
 
-    expect(listActiveCallMembersMock).toHaveBeenCalledWith('channel-1')
-    expect(listActiveCallMembersMock).toHaveBeenCalledTimes(1)
+    expect(wsStore.requestActiveCallMembers).toHaveBeenCalledWith('channel-1')
+    expect(wsStore.requestActiveCallMembers).toHaveBeenCalledTimes(1)
     const popover = wrapper.get('[data-testid="call-members-popover"]')
     expect(popover.text()).toContain('Bob')
     expect(popover.text()).toContain('eve@example.com')

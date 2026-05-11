@@ -328,7 +328,6 @@ import { pinnedDialogueId, usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
 import { useCallStore } from '@/stores/call'
-import { listActiveCallMembers, listConversationMembers } from '@/services/http/chatApi'
 import { generateId } from '@/services/id'
 import { matchesCallInviteSearch, normalizeCallInviteSearchQuery } from '@/utils/callInviteSearch'
 import MessageBubble from './MessageBubble.vue'
@@ -336,7 +335,7 @@ import MessageInput from './MessageInput.vue'
 import MembersPanel from './MembersPanel.vue'
 import UserAvatar from './UserAvatar.vue'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
-import { userCustomStatusFromDto, type UserCustomStatus } from '@/types/userStatus'
+import { userCustomStatusFromProto, type UserCustomStatus } from '@/types/userStatus'
 
 const chatStore = useChatStore()
 const pinnedDialogsStore = usePinnedDialogsStore()
@@ -592,14 +591,14 @@ async function refreshActiveCallMembers() {
   remoteActiveCallMembersLoading.value = true
   remoteActiveCallMembersError.value = ''
   try {
-    const members = await listActiveCallMembers(currentConversationId)
+    const response = await wsStore.requestActiveCallMembers(currentConversationId)
     if (requestSeq !== remoteActiveCallMembersRequestSeq || conversation.value?.id !== currentConversationId) return
-    remoteActiveCallMembers.value = members.map(member => ({
-      userId: member.user_id,
-      displayName: member.display_name || member.email,
-      avatarUrl: member.avatar_url,
-      customStatus: userCustomStatusFromDto(member.custom_status),
-      isSelf: member.user_id === (authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''),
+    remoteActiveCallMembers.value = response.members.map(member => ({
+      userId: member.userId,
+      displayName: member.displayName || member.email,
+      avatarUrl: member.avatarUrl,
+      customStatus: userCustomStatusFromProto(member.customStatus),
+      isSelf: member.userId === (authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''),
     }))
   } catch (err) {
     if (requestSeq !== remoteActiveCallMembersRequestSeq || conversation.value?.id !== currentConversationId) return
@@ -924,16 +923,16 @@ async function openChannelCallDialog() {
   channelCallSearch.value = ''
   selectedChannelCallInvitees.value = []
   try {
-    const members = await listConversationMembers(conversation.value.id)
+    const response = await wsStore.requestConversationMembers(conversation.value.id)
     const selfUserId = authStore.user?.id ?? chatStore.workspace?.selfUserId ?? ''
-    channelCallMembers.value = members
-      .filter(member => member.user_id !== selfUserId)
+    channelCallMembers.value = response.members
+      .filter(member => member.userId !== selfUserId)
       .map(member => ({
-        userId: member.user_id,
-        displayName: member.display_name,
+        userId: member.userId,
+        displayName: member.displayName,
         email: member.email,
-        avatarUrl: member.avatar_url,
-        customStatus: userCustomStatusFromDto(member.custom_status),
+        avatarUrl: member.avatarUrl,
+        customStatus: userCustomStatusFromProto(member.customStatus),
       }))
   } catch (err) {
     channelCallError.value = err instanceof Error ? err.message : 'Failed to load members'

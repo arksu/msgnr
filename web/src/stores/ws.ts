@@ -3,6 +3,8 @@ import { ref } from 'vue'
 import { create, toBinary, fromBinary } from '@bufbuild/protobuf'
 import {
   EnvelopeSchema,
+  ListActiveCallMembersRequestSchema,
+  ListConversationMembersRequestSchema,
   type Envelope,
   type SendMessageAck,
   type ReactionAck,
@@ -18,6 +20,8 @@ import {
   type InviteCallMembersResponse,
   type JoinCallTokenResponse,
   type CallInviteActionAck,
+  type ListActiveCallMembersResponse,
+  type ListConversationMembersResponse,
   type SetNotificationLevelResponse,
   type TaskDescriptionCollabSubscribeResponse,
   type TaskDescriptionCollabMessage,
@@ -56,6 +60,16 @@ export type DocumentContentCollabSubscribeResponseHandler = (resp: DocumentConte
 export type DocumentContentCollabMessageHandler = (msg: DocumentContentCollabMessage) => void
 export type ProtocolErrorHandler = (err: { requestId: string; code: ErrorCode; message: string; retryAfterMs: number }) => void
 
+type EnvelopePayload = Exclude<Envelope['payload'], { case: undefined }>
+type EnvelopePayloadCase = EnvelopePayload['case']
+type EnvelopePayloadValue<C extends EnvelopePayloadCase> = Extract<EnvelopePayload, { case: C }>['value']
+type PendingRequest = {
+  expectedCase: EnvelopePayloadCase
+  resolve: (value: unknown) => void
+  reject: (err: Error) => void
+  timeout: ReturnType<typeof setTimeout>
+}
+
 export type WsState =
   | 'DISCONNECTED'
   | 'CONNECTING'
@@ -82,6 +96,7 @@ const PROTOCOL_VERSION = 1
 const WS_OPEN = 1   // WebSocket.OPEN
 const WS_CLOSED = 3 // WebSocket.CLOSED
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000
+const REQUEST_TIMEOUT_MS = 15_000
 
 const REQUESTED_CAPABILITIES: FeatureCapability[] = Object.values(FeatureCapability)
   .filter((v): v is FeatureCapability => typeof v === 'number' && v !== FeatureCapability.UNSPECIFIED)
@@ -157,6 +172,7 @@ export const useWsStore = defineStore('ws', () => {
   let onDocumentContentCollabSubscribeResponseCallback: DocumentContentCollabSubscribeResponseHandler | null = null
   let onDocumentContentCollabMessageCallback: DocumentContentCollabMessageHandler | null = null
   let onProtocolErrorCallback: ProtocolErrorHandler | null = null
+  const pendingRequests = new Map<string, PendingRequest>()
   let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null
 
   function serverSupportsPresenceHeartbeat(): boolean {
@@ -311,6 +327,7 @@ export const useWsStore = defineStore('ws', () => {
   function connect(url: string) {
     stopPresenceHeartbeat()
     if (socket && socket.readyState !== WS_CLOSED) {
+      rejectPendingRequests(new Error('WebSocket reconnecting'))
       console.log('[ws:connect] closing old socket, suppressTransportDrop=true, readyState=', socket.readyState)
       suppressTransportDrop = true
       socket.close()
@@ -373,6 +390,7 @@ export const useWsStore = defineStore('ws', () => {
       if (state.value !== 'DISCONNECTED') {
         state.value = 'DISCONNECTED'
       }
+      rejectPendingRequests(new Error('WebSocket disconnected'))
       if (
         !suppressTransportDrop &&
         wasConnected &&
@@ -386,6 +404,7 @@ export const useWsStore = defineStore('ws', () => {
 
   function disconnect(reason: 'logout' | 'transport' = 'transport') {
     stopPresenceHeartbeat()
+    rejectPendingRequests(new Error('WebSocket disconnected'))
     // Suppress transport-drop callback for intentional disconnects (logout)
     if (reason === 'logout') {
       onTransportDropCallback = null
@@ -397,6 +416,7 @@ export const useWsStore = defineStore('ws', () => {
 
   function resetRuntimeState() {
     stopPresenceHeartbeat()
+    rejectPendingRequests(new Error('WebSocket reset'))
     suppressTransportDrop = true
     try {
       socket?.close()
@@ -436,6 +456,69 @@ export const useWsStore = defineStore('ws', () => {
     onDocumentContentCollabSubscribeResponseCallback = null
     onDocumentContentCollabMessageCallback = null
     onProtocolErrorCallback = null
+  }
+
+  function rejectPendingRequests(err: Error) {
+    for (const [requestId, pending] of pendingRequests.entries()) {
+      clearTimeout(pending.timeout)
+      pending.reject(err)
+      pendingRequests.delete(requestId)
+    }
+  }
+
+  function rejectPendingRequest(requestId: string, err: Error): boolean {
+    const pending = pendingRequests.get(requestId)
+    if (!pending) return false
+    clearTimeout(pending.timeout)
+    pending.reject(err)
+    pendingRequests.delete(requestId)
+    return true
+  }
+
+  function resolvePendingResponse(envelope: Envelope): boolean {
+    const pending = pendingRequests.get(envelope.requestId)
+    if (!pending) return false
+    const payload = envelope.payload
+    if (payload.case === pending.expectedCase) {
+      clearTimeout(pending.timeout)
+      pending.resolve(payload.value)
+      pendingRequests.delete(envelope.requestId)
+      return true
+    }
+    clearTimeout(pending.timeout)
+    pending.reject(new Error(`Unexpected response ${payload.case ?? 'empty'} for request ${envelope.requestId}; expected ${pending.expectedCase}`))
+    pendingRequests.delete(envelope.requestId)
+    return true
+  }
+
+  function requestEnvelope<ResponseCase extends EnvelopePayloadCase>(
+    payload: EnvelopePayload,
+    expectedCase: ResponseCase,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  ): Promise<EnvelopePayloadValue<ResponseCase>> {
+    const requestId = generateId()
+    const envelope = create(EnvelopeSchema, {
+      requestId,
+      traceId: generateId(),
+      protocolVersion: PROTOCOL_VERSION,
+      payload,
+    })
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pendingRequests.delete(requestId)
+        reject(new Error(`Request ${expectedCase} timed out: ${requestId}`))
+      }, timeoutMs)
+      pendingRequests.set(requestId, {
+        expectedCase,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timeout,
+      })
+      if (!sendEnvelope(envelope)) {
+        rejectPendingRequest(requestId, new Error(lastError.value || 'WebSocket is not open'))
+      }
+    })
   }
 
   function sendHello() {
@@ -826,6 +909,20 @@ export const useWsStore = defineStore('ws', () => {
     return requestId
   }
 
+  function requestConversationMembers(conversationId: string): Promise<ListConversationMembersResponse> {
+    return requestEnvelope({
+      case: 'listConversationMembersRequest',
+      value: create(ListConversationMembersRequestSchema, { conversationId }),
+    }, 'listConversationMembersResponse')
+  }
+
+  function requestActiveCallMembers(conversationId: string): Promise<ListActiveCallMembersResponse> {
+    return requestEnvelope({
+      case: 'listActiveCallMembersRequest',
+      value: create(ListActiveCallMembersRequestSchema, { conversationId }),
+    }, 'listActiveCallMembersResponse')
+  }
+
   function sendAcceptCallInvite(inviteId: string) {
     sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
@@ -884,6 +981,10 @@ export const useWsStore = defineStore('ws', () => {
       return
     }
     logPacket('RECV', envelope)
+
+    if (envelope.payload.case !== 'error' && resolvePendingResponse(envelope)) {
+      return
+    }
 
     switch (envelope.payload.case) {
       case 'serverHello':
@@ -1009,6 +1110,7 @@ export const useWsStore = defineStore('ws', () => {
           message: err.message,
           retryAfterMs: err.retryAfterMs,
         })
+        rejectPendingRequest(envelope.requestId, new Error(err.message || `Protocol error: ${err.code}`))
         const kind = mapErrorCode(err.code)
         lastError.value = err.message || `Protocol error: ${err.code}`
         lastErrorKind.value = kind
@@ -1078,6 +1180,8 @@ export const useWsStore = defineStore('ws', () => {
     sendCreateCall,
     sendInviteCallMembers,
     sendJoinCallToken,
+    requestConversationMembers,
+    requestActiveCallMembers,
     sendAcceptCallInvite,
     sendRejectCallInvite,
     sendCancelCallInvite,

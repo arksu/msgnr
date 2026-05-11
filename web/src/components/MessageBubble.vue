@@ -251,7 +251,7 @@
       <div v-if="message.sendStatus === 'failed'" class="mt-1 flex items-center gap-2">
         <span v-if="message.failReason" class="text-xs text-red-400/80">{{ message.failReason }}</span>
         <button
-          class="text-xs text-cyan-400 hover:text-cyan-300 hover:underline transition-colors"
+          class="text-xs text-accent hover:text-accent-hover hover:underline transition-colors"
           @click="handleRetry"
         >Retry</button>
         <button
@@ -366,7 +366,7 @@
       <button
         v-if="threadReplyCount > 0 && showThreadAction && !isThreadReply"
         data-testid="thread-action-button"
-        class="mt-1.5 flex items-center gap-2 text-[13px] text-cyan-300 hover:text-cyan-200 hover:underline transition-colors"
+        class="mt-1.5 flex items-center gap-2 text-[13px] text-accent hover:text-accent-hover hover:underline transition-colors"
         @click="$emit('openThread', message)"
       >
         <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -398,7 +398,7 @@
         <div class="relative inline-flex">
           <button
             ref="pickerToggleButton"
-            class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs border border-white/10 bg-transparent text-gray-300 hover:text-gray-100 hover:bg-white/10 transition-colors opacity-0 group-hover:opacity-100"
+            class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs border border-chat-border bg-transparent text-app-secondaryText hover:text-app-text hover:bg-chat-msgHover transition-colors opacity-0 group-hover:opacity-100"
             title="Add reaction"
             @click.stop="togglePickerButton"
           >
@@ -431,13 +431,13 @@
         :infinite-scroll="true"
         :emoji-size="26"
         :per-line="9"
-        color="#ae65c5"
+        :color="emojiPickerAccentColor"
         @select="onSelectEmoji"
         @selected="onSelectEmoji"
       />
       <div
         v-else
-        class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+        class="rounded-md border border-chat-border bg-chat-header px-3 py-2 text-xs text-app-muted shadow-xl"
       >
         Loading emoji...
       </div>
@@ -591,6 +591,7 @@ import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
+import { useColorTheme } from '@/composables/useColorTheme'
 import { NotificationLevel } from '@/shared/proto/packets_pb'
 import router from '@/router'
 import { generateId } from '@/services/id'
@@ -717,6 +718,7 @@ const forwardDialogOpen = ref(false)
 const ws = useWsStore()
 const chat = useChatStore()
 const auth = useAuthStore()
+const { currentTheme } = useColorTheme()
 const DEBUG_REACTIONS = false
 
 function debugReaction(label: string, payload?: unknown) {
@@ -748,6 +750,7 @@ const senderStatusTitle = computed(() =>
 )
 
 const hasReactions = computed(() => props.message.reactions.length > 0)
+const emojiPickerAccentColor = computed(() => currentTheme.value.tokens.accent)
 const reactionPopupVisible = computed(() => Boolean(activeReactionEmoji.value))
 const activeReactionUsers = computed(() => {
   const emoji = activeReactionEmoji.value
@@ -1568,89 +1571,11 @@ function reactionChipClass(emoji: string): string {
   const pending = chat.isReactionOpPending(props.message.channelId, props.message.id, emoji)
   if (mine) {
     return pending
-      ? 'border-accent/40 bg-accent/20 text-white opacity-70'
-      : 'border-accent/60 bg-accent/25 text-white'
+      ? 'border-accent/40 bg-accent/20 text-app-text opacity-70'
+      : 'border-accent/60 bg-accent/25 text-app-text'
   }
   return pending
-    ? 'border-white/10 bg-white/5 text-gray-300 opacity-70'
-    : 'border-white/10 bg-white/5 hover:bg-white/10 text-gray-300'
+    ? 'border-chat-border bg-chat-input text-app-secondaryText opacity-70'
+    : 'border-chat-border bg-chat-input hover:bg-chat-msgHover text-app-secondaryText'
 }
 </script>
-
-<style>
-.emoji-picker-dark .emoji-mart {
-  background-color: #1e1e2e !important;
-  border-color: #313244 !important;
-  color: #cdd6f4 !important;
-}
-
-.emoji-picker-dark .emoji-mart * {
-  color: #cdd6f4 !important;
-}
-
-.emoji-picker-dark .emoji-mart-search input {
-  background-color: #313244 !important;
-  border-color: #45475a !important;
-  color: #cdd6f4;
-}
-
-.emoji-picker-dark .emoji-mart-search input::placeholder {
-  color: #6c7086;
-}
-
-.emoji-picker-dark .emoji-mart-bar {
-  border-color: #313244 !important;
-}
-
-.emoji-picker-dark .emoji-mart-anchors {
-  color: #cdd6f4 !important;
-}
-
-.emoji-picker-dark .emoji-mart-category-label span {
-  background-color: #1e1e2e !important;
-  color: #6c7086 !important;
-}
-
-.emoji-picker-dark .emoji-mart-category-label h3 {
-  background-color: #1e1e2e !important;
-  color: #cdd6f4 !important;
-}
-
-.emoji-picker-dark .emoji-mart-category .emoji-mart-emoji:hover:before,
-.emoji-picker-dark .emoji-mart-emoji-selected:before {
-  background-color: #45475a !important;
-}
-
-.emoji-picker-dark .emoji-mart-bar {
-  border-color: #313244;
-}
-
-.emoji-picker-dark .emoji-mart-anchor:hover,
-.emoji-picker-dark .emoji-mart-anchor-selected {
-  color: #cba6f7;
-}
-
-.emoji-picker-dark .emoji-mart-anchor-bar {
-  background-color: #cba6f7 !important;
-}
-
-.emoji-picker-dark .emoji-mart-preview-name,
-.emoji-picker-dark .emoji-mart-preview-shortname,
-.emoji-picker-dark .emoji-mart-preview-emoticon,
-.emoji-picker-dark .emoji-mart-title-label {
-  color: #cdd6f4 !important;
-}
-
-.emoji-picker-dark .emoji-mart-skin-swatches {
-  background-color: #313244 !important;
-  border-color: #45475a !important;
-}
-
-.emoji-picker-dark .emoji-mart-preview-emoji {
-  color: #cdd6f4 !important;
-}
-
-.emoji-picker-dark .emoji-mart-no-results {
-  color: #cdd6f4 !important;
-}
-</style>

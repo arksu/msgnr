@@ -9,6 +9,8 @@ describe('renderMessageBodyWithEntities', () => {
 
     expect(html).toContain('data-message-entity-kind="user"')
     expect(html).toContain('data-target-id="user-1"')
+    expect(html).toContain('text-accent')
+    expect(html).not.toContain('text-cyan')
     expect(html).toContain('@Alice')
   })
 
@@ -19,6 +21,8 @@ describe('renderMessageBodyWithEntities', () => {
 
     expect(html).toContain('href="/tasks/dev-1"')
     expect(html).toContain('data-message-entity-kind="task"')
+    expect(html).toContain('decoration-accent/40')
+    expect(html).not.toContain('decoration-cyan')
     expect(html).toContain('task:')
   })
 

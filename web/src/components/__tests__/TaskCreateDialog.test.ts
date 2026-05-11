@@ -7,6 +7,8 @@ import {
   loadTaskCreateDraft,
   saveTaskCreateDraft,
 } from '@/services/storage/taskCreateDraftStorage'
+import { storage } from '@/services/storage/storageAdapter'
+import { ensureLocalStorageMock } from '@/__tests__/testUtils'
 
 const tasksApiMock = vi.hoisted(() => ({
   tasksUploadStagedAttachment: vi.fn(),
@@ -127,7 +129,9 @@ function mountDialog(props: { initialTemplateId: string | null } = { initialTemp
 
 describe('TaskCreateDialog', () => {
   beforeEach(() => {
+    ensureLocalStorageMock()
     localStorage.clear()
+    storage.clear()
     vi.clearAllMocks()
     tasksStoreMock.createDialogOpen = true
     tasksStoreMock.activeTemplates = [...baseTemplates]
@@ -240,6 +244,24 @@ describe('TaskCreateDialog', () => {
     const secondTemplateButton = wrapper.findAll('button').find(button => button.text() === 'BUG')
     expect(firstTemplateButton?.classes()).toContain('bg-accent')
     expect(secondTemplateButton?.classes()).not.toContain('bg-accent')
+  })
+
+  it('uses semantic theme classes for title surfaces in the create dialog', async () => {
+    tasksStoreMock.createDialogOpen = false
+    const wrapper = mountDialog()
+    tasksStoreMock.createDialogOpen = true
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+
+    expect(wrapper.get('h2').classes()).toContain('text-app-text')
+    expect(wrapper.get('label.form-label').classes()).toContain('form-label')
+
+    const titleInput = wrapper.get('input[placeholder="Task title"]')
+    expect(titleInput.classes()).toContain('form-input')
+    expect(titleInput.classes()).not.toContain('text-white')
+
+    const templateButton = wrapper.findAll('button').find(button => button.text() === 'TASK')
+    expect(templateButton?.classes()).toContain('text-app-onAccent')
   })
 
   it('uses the first active template when the initial template is not active', async () => {

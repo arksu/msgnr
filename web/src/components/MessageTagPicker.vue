@@ -2,15 +2,15 @@
   <Teleport to="body">
     <div
       v-if="open"
-      class="fixed z-[10020] w-[360px] overflow-hidden rounded-xl border border-chat-border bg-chat-header shadow-2xl"
+      class="fixed z-[10020] w-[360px] overflow-hidden rounded-xl border border-chat-border bg-chat-header text-app-text shadow-2xl"
       :style="style"
       @mousedown.prevent
     >
-      <div class="flex items-center justify-between border-b border-chat-border px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-gray-400">
+      <div class="flex items-center justify-between border-b border-chat-border px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-app-muted">
         <span>Tag search</span>
         <span
           v-if="loading"
-          class="inline-flex h-4 w-4 animate-spin rounded-full border border-white/15 border-t-gray-200"
+          class="inline-flex h-4 w-4 animate-spin rounded-full border border-chat-border border-t-accent"
           aria-label="Searching"
         />
       </div>
@@ -20,19 +20,19 @@
           :class="loading ? 'opacity-60' : 'opacity-100'"
         >
           <template v-if="error">
-            <div class="px-3 py-3 text-sm text-red-300">{{ error }}</div>
+            <div class="px-3 py-3 text-sm text-app-danger">{{ error }}</div>
           </template>
           <template v-else-if="flatItems.length === 0">
-            <div class="px-3 py-3 text-sm text-gray-400">No matches</div>
+            <div class="px-3 py-3 text-sm text-app-muted">No matches</div>
           </template>
           <template v-else>
           <section v-for="group in groups" :key="group.key" class="py-1">
-            <div class="px-3 py-1 text-[11px] uppercase tracking-[0.12em] text-gray-500">{{ group.label }}</div>
+            <div class="px-3 py-1 text-[11px] uppercase tracking-[0.12em] text-app-muted">{{ group.label }}</div>
             <button
               v-for="item in group.items"
               :key="`${group.key}-${item.id}`"
               class="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors"
-              :class="item.flatIndex === selectedIndex ? 'bg-white/10 text-white' : 'text-gray-200 hover:bg-white/5'"
+              :class="item.flatIndex === selectedIndex ? 'theme-selection bg-app-selection text-app-selectionText' : 'text-app-secondaryText hover:bg-chat-msgHover'"
               @click="$emit('select', item)"
             >
               <UserAvatar
@@ -43,7 +43,7 @@
                 :custom-status="null"
                 size="sm"
               />
-              <span v-else class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/5 text-sm">{{ item.icon }}</span>
+              <span v-else class="flex h-7 w-7 items-center justify-center rounded-lg bg-chat-msgHover text-sm text-app-secondaryText">{{ item.icon }}</span>
               <div class="min-w-0">
                 <div class="flex min-w-0 items-center gap-1.5 text-sm">
                   <span
@@ -56,7 +56,7 @@
                   </span>
                   <span class="min-w-0 truncate">{{ item.label }}</span>
                 </div>
-                <div class="truncate text-xs text-gray-500">{{ item.subtitle }}</div>
+                <div class="truncate text-xs text-app-muted">{{ item.subtitle }}</div>
               </div>
             </button>
           </section>
@@ -68,7 +68,7 @@
         >
           <div class="rounded-full bg-chat-header/90 p-2 shadow-lg">
             <span
-              class="inline-flex h-6 w-6 animate-spin rounded-full border-2 border-white/15 border-t-gray-200"
+              class="inline-flex h-6 w-6 animate-spin rounded-full border-2 border-chat-border border-t-accent"
               aria-hidden="true"
             />
           </div>

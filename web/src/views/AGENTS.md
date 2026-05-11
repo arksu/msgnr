@@ -17,6 +17,7 @@ This directory owns route-level orchestration (page composition, lifecycle wirin
 5. Chat navigation that opens a conversation or thread should also request focus for the matching composer so click-driven and programmatic opens behave the same.
 6. The profile settings modal in `MainView` is intentionally tabbed (`Profile`, `Status`, `Theme`, `Password`) so it fits normal viewport heights; do not collapse these sections back into one tall form.
 7. Color theme selection is local-only, applies immediately from the `Theme` tab, and must not be coupled to profile save or backend profile APIs.
+8. View-owned teleports, including profile/status emoji pickers and modal loading states, must use the current color theme tokens rather than fixed dark palette colors.
 
 ## Change Guidance
 

@@ -7,9 +7,9 @@
       <div class="w-[80vw] max-w-[80vw] rounded-xl border border-chat-border bg-chat-header shadow-2xl flex flex-col max-h-[90vh]">
         <!-- Header -->
         <div class="flex items-center justify-between px-6 py-4 border-b border-chat-border shrink-0">
-          <h2 class="text-base font-semibold text-white">New task</h2>
+          <h2 class="text-base font-semibold text-app-text">New task</h2>
           <button
-            class="text-gray-400 hover:text-gray-200 transition-colors"
+            class="text-app-muted hover:text-app-text transition-colors"
             aria-label="Close"
             @click="close"
           >
@@ -25,11 +25,11 @@
             {{ tasksStore.configError }}
           </div>
 
-          <div v-else-if="tasksStore.configLoading" class="text-gray-400 text-sm">
+          <div v-else-if="tasksStore.configLoading" class="text-app-muted text-sm">
             Loading...
           </div>
 
-          <div v-else-if="tasksStore.activeTemplates.length === 0" class="text-gray-400 text-sm">
+          <div v-else-if="tasksStore.activeTemplates.length === 0" class="text-app-muted text-sm">
             No active templates. Ask an administrator to create one.
           </div>
 
@@ -44,8 +44,8 @@
                   type="button"
                   class="px-3 py-1 rounded text-sm border transition-colors"
                   :class="selectedTemplateId === tpl.id
-                    ? 'bg-accent border-accent text-white'
-                    : 'border-chat-border text-gray-300 hover:border-accent/60 hover:text-white'"
+                    ? 'bg-accent border-accent text-app-onAccent'
+                    : 'border-chat-border text-app-secondaryText hover:border-accent/60 hover:text-app-text'"
                   @click="selectTemplate(tpl.id)"
                 >
                   {{ tpl.prefix }}
@@ -123,7 +123,7 @@
           </div>
           <button
             type="button"
-            class="px-4 py-2 rounded text-sm text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+            class="px-4 py-2 rounded text-sm text-app-secondaryText hover:text-app-text hover:bg-chat-msgHover transition-colors"
             :disabled="submitting"
             @click="cancel"
           >
@@ -131,7 +131,7 @@
           </button>
           <button
             type="button"
-            class="px-4 py-2 rounded bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            class="px-4 py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="!canSubmit || submitting"
             @click="submit"
           >
@@ -393,9 +393,9 @@ watch(
 
 <style scoped>
 .form-label {
-  @apply block text-sm text-gray-400 mb-1;
+  @apply block text-sm text-app-muted mb-1;
 }
 .form-input {
-  @apply w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-white text-sm outline-none focus:border-accent transition-colors;
+  @apply w-full bg-chat-input border border-chat-border rounded px-3 py-2 text-app-text placeholder-app-muted text-sm outline-none focus:border-accent transition-colors;
 }
 </style>

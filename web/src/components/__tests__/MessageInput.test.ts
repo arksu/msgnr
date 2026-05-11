@@ -5,6 +5,8 @@ import MessageInput from '@/components/MessageInput.vue'
 import RichTextComposer from '@/components/RichTextComposer.vue'
 import { uploadChatAttachment } from '@/services/http/chatApi'
 import { loadChatDraft, saveChatDraft, type ChatDraftScope } from '@/services/storage/chatDraftStorage'
+import { storage } from '@/services/storage/storageAdapter'
+import { ensureLocalStorageMock } from '@/__tests__/testUtils'
 
 vi.mock('@/composables/useComposerEmojiPicker', () => ({
   useComposerEmojiPicker: ({ onSelect }: { onSelect: (emoji: string) => void }) => {
@@ -42,7 +44,9 @@ vi.mock('@/services/http/chatApi', () => ({
 describe('MessageInput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    ensureLocalStorageMock()
     localStorage.clear()
+    storage.clear()
     Object.defineProperty(globalThis.Node.prototype, 'getClientRects', {
       configurable: true,
       value: () => [],

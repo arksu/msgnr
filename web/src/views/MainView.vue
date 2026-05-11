@@ -429,13 +429,13 @@
           :infinite-scroll="true"
           :emoji-size="26"
           :per-line="9"
-          color="#ae65c5"
+          :color="statusEmojiPickerAccentColor"
           @select="onSelectStatusEmoji"
           @selected="onSelectStatusEmoji"
         />
         <div
           v-else
-          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+          class="rounded-md border border-chat-border bg-chat-header px-3 py-2 text-xs text-app-muted shadow-xl"
         >
           Loading emoji...
         </div>
@@ -706,7 +706,8 @@ const pinnedDialogsStore = usePinnedDialogsStore()
 const callStore = useCallStore()
 const authStore = useAuthStore()
 const { logout, isReconnecting, reconnectAttempt, reconnectNow } = useSessionOrchestrator()
-const { themes: colorThemes, currentThemeId, setTheme: setColorTheme } = useColorTheme()
+const { themes: colorThemes, currentTheme, currentThemeId, setTheme: setColorTheme } = useColorTheme()
+const statusEmojiPickerAccentColor = computed(() => currentTheme.value.tokens.accent)
 const offlineQueue = useOfflineQueue()
 const soundEngine = useNotificationSoundEngine()
 const platform = getPlatformOrNull()

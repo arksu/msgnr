@@ -260,6 +260,23 @@ describe('TaskDescriptionEditor', () => {
     expect(wrapper.get('[data-testid="task-description-attachment-note"]').text()).toContain('available after save')
   })
 
+  it('uses semantic theme classes for tabs and markdown input', async () => {
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: '```ts\nconst value = 1\n```',
+        defaultTab: 'markdown',
+      },
+    })
+
+    const markdownTab = wrapper.get('[data-testid="task-description-tab-markdown"]')
+    expect(markdownTab.classes()).toContain('text-app-onAccent')
+
+    const input = wrapper.get('[data-testid="task-description-markdown-input"]')
+    expect(input.classes()).toContain('text-app-text')
+    expect(input.classes()).toContain('placeholder-app-muted')
+    expect(input.classes()).not.toContain('text-white')
+  })
+
   it('uploads pasted images through the create-task staging callback', async () => {
     const uploadStaged = vi.fn(async () => [{
       id: 'staged-1',

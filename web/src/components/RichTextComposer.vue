@@ -382,7 +382,7 @@ const editor = useEditor({
   editable: !props.disabled,
   editorProps: {
     attributes: {
-      class: 'rich-text-composer__content min-h-[24px] whitespace-pre-wrap break-words bg-transparent text-sm leading-relaxed text-gray-100 outline-none',
+      class: 'rich-text-composer__content min-h-[24px] whitespace-pre-wrap break-words bg-transparent text-sm leading-relaxed text-app-text outline-none',
     },
     handleKeyDown(_view, event) {
       if (tagPickerOpen.value) {
@@ -615,22 +615,22 @@ defineExpose<{
 }
 
 .rich-text-composer :deep(.ProseMirror blockquote) {
-  border-left: 3px solid rgb(75 85 99);
+  border-left: 3px solid rgb(var(--color-divider));
   margin: 0.5rem 0;
   padding-left: 0.75rem;
-  color: rgb(209 213 219);
+  color: rgb(var(--color-text-secondary));
 }
 
 .rich-text-composer :deep(.ProseMirror code) {
   border-radius: 0.375rem;
-  background: rgb(17 24 39);
+  background: rgb(var(--color-surface-hover));
   padding: 0.1rem 0.35rem;
 }
 
 .rich-text-composer :deep(.ProseMirror pre) {
   overflow-x: auto;
   border-radius: 0.5rem;
-  background: rgb(17 24 39);
+  background: rgb(var(--color-surface-hover));
   padding: 0.75rem;
 }
 
@@ -641,7 +641,7 @@ defineExpose<{
 
 .rich-text-composer :deep(.ProseMirror.is-empty::before) {
   content: attr(data-placeholder);
-  color: rgb(107 114 128);
+  color: rgb(var(--color-text-muted));
   pointer-events: none;
   float: left;
   height: 0;
@@ -651,8 +651,9 @@ defineExpose<{
   display: inline-flex;
   align-items: center;
   border-radius: 9999px;
-  background: rgb(34 211 238 / 0.12);
-  color: rgb(165 243 252);
+  background: rgb(var(--color-selection-bg));
+  color: rgb(var(--color-selection-text));
+  box-shadow: inset 0 0 0 1px rgb(var(--color-selection-border) / 0.28);
   padding: 0 0.4rem;
   white-space: nowrap;
 }

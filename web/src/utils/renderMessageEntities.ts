@@ -6,11 +6,11 @@ function renderEntity(entity: MessageEntity): string {
   const label = escapeHtml(entity.label)
   const targetId = escapeHtml(entity.targetId)
   if (entity.kind === 'user') {
-    return `<button type="button" class="inline rounded px-0.5 font-medium text-cyan-300 hover:bg-cyan-400/10 hover:text-cyan-200" data-message-entity-kind="user" data-target-id="${targetId}">${label}</button>`
+    return `<button type="button" class="inline rounded px-0.5 font-medium text-accent hover:bg-accent/10 hover:text-accent-hover" data-message-entity-kind="user" data-target-id="${targetId}">${label}</button>`
   }
 
   const href = escapeHtml(entity.href)
-  return `<a href="${href}" class="font-medium text-cyan-300 hover:text-cyan-200 underline decoration-cyan-500/40" data-message-entity-kind="${escapeHtml(entity.kind)}" data-target-id="${targetId}">${label}</a>`
+  return `<a href="${href}" class="font-medium text-accent hover:text-accent-hover underline decoration-accent/40" data-message-entity-kind="${escapeHtml(entity.kind)}" data-target-id="${targetId}">${label}</a>`
 }
 
 export function renderMessageBodyWithEntities(body: string, entities: MessageEntity[]): string {

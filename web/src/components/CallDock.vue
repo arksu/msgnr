@@ -4,25 +4,25 @@
     <div
       v-if="callStore.minimized"
       ref="minimizedDockEl"
-      class="flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-slate-900/95 px-3 py-1.5 text-white shadow-xl backdrop-blur touch-none cursor-move"
+      class="flex items-center gap-1.5 rounded-full border border-chat-border bg-chat-header/95 px-3 py-1.5 text-app-text shadow-xl backdrop-blur touch-none cursor-move"
       :style="minimizedDockStyle"
       data-testid="calldock-minimized-root"
       @pointerdown="handleMinimizedDockPointerDown"
     >
       <!-- Expand back to panel -->
       <button
-        class="flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-white/10 text-xs font-medium"
+        class="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium hover:bg-chat-msgHover"
         data-testid="calldock-minimized-expand"
         @click="callStore.toggleMinimized()"
       >
         <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
         <span class="max-w-[120px] truncate">{{ callStore.activeConversationTitle || 'Huddle' }}</span>
       </button>
-      <div class="h-4 w-px bg-slate-700" />
+      <div class="h-4 w-px bg-chat-border" />
       <!-- Mic toggle -->
       <button
         class="flex h-7 w-7 items-center justify-center rounded-full transition-colors"
-        :class="callStore.micEnabled ? 'text-slate-300 hover:bg-white/10' : 'text-red-400 hover:bg-white/10'"
+        :class="callStore.micEnabled ? 'text-app-secondaryText hover:bg-chat-msgHover' : 'text-app-danger hover:bg-app-danger/10'"
         :title="callStore.micEnabled ? 'Mute' : 'Unmute'"
         @click="handleToggleMute"
       >
@@ -59,19 +59,19 @@
 
       <!-- Header — single compact line -->
       <header
-        class="flex items-center gap-2 border-b border-slate-700/80 px-3 py-2 shrink-0 min-w-0 touch-none"
+        class="flex items-center gap-2 border-b border-chat-border px-3 py-2 shrink-0 min-w-0 touch-none"
         :class="maximized ? '' : 'cursor-move'"
         data-testid="calldock-expanded-drag-handle"
         @pointerdown="handleExpandedDockPointerDown"
       >
         <span class="h-2 w-2 shrink-0 rounded-full bg-emerald-400 animate-pulse" />
-        <span class="truncate text-sm font-semibold text-white min-w-0">{{ callStore.activeConversationTitle || 'Huddle' }}</span>
-        <span class="shrink-0 text-slate-600">·</span>
-        <span class="shrink-0 text-xs text-slate-400">{{ callStore.connecting ? 'Connecting…' : `${callStore.remoteParticipantCount + 1}` }}</span>
+        <span class="truncate text-sm font-semibold text-app-text min-w-0">{{ callStore.activeConversationTitle || 'Huddle' }}</span>
+        <span class="shrink-0 text-app-muted">·</span>
+        <span class="shrink-0 text-xs text-app-muted">{{ callStore.connecting ? 'Connecting…' : `${callStore.remoteParticipantCount + 1}` }}</span>
         <div class="ml-auto flex items-center gap-0.5 shrink-0">
           <!-- Maximize / restore -->
           <button
-            class="flex h-7 w-7 items-center justify-center rounded text-slate-400 hover:bg-white/10 hover:text-white transition-colors"
+            class="flex h-7 w-7 items-center justify-center rounded text-app-muted hover:bg-chat-msgHover hover:text-app-text transition-colors"
             :title="maximized ? 'Restore' : 'Maximize'"
             @click="toggleMaximized"
           >
@@ -86,7 +86,7 @@
           </button>
           <!-- Minimize to pill -->
           <button
-            class="flex h-7 w-7 items-center justify-center rounded text-slate-400 hover:bg-white/10 hover:text-white transition-colors"
+            class="flex h-7 w-7 items-center justify-center rounded text-app-muted hover:bg-chat-msgHover hover:text-app-text transition-colors"
             title="Minimize"
             @click="handleMinimize"
           >
@@ -416,10 +416,10 @@
 
           <!-- Microphone + arrow selector -->
           <div ref="inputSelectorWrapEl" class="relative">
-            <div class="flex h-10 items-center overflow-hidden rounded-xl border border-slate-600 bg-slate-700/90">
+            <div class="flex h-10 items-center overflow-hidden rounded-xl border border-chat-border bg-chat-input">
               <button
                 class="flex h-10 w-10 items-center justify-center transition-colors"
-                :class="callStore.micEnabled ? 'text-white hover:bg-slate-600' : 'text-red-400 hover:bg-red-500/15'"
+                :class="callStore.micEnabled ? 'text-app-text hover:bg-chat-msgHover' : 'text-app-danger hover:bg-app-danger/10'"
                 :title="callStore.micEnabled ? 'Mute microphone' : 'Unmute microphone'"
                 @click="handleToggleMute"
               >
@@ -432,9 +432,9 @@
                   <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23M12 19v3M8 23h8"/>
                 </svg>
               </button>
-              <div class="h-6 w-px bg-slate-500/60" />
+              <div class="h-6 w-px bg-chat-border" />
               <button
-                class="flex h-10 w-8 items-center justify-center text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+                class="flex h-10 w-8 items-center justify-center text-app-secondaryText transition-colors hover:bg-chat-msgHover disabled:cursor-not-allowed disabled:opacity-60"
                 title="Select input device"
                 data-testid="calldock-input-device-toggle"
                 :disabled="inputDeviceLoading || inputDeviceSwitching || !callStore.connected"
@@ -449,12 +449,12 @@
 
             <div
               v-if="inputDeviceMenuOpen"
-              class="absolute bottom-[calc(100%+8px)] left-0 z-30 w-64 rounded-xl border border-slate-600 bg-slate-900 shadow-2xl"
+              class="absolute bottom-[calc(100%+8px)] left-0 z-30 w-64 rounded-xl border border-chat-border bg-chat-header shadow-2xl"
               data-testid="calldock-input-device-menu"
             >
               <button
-                class="w-full truncate px-3 py-2 text-left text-xs transition-colors hover:bg-white/10"
-                :class="selectedInputDeviceId === '' ? 'text-emerald-300' : 'text-slate-100'"
+                class="w-full truncate px-3 py-2 text-left text-xs transition-colors hover:bg-chat-msgHover"
+                :class="selectedInputDeviceId === '' ? 'text-accent' : 'text-app-text'"
                 data-testid="calldock-input-device-option-default"
                 @click="handleInputDeviceSelect('')"
               >
@@ -463,8 +463,8 @@
               <button
                 v-for="device in inputDevices"
                 :key="device.deviceId"
-                class="w-full truncate px-3 py-2 text-left text-xs transition-colors hover:bg-white/10"
-                :class="selectedInputDeviceId === device.deviceId ? 'text-emerald-300' : 'text-slate-100'"
+                class="w-full truncate px-3 py-2 text-left text-xs transition-colors hover:bg-chat-msgHover"
+                :class="selectedInputDeviceId === device.deviceId ? 'text-accent' : 'text-app-text'"
                 :data-testid="`calldock-input-device-option-${device.deviceId}`"
                 @click="handleInputDeviceSelect(device.deviceId)"
               >
@@ -477,8 +477,8 @@
           <button
             class="flex h-10 w-10 items-center justify-center rounded-xl border transition-colors"
             :class="callStore.cameraEnabled
-              ? 'border-slate-600 bg-slate-700/90 hover:bg-slate-600 text-white'
-              : 'border-slate-600 bg-slate-700/90 hover:bg-red-500/15 text-red-400'"
+              ? 'border-chat-border bg-chat-input hover:bg-chat-msgHover text-app-text'
+              : 'border-chat-border bg-chat-input hover:bg-app-danger/10 text-app-danger'"
             :title="callStore.cameraEnabled ? 'Turn off camera' : 'Turn on camera'"
             @click="handleToggleCamera"
           >
@@ -500,10 +500,10 @@
             :class="[
               callStore.screenShareEnabled
                 ? 'border-emerald-500/50 bg-emerald-600/80 hover:bg-emerald-600 text-white'
-                : 'border-slate-600 bg-slate-700/90 text-white',
+                : 'border-chat-border bg-chat-input text-app-text',
               !callStore.screenShareEnabled && callStore.remoteScreenShareActive
                 ? 'opacity-50 cursor-not-allowed'
-                : !callStore.screenShareEnabled ? 'hover:bg-slate-600' : '',
+                : !callStore.screenShareEnabled ? 'hover:bg-chat-msgHover' : '',
             ]"
             :title="!callStore.screenShareEnabled && callStore.remoteScreenShareActive
               ? 'Someone is already sharing their screen'
@@ -522,12 +522,12 @@
 
           <!-- Screen annotation -->
           <button
-            class="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-600 transition-colors"
+            class="flex h-10 w-10 items-center justify-center rounded-xl border border-chat-border transition-colors"
             data-testid="calldock-annotation-toggle"
             :class="[
               annotationDrawMode
                 ? 'bg-amber-500/80 text-white hover:bg-amber-500'
-                : 'bg-slate-700/90 text-white hover:bg-slate-600',
+                : 'bg-chat-input text-app-text hover:bg-chat-msgHover',
               !annotationCanDraw ? 'opacity-50 cursor-not-allowed' : '',
             ]"
             :title="annotationToggleTitle"
@@ -542,7 +542,7 @@
 
           <!-- Invite members -->
           <button
-            class="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-slate-600 px-3 transition-colors bg-slate-700/90 text-white hover:bg-slate-600"
+            class="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-chat-border px-3 transition-colors bg-chat-input text-app-text hover:bg-chat-msgHover"
             title="Invite members"
             data-testid="calldock-invite-button"
             :disabled="inviteLoading || inviteSubmitting"
@@ -570,8 +570,8 @@
           </button>
 
           <!-- Mute hotkey hint -->
-          <span class="absolute right-0 flex items-center gap-1 text-[10px] text-slate-500 select-none pointer-events-none">
-            <kbd class="rounded border border-slate-700 bg-slate-800 px-1 py-0.5 font-mono leading-none">⌘D</kbd>
+          <span class="absolute right-0 flex items-center gap-1 text-[10px] text-app-muted select-none pointer-events-none">
+            <kbd class="rounded border border-chat-border bg-chat-input px-1 py-0.5 font-mono leading-none">⌘D</kbd>
             <span>mute</span>
           </span>
 
@@ -591,38 +591,38 @@
       data-testid="calldock-invite-modal"
       @click.self="closeInviteDialog"
     >
-      <div class="w-full max-w-md overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-        <div class="border-b border-slate-700 px-4 py-3">
-          <div class="text-sm font-semibold text-white">Invite members to call</div>
-          <div class="mt-1 text-xs text-slate-400">Select members and send invite notifications.</div>
+      <div class="w-full max-w-md overflow-hidden rounded-xl border border-chat-border bg-chat-header text-app-text shadow-2xl">
+        <div class="border-b border-chat-border px-4 py-3">
+          <div class="text-sm font-semibold text-app-text">Invite members to call</div>
+          <div class="mt-1 text-xs text-app-muted">Select members and send invite notifications.</div>
         </div>
 
-        <div v-if="inviteError" class="border-b border-slate-700 px-4 py-2 text-xs text-red-300">
+        <div v-if="inviteError" class="border-b border-chat-border px-4 py-2 text-xs text-app-danger">
           {{ inviteError }}
         </div>
-        <div v-if="inviteResultSummary" class="border-b border-slate-700 px-4 py-2 text-xs text-emerald-200">
+        <div v-if="inviteResultSummary" class="border-b border-chat-border px-4 py-2 text-xs text-app-success">
           {{ inviteResultSummary }}
         </div>
 
-        <div class="border-b border-slate-700 px-4 py-3">
+        <div class="border-b border-chat-border px-4 py-3">
           <input
             v-model="inviteSearch"
             type="text"
             data-testid="calldock-invite-search"
             placeholder="Search by nickname or email..."
-            class="w-full rounded border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-emerald-500"
+            class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text placeholder-app-muted outline-none focus:border-accent"
             autofocus
           >
         </div>
 
         <div class="max-h-72 overflow-y-auto">
-          <div v-if="inviteLoading" class="px-4 py-6 text-center text-xs text-slate-400">
+          <div v-if="inviteLoading" class="px-4 py-6 text-center text-xs text-app-muted">
             Loading members...
           </div>
-          <div v-else-if="inviteCandidates.length === 0" class="px-4 py-6 text-center text-xs text-slate-400">
+          <div v-else-if="inviteCandidates.length === 0" class="px-4 py-6 text-center text-xs text-app-muted">
             No members are available to invite.
           </div>
-          <div v-else-if="filteredInviteCandidates.length === 0" class="px-4 py-6 text-center text-xs text-slate-400">
+          <div v-else-if="filteredInviteCandidates.length === 0" class="px-4 py-6 text-center text-xs text-app-muted">
             No members match your search.
           </div>
           <template v-else>
@@ -630,7 +630,7 @@
               v-for="candidate in filteredInviteCandidates"
               :key="candidate.userId"
               :data-testid="`calldock-invite-candidate-${candidate.userId}`"
-              class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-white/5"
+              class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-chat-msgHover"
               @click="toggleInviteCandidate(candidate.userId)"
             >
               <input
@@ -647,19 +647,19 @@
                 size="sm"
               />
               <div class="min-w-0">
-                <div class="truncate text-sm text-white">{{ candidate.displayName || candidate.email }}</div>
-                <div class="truncate text-xs text-slate-400">{{ candidate.email }}</div>
+                <div class="truncate text-sm text-app-text">{{ candidate.displayName || candidate.email }}</div>
+                <div class="truncate text-xs text-app-muted">{{ candidate.email }}</div>
               </div>
             </button>
           </template>
         </div>
 
-        <div class="flex justify-end gap-2 border-t border-slate-700 px-4 py-3">
-          <button class="rounded px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10" @click="closeInviteDialog">
+        <div class="flex justify-end gap-2 border-t border-chat-border px-4 py-3">
+          <button class="rounded px-3 py-1.5 text-xs text-app-secondaryText hover:bg-chat-msgHover" @click="closeInviteDialog">
             Close
           </button>
           <button
-            class="rounded bg-emerald-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+            class="rounded bg-accent px-3 py-1.5 text-xs text-app-onAccent hover:bg-accent-hover disabled:opacity-50"
             data-testid="calldock-send-invites"
             :disabled="inviteLoading || inviteSubmitting || selectedInviteeIds.length === 0"
             @click="sendCallInvites"
@@ -1048,8 +1048,8 @@ const containerClass = computed(() =>
 
 const panelClass = computed(() =>
   maximized.value
-    ? 'h-full w-full overflow-hidden rounded-none border-0 bg-slate-900/95 flex flex-col'
-    : 'w-[min(96vw,640px)] overflow-hidden rounded-2xl border border-slate-600/70 bg-slate-900/95 shadow-2xl backdrop-blur'
+    ? 'h-full w-full overflow-hidden rounded-none border-0 bg-chat-header/95 text-app-text flex flex-col'
+    : 'w-[min(96vw,640px)] overflow-hidden rounded-2xl border border-chat-border bg-chat-header/95 text-app-text shadow-2xl backdrop-blur'
 )
 
 const minimizedDockStyle = computed<CSSProperties>(() => ({
@@ -1078,8 +1078,8 @@ const stageClass = computed(() =>
   // Normal: fixed height so the panel doesn't grow with tile content.
   // Maximized: flex-1 fills all remaining vertical space.
   maximized.value
-    ? 'relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950'
-    : 'relative h-52 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950'
+    ? 'relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-2xl border border-chat-border bg-chat-bg'
+    : 'relative h-52 overflow-hidden rounded-2xl border border-chat-border bg-chat-bg'
 )
 
 // Tile grid — explicit rows/heights in maximized mode to avoid tile overlap.
@@ -1192,8 +1192,8 @@ const remoteTiles = computed(() => participantTiles.value.filter(t => !t.isLocal
 // Tile wrapper class — always constrained to its grid cell.
 const tileItemClass = computed(() =>
   maximized.value
-    ? 'group relative h-full min-h-0 overflow-hidden rounded-xl bg-slate-800'
-    : 'group relative overflow-hidden rounded-xl bg-slate-800'
+    ? 'group relative h-full min-h-0 overflow-hidden rounded-xl bg-chat-input'
+    : 'group relative overflow-hidden rounded-xl bg-chat-input'
 )
 
 const fallbackAvatarClass = computed(() =>

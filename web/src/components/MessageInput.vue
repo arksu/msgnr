@@ -1,7 +1,7 @@
 <template>
   <div class="shrink-0 px-4 pb-4 pt-2">
     <div v-if="attachments.length > 0" class="mb-2 rounded-lg border border-chat-border bg-chat-input/70 p-2">
-      <p class="mb-1 text-[11px] text-gray-500">Attachments ({{ attachments.length }}/{{ MAX_ATTACHMENTS }})</p>
+      <p class="mb-1 text-[11px] text-app-muted">Attachments ({{ attachments.length }}/{{ MAX_ATTACHMENTS }})</p>
       <ul class="space-y-1">
         <li
           v-for="attachment in attachments"
@@ -9,11 +9,11 @@
           class="flex items-center justify-between gap-2 rounded border border-chat-border bg-chat-input px-2 py-1"
         >
           <div class="min-w-0">
-            <p class="truncate text-xs text-gray-200">{{ attachment.fileName }}</p>
-            <p class="text-[11px] text-gray-500">{{ formatFileSize(attachment.fileSize) }}</p>
+            <p class="truncate text-xs text-app-text">{{ attachment.fileName }}</p>
+            <p class="text-[11px] text-app-muted">{{ formatFileSize(attachment.fileSize) }}</p>
           </div>
           <button
-            class="rounded p-1 text-gray-400 hover:bg-white/10 hover:text-white"
+            class="rounded p-1 text-app-muted hover:bg-chat-msgHover hover:text-app-text"
             title="Remove attachment"
             :disabled="removingAttachmentIds.has(attachment.id)"
             @click="removeAttachment(attachment.id)"
@@ -60,7 +60,7 @@
         <div class="flex items-center gap-2">
           <button
             data-testid="composer-attach-button"
-            class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+            class="shrink-0 text-app-muted transition-colors hover:text-app-text disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="disabled || uploading || !conversationId || attachments.length >= MAX_ATTACHMENTS"
             :title="attachButtonTitle"
             @click="openFilePicker"
@@ -73,7 +73,7 @@
           <button
             ref="pickerToggleButton"
             data-testid="composer-emoji-button"
-            class="shrink-0 text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+            class="shrink-0 text-app-muted transition-colors hover:text-app-text disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="disabled"
             title="Add emoji"
             @click.stop="toggleEmojiPicker"
@@ -86,8 +86,8 @@
           data-testid="composer-send-button"
           class="shrink-0 rounded p-1.5 transition-colors"
           :class="canSend
-            ? 'bg-accent hover:bg-accent-hover text-white'
-            : 'text-gray-600 cursor-not-allowed'"
+            ? 'bg-accent hover:bg-accent-hover text-app-onAccent'
+            : 'text-app-muted cursor-not-allowed opacity-60'"
           :disabled="!canSend"
           @click="submit"
         >
@@ -119,34 +119,34 @@
           :infinite-scroll="true"
           :emoji-size="26"
           :per-line="9"
-          color="#ae65c5"
+          :color="emojiPickerAccentColor"
           @select="onSelectEmoji"
           @selected="onSelectEmoji"
         />
         <div
           v-else
-          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+          class="rounded-md border border-chat-border bg-chat-header px-3 py-2 text-xs text-app-muted shadow-xl"
         >
           Loading emoji...
         </div>
       </div>
     </Teleport>
 
-    <p class="mt-1 flex items-center justify-between gap-2 pl-1 text-xs text-gray-600">
-      <span class="truncate text-gray-500">{{ typingLabel || '' }}</span>
+    <p class="mt-1 flex items-center justify-between gap-2 pl-1 text-xs text-app-muted">
+      <span class="truncate text-app-muted">{{ typingLabel || '' }}</span>
       <span class="whitespace-nowrap">
         <kbd class="font-mono">Enter</kbd> sends from a plain paragraph · <kbd class="font-mono">Shift+Enter</kbd> newline · <kbd class="font-mono">Ctrl/Cmd+Enter</kbd> send anywhere
       </span>
     </p>
 
     <div v-if="uploading" class="mt-1 pl-1">
-      <div class="mb-1 flex items-center justify-between gap-2 text-[11px] text-gray-500">
+      <div class="mb-1 flex items-center justify-between gap-2 text-[11px] text-app-muted">
         <span class="truncate">
           Uploading{{ currentUploadingFileName ? ` ${currentUploadingFileName}` : ' attachments' }}...
         </span>
         <span class="tabular-nums">{{ uploadProgressPercent }}%</span>
       </div>
-      <div class="h-1.5 w-full overflow-hidden rounded bg-white/10">
+      <div class="h-1.5 w-full overflow-hidden rounded bg-chat-border">
         <div
           class="h-full bg-accent transition-[width] duration-150"
           :style="{ width: `${uploadProgressPercent}%` }"
@@ -168,6 +168,7 @@ import {
   type ChatDraftScope,
 } from '@/services/storage/chatDraftStorage'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
+import { useColorTheme } from '@/composables/useColorTheme'
 import type { MessageEntity } from '@/stores/chat'
 import RichTextComposer from './RichTextComposer.vue'
 
@@ -217,6 +218,8 @@ const attachmentError = ref('')
 const removingAttachmentIds = ref(new Set<string>())
 const isDragOver = ref(false)
 const syncingDraft = ref(false)
+const { currentTheme } = useColorTheme()
+const emojiPickerAccentColor = computed(() => currentTheme.value.tokens.accent)
 
 const {
   showEmojiPicker,

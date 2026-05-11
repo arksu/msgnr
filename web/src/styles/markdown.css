@@ -36,15 +36,15 @@
   }
 
   .markdown-body code {
-    @apply bg-chat-input border border-chat-border rounded px-1 py-0.5 text-xs text-orange-300;
+    @apply bg-chat-input border border-chat-border rounded px-1 py-0.5 text-xs text-app-text;
   }
 
   .markdown-body pre {
-    @apply bg-sky-500/10 border border-sky-400/40 text-sky-200 rounded-md p-3 overflow-x-auto;
+    @apply bg-chat-input border border-chat-border text-app-text rounded-md p-3 overflow-x-auto;
   }
 
   .markdown-body pre code {
-    @apply block p-0 border-0 bg-transparent text-xs text-orange-300;
+    @apply block p-0 border-0 bg-transparent text-xs text-app-text;
   }
 
   .markdown-body a {
@@ -56,10 +56,10 @@
   }
 
   .markdown-body th {
-    @apply border border-chat-border bg-chat-input text-gray-100 font-semibold px-3 py-2 text-left;
+    @apply border border-chat-border bg-chat-input text-app-text font-semibold px-3 py-2 text-left;
   }
 
   .markdown-body td {
-    @apply border border-chat-border px-3 py-2 text-gray-200 align-top;
+    @apply border border-chat-border px-3 py-2 text-app-secondaryText align-top;
   }
 }

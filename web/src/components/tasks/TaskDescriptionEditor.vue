@@ -4,7 +4,7 @@
       <button
         type="button"
         class="px-2 py-0.5"
-        :class="tab === 'rendered' ? 'bg-accent text-white' : 'bg-chat-input text-gray-300 hover:text-white'"
+        :class="tab === 'rendered' ? 'bg-accent text-app-onAccent' : 'bg-chat-input text-app-secondaryText hover:text-app-text'"
         data-testid="task-description-tab-rendered"
         @click="switchTab('rendered')"
       >
@@ -14,10 +14,10 @@
         type="button"
         class="border-l border-chat-border px-2 py-0.5"
         :class="tab === 'markdown'
-          ? 'bg-accent text-white'
+          ? 'bg-accent text-app-onAccent'
           : markdownTabDisabled
-            ? 'cursor-not-allowed bg-chat-input text-gray-500'
-            : 'bg-chat-input text-gray-300 hover:text-white'"
+            ? 'cursor-not-allowed bg-chat-input text-app-muted opacity-70'
+            : 'bg-chat-input text-app-secondaryText hover:text-app-text'"
         :disabled="markdownTabDisabled"
         data-testid="task-description-tab-markdown"
         @click="switchTab('markdown')"
@@ -61,7 +61,7 @@
       <textarea
         ref="markdownInputRef"
         v-model="markdownDraft"
-        class="min-h-[140px] w-full resize-none overflow-hidden rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-white outline-none focus:border-accent"
+        class="min-h-[140px] w-full resize-none overflow-hidden rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text placeholder-app-muted outline-none focus:border-accent"
         :placeholder="placeholder"
         :disabled="!editable || markdownTabDisabled"
         data-testid="task-description-markdown-input"
@@ -77,7 +77,7 @@
       v-if="attachmentNotice"
       data-testid="task-description-attachment-note"
       class="text-xs"
-      :class="attachmentNoticeIsError ? 'text-amber-300' : 'text-gray-500'"
+      :class="attachmentNoticeIsError ? 'text-app-warning' : 'text-app-muted'"
     >
       {{ attachmentNotice }}
     </p>

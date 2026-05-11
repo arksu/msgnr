@@ -142,7 +142,7 @@
             <button
               v-if="canEditComment(comment) && editingCommentId !== comment.id"
               data-testid="task-comment-edit-button"
-              class="rounded px-1.5 py-0.5 text-[11px] text-cyan-300 transition-colors hover:bg-white/10 hover:text-cyan-200"
+              class="rounded px-1.5 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/10 hover:text-accent-hover"
               @click="startEditingComment(comment)"
             >
               Edit
@@ -385,13 +385,13 @@
           :infinite-scroll="true"
           :emoji-size="26"
           :per-line="9"
-          color="#ae65c5"
+          :color="emojiPickerAccentColor"
           @select="onSelectEmoji"
           @selected="onSelectEmoji"
         />
         <div
           v-else
-          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+          class="rounded-md border border-chat-border bg-chat-header px-3 py-2 text-xs text-app-muted shadow-xl"
         >
           Loading emoji...
         </div>
@@ -419,13 +419,13 @@
           :infinite-scroll="true"
           :emoji-size="26"
           :per-line="9"
-          color="#ae65c5"
+          :color="emojiPickerAccentColor"
           @select="onSelectEditEmoji"
           @selected="onSelectEditEmoji"
         />
         <div
           v-else
-          class="rounded-md border border-white/10 bg-sidebar-bg px-3 py-2 text-xs text-gray-400 shadow-xl"
+          class="rounded-md border border-chat-border bg-chat-header px-3 py-2 text-xs text-app-muted shadow-xl"
         >
           Loading emoji...
         </div>
@@ -469,6 +469,7 @@ import { useAuthStore } from '@/stores/auth'
 import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
+import { useColorTheme } from '@/composables/useColorTheme'
 import { renderMarkdownToHtml } from '@/utils/markdown'
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import { userCustomStatusFromDto } from '@/types/userStatus'
@@ -493,6 +494,8 @@ const props = defineProps<{ taskId: string }>()
 const tasksStore = useTasksStore()
 const authStore = useAuthStore()
 const pinnedDialogs = usePinnedDialogsStore()
+const { currentTheme } = useColorTheme()
+const emojiPickerAccentColor = computed(() => currentTheme.value.tokens.accent)
 const comments = ref<TaskComment[]>([])
 const loading = ref(false)
 const error = ref('')

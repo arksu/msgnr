@@ -56,7 +56,8 @@ vi.mock('@/services/storage/lastTaskRouteStorage', () => ({
 
 vi.mock('@/components/AppSidebar.vue', () => ({
   default: {
-    template: '<aside data-testid="sidebar" />',
+    emits: ['search', 'profile', 'settings'],
+    template: '<aside data-testid="sidebar"><button data-testid="sidebar-search-button" @click="$emit(\'search\')">search</button></aside>',
   },
 }))
 
@@ -68,7 +69,73 @@ vi.mock('@/components/ResizableSidebar.vue', () => ({
 
 vi.mock('@/components/ChatArea.vue', () => ({
   default: {
-    template: '<section data-testid="chat-area" />',
+    emits: ['search-conversation'],
+    template: '<section data-testid="chat-area"><button data-testid="conversation-search-button" @click="$emit(\'search-conversation\')">search</button></section>',
+  },
+}))
+
+vi.mock('@/components/MessageSearchDialog.vue', () => ({
+  default: {
+    props: ['open', 'scope', 'conversationId', 'conversationTitle'],
+    emits: ['close', 'openResult'],
+    template: `
+      <section
+        v-if="open"
+        data-testid="message-search-dialog"
+        :data-scope="scope"
+        :data-conversation-id="conversationId || ''"
+        :data-conversation-title="conversationTitle || ''"
+      >
+        <button
+          data-testid="message-search-open-chat"
+          @click="$emit('openResult', {
+            source: 'chat_message',
+            id: 'chat:msg-1',
+            body: 'needle',
+            created_at: '2026-05-12T00:00:00Z',
+            actor_id: 'user-2',
+            actor_name: 'Bob',
+            conversation_id: 'channel-1',
+            conversation_title: 'general',
+            conversation_kind: 'channel',
+            conversation_visibility: 'public',
+            message_id: 'msg-1'
+          })"
+        >open chat</button>
+        <button
+          data-testid="message-search-open-task-thread"
+          @click="$emit('openResult', {
+            source: 'task_comment_thread',
+            id: 'task-comment-thread:reply-1',
+            body: 'needle',
+            created_at: '2026-05-12T00:00:00Z',
+            actor_id: 'user-2',
+            actor_name: 'Bob',
+            conversation_id: 'hidden-conv-1',
+            message_id: 'reply-1',
+            thread_root_message_id: 'root-1',
+            task_id: 'task-1',
+            task_public_id: 'TASK-1',
+            task_title: 'Fix search',
+            task_comment_id: 'comment-1'
+          })"
+        >open task thread</button>
+        <button
+          data-testid="message-search-open-broken-task-thread"
+          @click="$emit('openResult', {
+            source: 'task_comment_thread',
+            id: 'task-comment-thread:reply-bad',
+            body: 'needle',
+            created_at: '2026-05-12T00:00:00Z',
+            actor_id: 'user-2',
+            actor_name: 'Bob',
+            conversation_id: 'hidden-conv-1',
+            message_id: 'reply-bad',
+            thread_root_message_id: 'root-1'
+          })"
+        >open broken task thread</button>
+      </section>
+    `,
   },
 }))
 
@@ -1146,5 +1213,136 @@ describe('MainView server unavailable state', () => {
     expect(chatApi.resolveUnreadFeedNotification).toHaveBeenCalledTimes(2)
     expect(chatApi.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-1')
     expect(chatApi.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-2')
+  })
+
+  it('opens global message search from the sidebar and keyboard shortcut', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+    const chatStore = useChatStore()
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    await wrapper.get('[data-testid="sidebar-search-button"]').trigger('click')
+    await flushUi()
+    expect(wrapper.get('[data-testid="message-search-dialog"]').attributes('data-scope')).toBe('global')
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))
+    await flushUi()
+    expect(wrapper.get('[data-testid="message-search-dialog"]').attributes('data-scope')).toBe('global')
+  })
+
+  it('opens conversation-scoped message search from the chat header', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+    const chatStore = useChatStore()
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    await wrapper.get('[data-testid="conversation-search-button"]').trigger('click')
+    await flushUi()
+
+    const dialog = wrapper.get('[data-testid="message-search-dialog"]')
+    expect(dialog.attributes('data-scope')).toBe('conversation')
+    expect(dialog.attributes('data-conversation-id')).toBe('channel-1')
+    expect(dialog.attributes('data-conversation-title')).toBe('#general')
+  })
+
+  it('opens message search chat and task-thread results', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+    const chatStore = useChatStore()
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.messages = {
+      'channel-1': [{
+        id: 'msg-1',
+        channelId: 'channel-1',
+        senderId: 'user-2',
+        senderName: 'Bob',
+        body: 'needle',
+        channelSeq: 1n,
+        threadSeq: 0n,
+        mentionedUserIds: [],
+        mentionEveryone: false,
+        createdAt: '2026-05-12T00:00:00Z',
+        reactions: [],
+        myReactions: [],
+      }],
+    } as any
+    vi.spyOn(chatStore, 'ensureConversationHistory').mockResolvedValue(undefined)
+    const pinnedStore = usePinnedDialogsStore()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+    await wrapper.get('[data-testid="sidebar-search-button"]').trigger('click')
+    await flushUi()
+    await wrapper.get('[data-testid="message-search-open-chat"]').trigger('click')
+    await flushAsyncWork()
+
+    expect(chatStore.chatViewMode).toBe('conversation')
+    expect(chatStore.focusedMessageId).toBe('msg-1')
+
+    await wrapper.get('[data-testid="sidebar-search-button"]').trigger('click')
+    await flushUi()
+    await wrapper.get('[data-testid="message-search-open-task-thread"]').trigger('click')
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('tasks-card')
+    expect(router.currentRoute.value.query.comment).toBe('comment-1')
+    expect(taskRouteStorageMocks.saveLastOpenedTaskPublicId).toHaveBeenCalledWith('TASK-1')
+    expect(chatStore.focusedThreadMessageId).toBe('reply-1')
+    expect(pinnedStore.activeId).toBe('thread:hidden-conv-1:root-1')
+    expect(pinnedStore.activeItem?.title).toBe('Task TASK-1')
+  })
+
+  it('does not pin a task thread search result when task navigation details are missing', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+    const chatStore = useChatStore()
+    const pinnedStore = usePinnedDialogsStore()
+    const showToastSpy = vi.spyOn(chatStore, 'showToast').mockImplementation(() => {})
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+    await wrapper.get('[data-testid="sidebar-search-button"]').trigger('click')
+    await flushUi()
+    await wrapper.get('[data-testid="message-search-open-broken-task-thread"]').trigger('click')
+    await flushAsyncWork()
+
+    expect(showToastSpy).toHaveBeenCalledWith('Search result is missing task details.')
+    expect(router.currentRoute.value.name).toBe('main')
+    expect(chatStore.focusedThreadMessageId).toBe('')
+    expect(pinnedStore.activeId).toBeNull()
   })
 })

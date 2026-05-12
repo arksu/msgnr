@@ -11,8 +11,10 @@
 
       <!-- Search -->
       <button
+        data-testid="sidebar-search-button"
         class="w-full flex items-center gap-2 px-3 py-1.5 mx-1 rounded text-sidebar-text hover:bg-sidebar-hover text-sm transition-colors"
         style="width: calc(100% - 8px)"
+        @click="$emit('search')"
       >
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
@@ -514,7 +516,7 @@ import {
   type UserCustomStatus,
 } from '@/types/userStatus'
 
-defineEmits<{ profile: []; settings: [] }>()
+defineEmits<{ profile: []; settings: []; search: [] }>()
 
 const router = useRouter()
 const authStore = useAuthStore()

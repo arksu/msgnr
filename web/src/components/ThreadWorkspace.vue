@@ -6,7 +6,11 @@
       </div>
 
       <template v-else>
-        <div class="border-b border-chat-border/50 px-2 py-2">
+        <div
+          class="border-b border-chat-border/50 px-2 py-2"
+          :data-thread-message-id="rootMessage.id"
+          :class="chatStore.focusedThreadMessageId === rootMessage.id ? 'bg-amber-500/10 ring-1 ring-inset ring-amber-300/40' : ''"
+        >
           <MessageBubble
             :message="rootMessage"
             :show-header="true"
@@ -28,6 +32,7 @@
             v-for="(reply, idx) in replies"
             :key="reply.id"
             :data-thread-message-id="reply.id"
+            :class="chatStore.focusedThreadMessageId === reply.id ? 'rounded-md bg-amber-500/10 ring-1 ring-inset ring-amber-300/40' : ''"
           >
             <MessageBubble
               :message="reply"
@@ -229,6 +234,12 @@ watch(() => replies.value.length, async () => {
   await nextTick()
   scrollToBottom()
 })
+
+watch(() => [chatStore.focusedThreadMessageId, replies.value.length, rootMessage.value?.id ?? ''] as const, async ([messageId]) => {
+  if (!messageId) return
+  await nextTick()
+  scrollMessageIntoView(messageId)
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   stopTypingPresence(true)

@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import TaskComments from '@/components/tasks/TaskComments.vue'
 import RichTextComposer from '@/components/RichTextComposer.vue'
+import router from '@/router'
 import { useAuthStore } from '@/stores/auth'
 import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import {
@@ -55,6 +56,7 @@ describe('TaskComments', () => {
     vi.clearAllMocks()
 
     vi.mocked(tasksListComments).mockResolvedValue([])
+    ;(router.currentRoute as any).value = { query: {} }
     vi.mocked(tasksFetchCommentAttachmentBlob).mockResolvedValue(new Blob(['preview']))
     vi.mocked(tasksCreateComment).mockResolvedValue({
       id: 'comment-1',
@@ -231,6 +233,46 @@ describe('TaskComments', () => {
     const commentsList = wrapper.get('ul.mb-4')
     const position = editor.element.compareDocumentPosition(commentsList.element)
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('highlights and scrolls the comment named in the route query', async () => {
+    const scrollSpy = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      value: scrollSpy,
+      configurable: true,
+      writable: true,
+    })
+    ;(router.currentRoute as any).value = { query: { comment: 'comment-2' } }
+    vi.mocked(tasksListComments).mockResolvedValue([
+      {
+        id: 'comment-1',
+        task_id: 'task-1',
+        author_id: 'user-1',
+        body: 'first',
+        created_at: '2026-03-10T12:00:00Z',
+        updated_at: '2026-03-10T12:00:00Z',
+        attachments: [],
+      },
+      {
+        id: 'comment-2',
+        task_id: 'task-1',
+        author_id: 'user-1',
+        body: 'searched',
+        created_at: '2026-03-10T12:01:00Z',
+        updated_at: '2026-03-10T12:01:00Z',
+        attachments: [],
+      },
+    ])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await waitForComposer(wrapper)
+    await flushPromises()
+
+    const target = wrapper.get('[data-task-comment-id="comment-2"]')
+    expect(target.classes()).toContain('bg-amber-500/10')
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'center' })
   })
 
   it('inserts selected emoji at cursor into comment textarea', async () => {

@@ -120,7 +120,9 @@
       <li
         v-for="comment in comments"
         :key="comment.id"
-        class="flex gap-3"
+        :data-task-comment-id="comment.id"
+        class="flex gap-3 rounded-lg transition-colors"
+        :class="isHighlightedComment(comment) ? 'bg-amber-500/10 ring-1 ring-inset ring-amber-300/40' : ''"
       >
         <UserAvatar
           :user-id="comment.author_id"
@@ -513,6 +515,10 @@ const editFileInputEl = ref<HTMLInputElement | null>(null)
 const composerRef = ref<InstanceType<typeof RichTextComposer> | null>(null)
 const editComposerRef = ref<InstanceType<typeof RichTextComposer> | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
+const highlightedCommentId = computed(() => {
+  const raw = router.currentRoute.value.query.comment
+  return typeof raw === 'string' ? raw : ''
+})
 
 const editingCommentId = ref<string | null>(null)
 const editBody = ref('')
@@ -846,6 +852,18 @@ function isEditedComment(comment: TaskComment): boolean {
   return new Date(comment.updated_at).getTime() > new Date(comment.created_at).getTime()
 }
 
+function isHighlightedComment(comment: TaskComment): boolean {
+  return highlightedCommentId.value === comment.id
+}
+
+function scrollHighlightedCommentIntoView() {
+  const commentId = highlightedCommentId.value
+  const root = rootEl.value
+  if (!commentId || !root) return
+  const target = root.querySelector<HTMLElement>(`[data-task-comment-id="${commentId}"]`)
+  target?.scrollIntoView({ block: 'center' })
+}
+
 async function openCommentThread(comment: TaskComment) {
   if (openingThreadCommentIds.value.has(comment.id)) return
   openingThreadCommentIds.value.add(comment.id)
@@ -1054,6 +1072,12 @@ function handleEscape(event: KeyboardEvent) {
 watch(comments, () => {
   preloadAttachmentUrls()
 }, { deep: true })
+
+watch(() => [highlightedCommentId.value, comments.value.length] as const, async () => {
+  if (!highlightedCommentId.value) return
+  await nextTick()
+  scrollHighlightedCommentIntoView()
+}, { immediate: true })
 
 watch(() => props.taskId, (next, prev) => {
   closeEmojiPicker()

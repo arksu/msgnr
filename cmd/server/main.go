@@ -25,6 +25,7 @@ import (
 	"msgnr/internal/integrations"
 	"msgnr/internal/logger"
 	"msgnr/internal/push"
+	"msgnr/internal/search"
 	"msgnr/internal/storage"
 	syncsvc "msgnr/internal/sync"
 	"msgnr/internal/tasks"
@@ -78,6 +79,8 @@ func main() {
 	chatSvc := chat.NewService(db.Pool, eventStore)
 	chatSvc.SetLogger(log)
 	chatHandler := chat.NewHandler(chatSvc, authSvc, cfg)
+	searchSvc := search.NewService(db.Pool)
+	searchHandler := search.NewHandler(searchSvc, authSvc, log)
 	callSvc := calls.NewService(db.Pool, eventStore, cfg)
 	callHandler := calls.NewHandler(callSvc)
 	bootstrapSvc := bootstrap.NewService(db.Pool, cfg)
@@ -207,6 +210,7 @@ func main() {
 	mux.HandleFunc("/ready", readinessHandler(db))
 	authHandler.RegisterRoutes(mux)
 	chatHandler.RegisterRoutes(mux)
+	searchHandler.RegisterRoutes(mux)
 	callHandler.RegisterRoutes(mux)
 	adminHandler.RegisterRoutes(mux)
 	tasksHandler.RegisterRoutes(mux)

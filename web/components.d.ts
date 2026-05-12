@@ -26,6 +26,7 @@ declare module 'vue' {
     MembersPanel: typeof import('./src/components/MembersPanel.vue')['default']
     MessageBubble: typeof import('./src/components/MessageBubble.vue')['default']
     MessageInput: typeof import('./src/components/MessageInput.vue')['default']
+    MessageSearchDialog: typeof import('./src/components/MessageSearchDialog.vue')['default']
     MessageTagPicker: typeof import('./src/components/MessageTagPicker.vue')['default']
     MultiSelect: typeof import('./src/components/tasks/MultiSelect.vue')['default']
     NotificationLevelSelector: typeof import('./src/components/NotificationLevelSelector.vue')['default']

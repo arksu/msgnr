@@ -87,7 +87,14 @@
           </svg>
           <span class="hidden sm:inline">Call</span>
         </button>
-        <button class="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
+        <button
+          data-testid="conversation-search-button"
+          class="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+          :disabled="!conversation"
+          title="Search conversation"
+          aria-label="Search conversation"
+          @click="emit('search-conversation')"
+        >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
           </svg>
@@ -336,6 +343,10 @@ import MembersPanel from './MembersPanel.vue'
 import UserAvatar from './UserAvatar.vue'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import { userCustomStatusFromProto, type UserCustomStatus } from '@/types/userStatus'
+
+const emit = defineEmits<{
+  'search-conversation': []
+}>()
 
 const chatStore = useChatStore()
 const pinnedDialogsStore = usePinnedDialogsStore()

@@ -92,7 +92,7 @@
       :min-width="220"
       :max-width="420"
     >
-      <AppSidebar @profile="openSettings" @settings="openAudioSettings" />
+      <AppSidebar @profile="openSettings" @settings="openAudioSettings" @search="openGlobalMessageSearch" />
     </ResizableSidebar>
     <main class="flex-1 min-w-0 min-h-0">
       <ConnectionBanner
@@ -111,7 +111,7 @@
           v-else-if="chatStore.chatViewMode === 'saved'"
           @open-item="openSavedMessageItem"
         />
-        <ChatArea v-else />
+        <ChatArea v-else @search-conversation="openConversationMessageSearch" />
       </template>
       <template v-else-if="appMode === 'task-tracker'">
         <TaskTrackerShell
@@ -143,6 +143,14 @@
       </template>
     </main>
     <PinnedDialogsHost />
+    <MessageSearchDialog
+      :open="messageSearchOpen"
+      :scope="messageSearchScope"
+      :conversation-id="messageSearchConversationId"
+      :conversation-title="messageSearchConversationTitle"
+      @close="messageSearchOpen = false"
+      @open-result="openMessageSearchResult"
+    />
     <div
       v-if="chatStore.toast"
       class="pointer-events-none fixed right-4 bottom-4 z-50 rounded-md border border-red-300/40 bg-red-500/90 px-3 py-2 text-sm text-white shadow-lg"
@@ -521,8 +529,10 @@ import PinnedDialogsHost from '@/components/PinnedDialogsHost.vue'
 import ConnectionBanner from '@/components/ConnectionBanner.vue'
 import UnreadFeedPane from '@/components/UnreadFeedPane.vue'
 import SavedMessagesPane from '@/components/SavedMessagesPane.vue'
+import MessageSearchDialog from '@/components/MessageSearchDialog.vue'
 import CallDock from '@/components/CallDock.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
+import type { MessageSearchResult } from '@/services/http/searchApi'
 import { useTasksStore } from '@/stores/tasks'
 import { useDocumentsStore } from '@/stores/documents'
 import { useComposerEmojiPicker } from '@/composables/useComposerEmojiPicker'
@@ -717,6 +727,8 @@ const showSessionRecoveryBanner = computed(() => authStore.authState === 'AUTH_D
 const handlingIncomingInvite = ref(false)
 const incomingInviteError = ref('')
 const dismissedInviteIds = ref<string[]>([])
+const messageSearchOpen = ref(false)
+const messageSearchScope = ref<'global' | 'conversation'>('global')
 const selectedTemplateFilter = ref<string | null>(null)
 const lastTaskTrackerNonCardRoute = ref<'tasks-list' | 'tasks-kanban'>('tasks-list')
 type DocumentsBrowseRoute =
@@ -786,6 +798,15 @@ const routeDocumentsSearchQuery = computed(() => {
 const documentsSelectedTeamspaceId = computed(() =>
   routeDocumentsTeamspaceId.value || documentsStore.selectedDocument?.teamspace_id || null,
 )
+const messageSearchConversationId = computed(() =>
+  messageSearchScope.value === 'conversation' ? chatStore.activeChannelId : undefined
+)
+const messageSearchConversationTitle = computed(() => {
+  if (messageSearchScope.value !== 'conversation') return undefined
+  const conversation = chatStore.activeConversation
+  if (!conversation) return undefined
+  return conversation.kind === 'dm' ? `@${conversation.title}` : `#${conversation.title}`
+})
 let serviceWorkerMessageHandler: ((event: MessageEvent) => void) | null = null
 
 function setSidebarCollapsed(value: boolean) {
@@ -931,6 +952,54 @@ async function openSavedMessageItem(item: SavedMessageItem) {
     messageId: item.messageId,
     ...(item.threadRootMessageId ? { threadRootMessageId: item.threadRootMessageId } : {}),
   }, { focusThreadMessage: true })
+}
+
+function openGlobalMessageSearch() {
+  messageSearchScope.value = 'global'
+  messageSearchOpen.value = true
+}
+
+function openConversationMessageSearch() {
+  if (!chatStore.activeChannelId) return
+  messageSearchScope.value = 'conversation'
+  messageSearchOpen.value = true
+}
+
+async function openTaskCommentSearchTarget(item: MessageSearchResult): Promise<boolean> {
+  if (!item.task_public_id || !item.task_comment_id) {
+    chatStore.showToast('Search result is missing task details.')
+    return false
+  }
+  const taskSlug = canonicalTaskSlugFromPublicId(item.task_public_id)
+  saveLastOpenedTaskPublicId(item.task_public_id)
+  setSidebarCollapsed(false)
+  await router.push({
+    name: 'tasks-card',
+    params: { taskSlug },
+    query: { comment: item.task_comment_id },
+  })
+  return true
+}
+
+async function openMessageSearchResult(item: MessageSearchResult) {
+  if (item.source === 'chat_message') {
+    if (!item.conversation_id || !item.message_id) return
+    await openChatTarget({
+      conversationId: item.conversation_id,
+      messageId: item.message_id,
+      ...(item.thread_root_message_id ? { threadRootMessageId: item.thread_root_message_id } : {}),
+    }, { focusThreadMessage: true })
+    return
+  }
+
+  const openedTask = await openTaskCommentSearchTarget(item)
+  if (!openedTask) return
+  if (item.source !== 'task_comment_thread') return
+  if (!item.conversation_id || !item.thread_root_message_id || !item.message_id) return
+
+  const title = item.task_public_id ? `Task ${item.task_public_id}` : 'Task'
+  chatStore.focusThreadMessage(item.message_id)
+  pinnedDialogsStore.ensureThreadPinned(item.conversation_id, item.thread_root_message_id, title)
 }
 
 function canonicalTaskSlugFromPublicId(publicId: string): string {
@@ -1773,6 +1842,11 @@ watch(() => wsStore.state, async (state) => {
 })
 
 function handleGlobalKeydown(event: KeyboardEvent) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    openGlobalMessageSearch()
+    return
+  }
   if ((event.metaKey || event.ctrlKey) && event.key === 'd') {
     if (!callStore.activeCallId) return
     event.preventDefault()

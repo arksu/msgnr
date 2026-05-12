@@ -207,6 +207,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_thread_seq
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_msg_id
   ON messages(channel_id, sender_id, client_msg_id);
 
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX IF NOT EXISTS idx_messages_body_trgm
+  ON messages USING gin (body gin_trgm_ops);
+
 -- ---------------------------------------------------------------------------
 -- Message attachments
 -- ---------------------------------------------------------------------------
@@ -1044,6 +1049,9 @@ CREATE INDEX IF NOT EXISTS idx_task_comment_task_created_at
 CREATE INDEX IF NOT EXISTS idx_task_comment_thread_root_message_id
     ON task_comment (thread_root_message_id)
     WHERE thread_root_message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_task_comment_body_trgm
+    ON task_comment USING gin (body gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS task_comment_attachment (
     id           uuid          PRIMARY KEY DEFAULT gen_random_uuid(),

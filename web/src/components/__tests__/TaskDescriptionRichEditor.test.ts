@@ -420,6 +420,38 @@ describe('TaskDescriptionRichEditor', () => {
     expect(wrapper.find('[data-testid="task-description-editor-content"] .ProseMirror pre .hljs-keyword').exists()).toBe(true)
   })
 
+  it('autodetects command and JSON output blocks in the editable rendered description', async () => {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: [
+          '```',
+          'curl --request POST \\',
+          "     --url 'https://uat.com/oauth/token?form=2' \\",
+          "     --header 'Content-Type: application/x-www-form-urlencoded' \\",
+          "     --header 'accept: application/json' \\",
+          '     --data grant_type=client_credentials',
+          '```',
+          '',
+          '```',
+          '{"error":"invalid_scope","error_description":"The requested scope is invalid, unknown, or malformed."}%',
+          '```',
+        ].join('\n'),
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    await flushPromises()
+
+    const codeBlocks = wrapper.findAll('[data-testid="task-description-editor-content"] .ProseMirror pre')
+    expect(codeBlocks).toHaveLength(2)
+    expect(codeBlocks[0]!.classes()).toContain('language-shell')
+    expect(codeBlocks[0]!.attributes('data-language')).toBe('Shell')
+    expect(codeBlocks[1]!.classes()).toContain('language-json')
+    expect(codeBlocks[1]!.attributes('data-language')).toBe('JSON')
+    expect(wrapper.find('[data-testid="task-description-editor-content"] .ProseMirror pre.language-json .hljs-attr').exists()).toBe(true)
+  })
+
   it('keeps rendered mode editable after local collab content is cleared', async () => {
     const collabDoc = new Y.Doc()
     const collabFragment = collabDoc.getXmlFragment('task_description')

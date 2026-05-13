@@ -87,6 +87,7 @@
   .markdown-body pre.language-shell { --markdown-code-accent: #84cc16; }
   .markdown-body pre.language-typescript { --markdown-code-accent: #60a5fa; }
   .markdown-body pre.language-python { --markdown-code-accent: #facc15; }
+  .markdown-body pre.language-json { --markdown-code-accent: #fb7185; }
 
   .markdown-body .hljs-comment,
   .markdown-body .hljs-quote {

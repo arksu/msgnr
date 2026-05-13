@@ -10,6 +10,7 @@ describe('highlightCodeToHtml', () => {
     ['shell', 'if [ -f package.json ]; then echo "ok"; fi', 'language-shell'],
     ['typescript', 'const value: string = "hello"', 'language-typescript'],
     ['javascript', 'const value = "hello"', 'language-javascript'],
+    ['json', '{"error":"invalid_scope"}', 'language-json'],
     ['python', 'def greet(name):\n    return f"hi {name}"', 'language-python'],
   ])('highlights explicit %s fences', (language, code, className) => {
     const html = highlightCodeToHtml(code, language)
@@ -50,6 +51,31 @@ describe('highlightCodeToHtml', () => {
 
     expect(html).toContain(className)
     expect(html).toContain('<span class="hljs-')
+  })
+
+  it('autodetects unlabeled curl commands as shell', () => {
+    const html = highlightCodeToHtml(`curl --request POST \\
+     --url 'https://uat.com/oauth/token?form=2' \\
+     --header 'Content-Type: application/x-www-form-urlencoded' \\
+     --header 'accept: application/json' \\
+     --data client_id=3b1afc1086032e3 \\
+     --data client_secret=d815e0039bbac19c3ae2ba \\
+     --data grant_type=client_credentials \\
+     --data scope=create_payout_transactions`)
+
+    expect(html).toContain('language-shell')
+    expect(html).toContain('data-language="Shell"')
+    expect(html).not.toContain('language-sql')
+    expect(html).toContain('<span class="hljs-')
+  })
+
+  it('autodetects JSON output with a trailing shell prompt marker', () => {
+    const html = highlightCodeToHtml('{"error":"invalid_scope","error_description":"The requested scope is invalid, unknown, or malformed."}%')
+
+    expect(html).toContain('language-json')
+    expect(html).toContain('data-language="JSON"')
+    expect(html).not.toContain('language-kotlin')
+    expect(html).toContain('<span class="hljs-attr">&quot;error&quot;</span>')
   })
 
   it('falls back to escaped plain code for low-confidence autodetection', () => {

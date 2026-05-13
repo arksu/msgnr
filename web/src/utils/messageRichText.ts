@@ -1,5 +1,6 @@
 import type { JSONContent } from '@tiptap/core'
 import type { MessageEntity } from '@/stores/chat'
+import { escapeHtml } from '@/utils/html'
 import { renderMarkdownToHtml } from '@/utils/markdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 
@@ -71,15 +72,6 @@ export function tiptapJsonToMessagePayload(doc: JSONContent | null | undefined):
     body,
     entities,
   }
-}
-
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
 }
 
 export function renderMessageEditorHtml(body: string, entities: MessageEntity[]): string {

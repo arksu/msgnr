@@ -62,4 +62,12 @@ describe('task markdown helpers', () => {
     expect(html).toContain('<td>one<br>two</td>')
     expect(html).not.toContain('&lt;br&gt;')
   })
+
+  it('renders fenced code with language-aware syntax highlighting', () => {
+    const html = renderTaskMarkdownToHtml('```python\ndef hello(name):\n    return f"hi {name}"\n```')
+
+    expect(html).toContain('language-python')
+    expect(html).toContain('data-language="Python"')
+    expect(html).toContain('<span class="hljs-keyword">def</span>')
+  })
 })

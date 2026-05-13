@@ -338,6 +338,20 @@ function buildStyles(): string {
       transform: none !important;
       vertical-align: top !important;
     }
+    .task-pdf-export .markdown-body pre[data-language] {
+      padding-top: 26px;
+    }
+    .task-pdf-export .markdown-body pre[data-language]::before {
+      content: attr(data-language);
+      position: absolute;
+      top: 8px;
+      right: 12px;
+      color: #555555;
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 1;
+      text-transform: uppercase;
+    }
     .task-pdf-export .markdown-body pre code {
       display: block !important;
       position: static !important;
@@ -411,6 +425,69 @@ function buildStyles(): string {
       border: 0 !important;
       color: #000000 !important;
       border-radius: 0 !important;
+    }
+    .task-pdf-export .markdown-body .hljs-comment,
+    .task-pdf-export .markdown-body .hljs-quote {
+      color: #666666 !important;
+      font-style: italic;
+    }
+    .task-pdf-export .markdown-body .hljs-keyword,
+    .task-pdf-export .markdown-body .hljs-selector-tag,
+    .task-pdf-export .markdown-body .hljs-subst {
+      color: #004f9e !important;
+      font-weight: 700;
+    }
+    .task-pdf-export .markdown-body .hljs-string,
+    .task-pdf-export .markdown-body .hljs-doctag,
+    .task-pdf-export .markdown-body .hljs-regexp {
+      color: #116329 !important;
+    }
+    .task-pdf-export .markdown-body .hljs-number,
+    .task-pdf-export .markdown-body .hljs-literal,
+    .task-pdf-export .markdown-body .hljs-symbol,
+    .task-pdf-export .markdown-body .hljs-bullet {
+      color: #8a4b00 !important;
+    }
+    .task-pdf-export .markdown-body .hljs-title,
+    .task-pdf-export .markdown-body .hljs-title.function_,
+    .task-pdf-export .markdown-body .hljs-function .hljs-title {
+      color: #005f73 !important;
+      font-weight: 700;
+    }
+    .task-pdf-export .markdown-body .hljs-title.class_,
+    .task-pdf-export .markdown-body .hljs-type,
+    .task-pdf-export .markdown-body .hljs-class .hljs-title {
+      color: #5f3dc4 !important;
+      font-weight: 700;
+    }
+    .task-pdf-export .markdown-body .hljs-attr,
+    .task-pdf-export .markdown-body .hljs-attribute,
+    .task-pdf-export .markdown-body .hljs-property,
+    .task-pdf-export .markdown-body .hljs-variable,
+    .task-pdf-export .markdown-body .hljs-template-variable {
+      color: #9d174d !important;
+    }
+    .task-pdf-export .markdown-body .hljs-built_in,
+    .task-pdf-export .markdown-body .hljs-builtin-name,
+    .task-pdf-export .markdown-body .hljs-name {
+      color: #0369a1 !important;
+    }
+    .task-pdf-export .markdown-body .hljs-operator,
+    .task-pdf-export .markdown-body .hljs-punctuation,
+    .task-pdf-export .markdown-body .hljs-params {
+      color: #222222 !important;
+    }
+    .task-pdf-export .markdown-body .hljs-meta,
+    .task-pdf-export .markdown-body .hljs-section,
+    .task-pdf-export .markdown-body .hljs-selector-id,
+    .task-pdf-export .markdown-body .hljs-selector-class {
+      color: #9f1239 !important;
+    }
+    .task-pdf-export .markdown-body .hljs-addition {
+      color: #116329 !important;
+    }
+    .task-pdf-export .markdown-body .hljs-deletion {
+      color: #991b1b !important;
     }
   `
 }

@@ -762,6 +762,26 @@ describe('TaskComments', () => {
     expect(link.attributes('href')).toBe('https://example.com')
   })
 
+  it('renders fenced code blocks with syntax highlighting', async () => {
+    vi.mocked(tasksListComments).mockResolvedValue([{
+      id: 'comment-code',
+      task_id: 'task-1',
+      author_id: 'user-1',
+      body: '```sql\nSELECT id FROM users\n```',
+      created_at: '2026-03-10T12:00:00Z',
+      updated_at: '2026-03-10T12:00:00Z',
+      attachments: [],
+    }])
+
+    const wrapper = mount(TaskComments, {
+      props: { taskId: 'task-1' },
+    })
+    await waitForComposer(wrapper)
+
+    expect(wrapper.find('.markdown-body pre code.language-sql').exists()).toBe(true)
+    expect(wrapper.html()).toContain('<span class="hljs-keyword">SELECT</span>')
+  })
+
   it('opens a task comment chat thread and pins it', async () => {
     vi.mocked(tasksListComments).mockResolvedValue([{
       id: 'comment-thread',

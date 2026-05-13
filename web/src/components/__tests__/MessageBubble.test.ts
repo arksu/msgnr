@@ -773,6 +773,28 @@ describe('MessageBubble reactions', () => {
     wrapper.unmount()
   })
 
+  it('renders fenced code blocks with syntax highlighting', async () => {
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      body: '```typescript\nconst answer: number = 42\n```',
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await flushAll()
+
+    const code = wrapper.get('.markdown-body pre code')
+    expect(code.classes()).toContain('hljs')
+    expect(code.classes()).toContain('language-typescript')
+    expect(wrapper.html()).toContain('<span class="hljs-keyword">const</span>')
+
+    wrapper.unmount()
+  })
+
   it('opens a direct message when clicking a user mention in the rendered message body', async () => {
     const chat = useChatStore()
     const openDirectMessageSpy = vi.spyOn(chat, 'openDirectMessage').mockImplementation(() => {})

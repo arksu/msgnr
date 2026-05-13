@@ -63,4 +63,16 @@ describe('renderMessageBodyWithEntities', () => {
     expect(html).toContain('<li><button')
     expect(html).toContain('<li>third</li>')
   })
+
+  it('keeps syntax highlighting when rendering messages with entities', () => {
+    const body = 'Review @Alice\n\n```sql\nSELECT id FROM users WHERE active = true;\n```'
+    const start = body.indexOf('@Alice')
+    const html = renderMessageBodyWithEntities(body, [
+      { kind: 'user', targetId: 'user-1', label: '@Alice', href: '', start, end: start + '@Alice'.length },
+    ])
+
+    expect(html).toContain('data-message-entity-kind="user"')
+    expect(html).toContain('language-sql')
+    expect(html).toContain('<span class="hljs-keyword">SELECT</span>')
+  })
 })

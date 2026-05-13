@@ -1,13 +1,8 @@
-import { Marked } from 'marked'
+import { Marked, type Tokens } from 'marked'
+import { highlightCodeToHtml } from '@/utils/codeHighlight'
+import { escapeHtml } from '@/utils/html'
 
-export function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
+export { escapeHtml }
 
 function renderHtmlToken(token: { text: string }): string {
   if (/^<br\s*\/?>$/i.test(token.text)) {
@@ -17,10 +12,15 @@ function renderHtmlToken(token: { text: string }): string {
   return escapeHtml(token.text)
 }
 
+function renderCodeToken(token: Tokens.Code): string {
+  return highlightCodeToHtml(token.text, token.lang)
+}
+
 const markdown = new Marked({
   gfm: true,
   breaks: true,
   renderer: {
+    code: renderCodeToken,
     html: renderHtmlToken,
   },
 })

@@ -80,6 +80,19 @@ describe('AttachmentMarkdownContent', () => {
     expect(window.open).toHaveBeenCalledWith('https://example.com/docs', '_blank')
   })
 
+  it('renders fenced code blocks with syntax highlighting', async () => {
+    const wrapper = mount(AttachmentMarkdownContent, {
+      props: {
+        markdown: '```go\npackage main\nfunc main() {}\n```',
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('.markdown-body pre code.language-go').exists()).toBe(true)
+    expect(wrapper.html()).toContain('<span class="hljs-keyword">package</span>')
+  })
+
   it('does not navigate the current tab when the popup is blocked', async () => {
     window.open = vi.fn(() => null)
 

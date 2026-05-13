@@ -1,6 +1,18 @@
 @layer components {
   .markdown-body {
     @apply leading-relaxed break-words;
+    --markdown-code-token-keyword: #93c5fd;
+    --markdown-code-token-string: #86efac;
+    --markdown-code-token-number: #fbbf24;
+    --markdown-code-token-title: #67e8f9;
+    --markdown-code-token-type: #c4b5fd;
+    --markdown-code-token-attr: #f9a8d4;
+    --markdown-code-token-builtin: #7dd3fc;
+    --markdown-code-token-meta: #fda4af;
+    --markdown-code-token-addition: #86efac;
+    --markdown-code-token-addition-bg: rgb(22 101 52 / 0.18);
+    --markdown-code-token-deletion: #fca5a5;
+    --markdown-code-token-deletion-bg: rgb(127 29 29 / 0.18);
   }
 
   .markdown-body p,
@@ -40,11 +52,117 @@
   }
 
   .markdown-body pre {
+    --markdown-code-accent: rgb(var(--color-accent));
     @apply bg-chat-input border border-chat-border text-app-text rounded-md p-3 overflow-x-auto;
+    border-left-width: 3px;
+    border-left-color: var(--markdown-code-accent);
+    position: relative;
+  }
+
+  .markdown-body pre[data-language] {
+    padding-top: 1.9rem;
+  }
+
+  .markdown-body pre[data-language]::before {
+    content: attr(data-language);
+    position: absolute;
+    top: 0.55rem;
+    right: 0.75rem;
+    color: rgb(var(--color-text-muted));
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0;
+    text-transform: uppercase;
   }
 
   .markdown-body pre code {
     @apply block p-0 border-0 bg-transparent text-xs text-app-text;
+  }
+
+  .markdown-body pre.language-sql { --markdown-code-accent: #38bdf8; }
+  .markdown-body pre.language-kotlin { --markdown-code-accent: #a78bfa; }
+  .markdown-body pre.language-java { --markdown-code-accent: #f97316; }
+  .markdown-body pre.language-go { --markdown-code-accent: #22d3ee; }
+  .markdown-body pre.language-shell { --markdown-code-accent: #84cc16; }
+  .markdown-body pre.language-typescript { --markdown-code-accent: #60a5fa; }
+  .markdown-body pre.language-python { --markdown-code-accent: #facc15; }
+
+  .markdown-body .hljs-comment,
+  .markdown-body .hljs-quote {
+    color: rgb(var(--color-text-muted));
+    font-style: italic;
+  }
+
+  .markdown-body .hljs-keyword,
+  .markdown-body .hljs-selector-tag,
+  .markdown-body .hljs-subst {
+    color: var(--markdown-code-token-keyword);
+    font-weight: 600;
+  }
+
+  .markdown-body .hljs-string,
+  .markdown-body .hljs-doctag,
+  .markdown-body .hljs-regexp {
+    color: var(--markdown-code-token-string);
+  }
+
+  .markdown-body .hljs-number,
+  .markdown-body .hljs-literal,
+  .markdown-body .hljs-symbol,
+  .markdown-body .hljs-bullet {
+    color: var(--markdown-code-token-number);
+  }
+
+  .markdown-body .hljs-title,
+  .markdown-body .hljs-title.function_,
+  .markdown-body .hljs-function .hljs-title {
+    color: var(--markdown-code-token-title);
+    font-weight: 600;
+  }
+
+  .markdown-body .hljs-title.class_,
+  .markdown-body .hljs-type,
+  .markdown-body .hljs-class .hljs-title {
+    color: var(--markdown-code-token-type);
+    font-weight: 600;
+  }
+
+  .markdown-body .hljs-attr,
+  .markdown-body .hljs-attribute,
+  .markdown-body .hljs-property,
+  .markdown-body .hljs-variable,
+  .markdown-body .hljs-template-variable {
+    color: var(--markdown-code-token-attr);
+  }
+
+  .markdown-body .hljs-built_in,
+  .markdown-body .hljs-builtin-name,
+  .markdown-body .hljs-name {
+    color: var(--markdown-code-token-builtin);
+  }
+
+  .markdown-body .hljs-operator,
+  .markdown-body .hljs-punctuation,
+  .markdown-body .hljs-params {
+    color: rgb(var(--color-text-secondary));
+  }
+
+  .markdown-body .hljs-meta,
+  .markdown-body .hljs-section,
+  .markdown-body .hljs-selector-id,
+  .markdown-body .hljs-selector-class {
+    color: var(--markdown-code-token-meta);
+  }
+
+  .markdown-body .hljs-addition {
+    color: var(--markdown-code-token-addition);
+    background: var(--markdown-code-token-addition-bg);
+  }
+
+  .markdown-body .hljs-deletion {
+    color: var(--markdown-code-token-deletion);
+    background: var(--markdown-code-token-deletion-bg);
   }
 
   .markdown-body a {
@@ -62,4 +180,19 @@
   .markdown-body td {
     @apply border border-chat-border px-3 py-2 text-app-secondaryText align-top;
   }
+}
+
+html[data-color-scheme='light'] .markdown-body {
+  --markdown-code-token-keyword: #1d4ed8;
+  --markdown-code-token-string: #166534;
+  --markdown-code-token-number: #92400e;
+  --markdown-code-token-title: #0e7490;
+  --markdown-code-token-type: #6d28d9;
+  --markdown-code-token-attr: #be185d;
+  --markdown-code-token-builtin: #0369a1;
+  --markdown-code-token-meta: #be123c;
+  --markdown-code-token-addition: #166534;
+  --markdown-code-token-addition-bg: rgb(187 247 208 / 0.55);
+  --markdown-code-token-deletion: #991b1b;
+  --markdown-code-token-deletion-bg: rgb(254 202 202 / 0.55);
 }

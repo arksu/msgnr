@@ -1,9 +1,11 @@
 import MarkdownIt from 'markdown-it'
+import { highlightCodeToHtml } from '@/utils/codeHighlight'
 
 const taskMarkdown = new MarkdownIt({
   html: false,
   linkify: true,
   breaks: true,
+  highlight: (code, language) => highlightCodeToHtml(code, language),
 })
 
 const TASK_LIST_MARKER_RE = /^(\s*)\[( |x|X)\]\s+/

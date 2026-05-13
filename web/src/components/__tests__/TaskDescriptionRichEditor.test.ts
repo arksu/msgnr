@@ -365,6 +365,61 @@ describe('TaskDescriptionRichEditor', () => {
     expect(wrapper.get('[data-testid="task-description-editor-fallback"] .markdown-body strong').text()).toBe('Bold')
   })
 
+  it('highlights fenced code in the rendered markdown fallback', async () => {
+    const collabDoc = new Y.Doc()
+    collabDoc.getXmlFragment('task_description')
+
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '```python\ndef hello(name):\n    return name\n```',
+        collabDoc,
+        allowLocalDraftSeed: false,
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    const code = wrapper.get('[data-testid="task-description-editor-fallback"] .markdown-body pre code')
+    expect(code.classes()).toContain('hljs')
+    expect(code.classes()).toContain('language-python')
+    expect(wrapper.html()).toContain('<span class="hljs-keyword">def</span>')
+  })
+
+  it('highlights fenced code in the editable rendered description', async () => {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '```go\npackage main\nfunc main() {}\n```',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    await flushPromises()
+
+    const pre = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror pre')
+    expect(pre.classes()).toContain('language-go')
+    expect(pre.attributes('data-language')).toBe('Go')
+    expect(wrapper.find('[data-testid="task-description-editor-content"] .ProseMirror pre .hljs-keyword').exists()).toBe(true)
+  })
+
+  it('autodetects unlabeled code blocks in the editable rendered description', async () => {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '```\nSELECT id FROM users WHERE active = true;\n```',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    await flushPromises()
+
+    const pre = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror pre')
+    expect(pre.classes()).toContain('language-sql')
+    expect(pre.attributes('data-language')).toBe('SQL')
+    expect(wrapper.find('[data-testid="task-description-editor-content"] .ProseMirror pre .hljs-keyword').exists()).toBe(true)
+  })
+
   it('keeps rendered mode editable after local collab content is cleared', async () => {
     const collabDoc = new Y.Doc()
     const collabFragment = collabDoc.getXmlFragment('task_description')

@@ -292,6 +292,7 @@ import {
 import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
+import { CodeBlockHighlightExtension } from '@/editor/codeBlockHighlight'
 import { FenceOnEnterExtension } from '@/editor/richTextShortcuts'
 import { useChatStore } from '@/stores/chat'
 import { NotificationLevel } from '@/shared/proto/packets_pb'
@@ -731,6 +732,7 @@ const extensions = computed(() => {
       link: false,
     }),
     FenceOnEnterExtension,
+    CodeBlockHighlightExtension,
     Link.configure({
       openOnClick: false,
       autolink: false,

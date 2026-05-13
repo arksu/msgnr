@@ -8,27 +8,37 @@ import kotlin from 'highlight.js/lib/languages/kotlin'
 import python from 'highlight.js/lib/languages/python'
 import sql from 'highlight.js/lib/languages/sql'
 import typescript from 'highlight.js/lib/languages/typescript'
+import type { LanguageFn } from 'highlight.js'
 import { escapeHtml } from '@/utils/html'
 
-const AUTO_DETECT_LANGUAGES = ['sql', 'kotlin', 'java', 'go', 'bash', 'typescript', 'javascript', 'python', 'json']
+const AUTO_DETECT_LANGUAGES = ['sql', 'kotlin', 'java', 'go', 'bash', 'typescript', 'javascript', 'python', 'json', 'mermaid', 'diagram']
 const MIN_AUTO_DETECT_RELEVANCE = 3
 const TRAILING_JSON_PROMPT_MARKER = /([}\]])%$/
 const SHELL_COMMAND_START = /^(?:[$#>]\s*)?(?:curl|wget|http|git|docker|kubectl|helm|npm|pnpm|yarn|node|npx|go|python|python3|pip|pip3|ssh|scp|rsync|make|cmake|cargo|java|mvn|gradle|grep|rg|sed|awk|jq|cat|less|tail|head|echo|printf|cd|ls|cp|mv|rm|mkdir|chmod|chown|sudo|env|export|\.[/]|[/][\w./-]+)(?:\s|$)/
+const MERMAID_DIAGRAM_START = /^(?:graph|flowchart|sequenceDiagram|classDiagram|classDiagram-v2|stateDiagram|stateDiagram-v2|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|quadrantChart|requirementDiagram|C4Context|C4Container|C4Component|C4Dynamic|block-beta|architecture-beta|packet-beta)\b/
+const BOX_DRAWING_MARKS = /[┌┐└┘├┤┬┴┼─│╭╮╰╯═║╔╗╚╝╠╣╦╩╬]/g
+const FLOW_ARROW_MARKS = /[▼▲▶◀→←↔⬅➡]/g
 
 const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
   bash: 'Shell',
+  diagram: 'Diagram',
   go: 'Go',
   java: 'Java',
   javascript: 'JavaScript',
   json: 'JSON',
   kotlin: 'Kotlin',
+  mermaid: 'Mermaid',
   python: 'Python',
   sql: 'SQL',
   typescript: 'TypeScript',
 }
 
 const LANGUAGE_ALIASES: Record<string, string> = {
+  ascii: 'diagram',
+  box: 'diagram',
+  flow: 'diagram',
   js: 'javascript',
+  mmd: 'mermaid',
   postgres: 'sql',
   postgresql: 'sql',
   psql: 'sql',
@@ -45,12 +55,152 @@ export interface HighlightedCode {
   displayName: string
 }
 
+const diagram: LanguageFn = () => ({
+  name: 'Diagram',
+  contains: [
+    {
+      className: 'comment',
+      begin: /^\s*(?:#|\/\/).+$/,
+      relevance: 0,
+    },
+    {
+      className: 'string',
+      begin: /"[^"\n]*"/,
+    },
+    {
+      className: 'keyword',
+      begin: /\b(?:SCREEN|Screen|User|clicks|Passed|Failed|Branch|Ticket|Operator|Admin|Alert|Cooldown|Continue|Confirm|Back|Created|Notification|Main Menu|Detail Screen)\b/,
+    },
+    {
+      className: 'operator',
+      begin: /[┌┐└┘├┤┬┴┼─│╭╮╰╯═║╔╗╚╝╠╣╦╩╬▼▲▶◀→←↔⬅➡]+/,
+      relevance: 0,
+    },
+    {
+      className: 'number',
+      begin: /\b\d+[A-Z]?\b/,
+      relevance: 0,
+    },
+    {
+      className: 'title',
+      begin: /\[[^\]\n]+\]/,
+      relevance: 0,
+    },
+  ],
+})
+
+const mermaid: LanguageFn = hljs => ({
+  name: 'Mermaid',
+  case_insensitive: false,
+  keywords: {
+    keyword: [
+      'accDescr',
+      'accTitle',
+      'activate',
+      'actor',
+      'alt',
+      'and',
+      'architecture-beta',
+      'autonumber',
+      'block-beta',
+      'break',
+      'C4Component',
+      'C4Container',
+      'C4Context',
+      'C4Dynamic',
+      'class',
+      'classDef',
+      'classDiagram',
+      'classDiagram-v2',
+      'click',
+      'create',
+      'critical',
+      'dateFormat',
+      'deactivate',
+      'destroy',
+      'direction',
+      'else',
+      'end',
+      'erDiagram',
+      'flowchart',
+      'gantt',
+      'gitGraph',
+      'graph',
+      'journey',
+      'linkStyle',
+      'loop',
+      'mindmap',
+      'namespace',
+      'note',
+      'opt',
+      'option',
+      'packet-beta',
+      'par',
+      'participant',
+      'pie',
+      'quadrantChart',
+      'requirementDiagram',
+      'rect',
+      'section',
+      'sequenceDiagram',
+      'state',
+      'stateDiagram',
+      'stateDiagram-v2',
+      'style',
+      'subgraph',
+      'timeline',
+      'title',
+    ].join(' '),
+    literal: 'true false',
+    type: 'BT LR RL TB TD',
+  },
+  contains: [
+    hljs.COMMENT(/%%/, /$/),
+    hljs.QUOTE_STRING_MODE,
+    hljs.APOS_STRING_MODE,
+    {
+      className: 'meta',
+      begin: /^---$/,
+      end: /^---$/,
+      contains: [
+        hljs.QUOTE_STRING_MODE,
+        hljs.APOS_STRING_MODE,
+        {
+          className: 'attr',
+          begin: /^[\w-]+(?=\s*:)/,
+        },
+      ],
+    },
+    {
+      className: 'operator',
+      begin: /-{1,3}(?:>|x|o)?|={1,3}>|<--?>|<->|\.{1,2}->|::|:|\|/,
+      relevance: 0,
+    },
+    {
+      className: 'attr',
+      begin: /\b[\w-]+(?=\s*[:=])/,
+    },
+    {
+      className: 'number',
+      begin: /\b\d+(?:\.\d+)?%?\b/,
+      relevance: 0,
+    },
+    {
+      className: 'title',
+      begin: /\b[A-Za-z_][\w-]*(?=\s*(?:\[|\(|\{|--|==|::|:))/,
+      relevance: 0,
+    },
+  ],
+})
+
 hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('diagram', diagram)
 hljs.registerLanguage('go', go)
 hljs.registerLanguage('java', java)
 hljs.registerLanguage('javascript', javascript)
 hljs.registerLanguage('json', json)
 hljs.registerLanguage('kotlin', kotlin)
+hljs.registerLanguage('mermaid', mermaid)
 hljs.registerLanguage('python', python)
 hljs.registerLanguage('sql', sql)
 hljs.registerLanguage('typescript', typescript)
@@ -114,9 +264,25 @@ function looksLikeShell(code: string): boolean {
   return hasContinuation && hasCliOptionLine
 }
 
+function looksLikeMermaid(code: string): boolean {
+  const firstLine = code.trim().split(/\r?\n/).find(line => line.trim())?.trim() ?? ''
+  return MERMAID_DIAGRAM_START.test(firstLine)
+}
+
+function looksLikeBoxDrawingDiagram(code: string): boolean {
+  const boxMarkCount = code.match(BOX_DRAWING_MARKS)?.length ?? 0
+  if (boxMarkCount < 8) return false
+
+  const arrowMarkCount = code.match(FLOW_ARROW_MARKS)?.length ?? 0
+  const hasDiagramWords = /\b(?:SCREEN|User clicks|flow|Branch|Passed|Failed|Back|Continue|Confirm|Alert)\b/i.test(code)
+  return arrowMarkCount > 0 || hasDiagramWords
+}
+
 function heuristicLanguage(code: string): string {
   if (looksLikeJson(code)) return 'json'
   if (looksLikeShell(code)) return 'bash'
+  if (looksLikeMermaid(code)) return 'mermaid'
+  if (looksLikeBoxDrawingDiagram(code)) return 'diagram'
   return ''
 }
 

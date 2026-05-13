@@ -99,9 +99,10 @@ type JoinCallTokenResult struct {
 }
 
 type InviteActionParams struct {
-	InviteID  uuid.UUID
-	ActorID   uuid.UUID
-	ActorRole string
+	InviteID           uuid.UUID
+	ActorID            uuid.UUID
+	ActorRole          string
+	LeaveExistingCalls bool
 }
 
 type InviteActionResult struct {
@@ -436,6 +437,11 @@ func (s *Service) AcceptInvite(ctx context.Context, p InviteActionParams) (Invit
 		return InviteActionResult{}, ErrInviteNotActive
 	}
 
+	beforeUserCount, err := s.activeCallCountForUserTx(ctx, tx, p.ActorID)
+	if err != nil {
+		return InviteActionResult{}, err
+	}
+
 	if _, err := tx.Exec(ctx, `
 		UPDATE call_invites
 		   SET state = 'accepted',
@@ -445,7 +451,16 @@ func (s *Service) AcceptInvite(ctx context.Context, p InviteActionParams) (Invit
 		return InviteActionResult{}, fmt.Errorf("calls.AcceptInvite update invite: %w", err)
 	}
 
-	if err := s.upsertParticipantAndEmitPresenceTx(ctx, tx, invite.CallID, p.ActorID); err != nil {
+	if p.LeaveExistingCalls {
+		if err := s.leaveOtherActiveCallsForUserTx(ctx, tx, p.ActorID, invite.CallID); err != nil {
+			return InviteActionResult{}, err
+		}
+	}
+
+	if err := s.upsertParticipantTx(ctx, tx, invite.CallID, p.ActorID); err != nil {
+		return InviteActionResult{}, err
+	}
+	if err := s.emitUserCallPresenceIfChangedTx(ctx, tx, p.ActorID, beforeUserCount); err != nil {
 		return InviteActionResult{}, err
 	}
 
@@ -1036,6 +1051,87 @@ func (s *Service) isActiveParticipantTx(ctx context.Context, tx pgx.Tx, callID, 
 		return false, fmt.Errorf("calls.isActiveParticipantTx: %w", err)
 	}
 	return inCall, nil
+}
+
+func (s *Service) leaveOtherActiveCallsForUserTx(ctx context.Context, tx pgx.Tx, userID, targetCallID uuid.UUID) error {
+	rows, err := tx.Query(ctx, `
+		SELECT c.id, c.channel_id
+		  FROM calls c
+		  JOIN call_participants cp ON cp.call_id = c.id
+		 WHERE cp.user_id = $1
+		   AND cp.left_at IS NULL
+		   AND c.status = 'active'
+		   AND c.id <> $2
+		 ORDER BY c.id ASC
+		   FOR UPDATE OF c, cp`, userID, targetCallID)
+	if err != nil {
+		return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx query calls: %w", err)
+	}
+	defer rows.Close()
+
+	type callRef struct {
+		id             uuid.UUID
+		conversationID uuid.UUID
+	}
+	refs := make([]callRef, 0, 4)
+	callIDs := make([]uuid.UUID, 0, 4)
+	for rows.Next() {
+		var ref callRef
+		if err := rows.Scan(&ref.id, &ref.conversationID); err != nil {
+			return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx scan call: %w", err)
+		}
+		refs = append(refs, ref)
+		callIDs = append(callIDs, ref.id)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx rows: %w", err)
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE call_participants
+		   SET left_at = now()
+		 WHERE user_id = $1
+		   AND call_id = ANY($2::uuid[])
+		   AND left_at IS NULL`, userID, callIDs); err != nil {
+		return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx leave participants: %w", err)
+	}
+
+	for _, ref := range refs {
+		var activeParticipants int
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*)
+			  FROM call_participants
+			 WHERE call_id = $1
+			   AND left_at IS NULL`, ref.id).Scan(&activeParticipants); err != nil {
+			return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx count active participants: %w", err)
+		}
+		if activeParticipants > 0 {
+			continue
+		}
+
+		tag, err := tx.Exec(ctx, `
+			UPDATE calls
+			   SET status = 'ended',
+			       ended_at = now()
+			 WHERE id = $1
+			   AND status = 'active'`, ref.id)
+		if err != nil {
+			return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx end call: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+		if err := s.appendCallStateChangedTx(ctx, tx, ref.id, ref.conversationID, packetspb.CallStatus_CALL_STATUS_ENDED); err != nil {
+			return err
+		}
+		if _, err := s.cancelPendingInvitesForEndedCallTx(ctx, tx, ref.id, ref.conversationID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) hasActiveInviteForCallTx(ctx context.Context, tx pgx.Tx, callID, inviteeID uuid.UUID) (bool, error) {

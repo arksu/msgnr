@@ -284,6 +284,7 @@
             <button
               v-for="member in filteredChannelCallMembers"
               :key="member.userId"
+              :data-testid="`channel-call-invite-candidate-${member.userId}`"
               class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-white/5"
               @click="toggleChannelCallInvitee(member.userId)"
             >
@@ -324,6 +325,14 @@
       </div>
     </div>
 
+    <BusyCallConfirmDialog
+      :open="busyCallConfirmOpen"
+      :user-names="busyCallConfirmNames"
+      :confirm-label="busyCallConfirmLabel"
+      @cancel="cancelBusyCallConfirm"
+      @confirm="confirmBusyCallAction"
+    />
+
   </div>
 </template>
 
@@ -341,6 +350,7 @@ import MessageBubble from './MessageBubble.vue'
 import MessageInput from './MessageInput.vue'
 import MembersPanel from './MembersPanel.vue'
 import UserAvatar from './UserAvatar.vue'
+import BusyCallConfirmDialog from './BusyCallConfirmDialog.vue'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import { userCustomStatusFromProto, type UserCustomStatus } from '@/types/userStatus'
 
@@ -511,6 +521,10 @@ const channelCallMembers = ref<Array<{
   customStatus: UserCustomStatus | null
 }>>([])
 const selectedChannelCallInvitees = ref<string[]>([])
+const busyCallConfirmOpen = ref(false)
+const busyCallConfirmNames = ref<string[]>([])
+const busyCallConfirmLabel = ref('Continue')
+let busyCallPendingAction: (() => Promise<void> | void) | null = null
 const filteredChannelCallMembers = computed(() => {
   const query = normalizeCallInviteSearchQuery(channelCallSearch.value)
   if (!query) return channelCallMembers.value
@@ -890,6 +904,57 @@ function handleTyping(active: boolean) {
   }
 }
 
+function userIsBusyInAnotherCall(userId: string): boolean {
+  return (chatStore.userCallPresenceByUserId[userId] ?? 0) > 0
+}
+
+function requestBusyCallConfirm(userNames: string[], confirmLabel: string, action: () => Promise<void> | void) {
+  busyCallConfirmNames.value = userNames
+  busyCallConfirmLabel.value = confirmLabel
+  busyCallPendingAction = action
+  busyCallConfirmOpen.value = true
+}
+
+function cancelBusyCallConfirm() {
+  busyCallConfirmOpen.value = false
+  busyCallConfirmNames.value = []
+  busyCallConfirmLabel.value = 'Continue'
+  busyCallPendingAction = null
+}
+
+async function confirmBusyCallAction() {
+  const action = busyCallPendingAction
+  busyCallConfirmOpen.value = false
+  busyCallConfirmNames.value = []
+  busyCallConfirmLabel.value = 'Continue'
+  busyCallPendingAction = null
+  await action?.()
+}
+
+async function startDmCall(conversationId: string) {
+  try {
+    await callStore.startOrJoinCall({
+      conversationId,
+      kind: 'dm',
+      visibility: 'dm',
+    })
+  } catch {
+    // store surface handles call errors.
+  }
+}
+
+async function joinChannelCall(conversationId: string, visibility: 'public' | 'private' | 'dm') {
+  try {
+    await callStore.startOrJoinCall({
+      conversationId,
+      kind: 'channel',
+      visibility,
+    })
+  } catch {
+    // store surface handles call errors.
+  }
+}
+
 async function handleCallClick() {
   if (!conversation.value) return
   if (
@@ -900,27 +965,17 @@ async function handleCallClick() {
     return
   }
   if (conversation.value.kind === 'dm') {
-    try {
-      await callStore.startOrJoinCall({
-        conversationId: conversation.value.id,
-        kind: 'dm',
-        visibility: 'dm',
-      })
-    } catch {
-      // store surface handles call errors.
+    const dm = chatStore.directMessages.find(item => item.id === conversation.value?.id)
+    const conversationId = conversation.value.id
+    if (dm && userIsBusyInAnotherCall(dm.userId)) {
+      requestBusyCallConfirm([dm.displayName || chatStore.resolveDisplayName(dm.userId)], 'Call anyway', () => startDmCall(conversationId))
+      return
     }
+    await startDmCall(conversationId)
     return
   }
   if (activeConversationCall.value) {
-    try {
-      await callStore.startOrJoinCall({
-        conversationId: conversation.value.id,
-        kind: 'channel',
-        visibility: conversation.value.visibility,
-      })
-    } catch {
-      // store surface handles call errors.
-    }
+    await joinChannelCall(conversation.value.id, conversation.value.visibility)
     return
   }
   await openChannelCallDialog()
@@ -967,7 +1022,17 @@ function toggleChannelCallInvitee(userId: string) {
   selectedChannelCallInvitees.value = [...selectedChannelCallInvitees.value, userId]
 }
 
-async function startChannelCall() {
+function busyChannelInviteNames(inviteeIds: string[]): string[] {
+  const byId = new Map(channelCallMembers.value.map(member => [member.userId, member]))
+  return inviteeIds
+    .filter(userIsBusyInAnotherCall)
+    .map(userId => {
+      const member = byId.get(userId)
+      return member?.displayName || member?.email || chatStore.resolveDisplayName(userId)
+    })
+}
+
+async function startChannelCallConfirmed(inviteeUserIds: string[]) {
   if (!conversation.value) return
   startingChannelCall.value = true
   channelCallError.value = ''
@@ -976,7 +1041,7 @@ async function startChannelCall() {
       conversationId: conversation.value.id,
       kind: 'channel',
       visibility: conversation.value.visibility,
-      inviteeUserIds: selectedChannelCallInvitees.value,
+      inviteeUserIds,
     })
     closeChannelCallDialog()
   } catch (err) {
@@ -984,6 +1049,16 @@ async function startChannelCall() {
   } finally {
     startingChannelCall.value = false
   }
+}
+
+async function startChannelCall() {
+  const inviteeUserIds = [...selectedChannelCallInvitees.value]
+  const busyNames = busyChannelInviteNames(inviteeUserIds)
+  if (busyNames.length > 0) {
+    requestBusyCallConfirm(busyNames, 'Start call', () => startChannelCallConfirmed(inviteeUserIds))
+    return
+  }
+  await startChannelCallConfirmed(inviteeUserIds)
 }
 
 function scrollToBottom() {

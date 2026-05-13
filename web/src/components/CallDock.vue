@@ -670,6 +670,14 @@
       </div>
     </div>
   </Teleport>
+
+  <BusyCallConfirmDialog
+    :open="busyCallConfirmOpen"
+    :user-names="busyCallConfirmNames"
+    confirm-label="Send invites"
+    @cancel="cancelBusyCallConfirm"
+    @confirm="confirmBusyCallInvites"
+  />
 </template>
 
 <script setup lang="ts">
@@ -684,6 +692,7 @@ import { matchesCallInviteSearch, normalizeCallInviteSearchQuery } from '@/utils
 import { resolveScreenAnnotationStrokeColor } from '@/utils/color'
 import { useFloatingDockPosition } from '@/composables/useFloatingDockPosition'
 import UserAvatar from './UserAvatar.vue'
+import BusyCallConfirmDialog from './BusyCallConfirmDialog.vue'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -801,6 +810,8 @@ const inviteLoading = ref(false)
 const inviteSubmitting = ref(false)
 const inviteError = ref('')
 const inviteResultSummary = ref('')
+const busyCallConfirmOpen = ref(false)
+const busyCallConfirmNames = ref<string[]>([])
 const inputDevices = ref<MediaDeviceInfo[]>([])
 const selectedInputDeviceId = ref(loadAudioPrefs().inputDeviceId)
 const inputDeviceLoading = ref(false)
@@ -2409,12 +2420,32 @@ function toggleInviteCandidate(userId: string) {
   selectedInviteeIds.value = [...selectedInviteeIds.value, userId]
 }
 
-async function sendCallInvites() {
-  if (!selectedInviteeIds.value.length) return
+function busyInviteeNames(userIds: string[]): string[] {
+  const byId = new Map(inviteCandidates.value.map(candidate => [candidate.userId, candidate]))
+  return userIds
+    .filter(userId => (chatStore.userCallPresenceByUserId[userId] ?? 0) > 0)
+    .map(userId => {
+      const candidate = byId.get(userId)
+      return candidate?.displayName || candidate?.email || chatStore.resolveDisplayName(userId)
+    })
+}
+
+function cancelBusyCallConfirm() {
+  busyCallConfirmOpen.value = false
+  busyCallConfirmNames.value = []
+}
+
+async function confirmBusyCallInvites() {
+  busyCallConfirmOpen.value = false
+  busyCallConfirmNames.value = []
+  await sendCallInvitesConfirmed([...selectedInviteeIds.value])
+}
+
+async function sendCallInvitesConfirmed(requestIds: string[]) {
+  if (!requestIds.length) return
   inviteSubmitting.value = true
   inviteError.value = ''
   inviteResultSummary.value = ''
-  const requestIds = [...selectedInviteeIds.value]
   try {
     const result = await callStore.inviteMembersToActiveCall(requestIds)
     const invitedCount = result.invitedUserIds.length
@@ -2432,6 +2463,17 @@ async function sendCallInvites() {
   } finally {
     inviteSubmitting.value = false
   }
+}
+
+async function sendCallInvites() {
+  if (!selectedInviteeIds.value.length) return
+  const busyNames = busyInviteeNames(selectedInviteeIds.value)
+  if (busyNames.length > 0) {
+    busyCallConfirmNames.value = busyNames
+    busyCallConfirmOpen.value = true
+    return
+  }
+  await sendCallInvitesConfirmed([...selectedInviteeIds.value])
 }
 
 // ── Control handlers ──────────────────────────────────────────────────────────

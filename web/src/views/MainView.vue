@@ -1736,9 +1736,11 @@ async function acceptIncomingInvite() {
   if (!invite || !conversation) return
   handlingIncomingInvite.value = true
   incomingInviteError.value = ''
-  wsStore.sendAcceptCallInvite(invite.id)
-  dismissInvite(invite.id)
+  let accepted = false
   try {
+    await wsStore.requestAcceptCallInvite(invite.id, { leaveExistingCalls: true })
+    accepted = true
+    dismissInvite(invite.id)
     await callStore.startOrJoinCall({
       conversationId: invite.conversationId,
       kind: conversation.kind,
@@ -1747,7 +1749,9 @@ async function acceptIncomingInvite() {
     })
   } catch (err) {
     incomingInviteError.value = err instanceof Error ? err.message : 'Failed to join call'
-    dismissedInviteIds.value = dismissedInviteIds.value.filter(item => item !== invite.id)
+    if (!accepted) {
+      dismissedInviteIds.value = dismissedInviteIds.value.filter(item => item !== invite.id)
+    }
   } finally {
     handlingIncomingInvite.value = false
   }

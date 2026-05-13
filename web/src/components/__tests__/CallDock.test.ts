@@ -321,6 +321,82 @@ describe('CallDock invite modal', () => {
     wrapper.unmount()
   })
 
+  it('confirms before inviting a selected user who is already in another call', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    const callStore = useCallStore()
+
+    authStore.user = {
+      id: 'user-1',
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      avatarUrl: '',
+      role: 'member',
+    }
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfAvatarUrl: '',
+      selfRole: 'member',
+    }
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.userCallPresenceByUserId = { 'user-2': 1 }
+
+    callStore.connected = true
+    callStore.minimized = false
+    callStore.activeConversationId = 'channel-1'
+    callStore.inviteMembersToActiveCall = vi.fn().mockResolvedValue({
+      invitedUserIds: ['user-2'],
+      skippedUserIds: [],
+    })
+
+    chatApiMocks.listDmCandidates.mockResolvedValue([
+      { user_id: 'user-2', display_name: 'Bob', email: 'bob@example.com', avatar_url: '' },
+    ])
+
+    const wrapper = mount(CallDock, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="calldock-invite-button"]').trigger('click')
+    await flushAll()
+
+    const candidate = document.body.querySelector('[data-testid="calldock-invite-candidate-user-2"]') as HTMLElement | null
+    expect(candidate).not.toBeNull()
+    candidate?.click()
+    await flushAll()
+
+    const sendInvitesButton = document.body.querySelector('[data-testid="calldock-send-invites"]') as HTMLElement | null
+    expect(sendInvitesButton).not.toBeNull()
+    sendInvitesButton?.click()
+    await flushAll()
+
+    const dialog = document.body.querySelector('[data-testid="busy-call-confirm-dialog"]') as HTMLElement | null
+    expect(dialog).not.toBeNull()
+    expect(dialog?.textContent).toContain('Bob')
+    expect(callStore.inviteMembersToActiveCall).not.toHaveBeenCalled()
+
+    document.body.querySelector<HTMLButtonElement>('[data-testid="busy-call-confirm-confirm"]')?.click()
+    await flushAll()
+
+    expect(callStore.inviteMembersToActiveCall).toHaveBeenCalledWith(['user-2'])
+    wrapper.unmount()
+  })
+
   it('restores from maximized mode when Escape is pressed', async () => {
     const authStore = useAuthStore()
     const chatStore = useChatStore()

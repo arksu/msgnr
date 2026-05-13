@@ -2114,9 +2114,10 @@ func (s *Server) handleDomainPayload(
 		}
 
 		result, err := s.callSvc.AcceptInvite(ctx, calls.InviteActionParams{
-			InviteID:  inviteID,
-			ActorID:   principal.UserID,
-			ActorRole: principal.Role,
+			InviteID:           inviteID,
+			ActorID:            principal.UserID,
+			ActorRole:          principal.Role,
+			LeaveExistingCalls: req.GetLeaveExistingCalls(),
 		})
 		if err != nil {
 			switch {

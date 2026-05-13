@@ -7,10 +7,12 @@ describe('highlightCodeToHtml', () => {
     ['kotlin', 'fun greet(name: String) = println(name)', 'language-kotlin'],
     ['java', 'public class App { public static void main(String[] args) {} }', 'language-java'],
     ['go', 'package main\nfunc main() { fmt.Println("hi") }', 'language-go'],
+    ['diagram', '┌────────┐\n│ SCREEN │\n└───┬────┘\n    ▼', 'language-diagram'],
     ['shell', 'if [ -f package.json ]; then echo "ok"; fi', 'language-shell'],
     ['typescript', 'const value: string = "hello"', 'language-typescript'],
     ['javascript', 'const value = "hello"', 'language-javascript'],
     ['json', '{"error":"invalid_scope"}', 'language-json'],
+    ['mermaid', 'flowchart TD\n  A[Start] --> B{Ready?}\n  B -->|Yes| C[Ship]', 'language-mermaid'],
     ['python', 'def greet(name):\n    return f"hi {name}"', 'language-python'],
   ])('highlights explicit %s fences', (language, code, className) => {
     const html = highlightCodeToHtml(code, language)
@@ -28,6 +30,10 @@ describe('highlightCodeToHtml', () => {
     ['postgresql', 'SELECT id FROM users WHERE active = true;', 'language-sql'],
     ['postgres', 'SELECT id FROM users WHERE active = true;', 'language-sql'],
     ['psql', 'SELECT id FROM users WHERE active = true;', 'language-sql'],
+    ['mmd', 'sequenceDiagram\n  Alice->>Bob: Hello', 'language-mermaid'],
+    ['ascii', '┌────────┐\n│ SCREEN │\n└───┬────┘\n    ▼', 'language-diagram'],
+    ['box', '┌────────┐\n│ SCREEN │\n└───┬────┘\n    ▼', 'language-diagram'],
+    ['flow', '┌────────┐\n│ SCREEN │\n└───┬────┘\n    ▼', 'language-diagram'],
   ])('normalizes the %s alias', (language, code, className) => {
     const html = highlightCodeToHtml(code, language)
 
@@ -76,6 +82,37 @@ describe('highlightCodeToHtml', () => {
     expect(html).toContain('data-language="JSON"')
     expect(html).not.toContain('language-kotlin')
     expect(html).toContain('<span class="hljs-attr">&quot;error&quot;</span>')
+  })
+
+  it('autodetects unlabeled Mermaid diagrams', () => {
+    const html = highlightCodeToHtml('flowchart TD\n  A[Start] --> B{Ready?}\n  B -->|Yes| C[Ship]')
+
+    expect(html).toContain('language-mermaid')
+    expect(html).toContain('data-language="Mermaid"')
+    expect(html).toContain('<span class="hljs-keyword">flowchart</span>')
+  })
+
+  it('autodetects unlabeled box-drawing flow diagrams', () => {
+    const html = highlightCodeToHtml(`
+┌──────────────────────────────┐
+│          SCREEN 1             │
+│         Main Menu             │
+│  "Please choose a ticket      │
+│         type:"                │
+│   [11 ticket type buttons]    │
+└──────────────┬────────────────┘
+               │ User clicks a ticket type
+               ▼
+┌──────────────────────────────┐
+│          SCREEN 2             │
+│      Type Detail Screen       │
+│   [⬅️ Back]  [➡️ Continue]    │
+└──────────────────────────────┘`)
+
+    expect(html).toContain('language-diagram')
+    expect(html).toContain('data-language="Diagram"')
+    expect(html).toContain('<span class="hljs-keyword">SCREEN</span>')
+    expect(html).toContain('<span class="hljs-title">[11 ticket type buttons]</span>')
   })
 
   it('falls back to escaped plain code for low-confidence autodetection', () => {

@@ -1003,7 +1003,12 @@ describe('MainView server unavailable state', () => {
     const wsStore = useWsStore()
     const callStore = useCallStore()
     const startOrJoinSpy = vi.spyOn(callStore, 'startOrJoinCall').mockResolvedValue()
-    const acceptInviteSpy = vi.spyOn(wsStore, 'sendAcceptCallInvite')
+    const acceptInviteSpy = vi.spyOn(wsStore, 'requestAcceptCallInvite').mockResolvedValue({
+      ok: true,
+      inviteId: 'invite-1',
+      resultingState: 2,
+      applied: true,
+    } as any)
     chatStore.pendingInvites = [{
       id: 'invite-1',
       callId: 'call-1',
@@ -1022,7 +1027,7 @@ describe('MainView server unavailable state', () => {
     await acceptButton!.trigger('click')
     await flushUi()
 
-    expect(acceptInviteSpy).toHaveBeenCalledWith('invite-1')
+    expect(acceptInviteSpy).toHaveBeenCalledWith('invite-1', { leaveExistingCalls: true })
     expect(startOrJoinSpy).toHaveBeenCalledWith({
       conversationId: 'external-conversation-1',
       kind: 'channel',

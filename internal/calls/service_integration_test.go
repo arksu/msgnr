@@ -136,6 +136,29 @@ func listUserCallPresenceEventCounts(t *testing.T, ctx context.Context, pool *pg
 	return counts
 }
 
+func assertParticipantActive(t *testing.T, ctx context.Context, pool *pgxpool.Pool, callID, userID uuid.UUID, expected bool) {
+	t.Helper()
+	var active bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			  FROM call_participants
+			 WHERE call_id = $1
+			   AND user_id = $2
+			   AND left_at IS NULL
+		)`, callID, userID).Scan(&active)
+	require.NoError(t, err)
+	assert.Equal(t, expected, active)
+}
+
+func assertCallStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, callID uuid.UUID, expected string) {
+	t.Helper()
+	var status string
+	err := pool.QueryRow(ctx, `SELECT status FROM calls WHERE id = $1`, callID).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, expected, status)
+}
+
 func TestIntegration_HandleWebhook_ParticipantLeftEndsCallWhenRoomBecomesEmpty(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -656,6 +679,152 @@ func TestIntegration_AcceptInvite_AppendsActiveCallStateDelivery(t *testing.T) {
 	}
 	assert.True(t, sawActiveCallState, "accept invite should deliver active call state to invitee")
 	assert.Equal(t, []int{1}, listUserCallPresenceEventCounts(t, ctx, pool, inviteeID))
+}
+
+func TestIntegration_AcceptInvite_LeaveExistingCallsLeavesPriorCallWithOtherParticipants(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	remainingID := seedCallUser(t, ctx, pool, "Remaining")
+	oldChannelID := seedCallChannel(t, ctx, pool, inviteeID)
+	targetChannelID := seedCallChannel(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, oldChannelID, inviteeID)
+	seedMember(t, ctx, pool, oldChannelID, remainingID)
+	seedMember(t, ctx, pool, targetChannelID, ownerID)
+	seedMember(t, ctx, pool, targetChannelID, inviteeID)
+	oldCallID, _ := seedActiveCall(t, ctx, pool, oldChannelID, inviteeID)
+	targetCallID, _ := seedActiveCall(t, ctx, pool, targetChannelID, ownerID)
+	seedParticipant(t, ctx, pool, oldCallID, inviteeID)
+	seedParticipant(t, ctx, pool, oldCallID, remainingID)
+	seedParticipant(t, ctx, pool, targetCallID, ownerID)
+	inviteID := seedPendingInviteWithNotification(t, ctx, pool, targetCallID, targetChannelID, ownerID, inviteeID)
+
+	result, err := svc.AcceptInvite(ctx, InviteActionParams{
+		InviteID:           inviteID,
+		ActorID:            inviteeID,
+		LeaveExistingCalls: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Applied)
+
+	assertParticipantActive(t, ctx, pool, oldCallID, inviteeID, false)
+	assertParticipantActive(t, ctx, pool, oldCallID, remainingID, true)
+	assertParticipantActive(t, ctx, pool, targetCallID, inviteeID, true)
+	assertCallStatus(t, ctx, pool, oldCallID, "active")
+	assert.Empty(t, listUserCallPresenceEventCounts(t, ctx, pool, inviteeID))
+}
+
+func TestIntegration_AcceptInvite_LeaveExistingCallsEndsEmptyPriorCall(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	oldInviteeID := seedCallUser(t, ctx, pool, "Old Invitee")
+	oldChannelID := seedCallChannel(t, ctx, pool, inviteeID)
+	targetChannelID := seedCallChannel(t, ctx, pool, ownerID)
+	seedMember(t, ctx, pool, oldChannelID, inviteeID)
+	seedMember(t, ctx, pool, oldChannelID, oldInviteeID)
+	seedMember(t, ctx, pool, targetChannelID, ownerID)
+	seedMember(t, ctx, pool, targetChannelID, inviteeID)
+	oldCallID, _ := seedActiveCall(t, ctx, pool, oldChannelID, inviteeID)
+	targetCallID, _ := seedActiveCall(t, ctx, pool, targetChannelID, ownerID)
+	seedParticipant(t, ctx, pool, oldCallID, inviteeID)
+	seedParticipant(t, ctx, pool, targetCallID, ownerID)
+	oldInviteID := seedPendingInviteWithNotification(t, ctx, pool, oldCallID, oldChannelID, inviteeID, oldInviteeID)
+	targetInviteID := seedPendingInviteWithNotification(t, ctx, pool, targetCallID, targetChannelID, ownerID, inviteeID)
+
+	_, err := svc.AcceptInvite(ctx, InviteActionParams{
+		InviteID:           targetInviteID,
+		ActorID:            inviteeID,
+		LeaveExistingCalls: true,
+	})
+	require.NoError(t, err)
+
+	assertParticipantActive(t, ctx, pool, oldCallID, inviteeID, false)
+	assertParticipantActive(t, ctx, pool, targetCallID, inviteeID, true)
+	assertCallStatus(t, ctx, pool, oldCallID, "ended")
+	assert.Empty(t, listUserCallPresenceEventCounts(t, ctx, pool, inviteeID))
+
+	var oldInviteState string
+	err = pool.QueryRow(ctx, `SELECT state FROM call_invites WHERE id = $1`, oldInviteID).Scan(&oldInviteState)
+	require.NoError(t, err)
+	assert.Equal(t, "rejected", oldInviteState)
+
+	var endedEvents int
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM workspace_events
+		 WHERE event_type = 'call_state_changed'
+		   AND payload->>'callId' = $1
+		   AND payload->>'status' = 'CALL_STATUS_ENDED'`, oldCallID.String()).Scan(&endedEvents)
+	require.NoError(t, err)
+	assert.Equal(t, 1, endedEvents)
+}
+
+func TestIntegration_AcceptInvite_LeaveExistingCallsDoesNotLeaveWhenInviteInactive(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	oldChannelID := seedCallChannel(t, ctx, pool, inviteeID)
+	targetChannelID := seedCallChannel(t, ctx, pool, ownerID)
+	oldCallID, _ := seedActiveCall(t, ctx, pool, oldChannelID, inviteeID)
+	targetCallID, _ := seedActiveCall(t, ctx, pool, targetChannelID, ownerID)
+	seedParticipant(t, ctx, pool, oldCallID, inviteeID)
+	seedParticipant(t, ctx, pool, targetCallID, ownerID)
+	inviteID := seedPendingInviteWithNotification(t, ctx, pool, targetCallID, targetChannelID, ownerID, inviteeID)
+	_, err := pool.Exec(ctx, `UPDATE call_invites SET state = 'rejected' WHERE id = $1`, inviteID)
+	require.NoError(t, err)
+
+	_, err = svc.AcceptInvite(ctx, InviteActionParams{
+		InviteID:           inviteID,
+		ActorID:            inviteeID,
+		LeaveExistingCalls: true,
+	})
+	require.ErrorIs(t, err, ErrInviteNotActive)
+	assertParticipantActive(t, ctx, pool, oldCallID, inviteeID, true)
+	assertCallStatus(t, ctx, pool, oldCallID, "active")
+}
+
+func TestIntegration_AcceptInvite_LeaveExistingCallsDoesNotLeaveWhenForbidden(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := NewService(pool, store, &config.Config{CallInviteTTL: time.Minute})
+
+	ownerID := seedCallUser(t, ctx, pool, "Owner")
+	inviteeID := seedCallUser(t, ctx, pool, "Invitee")
+	actorID := seedCallUser(t, ctx, pool, "Wrong Actor")
+	oldChannelID := seedCallChannel(t, ctx, pool, actorID)
+	targetChannelID := seedCallChannel(t, ctx, pool, ownerID)
+	oldCallID, _ := seedActiveCall(t, ctx, pool, oldChannelID, actorID)
+	targetCallID, _ := seedActiveCall(t, ctx, pool, targetChannelID, ownerID)
+	seedParticipant(t, ctx, pool, oldCallID, actorID)
+	seedParticipant(t, ctx, pool, targetCallID, ownerID)
+	inviteID := seedPendingInviteWithNotification(t, ctx, pool, targetCallID, targetChannelID, ownerID, inviteeID)
+
+	_, err := svc.AcceptInvite(ctx, InviteActionParams{
+		InviteID:           inviteID,
+		ActorID:            actorID,
+		LeaveExistingCalls: true,
+	})
+	require.ErrorIs(t, err, ErrForbiddenAction)
+	assertParticipantActive(t, ctx, pool, oldCallID, actorID, true)
+	assertCallStatus(t, ctx, pool, oldCallID, "active")
 }
 
 func TestIntegration_InviteCallMembers_FailsWhenNoActiveCall(t *testing.T) {

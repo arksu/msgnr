@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf'
-import { EnvelopeSchema, ErrorCode, PresenceStatus, ConversationType, TaskDescriptionCollabMessageKind, DocumentContentCollabMessageKind, FeatureCapability } from '@/shared/proto/packets_pb'
+import { EnvelopeSchema, ErrorCode, PresenceStatus, ConversationType, TaskDescriptionCollabMessageKind, DocumentContentCollabMessageKind, FeatureCapability, InviteState } from '@/shared/proto/packets_pb'
 import { useWsStore } from '@/stores/ws'
 
 // Minimal WebSocket mock
@@ -148,6 +148,23 @@ function makeInviteCallMembersResponseEnvelope(): ArrayBuffer {
         conversationId: 'channel-1',
         invitedUserIds: ['user-2'],
         skippedUserIds: ['user-3'],
+      },
+    },
+  })
+  return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
+}
+
+function makeCallInviteActionAckEnvelope(requestId: string): ArrayBuffer {
+  const env = create(EnvelopeSchema, {
+    requestId,
+    protocolVersion: 1,
+    payload: {
+      case: 'callInviteActionAck',
+      value: {
+        ok: true,
+        inviteId: 'invite-1',
+        resultingState: InviteState.ACCEPTED,
+        applied: true,
       },
     },
   })
@@ -535,6 +552,29 @@ describe('wsStore state machine', () => {
       invitedUserIds: ['user-2'],
       skippedUserIds: ['user-3'],
     }), '5')
+  })
+
+  it('requests acceptCallInvite with leaveExistingCalls and resolves action ack', async () => {
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+
+    const promise = store.requestAcceptCallInvite('invite-1', { leaveExistingCalls: true })
+
+    const lastSent = mockSocket.sent[mockSocket.sent.length - 1]
+    const envelope = fromBinary(EnvelopeSchema, lastSent)
+    expect(envelope.payload.case).toBe('acceptCallInviteRequest')
+    expect(envelope.payload.value).toEqual(expect.objectContaining({
+      inviteId: 'invite-1',
+      leaveExistingCalls: true,
+    }))
+
+    mockSocket.simulateMessage(makeCallInviteActionAckEnvelope(envelope.requestId))
+    await expect(promise).resolves.toEqual(expect.objectContaining({
+      inviteId: 'invite-1',
+      resultingState: InviteState.ACCEPTED,
+      applied: true,
+    }))
   })
 
   it('routes protocol error envelopes to the registered callback with request id', () => {

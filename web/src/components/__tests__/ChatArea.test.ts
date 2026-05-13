@@ -1375,6 +1375,122 @@ describe('ChatArea', () => {
     expect(wrapper.find('[data-testid="invite-avatar-user-3"]').exists()).toBe(false)
   })
 
+  it('confirms before starting a DM call when the peer is already in another call', async () => {
+    const chatStore = useChatStore()
+    const callStore = useCallStore()
+    callStore.startOrJoinCall = vi.fn().mockResolvedValue(undefined)
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chatStore.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      presence: 'online',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.userCallPresenceByUserId = { 'user-2': 1 }
+    chatStore.activeChannelId = 'dm-1'
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+
+    const callButton = wrapper.findAll('button').find(btn => btn.text().includes('Call'))
+    expect(callButton).toBeDefined()
+    await callButton!.trigger('click')
+    await flushAll()
+
+    const dialog = document.body.querySelector('[data-testid="busy-call-confirm-dialog"]') as HTMLElement | null
+    expect(dialog).not.toBeNull()
+    expect(dialog?.textContent).toContain('Bob')
+    expect(callStore.startOrJoinCall).not.toHaveBeenCalled()
+
+    document.body.querySelector<HTMLButtonElement>('[data-testid="busy-call-confirm-cancel"]')?.click()
+    await flushAll()
+
+    expect(callStore.startOrJoinCall).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('confirms before starting a channel call with busy selected invitees', async () => {
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    const callStore = useCallStore()
+    wsStore.state = 'LIVE_SYNCED'
+    wsStore.requestConversationMembers = vi.fn().mockResolvedValue({
+      members: [
+        { userId: 'user-2', displayName: 'Bob', email: 'bob@example.com', avatarUrl: '' },
+        { userId: 'user-3', displayName: 'Eve', email: 'eve@example.com', avatarUrl: '' },
+      ],
+    })
+    callStore.startOrJoinCall = vi.fn().mockResolvedValue(undefined)
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.userCallPresenceByUserId = { 'user-2': 1 }
+    chatStore.activeChannelId = 'channel-1'
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+          UserAvatar: true,
+        },
+      },
+    })
+
+    const callButton = wrapper.findAll('button').find(btn => btn.text().includes('Call'))
+    expect(callButton).toBeDefined()
+    await callButton!.trigger('click')
+    await flushAll()
+
+    await wrapper.get('[data-testid="channel-call-invite-candidate-user-2"]').trigger('click')
+    const startButton = wrapper.findAll('button').find(btn => btn.text().includes('Start call'))
+    expect(startButton).toBeDefined()
+    await startButton!.trigger('click')
+    await flushAll()
+
+    const dialog = document.body.querySelector('[data-testid="busy-call-confirm-dialog"]') as HTMLElement | null
+    expect(dialog).not.toBeNull()
+    expect(dialog?.textContent).toContain('Bob')
+    expect(callStore.startOrJoinCall).not.toHaveBeenCalled()
+
+    document.body.querySelector<HTMLButtonElement>('[data-testid="busy-call-confirm-confirm"]')?.click()
+    await flushAll()
+
+    expect(callStore.startOrJoinCall).toHaveBeenCalledWith({
+      conversationId: 'channel-1',
+      kind: 'channel',
+      visibility: 'public',
+      inviteeUserIds: ['user-2'],
+    })
+    wrapper.unmount()
+  })
+
   it('shows the active call member roster on hover and includes the current user', async () => {
     const authStore = useAuthStore()
     const chatStore = useChatStore()

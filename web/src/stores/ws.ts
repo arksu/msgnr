@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { create, toBinary, fromBinary } from '@bufbuild/protobuf'
 import {
+  AcceptCallInviteRequestSchema,
   EnvelopeSchema,
   ListActiveCallMembersRequestSchema,
   ListConversationMembersRequestSchema,
@@ -930,9 +931,19 @@ export const useWsStore = defineStore('ws', () => {
       protocolVersion: PROTOCOL_VERSION,
       payload: {
         case: 'acceptCallInviteRequest',
-        value: { inviteId },
+        value: create(AcceptCallInviteRequestSchema, { inviteId }),
       },
     }))
+  }
+
+  function requestAcceptCallInvite(inviteId: string, options: { leaveExistingCalls?: boolean } = {}): Promise<CallInviteActionAck> {
+    return requestEnvelope({
+      case: 'acceptCallInviteRequest',
+      value: create(AcceptCallInviteRequestSchema, {
+        inviteId,
+        leaveExistingCalls: options.leaveExistingCalls ?? false,
+      }),
+    }, 'callInviteActionAck')
   }
 
   function sendRejectCallInvite(inviteId: string) {
@@ -1183,6 +1194,7 @@ export const useWsStore = defineStore('ws', () => {
     requestConversationMembers,
     requestActiveCallMembers,
     sendAcceptCallInvite,
+    requestAcceptCallInvite,
     sendRejectCallInvite,
     sendCancelCallInvite,
     setLiveSynced,

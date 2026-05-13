@@ -470,6 +470,7 @@ message JoinCallTokenResponse {
 
 message AcceptCallInviteRequest {
   string invite_id = 1;
+  bool leave_existing_calls = 2;
 }
 
 message RejectCallInviteRequest {

@@ -75,6 +75,10 @@ type LeaveConversationResult struct {
 	DirectDeliveries []DirectDelivery
 }
 
+type RemoveConversationMemberResult struct {
+	DirectDeliveries []DirectDelivery
+}
+
 type JoinableChannel struct {
 	ID             uuid.UUID
 	Name           string

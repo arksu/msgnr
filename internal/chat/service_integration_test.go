@@ -81,12 +81,18 @@ func seedChatUserWithAttrs(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 func seedChannelForUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, name string) uuid.UUID {
 	t.Helper()
 
+	return seedChannelForUserWithVisibility(t, ctx, pool, userID, name, "public")
+}
+
+func seedChannelForUserWithVisibility(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, name, visibility string) uuid.UUID {
+	t.Helper()
+
 	var channelID uuid.UUID
 	err := pool.QueryRow(ctx,
 		`INSERT INTO channels (kind, visibility, name, created_by)
-		 VALUES ('channel', 'public', $1, $2)
+		 VALUES ('channel', $1, $2, $3)
 		 RETURNING id`,
-		name, userID,
+		visibility, name, userID,
 	).Scan(&channelID)
 	require.NoError(t, err)
 
@@ -1543,6 +1549,186 @@ func TestIntegration_LeaveConversation_ArchivesMembershipAndIsIdempotent(t *test
 	assert.True(t, errors.Is(err, chat.ErrNotMember))
 }
 
+func TestIntegration_RemoveConversationMember_PublicAdminOrOwnerArchivesMembershipAndRevokesAccess(t *testing.T) {
+	for _, role := range []string{"admin", "owner"} {
+		t.Run(role, func(t *testing.T) {
+			pool, _ := testdb.New(t)
+			ctx := context.Background()
+
+			store := events.NewStore(pool)
+			svc := chat.NewService(pool, store)
+
+			requesterID := seedChatUserWithAttrs(t, ctx, pool, "Requester "+role, role, "active")
+			targetID := seedChatUserWithAttrs(t, ctx, pool, "Target "+role, "member", "active")
+			channelID := seedChannelForUserWithVisibility(t, ctx, pool, requesterID, "Public "+role, "public")
+			_, err := pool.Exec(ctx,
+				`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+				channelID, targetID,
+			)
+			require.NoError(t, err)
+
+			result, err := svc.RemoveConversationMember(ctx, requesterID, role, channelID, targetID)
+			require.NoError(t, err)
+			removedDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_CONVERSATION_REMOVED)
+			require.Len(t, removedDeliveries, 1)
+			assert.Equal(t, targetID.String(), removedDeliveries[0].UserID)
+			require.NotNil(t, removedDeliveries[0].Event)
+			assert.Equal(
+				t,
+				packetspb.ConversationRemovedReason_CONVERSATION_REMOVED_REASON_ACCESS_REVOKED,
+				removedDeliveries[0].Event.GetConversationRemoved().GetReason(),
+			)
+
+			var isArchived bool
+			err = pool.QueryRow(ctx,
+				`SELECT is_archived FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+				channelID, targetID,
+			).Scan(&isArchived)
+			require.NoError(t, err)
+			assert.True(t, isArchived)
+
+			var rowCount int
+			err = pool.QueryRow(ctx,
+				`SELECT COUNT(*) FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+				channelID, targetID,
+			).Scan(&rowCount)
+			require.NoError(t, err)
+			assert.Equal(t, 1, rowCount)
+
+			var body string
+			err = pool.QueryRow(ctx,
+				`SELECT body FROM messages WHERE channel_id = $1 ORDER BY channel_seq DESC LIMIT 1`,
+				channelID,
+			).Scan(&body)
+			require.NoError(t, err)
+			assert.Equal(t, "@Target "+role+" was removed from this channel by @Requester "+role, body)
+		})
+	}
+}
+
+func TestIntegration_RemoveConversationMember_PublicMemberForbidden(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	requesterID := seedChatUserWithAttrs(t, ctx, pool, "Requester", "member", "active")
+	targetID := seedChatUserWithAttrs(t, ctx, pool, "Target", "member", "active")
+	channelID := seedChannelForUserWithVisibility(t, ctx, pool, requesterID, "Public", "public")
+	_, err := pool.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+		channelID, targetID,
+	)
+	require.NoError(t, err)
+
+	_, err = svc.RemoveConversationMember(ctx, requesterID, "member", channelID, targetID)
+	require.ErrorIs(t, err, chat.ErrRemoveMemberForbidden)
+
+	var isArchived bool
+	err = pool.QueryRow(ctx,
+		`SELECT is_archived FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+		channelID, targetID,
+	).Scan(&isArchived)
+	require.NoError(t, err)
+	assert.False(t, isArchived)
+}
+
+func TestIntegration_RemoveConversationMember_PrivateMemberArchivesMembership(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	requesterID := seedChatUserWithAttrs(t, ctx, pool, "Requester", "member", "active")
+	targetID := seedChatUserWithAttrs(t, ctx, pool, "Target", "member", "active")
+	channelID := seedChannelForUserWithVisibility(t, ctx, pool, requesterID, "Private", "private")
+	_, err := pool.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+		channelID, targetID,
+	)
+	require.NoError(t, err)
+
+	result, err := svc.RemoveConversationMember(ctx, requesterID, "member", channelID, targetID)
+	require.NoError(t, err)
+	removedDeliveries := filterDirectDeliveriesByType(result.DirectDeliveries, packetspb.EventType_EVENT_TYPE_CONVERSATION_REMOVED)
+	require.Len(t, removedDeliveries, 1)
+	assert.Equal(t, targetID.String(), removedDeliveries[0].UserID)
+	require.NotNil(t, removedDeliveries[0].Event)
+	assert.Equal(
+		t,
+		packetspb.ConversationRemovedReason_CONVERSATION_REMOVED_REASON_ACCESS_REVOKED,
+		removedDeliveries[0].Event.GetConversationRemoved().GetReason(),
+	)
+
+	var isArchived bool
+	err = pool.QueryRow(ctx,
+		`SELECT is_archived FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+		channelID, targetID,
+	).Scan(&isArchived)
+	require.NoError(t, err)
+	assert.True(t, isArchived)
+
+	var body string
+	err = pool.QueryRow(ctx,
+		`SELECT body FROM messages WHERE channel_id = $1 ORDER BY channel_seq DESC LIMIT 1`,
+		channelID,
+	).Scan(&body)
+	require.NoError(t, err)
+	assert.Equal(t, "@Target was removed from this channel by @Requester", body)
+}
+
+func TestIntegration_RemoveConversationMember_PrivateNonMemberRequesterRejected(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	creatorID := seedChatUserWithAttrs(t, ctx, pool, "Creator", "member", "active")
+	requesterID := seedChatUserWithAttrs(t, ctx, pool, "Requester", "member", "active")
+	targetID := seedChatUserWithAttrs(t, ctx, pool, "Target", "member", "active")
+	channelID := seedChannelForUserWithVisibility(t, ctx, pool, creatorID, "Private", "private")
+	_, err := pool.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+		channelID, targetID,
+	)
+	require.NoError(t, err)
+
+	_, err = svc.RemoveConversationMember(ctx, requesterID, "member", channelID, targetID)
+	require.ErrorIs(t, err, chat.ErrNotMember)
+
+	var isArchived bool
+	err = pool.QueryRow(ctx,
+		`SELECT is_archived FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+		channelID, targetID,
+	).Scan(&isArchived)
+	require.NoError(t, err)
+	assert.False(t, isArchived)
+}
+
+func TestIntegration_RemoveConversationMember_RejectsSelfRemoval(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	userID, channelID := seedUserAndChannel(t, ctx, pool)
+
+	_, err := svc.RemoveConversationMember(ctx, userID, "admin", channelID, userID)
+	require.ErrorIs(t, err, chat.ErrRemoveMemberForbidden)
+
+	var isArchived bool
+	err = pool.QueryRow(ctx,
+		`SELECT is_archived FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+		channelID, userID,
+	).Scan(&isArchived)
+	require.NoError(t, err)
+	assert.False(t, isArchived)
+}
+
 func TestIntegration_ListAvailablePublicChannels_ExcludesJoinedPrivateArchivedAndDM(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -1744,7 +1930,7 @@ func TestIntegration_InviteToChannel_PrivateRestoresArchivedMembership(t *testin
 
 	result, err := svc.InviteToChannel(ctx, requesterID, channelID, targetID)
 	require.NoError(t, err)
-	require.Len(t, result.DirectDeliveries, 1)
+	require.NotEmpty(t, result.DirectDeliveries)
 	require.NotNil(t, result.DirectDeliveries[0].Event)
 	assert.Equal(t, packetspb.EventType_EVENT_TYPE_CONVERSATION_UPSERTED, result.DirectDeliveries[0].Event.GetEventType())
 
@@ -1755,6 +1941,52 @@ func TestIntegration_InviteToChannel_PrivateRestoresArchivedMembership(t *testin
 	).Scan(&isArchived)
 	require.NoError(t, err)
 	assert.False(t, isArchived)
+
+	var body string
+	err = pool.QueryRow(ctx,
+		`SELECT body FROM messages WHERE channel_id = $1 ORDER BY channel_seq DESC LIMIT 1`,
+		channelID,
+	).Scan(&body)
+	require.NoError(t, err)
+	assert.Equal(t, "@Target was added to this channel by @Requester", body)
+
+	rows, err := pool.Query(ctx,
+		`SELECT label, target_id
+		   FROM message_entities me
+		   JOIN messages m ON m.id = me.message_id
+		  WHERE m.channel_id = $1
+		  ORDER BY m.channel_seq DESC, me.ordinal ASC
+		  LIMIT 2`,
+		channelID,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	type entityRow struct {
+		label  string
+		target uuid.UUID
+	}
+	entities := make([]entityRow, 0, 2)
+	for rows.Next() {
+		var entity entityRow
+		require.NoError(t, rows.Scan(&entity.label, &entity.target))
+		entities = append(entities, entity)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, entities, 2)
+	assert.Equal(t, "@Target", entities[0].label)
+	assert.Equal(t, targetID, entities[0].target)
+	assert.Equal(t, "@Requester", entities[1].label)
+	assert.Equal(t, requesterID, entities[1].target)
+
+	second, err := svc.InviteToChannel(ctx, requesterID, channelID, targetID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(filterDirectDeliveriesByType(second.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)))
+
+	var messageCount int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM messages WHERE channel_id = $1`, channelID).Scan(&messageCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, messageCount)
 }
 
 func TestIntegration_InviteToChannel_RejectsArchivedConversation(t *testing.T) {

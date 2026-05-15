@@ -30,6 +30,8 @@ var (
 	ErrAttachmentStoreUnavailable = errors.New("attachment storage is unavailable")
 	ErrInvalidNotificationLevel   = errors.New("invalid notification level")
 	ErrInvalidMessageEntity       = errors.New("invalid message entity")
+	ErrRemoveMemberForbidden      = errors.New("not allowed to remove channel members")
+	ErrRemoveUnsupportedTarget    = errors.New("conversation does not support member removal")
 )
 
 // Service handles messaging, reactions, and thread subscriptions.

@@ -52,6 +52,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/channels/join", h.requireAuth(h.joinChannels))
 	mux.HandleFunc("/api/conversations/leave", h.requireAuth(h.leaveConversation))
 	mux.HandleFunc("/api/conversations/members", h.requireAuth(h.listConversationMembers))
+	mux.HandleFunc("/api/conversations/members/remove", h.requireAuth(h.removeConversationMember))
 	mux.HandleFunc("/api/conversations/active-call-members", h.requireAuth(h.listActiveCallMembers))
 	mux.HandleFunc("/api/conversations/invite", h.requireAuth(h.inviteToConversation))
 	mux.HandleFunc("/api/chat/unread-feed", h.requireAuth(h.listUnreadFeed))
@@ -98,6 +99,11 @@ type leaveConversationRequest struct {
 }
 
 type inviteConversationRequest struct {
+	ConversationID string `json:"conversation_id"`
+	UserID         string `json:"user_id"`
+}
+
+type removeConversationMemberRequest struct {
 	ConversationID string `json:"conversation_id"`
 	UserID         string `json:"user_id"`
 }
@@ -604,6 +610,55 @@ func (h *Handler) listConversationMembers(w http.ResponseWriter, r *http.Request
 		})
 	}
 	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) removeConversationMember(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodPost {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	var req removeConversationMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
+		return
+	}
+	conversationID, err := uuid.Parse(req.ConversationID)
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
+		return
+	}
+	targetUserID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid user_id"))
+		return
+	}
+
+	result, err := h.svc.RemoveConversationMember(r.Context(), principal.UserID, principal.Role, conversationID, targetUserID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
+		case errors.Is(err, ErrRemoveMemberForbidden):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not allowed to remove members from this conversation"))
+		case errors.Is(err, ErrRemoveUnsupportedTarget):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("cannot remove members from this conversation"))
+		case errors.Is(err, ErrConversationArchived):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("cannot remove members from archived conversations"))
+		case errors.Is(err, ErrNotPublicChannel):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("conversation not found"))
+		default:
+			h.log.Error("removeConversationMember error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+
+	if len(result.DirectDeliveries) > 0 && h.notifier != nil {
+		h.notifier.SendChatDirectServerEvents(result.DirectDeliveries)
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h *Handler) listActiveCallMembers(w http.ResponseWriter, r *http.Request, principal auth.Principal) {

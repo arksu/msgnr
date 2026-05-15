@@ -47,19 +47,26 @@ SELECT u.id, u.email, u.display_name, u.avatar_url, u.role, u.status, cm.created
 FROM channel_members cm
 JOIN users u ON u.id = cm.user_id
 WHERE cm.channel_id = $1
+  AND cm.is_archived = false
 ORDER BY cm.created_at ASC;
 
 -- name: AdminAddChannelMember :exec
 INSERT INTO channel_members (channel_id, user_id)
 VALUES ($1, $2)
-ON CONFLICT DO NOTHING;
+ON CONFLICT (channel_id, user_id) DO UPDATE
+    SET is_archived = false;
 
 -- name: AdminAddAllUsersToChannel :exec
 INSERT INTO channel_members (channel_id, user_id)
 SELECT $1, u.id
 FROM users u
 WHERE u.role <> 'bot'
-ON CONFLICT DO NOTHING;
+ON CONFLICT (channel_id, user_id) DO UPDATE
+    SET is_archived = false;
 
 -- name: AdminRemoveChannelMember :exec
-DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2;
+UPDATE channel_members
+SET is_archived = true
+WHERE channel_id = $1
+  AND user_id = $2
+  AND is_archived = false;

@@ -866,6 +866,111 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	}, nil
 }
 
+type membershipNoticeAction string
+
+const (
+	membershipNoticeAdded   membershipNoticeAction = "added to"
+	membershipNoticeRemoved membershipNoticeAction = "removed from"
+)
+
+func (s *Service) createMembershipChangeNoticeTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	channelID, actorID, targetUserID uuid.UUID,
+	action membershipNoticeAction,
+) ([]DirectDelivery, error) {
+	actorLabel, err := s.userNoticeLabelTx(ctx, tx, actorID)
+	if err != nil {
+		return nil, fmt.Errorf("load actor label: %w", err)
+	}
+	targetLabel, err := s.userNoticeLabelTx(ctx, tx, targetUserID)
+	if err != nil {
+		return nil, fmt.Errorf("load target label: %w", err)
+	}
+
+	targetMentionLabel := "@" + targetLabel
+	middle := fmt.Sprintf(" was %s this channel by ", action)
+	actorMentionLabel := "@" + actorLabel
+	body := targetMentionLabel + middle + actorMentionLabel
+	targetMention := MessageEntity{
+		Kind:     MessageEntityKindUser,
+		TargetID: targetUserID,
+		Label:    targetMentionLabel,
+		Start:    0,
+		End:      int32(len([]rune(targetMentionLabel))),
+	}
+	actorMention := MessageEntity{
+		Kind:     MessageEntityKindUser,
+		TargetID: actorID,
+		Label:    actorMentionLabel,
+		Start:    int32(len([]rune(targetMentionLabel + middle))),
+		End:      int32(len([]rune(body))),
+	}
+
+	var msgID uuid.UUID
+	var channelSeq int64
+	var createdAt time.Time
+	if err := tx.QueryRow(ctx, `
+		WITH seq AS (
+		    UPDATE channels
+		    SET next_seq = next_seq + 1,
+		        last_activity_at = now()
+		    WHERE id = $1
+		    RETURNING next_seq
+		)
+		INSERT INTO messages (channel_id, channel_seq, sender_id, client_msg_id, body, mention_everyone, created_at)
+		VALUES ($1, (SELECT next_seq FROM seq), $2, $3, $4, false, now())
+		RETURNING id, channel_seq, created_at`,
+		channelID,
+		actorID,
+		"membership:"+strings.ReplaceAll(string(action), " ", "-")+":"+uuid.NewString(),
+		body,
+	).Scan(&msgID, &channelSeq, &createdAt); err != nil {
+		return nil, fmt.Errorf("insert message: %w", err)
+	}
+
+	entities := []MessageEntity{targetMention, actorMention}
+	if err := s.insertMessageEntitiesTx(ctx, tx, msgID, entities); err != nil {
+		return nil, fmt.Errorf("insert entities: %w", err)
+	}
+
+	msgProto := &packetspb.MessageEvent{
+		ConversationId:  channelID.String(),
+		MessageId:       msgID.String(),
+		SenderId:        actorID.String(),
+		Body:            body,
+		ChannelSeq:      channelSeq,
+		CreatedAt:       timestamppb.New(createdAt),
+		MentionEveryone: false,
+		Entities:        toProtoMessageEntities(entities),
+	}
+	msgServerEvt := &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+		ConversationId: channelID.String(),
+		Payload:        &packetspb.ServerEvent_MessageCreated{MessageCreated: msgProto},
+	}
+	if err := s.appendAndNotifyTx(ctx, tx, "message_created", channelID.String(), msgProto, msgServerEvt); err != nil {
+		return nil, err
+	}
+
+	deliveries, err := s.buildUnreadRecalcDeliveriesForChannelMembersTx(ctx, tx, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("build unread deliveries: %w", err)
+	}
+	return deliveries, nil
+}
+
+func (s *Service) userNoticeLabelTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (string, error) {
+	var label string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(NULLIF(display_name, ''), email) FROM users WHERE id = $1`,
+		userID,
+	).Scan(&label); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(label), nil
+}
+
 // EditMessage updates body/mentions for an existing message authored by actor.
 // The mutation emits message_updated and recalculates unread counters for members.
 func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMessageResult, error) {

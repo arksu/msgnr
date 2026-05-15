@@ -268,6 +268,12 @@ export async function inviteToConversation(conversationId: string, userId: strin
   } catch (e) { handleError(e) }
 }
 
+export async function removeConversationMember(conversationId: string, userId: string): Promise<void> {
+  try {
+    await http.post('/api/conversations/members/remove', { conversation_id: conversationId, user_id: userId })
+  } catch (e) { handleError(e) }
+}
+
 export async function listConversationMembers(conversationId: string): Promise<ConversationMemberItem[]> {
   try {
     const { data } = await http.get<ConversationMemberItem[]>('/api/conversations/members', {

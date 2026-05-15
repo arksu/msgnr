@@ -365,7 +365,7 @@ func (s *Service) LeaveConversation(ctx context.Context, requesterID, conversati
 	if rowsAffected == 0 {
 		hasMembership, err := s.q.HasConversationMembership(ctx, queries.HasConversationMembershipParams{
 			ConversationID: conversationID,
-			RequesterID:    requesterID,
+			UserID:         requesterID,
 		})
 		if err != nil {
 			return LeaveConversationResult{}, fmt.Errorf("chat.LeaveConversation membership lookup: %w", err)
@@ -380,6 +380,95 @@ func (s *Service) LeaveConversation(ctx context.Context, requesterID, conversati
 		DirectDeliveries: []DirectDelivery{
 			buildConversationRemovedDelivery(requesterID, conversationID, packetspb.ConversationRemovedReason_CONVERSATION_REMOVED_REASON_ARCHIVED),
 		},
+	}, nil
+}
+
+// RemoveConversationMember archives targetUserID's active membership from a
+// public/private channel. Public channels require a workspace admin/owner;
+// private channels allow any active member to remove another active member.
+func (s *Service) RemoveConversationMember(ctx context.Context, requesterID uuid.UUID, requesterRole string, conversationID, targetUserID uuid.UUID) (RemoveConversationMemberResult, error) {
+	if requesterID == targetUserID {
+		return RemoveConversationMemberResult{}, ErrRemoveMemberForbidden
+	}
+
+	channel, err := s.q.GetRemovableChannelByID(ctx, conversationID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return RemoveConversationMemberResult{}, ErrNotPublicChannel
+		}
+		return RemoveConversationMemberResult{}, fmt.Errorf("chat.RemoveConversationMember fetch channel: %w", err)
+	}
+	if channel.IsArchived {
+		return RemoveConversationMemberResult{}, ErrConversationArchived
+	}
+	if channel.Kind != "channel" || (channel.Visibility != "public" && channel.Visibility != "private") {
+		return RemoveConversationMemberResult{}, ErrRemoveUnsupportedTarget
+	}
+
+	switch channel.Visibility {
+	case "public":
+		if requesterRole != "admin" && requesterRole != "owner" {
+			return RemoveConversationMemberResult{}, ErrRemoveMemberForbidden
+		}
+	case "private":
+		isMember, err := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
+			ChannelID: conversationID,
+			UserID:    requesterID,
+		})
+		if err != nil {
+			return RemoveConversationMemberResult{}, fmt.Errorf("chat.RemoveConversationMember requester membership check: %w", err)
+		}
+		if !isMember {
+			return RemoveConversationMemberResult{}, ErrNotMember
+		}
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return RemoveConversationMemberResult{}, fmt.Errorf("chat.RemoveConversationMember begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	commandTag, err := tx.Exec(ctx, `
+		UPDATE channel_members
+		   SET is_archived = true
+		 WHERE channel_id = $1
+		   AND user_id = $2
+		   AND is_archived = false`,
+		conversationID,
+		targetUserID,
+	)
+	if err != nil {
+		return RemoveConversationMemberResult{}, fmt.Errorf("chat.RemoveConversationMember archive target membership: %w", err)
+	}
+	rowsAffected := commandTag.RowsAffected()
+	if rowsAffected == 0 {
+		hasMembership, err := s.q.HasConversationMembership(ctx, queries.HasConversationMembershipParams{
+			ConversationID: conversationID,
+			UserID:         targetUserID,
+		})
+		if err != nil {
+			return RemoveConversationMemberResult{}, fmt.Errorf("chat.RemoveConversationMember target membership lookup: %w", err)
+		}
+		if !hasMembership {
+			return RemoveConversationMemberResult{}, ErrNotMember
+		}
+		return RemoveConversationMemberResult{}, nil
+	}
+
+	noticeDeliveries, err := s.createMembershipChangeNoticeTx(ctx, tx, conversationID, requesterID, targetUserID, membershipNoticeRemoved)
+	if err != nil {
+		return RemoveConversationMemberResult{}, fmt.Errorf("chat.RemoveConversationMember create membership notice: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return RemoveConversationMemberResult{}, fmt.Errorf("chat.RemoveConversationMember commit: %w", err)
+	}
+
+	return RemoveConversationMemberResult{
+		DirectDeliveries: append([]DirectDelivery{
+			buildConversationRemovedDelivery(targetUserID, conversationID, packetspb.ConversationRemovedReason_CONVERSATION_REMOVED_REASON_ACCESS_REVOKED),
+		}, noticeDeliveries...),
 	}, nil
 }
 
@@ -808,18 +897,55 @@ func (s *Service) InviteToChannel(ctx context.Context, requesterID, channelID, t
 	}
 
 	// 4. Insert or restore membership (idempotent).
-	if err := s.q.UpsertChannelMember(ctx, queries.UpsertChannelMemberParams{
-		ChannelID: channelID,
-		UserID:    targetUserID,
-	}); err != nil {
-		return InviteToChannelResult{}, fmt.Errorf("chat.InviteToChannel insert member: %w", err)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return InviteToChannelResult{}, fmt.Errorf("chat.InviteToChannel begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var wasActiveMember bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			  FROM channel_members
+			 WHERE channel_id = $1
+			   AND user_id = $2
+			   AND is_archived = false
+		)`,
+		channelID,
+		targetUserID,
+	).Scan(&wasActiveMember); err != nil {
+		return InviteToChannelResult{}, fmt.Errorf("chat.InviteToChannel check active membership: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO channel_members (channel_id, user_id)
+		VALUES ($1, $2)
+		ON CONFLICT (channel_id, user_id) DO UPDATE
+		    SET is_archived = false`,
+		channelID,
+		targetUserID,
+	); err != nil {
+		return InviteToChannelResult{}, fmt.Errorf("chat.InviteToChannel upsert member: %w", err)
+	}
+
+	var noticeDeliveries []DirectDelivery
+	if !wasActiveMember {
+		noticeDeliveries, err = s.createMembershipChangeNoticeTx(ctx, tx, channelID, requesterID, targetUserID, membershipNoticeAdded)
+		if err != nil {
+			return InviteToChannelResult{}, fmt.Errorf("chat.InviteToChannel create membership notice: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return InviteToChannelResult{}, fmt.Errorf("chat.InviteToChannel commit: %w", err)
 	}
 
 	// 5. Build a real-time delivery for the invited user so their sidebar
 	//    immediately shows the new channel without waiting for re-bootstrap.
 	delivery := buildChannelConversationUpsertedDelivery(targetUserID, channel)
 	return InviteToChannelResult{
-		DirectDeliveries: []DirectDelivery{delivery},
+		DirectDeliveries: append([]DirectDelivery{delivery}, noticeDeliveries...),
 	}, nil
 }
 

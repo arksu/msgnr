@@ -98,6 +98,15 @@ FROM channels
 WHERE id = @channel_id
   AND hidden = false;
 
+-- name: GetRemovableChannelByID :one
+SELECT id,
+       kind,
+       visibility,
+       is_archived
+FROM channels
+WHERE id = @channel_id
+  AND hidden = false;
+
 -- name: GetInviteTargetUserByID :one
 SELECT COALESCE(NULLIF(display_name, ''), email) AS display_name,
        email
@@ -136,10 +145,17 @@ WHERE channel_id = @conversation_id
   AND user_id = @requester_id
   AND is_archived = false;
 
+-- name: ArchiveTargetChannelMembership :execrows
+UPDATE channel_members
+SET is_archived = true
+WHERE channel_id = @conversation_id
+  AND user_id = @target_user_id
+  AND is_archived = false;
+
 -- name: HasConversationMembership :one
 SELECT EXISTS (
   SELECT 1
   FROM channel_members
   WHERE channel_id = @conversation_id
-    AND user_id = @requester_id
+    AND user_id = @user_id
 ) AS has_membership;

@@ -80,8 +80,45 @@
               {{ member.email }}
             </div>
           </div>
+          <button
+            v-if="canRemoveMember(member)"
+            class="h-7 w-7 shrink-0 rounded flex items-center justify-center text-gray-500 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            title="Remove member"
+            data-testid="remove-member-button"
+            :data-user-id="member.user_id"
+            :disabled="removeSubmittingId === member.user_id"
+            @click.stop="removeMember(member.user_id)"
+          >
+            <svg
+              v-if="removeSubmittingId === member.user_id"
+              class="h-4 w-4 animate-spin"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
+              <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"/>
+              <path class="opacity-90" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+            </svg>
+            <svg
+              v-else
+              class="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+              <circle cx="8.5" cy="7" r="4"/>
+              <line x1="18" y1="8" x2="23" y2="13"/>
+              <line x1="23" y1="8" x2="18" y2="13"/>
+            </svg>
+          </button>
         </li>
       </ul>
+      <div v-if="removeError" class="px-4 py-2 text-xs text-red-400">
+        {{ removeError }}
+      </div>
     </div>
   </aside>
 
@@ -181,32 +218,50 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useChatStore } from '@/stores/chat'
+import { useAuthStore } from '@/stores/auth'
 import UserAvatar from './UserAvatar.vue'
 import {
   listConversationMembers,
   listDmCandidates,
   inviteToConversation,
+  removeConversationMember,
   type ConversationMemberItem,
   type DmCandidateItem,
   ChatApiError,
 } from '@/services/http/chatApi'
 import { userCustomStatusFromDto } from '@/types/userStatus'
 
-defineProps<{ visibility?: string }>()
+const props = defineProps<{ visibility?: string }>()
 defineEmits<{ close: [] }>()
 
 const chat = useChatStore()
+const auth = useAuthStore()
 
 // ── Members list ──────────────────────────────────────────────────────────────
 
 const members = ref<ConversationMemberItem[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+const removeError = ref<string | null>(null)
+const removeSubmittingId = ref<string | null>(null)
+
+const selfUserId = computed(() => auth.user?.id ?? '')
+const canRemoveMembers = computed(() => {
+  if (props.visibility === 'private') return true
+  if (props.visibility !== 'public') return false
+  const role = auth.user?.role
+  return role === 'admin' || role === 'owner'
+})
+
+function canRemoveMember(member: ConversationMemberItem) {
+  return canRemoveMembers.value && member.user_id !== selfUserId.value
+}
 
 async function fetchMembers(conversationId: string) {
   if (!conversationId) return
   loading.value = true
   error.value = null
+  removeError.value = null
   try {
     members.value = await listConversationMembers(conversationId)
     for (const member of members.value) {
@@ -217,6 +272,22 @@ async function fetchMembers(conversationId: string) {
     members.value = []
   } finally {
     loading.value = false
+  }
+}
+
+async function removeMember(userId: string) {
+  const conversationId = chat.activeConversation?.id
+  if (!conversationId || userId === selfUserId.value) return
+
+  removeSubmittingId.value = userId
+  removeError.value = null
+  try {
+    await removeConversationMember(conversationId, userId)
+    await fetchMembers(conversationId)
+  } catch (e) {
+    removeError.value = e instanceof ChatApiError ? e.message : 'Failed to remove member.'
+  } finally {
+    removeSubmittingId.value = null
   }
 }
 

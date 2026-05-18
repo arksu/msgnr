@@ -28,6 +28,19 @@ export interface SaveBlobOptions {
   mimeType?: string
 }
 
+export type HardwareCallControlAction = 'hangup' | 'toggle-microphone'
+
+export interface HardwareCallControlHandlers {
+  onHangup(): Promise<void> | void
+  onToggleMicrophone(): Promise<void> | void
+}
+
+export interface HardwareCallControlState {
+  active: boolean
+  microphoneActive: boolean
+  title?: string
+}
+
 export interface PlatformAdapter {
   readonly type: PlatformType
 
@@ -67,6 +80,12 @@ export interface PlatformAdapter {
 
   files: {
     saveBlob(options: SaveBlobOptions): Promise<{ saved: boolean }>
+  }
+
+  callControls?: {
+    register(handlers: HardwareCallControlHandlers): Promise<void> | void
+    update(state: HardwareCallControlState): Promise<void> | void
+    dispose(): Promise<void> | void
   }
 
   lifecycle: {

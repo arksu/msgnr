@@ -7,6 +7,8 @@ use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Position, Size, WebviewUrl, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 
+mod call_controls;
+
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 
 struct TrayState {
@@ -92,6 +94,16 @@ fn request_app_restart(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
   tauri_plugin_opener::open_url(url, None::<&str>).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn call_controls_set_active(app: AppHandle, title: String, microphone_active: bool) -> Result<(), String> {
+  call_controls::set_active(app, title, microphone_active)
+}
+
+#[tauri::command]
+fn call_controls_clear() -> Result<(), String> {
+  call_controls::clear()
 }
 
 #[tauri::command]
@@ -314,6 +326,8 @@ pub fn run() {
       keyring_delete,
       request_app_restart,
       open_external_url,
+      call_controls_set_active,
+      call_controls_clear,
       save_pdf_file,
       annotation_overlay_show,
       annotation_overlay_hide,

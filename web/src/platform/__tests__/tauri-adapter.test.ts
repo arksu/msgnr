@@ -32,3 +32,49 @@ describe('TauriAdapter files.saveBlob', () => {
     }))
   })
 })
+
+describe('TauriAdapter callControls', () => {
+  beforeEach(() => {
+    ;(window as Window & { __TAURI__?: unknown }).__TAURI__ = undefined
+    ;(window as Window & { __TAURI_INTERNALS__?: { invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__ = undefined
+  })
+
+  it('bridges native hardware call-control events into registered handlers', async () => {
+    const listeners = new Map<string, (event: { payload: unknown }) => void>()
+    const invoke = vi.fn(async () => null)
+    const unlisten = vi.fn()
+    const listen = vi.fn(async (event: string, handler: (event: { payload: unknown }) => void) => {
+      listeners.set(event, handler)
+      return unlisten
+    })
+    ;(window as Window & { __TAURI__?: unknown }).__TAURI__ = {
+      core: { invoke },
+      event: { listen },
+    }
+
+    const { TauriAdapter } = await import('@/platform/tauri-adapter')
+    const adapter = new TauriAdapter()
+    const onHangup = vi.fn()
+    const onToggleMicrophone = vi.fn()
+
+    await adapter.callControls?.register({ onHangup, onToggleMicrophone })
+    listeners.get('hardware-call-control')?.({ payload: { action: 'hangup' } })
+    listeners.get('hardware-call-control')?.({ payload: { action: 'toggle-microphone' } })
+    await adapter.callControls?.update({
+      active: true,
+      microphoneActive: true,
+      title: 'General',
+    })
+    await adapter.callControls?.dispose()
+
+    expect(listen).toHaveBeenCalledWith('hardware-call-control', expect.any(Function))
+    expect(onHangup).toHaveBeenCalledTimes(1)
+    expect(onToggleMicrophone).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('call_controls_set_active', {
+      title: 'General',
+      microphoneActive: true,
+    })
+    expect(invoke).toHaveBeenCalledWith('call_controls_clear', undefined)
+    expect(unlisten).toHaveBeenCalledTimes(1)
+  })
+})

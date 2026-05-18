@@ -2154,7 +2154,9 @@ name = "msgnr-desktop"
 version = "0.24.0"
 dependencies = [
  "base64 0.22.1",
+ "block2",
  "keyring",
+ "objc2",
  "serde",
  "serde_json",
  "tauri",

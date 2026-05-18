@@ -1,6 +1,52 @@
 import { normalizeNotificationPermission } from '@/platform/types'
-import type { AppNotificationOptions, PlatformAdapter } from '@/platform/types'
+import type {
+  AppNotificationOptions,
+  HardwareCallControlHandlers,
+  HardwareCallControlState,
+  PlatformAdapter,
+} from '@/platform/types'
 import { useNotificationSoundEngine } from '@/services/sound'
+
+type BrowserMediaSessionAction = 'hangup' | 'togglemicrophone'
+
+type BrowserMediaSession = {
+  metadata?: MediaMetadata | null
+  setActionHandler?: (
+    action: BrowserMediaSessionAction,
+    handler: ((details?: unknown) => void) | null,
+  ) => void
+  setMicrophoneActive?: (active: boolean) => void
+}
+
+function getBrowserMediaSession(): BrowserMediaSession | null {
+  if (typeof navigator === 'undefined') return null
+  const nav = navigator as Navigator & { mediaSession?: BrowserMediaSession }
+  return nav.mediaSession ?? null
+}
+
+function setMediaSessionActionHandler(
+  action: BrowserMediaSessionAction,
+  handler: ((details?: unknown) => void) | null,
+): boolean {
+  const mediaSession = getBrowserMediaSession()
+  if (typeof mediaSession?.setActionHandler !== 'function') return false
+  try {
+    mediaSession.setActionHandler(action, handler)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function setMediaSessionMicrophoneActive(active: boolean) {
+  const mediaSession = getBrowserMediaSession()
+  if (typeof mediaSession?.setMicrophoneActive !== 'function') return
+  try {
+    mediaSession.setMicrophoneActive(active)
+  } catch {
+    // Best effort: some browsers expose the method before the action is usable.
+  }
+}
 
 type SaveFilePickerWindow = Window & {
   showSaveFilePicker?: (options?: {
@@ -34,6 +80,7 @@ function downloadBlob(blob: Blob, suggestedName: string) {
 export class PwaAdapter implements PlatformAdapter {
   readonly type = 'pwa' as const
   private readonly soundEngine = useNotificationSoundEngine()
+  private registeredCallControlActions = new Set<BrowserMediaSessionAction>()
 
   notifications: PlatformAdapter['notifications'] = {
     requestPermission: async () => {
@@ -136,6 +183,59 @@ export class PwaAdapter implements PlatformAdapter {
 
       downloadBlob(blob, suggestedName)
       return { saved: true }
+    },
+  }
+
+  callControls: PlatformAdapter['callControls'] = {
+    register: (handlers: HardwareCallControlHandlers) => {
+      this.registeredCallControlActions.clear()
+
+      if (setMediaSessionActionHandler('hangup', () => {
+        void handlers.onHangup()
+      })) {
+        this.registeredCallControlActions.add('hangup')
+      }
+
+      if (setMediaSessionActionHandler('togglemicrophone', () => {
+        void handlers.onToggleMicrophone()
+      })) {
+        this.registeredCallControlActions.add('togglemicrophone')
+      }
+    },
+    update: (state: HardwareCallControlState) => {
+      const mediaSession = getBrowserMediaSession()
+      if (!mediaSession) return
+
+      if (typeof MediaMetadata !== 'undefined') {
+        try {
+          mediaSession.metadata = state.active
+            ? new MediaMetadata({
+                title: state.title || 'Msgnr call',
+                artist: 'Msgnr',
+              })
+            : null
+        } catch {
+          // Metadata is only a hint for OS-level call controls.
+        }
+      }
+
+      setMediaSessionMicrophoneActive(state.microphoneActive)
+    },
+    dispose: () => {
+      for (const action of this.registeredCallControlActions) {
+        setMediaSessionActionHandler(action, null)
+      }
+      this.registeredCallControlActions.clear()
+
+      const mediaSession = getBrowserMediaSession()
+      if (mediaSession) {
+        try {
+          mediaSession.metadata = null
+        } catch {
+          // Best effort.
+        }
+      }
+      setMediaSessionMicrophoneActive(false)
     },
   }
 

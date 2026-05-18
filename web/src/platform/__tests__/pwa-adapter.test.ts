@@ -57,3 +57,91 @@ describe('PwaAdapter files.saveBlob', () => {
     createElementSpy.mockRestore()
   })
 })
+
+describe('PwaAdapter callControls', () => {
+  const originalMediaMetadata = globalThis.MediaMetadata
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'mediaSession', {
+      configurable: true,
+      value: undefined,
+    })
+    ;(globalThis as typeof globalThis & { MediaMetadata?: typeof MediaMetadata }).MediaMetadata = originalMediaMetadata
+  })
+
+  it('registers hangup and microphone handlers with Media Session', async () => {
+    const handlers = new Map<string, ((details?: unknown) => void) | null>()
+    const mediaSession = {
+      metadata: null as MediaMetadata | null,
+      setActionHandler: vi.fn((action: string, handler: ((details?: unknown) => void) | null) => {
+        handlers.set(action, handler)
+      }),
+      setMicrophoneActive: vi.fn(),
+    }
+    class MockMediaMetadata {
+      title: string
+      artist: string
+
+      constructor(init: { title?: string; artist?: string }) {
+        this.title = init.title ?? ''
+        this.artist = init.artist ?? ''
+      }
+    }
+    ;(globalThis as typeof globalThis & { MediaMetadata?: typeof MediaMetadata }).MediaMetadata = MockMediaMetadata as typeof MediaMetadata
+    Object.defineProperty(navigator, 'mediaSession', {
+      configurable: true,
+      value: mediaSession,
+    })
+
+    const onHangup = vi.fn()
+    const onToggleMicrophone = vi.fn()
+    const adapter = new PwaAdapter()
+
+    await adapter.callControls?.register({ onHangup, onToggleMicrophone })
+    handlers.get('hangup')?.()
+    handlers.get('togglemicrophone')?.()
+    await adapter.callControls?.update({
+      active: true,
+      microphoneActive: true,
+      title: 'General',
+    })
+    await adapter.callControls?.dispose()
+
+    expect(onHangup).toHaveBeenCalledTimes(1)
+    expect(onToggleMicrophone).toHaveBeenCalledTimes(1)
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('hangup', expect.any(Function))
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('togglemicrophone', expect.any(Function))
+    expect(mediaSession.setMicrophoneActive).toHaveBeenCalledWith(true)
+    expect(mediaSession.metadata).toBeNull()
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('hangup', null)
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('togglemicrophone', null)
+  })
+
+  it('tolerates unsupported Media Session actions', async () => {
+    const mediaSession = {
+      setActionHandler: vi.fn(() => {
+        throw new Error('unsupported')
+      }),
+      setMicrophoneActive: vi.fn(() => {
+        throw new Error('unsupported')
+      }),
+    }
+    Object.defineProperty(navigator, 'mediaSession', {
+      configurable: true,
+      value: mediaSession,
+    })
+
+    const adapter = new PwaAdapter()
+
+    expect(() => adapter.callControls?.register({
+      onHangup: vi.fn(),
+      onToggleMicrophone: vi.fn(),
+    })).not.toThrow()
+    expect(() => adapter.callControls?.update({
+      active: true,
+      microphoneActive: true,
+      title: 'General',
+    })).not.toThrow()
+    expect(() => adapter.callControls?.dispose()).not.toThrow()
+  })
+})

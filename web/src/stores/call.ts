@@ -577,6 +577,10 @@ export const useCallStore = defineStore('call', () => {
   let lastResolvedNativeOverlayTargetKey = ''
   let activeNativeOverlayLabelVersion = 0
   const activeNativeOverlayLabels = new Map<string, number>()
+  let hardwareCallControlsRegistered = false
+  let hardwareCallControlsSyncSeq = 0
+  let hardwareHangupInFlight = false
+  let hardwareMuteInFlight = false
 
   const activeConversationTitle = computed(() => {
     const channel = chatStore.channels.find(item => item.id === activeConversationId.value)
@@ -585,6 +589,91 @@ export const useCallStore = defineStore('call', () => {
     if (dm) return dm.displayName
     return 'Call'
   })
+
+  function shouldExposeHardwareCallControls(): boolean {
+    return Boolean(activeCallId.value && connected.value)
+  }
+
+  async function handleHardwareHangup() {
+    if (!shouldExposeHardwareCallControls()) return
+    if (hardwareHangupInFlight) return
+    hardwareHangupInFlight = true
+    try {
+      await leaveCall()
+    } catch (err) {
+      callDebug('hardware hangup failed', {
+        error: toErrorMessage(err),
+      })
+    } finally {
+      hardwareHangupInFlight = false
+    }
+  }
+
+  async function handleHardwareToggleMicrophone() {
+    if (!shouldExposeHardwareCallControls()) return
+    if (hardwareMuteInFlight) return
+    hardwareMuteInFlight = true
+    try {
+      await toggleMute()
+    } catch (err) {
+      callDebug('hardware microphone toggle failed', {
+        error: toErrorMessage(err),
+      })
+    } finally {
+      hardwareMuteInFlight = false
+    }
+  }
+
+  async function syncHardwareCallControls() {
+    const seq = ++hardwareCallControlsSyncSeq
+    const controls = getPlatformOrNull()?.callControls
+    if (!controls) {
+      hardwareCallControlsRegistered = false
+      return
+    }
+
+    const active = shouldExposeHardwareCallControls()
+    if (!active) {
+      if (!hardwareCallControlsRegistered) return
+      hardwareCallControlsRegistered = false
+      try {
+        await controls.dispose()
+      } catch (err) {
+        callDebug('hardware call controls dispose failed', {
+          error: toErrorMessage(err),
+        })
+      }
+      return
+    }
+
+    if (!hardwareCallControlsRegistered) {
+      try {
+        await controls.register({
+          onHangup: handleHardwareHangup,
+          onToggleMicrophone: handleHardwareToggleMicrophone,
+        })
+        if (seq !== hardwareCallControlsSyncSeq) return
+        hardwareCallControlsRegistered = true
+      } catch (err) {
+        callDebug('hardware call controls register failed', {
+          error: toErrorMessage(err),
+        })
+        return
+      }
+    }
+
+    try {
+      await controls.update({
+        active: true,
+        microphoneActive: micEnabled.value,
+        title: activeConversationTitle.value,
+      })
+    } catch (err) {
+      callDebug('hardware call controls update failed', {
+        error: toErrorMessage(err),
+      })
+    }
+  }
 
   function clearPendingJoin() {
     if (pendingJoinTimer) {
@@ -2580,6 +2669,10 @@ export const useCallStore = defineStore('call', () => {
       void leaveCall()
     }
   }
+
+  watch([connected, activeCallId, micEnabled, activeConversationTitle], () => {
+    void syncHardwareCallControls()
+  }, { immediate: true })
 
   return {
     room,

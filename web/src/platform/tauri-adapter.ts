@@ -1,5 +1,8 @@
 import type {
   AppNotificationOptions,
+  HardwareCallControlAction,
+  HardwareCallControlHandlers,
+  HardwareCallControlState,
   PlatformAdapter,
 } from '@/platform/types'
 import { normalizeNotificationPermission } from '@/platform/types'
@@ -33,6 +36,13 @@ type TauriWindowBridge = {
   getCurrentWindow?: () => TauriWindowHandle
 }
 
+type TauriEventBridge = {
+  listen?: <T = unknown>(
+    event: string,
+    handler: (event: { payload: T }) => void,
+  ) => Promise<() => void> | (() => void)
+}
+
 type TauriBridge = {
   core?: {
     invoke?: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>
@@ -40,6 +50,7 @@ type TauriBridge = {
   notification?: TauriNotificationBridge
   updater?: TauriUpdaterBridge
   window?: TauriWindowBridge
+  event?: TauriEventBridge
 }
 
 type TauriInternalsBridge = {
@@ -103,6 +114,7 @@ export class TauriAdapter implements PlatformAdapter {
   readonly type = 'tauri' as const
   private readonly soundEngine = useNotificationSoundEngine()
   private readonly pwaFallback = new PwaAdapter()
+  private callControlUnlisten: (() => void) | null = null
 
   notifications: PlatformAdapter['notifications'] = {
     requestPermission: async () => {
@@ -292,6 +304,52 @@ export class TauriAdapter implements PlatformAdapter {
     },
   }
 
+  callControls: PlatformAdapter['callControls'] = {
+    register: async (handlers: HardwareCallControlHandlers) => {
+      await this.pwaFallback.callControls?.register(handlers)
+      await this.detachCallControlListener()
+
+      const listen = tauriBridge().event?.listen
+      if (typeof listen !== 'function') return
+
+      const unlisten = await listen<{ action?: HardwareCallControlAction }>('hardware-call-control', (event) => {
+        const action = event.payload?.action
+        if (action === 'hangup') {
+          void handlers.onHangup()
+          return
+        }
+        if (action === 'toggle-microphone') {
+          void handlers.onToggleMicrophone()
+        }
+      })
+      this.callControlUnlisten = unlisten
+    },
+    update: async (state: HardwareCallControlState) => {
+      await this.pwaFallback.callControls?.update(state)
+      try {
+        if (state.active) {
+          await invokeNative('call_controls_set_active', {
+            title: state.title || 'Msgnr call',
+            microphoneActive: state.microphoneActive,
+          })
+        } else {
+          await invokeNative('call_controls_clear')
+        }
+      } catch {
+        // Native headset hooks are best effort; the in-app controls remain authoritative.
+      }
+    },
+    dispose: async () => {
+      await this.detachCallControlListener()
+      await this.pwaFallback.callControls?.dispose()
+      try {
+        await invokeNative('call_controls_clear')
+      } catch {
+        // Best effort.
+      }
+    },
+  }
+
   lifecycle: PlatformAdapter['lifecycle'] = {
     init: async () => {
       await this.window.setCloseToTray?.(true)
@@ -299,5 +357,16 @@ export class TauriAdapter implements PlatformAdapter {
     dispose: async () => {
       // No-op for now.
     },
+  }
+
+  private async detachCallControlListener() {
+    const unlisten = this.callControlUnlisten
+    this.callControlUnlisten = null
+    if (!unlisten) return
+    try {
+      unlisten()
+    } catch {
+      // Listener disposal is best effort.
+    }
   }
 }

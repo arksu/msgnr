@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { nextTick } from 'vue'
 import { Track } from 'livekit-client'
 import { ErrorCode, NotificationLevel } from '@/shared/proto/packets_pb'
 import { useCallStore } from '@/stores/call'
@@ -156,6 +157,68 @@ describe('callStore leaveCall media cleanup', () => {
     expect(micTrackStop).toHaveBeenCalledTimes(1)
     expect(micMediaTrackStop).toHaveBeenCalledTimes(1)
     expect(room.disconnect).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('callStore hardware call controls', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('registers while connected, disposes on inactive, and ignores duplicate in-flight hangup', async () => {
+    type RegisteredHardwareHandlers = {
+      onHangup(): Promise<void> | void
+      onToggleMicrophone(): Promise<void> | void
+    }
+    let registeredHandlers: RegisteredHardwareHandlers | undefined
+    const controls = {
+      register: vi.fn((handlers: RegisteredHardwareHandlers) => {
+        registeredHandlers = handlers
+      }),
+      update: vi.fn(),
+      dispose: vi.fn(),
+    }
+    platformMocks.getPlatformOrNull.mockReturnValue({
+      type: 'pwa',
+      callControls: controls,
+    })
+    const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    const callStore = useCallStore()
+    callStore.activeConversationId = 'channel-1'
+    callStore.activeCallId = 'call-1'
+    callStore.connected = true
+
+    await nextTick()
+    await Promise.resolve()
+
+    expect(controls.register).toHaveBeenCalledTimes(1)
+    expect(controls.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      active: true,
+      microphoneActive: false,
+    }))
+    const handlers = registeredHandlers
+    expect(handlers).toBeDefined()
+    if (!handlers) {
+      throw new Error('expected hardware call handlers to be registered')
+    }
+
+    const firstHangup = handlers.onHangup()
+    const secondHangup = handlers.onHangup()
+    await Promise.all([firstHangup, secondHangup])
+
+    const leaveRequests = consoleInfoSpy.mock.calls.filter(call => call[0] === '[call-leave] leave requested')
+    expect(leaveRequests).toHaveLength(1)
+    expect(consoleInfoSpy).toHaveBeenCalledWith('[call-leave] leave requested', expect.objectContaining({
+      activeCallId: 'call-1',
+    }))
+
+    callStore.connected = false
+    await nextTick()
+    await Promise.resolve()
+
+    expect(controls.dispose).toHaveBeenCalledTimes(1)
+    consoleInfoSpy.mockRestore()
   })
 })
 

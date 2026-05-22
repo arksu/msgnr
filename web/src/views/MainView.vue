@@ -1143,7 +1143,7 @@ async function handleDocumentsDeleted(deletedDocumentIds: string[]) {
     return
   }
   documentsStore.clearSelectedDocument()
-  await backToDocuments(true)
+  await backToDocuments()
 }
 
 function routeTaskSlugMatchesSelected(routeSlug: string): boolean {

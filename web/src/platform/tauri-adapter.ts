@@ -306,13 +306,15 @@ export class TauriAdapter implements PlatformAdapter {
 
   callControls: PlatformAdapter['callControls'] = {
     register: async (handlers: HardwareCallControlHandlers) => {
-      await this.pwaFallback.callControls?.register(handlers)
       await this.detachCallControlListener()
+      // Keep Media Session enabled inside Tauri when WebView supports it, while
+      // the native bridge covers desktop headset controls that WebView may miss.
+      await this.pwaFallback.callControls?.register(handlers)
 
       const listen = tauriBridge().event?.listen
       if (typeof listen !== 'function') return
 
-      const unlisten = await listen<{ action?: HardwareCallControlAction }>('hardware-call-control', (event) => {
+      const unlisten = await listen<{ action?: HardwareCallControlAction; muted?: boolean }>('hardware-call-control', (event) => {
         const action = event.payload?.action
         if (action === 'hangup') {
           void handlers.onHangup()
@@ -320,6 +322,10 @@ export class TauriAdapter implements PlatformAdapter {
         }
         if (action === 'toggle-microphone') {
           void handlers.onToggleMicrophone()
+          return
+        }
+        if (action === 'set-microphone-muted' && typeof event.payload?.muted === 'boolean') {
+          void handlers.onSetMicrophoneMuted?.(event.payload.muted)
         }
       })
       this.callControlUnlisten = unlisten
@@ -327,14 +333,10 @@ export class TauriAdapter implements PlatformAdapter {
     update: async (state: HardwareCallControlState) => {
       await this.pwaFallback.callControls?.update(state)
       try {
-        if (state.active) {
-          await invokeNative('call_controls_set_active', {
-            title: state.title || 'Msgnr call',
-            microphoneActive: state.microphoneActive,
-          })
-        } else {
-          await invokeNative('call_controls_clear')
-        }
+        await invokeNative('call_controls_set_active', {
+          title: state.title || 'Msgnr call',
+          microphoneActive: state.microphoneActive,
+        })
       } catch {
         // Native headset hooks are best effort; the in-app controls remain authoritative.
       }

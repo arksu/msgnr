@@ -188,6 +188,9 @@ export class PwaAdapter implements PlatformAdapter {
 
   callControls: PlatformAdapter['callControls'] = {
     register: (handlers: HardwareCallControlHandlers) => {
+      for (const action of this.registeredCallControlActions) {
+        setMediaSessionActionHandler(action, null)
+      }
       this.registeredCallControlActions.clear()
 
       if (setMediaSessionActionHandler('hangup', () => {
@@ -208,12 +211,10 @@ export class PwaAdapter implements PlatformAdapter {
 
       if (typeof MediaMetadata !== 'undefined') {
         try {
-          mediaSession.metadata = state.active
-            ? new MediaMetadata({
-                title: state.title || 'Msgnr call',
-                artist: 'Msgnr',
-              })
-            : null
+          mediaSession.metadata = new MediaMetadata({
+            title: state.title || 'Msgnr call',
+            artist: 'Msgnr',
+          })
         } catch {
           // Metadata is only a hint for OS-level call controls.
         }

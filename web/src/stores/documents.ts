@@ -18,6 +18,7 @@ import {
   type DocumentHistoryItem,
   type DocumentItem,
   type DocumentSearchResult,
+  type SidebarDocumentNode,
   type SidebarTeamspace,
   type Teamspace,
   type UpsertTeamspacePayload,
@@ -199,6 +200,27 @@ export const useDocumentsStore = defineStore('documents', () => {
     }, delayMs)
   }
 
+  function pruneDocumentTree(
+    nodes: SidebarDocumentNode[] | null | undefined,
+    deletedDocumentId: string,
+  ): SidebarDocumentNode[] {
+    if (!Array.isArray(nodes)) return []
+    return nodes.flatMap((node) => {
+      if (node.id === deletedDocumentId) return []
+      return [{
+        ...node,
+        children: pruneDocumentTree(node.children, deletedDocumentId),
+      }]
+    })
+  }
+
+  function removeDocumentFromSidebar(deletedDocumentId: string) {
+    sidebarTeamspaces.value = sidebarTeamspaces.value.map(teamspace => ({
+      ...teamspace,
+      documents: pruneDocumentTree(teamspace.documents, deletedDocumentId),
+    }))
+  }
+
   async function createTeamspace(payload: UpsertTeamspacePayload) {
     const row = await documentsCreateTeamspace(payload)
     await Promise.all([loadTeamspaces(true), loadSidebar(true)])
@@ -256,7 +278,7 @@ export const useDocumentsStore = defineStore('documents', () => {
     if (selectedDocument.value?.id === id) {
       clearSelectedDocument()
     }
-    await loadSidebar(true)
+    removeDocumentFromSidebar(id)
   }
 
   async function loadDocumentHistory(id: string): Promise<DocumentHistoryItem[]> {

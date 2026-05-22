@@ -28,15 +28,15 @@ export interface SaveBlobOptions {
   mimeType?: string
 }
 
-export type HardwareCallControlAction = 'hangup' | 'toggle-microphone'
+export type HardwareCallControlAction = 'hangup' | 'toggle-microphone' | 'set-microphone-muted'
 
 export interface HardwareCallControlHandlers {
   onHangup(): Promise<void> | void
   onToggleMicrophone(): Promise<void> | void
+  onSetMicrophoneMuted?(muted: boolean): Promise<void> | void
 }
 
 export interface HardwareCallControlState {
-  active: boolean
   microphoneActive: boolean
   title?: string
 }

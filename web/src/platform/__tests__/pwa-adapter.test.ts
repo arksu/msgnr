@@ -101,7 +101,6 @@ describe('PwaAdapter callControls', () => {
     handlers.get('hangup')?.()
     handlers.get('togglemicrophone')?.()
     await adapter.callControls?.update({
-      active: true,
       microphoneActive: true,
       title: 'General',
     })
@@ -112,9 +111,46 @@ describe('PwaAdapter callControls', () => {
     expect(mediaSession.setActionHandler).toHaveBeenCalledWith('hangup', expect.any(Function))
     expect(mediaSession.setActionHandler).toHaveBeenCalledWith('togglemicrophone', expect.any(Function))
     expect(mediaSession.setMicrophoneActive).toHaveBeenCalledWith(true)
+    expect(mediaSession.setMicrophoneActive).toHaveBeenCalledWith(false)
     expect(mediaSession.metadata).toBeNull()
     expect(mediaSession.setActionHandler).toHaveBeenCalledWith('hangup', null)
     expect(mediaSession.setActionHandler).toHaveBeenCalledWith('togglemicrophone', null)
+  })
+
+  it('unregisters previous Media Session handlers before re-registering', async () => {
+    const mediaSession = {
+      setActionHandler: vi.fn((action: string, handler: ((details?: unknown) => void) | null) => {
+        if (action === 'hangup' && handler && mediaSession.setActionHandler.mock.calls.length > 2) {
+          throw new Error('unsupported')
+        }
+      }),
+      setMicrophoneActive: vi.fn(),
+    }
+    Object.defineProperty(navigator, 'mediaSession', {
+      configurable: true,
+      value: mediaSession,
+    })
+
+    const adapter = new PwaAdapter()
+    adapter.callControls?.register({
+      onHangup: vi.fn(),
+      onToggleMicrophone: vi.fn(),
+    })
+    adapter.callControls?.register({
+      onHangup: vi.fn(),
+      onToggleMicrophone: vi.fn(),
+    })
+    adapter.callControls?.dispose()
+
+    expect(mediaSession.setActionHandler.mock.calls).toEqual([
+      ['hangup', expect.any(Function)],
+      ['togglemicrophone', expect.any(Function)],
+      ['hangup', null],
+      ['togglemicrophone', null],
+      ['hangup', expect.any(Function)],
+      ['togglemicrophone', expect.any(Function)],
+      ['togglemicrophone', null],
+    ])
   })
 
   it('tolerates unsupported Media Session actions', async () => {
@@ -138,7 +174,6 @@ describe('PwaAdapter callControls', () => {
       onToggleMicrophone: vi.fn(),
     })).not.toThrow()
     expect(() => adapter.callControls?.update({
-      active: true,
       microphoneActive: true,
       title: 'General',
     })).not.toThrow()

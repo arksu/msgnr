@@ -75,6 +75,15 @@
         <button
           type="button"
           class="toolbar-btn"
+          data-testid="task-description-bubble-code-block"
+          :class="isActive('codeBlock') ? 'toolbar-btn-active' : ''"
+          @click="convertSelectionToCodeBlock"
+        >
+          Code Block
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
           :class="isActive('link') ? 'toolbar-btn-active' : ''"
           @click="toggleLink"
         >
@@ -1050,6 +1059,26 @@ function toggleLink() {
   editor.value.chain().focus().setLink({ href }).run()
 }
 
+function convertSelectionToCodeBlock() {
+  if (!editor.value || !editable.value) return
+  const { state, view } = editor.value
+  const { selection, schema } = state
+  if (selection.empty) return
+
+  const codeBlock = schema.nodes.codeBlock
+  if (!codeBlock) return
+
+  const selectedText = state.doc.textBetween(selection.from, selection.to, '\n', '\n')
+  if (!selectedText) return
+
+  const node = codeBlock.create(
+    { language: null },
+    schema.text(selectedText),
+  )
+  view.dispatch(state.tr.replaceSelectionWith(node, false).scrollIntoView())
+  view.focus()
+}
+
 function insertTable() {
   if (!editor.value || !editable.value) return
   if (editor.value.isActive('table')) return
@@ -1177,8 +1206,12 @@ onBeforeUnmount(() => {
   revokeAttachmentObjectUrls()
 })
 
-defineExpose<{ editor: typeof editor }>({
+defineExpose<{
+  editor: typeof editor
+  convertSelectionToCodeBlock: typeof convertSelectionToCodeBlock
+}>({
   editor,
+  convertSelectionToCodeBlock,
 })
 </script>
 

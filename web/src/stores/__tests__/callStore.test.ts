@@ -169,6 +169,7 @@ describe('callStore hardware call controls', () => {
     type RegisteredHardwareHandlers = {
       onHangup(): Promise<void> | void
       onToggleMicrophone(): Promise<void> | void
+      onSetMicrophoneMuted?(muted: boolean): Promise<void> | void
     }
     let registeredHandlers: RegisteredHardwareHandlers | undefined
     const controls = {
@@ -194,7 +195,6 @@ describe('callStore hardware call controls', () => {
 
     expect(controls.register).toHaveBeenCalledTimes(1)
     expect(controls.update).toHaveBeenLastCalledWith(expect.objectContaining({
-      active: true,
       microphoneActive: false,
     }))
     const handlers = registeredHandlers
@@ -219,6 +219,136 @@ describe('callStore hardware call controls', () => {
 
     expect(controls.dispose).toHaveBeenCalledTimes(1)
     consoleInfoSpy.mockRestore()
+  })
+
+  it('ignores duplicate in-flight hardware microphone toggles', async () => {
+    type RegisteredHardwareHandlers = {
+      onHangup(): Promise<void> | void
+      onToggleMicrophone(): Promise<void> | void
+      onSetMicrophoneMuted?(muted: boolean): Promise<void> | void
+    }
+    let registeredHandlers: RegisteredHardwareHandlers | undefined
+    const controls = {
+      register: vi.fn((handlers: RegisteredHardwareHandlers) => {
+        registeredHandlers = handlers
+      }),
+      update: vi.fn(),
+      dispose: vi.fn(),
+    }
+    platformMocks.getPlatformOrNull.mockReturnValue({
+      type: 'pwa',
+      callControls: controls,
+    })
+    const originalMediaDevices = navigator.mediaDevices
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        ...(originalMediaDevices ?? {}),
+        getUserMedia: vi.fn(),
+      },
+    })
+
+    let resolveSetMicrophone: () => void = () => {}
+    const setMicrophoneEnabled = vi.fn(() => new Promise<void>((resolve) => {
+      resolveSetMicrophone = resolve
+    }))
+
+    try {
+      const callStore = useCallStore()
+      callStore.room = {
+        name: 'room-1',
+        localParticipant: {
+          setMicrophoneEnabled,
+        },
+      } as never
+      callStore.activeConversationId = 'channel-1'
+      callStore.activeCallId = 'call-1'
+      callStore.connected = true
+      callStore.micEnabled = false
+
+      await nextTick()
+      await Promise.resolve()
+
+      const handlers = registeredHandlers
+      expect(handlers).toBeDefined()
+      if (!handlers) {
+        throw new Error('expected hardware call handlers to be registered')
+      }
+
+      const firstToggle = handlers.onToggleMicrophone()
+      const secondToggle = handlers.onToggleMicrophone()
+
+      expect(setMicrophoneEnabled).toHaveBeenCalledTimes(1)
+      expect(setMicrophoneEnabled).toHaveBeenCalledWith(true, expect.any(Object))
+      resolveSetMicrophone()
+      await Promise.all([firstToggle, secondToggle])
+      expect(callStore.micEnabled).toBe(true)
+    } finally {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: originalMediaDevices,
+      })
+    }
+  })
+
+  it('applies AirPods mute state events without toggling when already synced', async () => {
+    type RegisteredHardwareHandlers = {
+      onHangup(): Promise<void> | void
+      onToggleMicrophone(): Promise<void> | void
+      onSetMicrophoneMuted?(muted: boolean): Promise<void> | void
+    }
+    let registeredHandlers: RegisteredHardwareHandlers | undefined
+    const controls = {
+      register: vi.fn((handlers: RegisteredHardwareHandlers) => {
+        registeredHandlers = handlers
+      }),
+      update: vi.fn(),
+      dispose: vi.fn(),
+    }
+    platformMocks.getPlatformOrNull.mockReturnValue({
+      type: 'tauri',
+      callControls: controls,
+    })
+    const originalMediaDevices = navigator.mediaDevices
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        ...(originalMediaDevices ?? {}),
+        getUserMedia: vi.fn(),
+      },
+    })
+    const setMicrophoneEnabled = vi.fn().mockResolvedValue(undefined)
+
+    try {
+      const callStore = useCallStore()
+      callStore.room = {
+        name: 'room-1',
+        localParticipant: {
+          setMicrophoneEnabled,
+        },
+      } as never
+      callStore.activeConversationId = 'channel-1'
+      callStore.activeCallId = 'call-1'
+      callStore.connected = true
+      callStore.micEnabled = true
+
+      await nextTick()
+      await Promise.resolve()
+
+      const handlers = registeredHandlers
+      expect(handlers?.onSetMicrophoneMuted).toBeDefined()
+      await handlers?.onSetMicrophoneMuted?.(true)
+      await handlers?.onSetMicrophoneMuted?.(true)
+
+      expect(setMicrophoneEnabled).toHaveBeenCalledTimes(1)
+      expect(setMicrophoneEnabled).toHaveBeenCalledWith(false, undefined)
+      expect(callStore.micEnabled).toBe(false)
+    } finally {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: originalMediaDevices,
+      })
+    }
   })
 })
 

@@ -624,9 +624,16 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
+  async function handleHardwareSetMicrophoneMuted(muted: boolean) {
+    if (!shouldExposeHardwareCallControls()) return
+    const nextMicEnabled = !muted
+    if (micEnabled.value === nextMicEnabled) return
+    await handleHardwareToggleMicrophone()
+  }
+
   async function syncHardwareCallControls() {
     const seq = ++hardwareCallControlsSyncSeq
-    const controls = getPlatformOrNull()?.callControls
+    const controls = platform?.callControls
     if (!controls) {
       hardwareCallControlsRegistered = false
       return
@@ -651,6 +658,7 @@ export const useCallStore = defineStore('call', () => {
         await controls.register({
           onHangup: handleHardwareHangup,
           onToggleMicrophone: handleHardwareToggleMicrophone,
+          onSetMicrophoneMuted: handleHardwareSetMicrophoneMuted,
         })
         if (seq !== hardwareCallControlsSyncSeq) return
         hardwareCallControlsRegistered = true
@@ -664,7 +672,6 @@ export const useCallStore = defineStore('call', () => {
 
     try {
       await controls.update({
-        active: true,
         microphoneActive: micEnabled.value,
         title: activeConversationTitle.value,
       })

@@ -937,6 +937,26 @@ describe('MainView server unavailable state', () => {
     expect(selectDocumentSpy).toHaveBeenCalledWith('document-123', true)
   })
 
+  it('returns from a deleted document without forcing a sidebar reload', async () => {
+    const router = createMainRouter()
+    router.push('/documents/doc-1')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushAsyncWork()
+
+    const documentsStore = useDocumentsStore(pinia)
+    const loadSidebarSpy = vi.spyOn(documentsStore, 'loadSidebar')
+    loadSidebarSpy.mockClear()
+
+    await (wrapper.findComponent(MainView).vm as any).handleDocumentsDeleted(['doc-1'])
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('documents-teamspaces')
+    expect(documentsStore.clearSelectedDocument).toHaveBeenCalled()
+    expect(loadSidebarSpy).not.toHaveBeenCalledWith(true)
+  })
+
   it('keeps task card mode and loads task on direct /tasks/:taskSlug entry', async () => {
     const router = createMainRouter()
     const tasksStore = useTasksStore(pinia)

@@ -56,12 +56,13 @@ describe('TauriAdapter callControls', () => {
     const adapter = new TauriAdapter()
     const onHangup = vi.fn()
     const onToggleMicrophone = vi.fn()
+    const onSetMicrophoneMuted = vi.fn()
 
-    await adapter.callControls?.register({ onHangup, onToggleMicrophone })
+    await adapter.callControls?.register({ onHangup, onToggleMicrophone, onSetMicrophoneMuted })
     listeners.get('hardware-call-control')?.({ payload: { action: 'hangup' } })
     listeners.get('hardware-call-control')?.({ payload: { action: 'toggle-microphone' } })
+    listeners.get('hardware-call-control')?.({ payload: { action: 'set-microphone-muted', muted: true } })
     await adapter.callControls?.update({
-      active: true,
       microphoneActive: true,
       title: 'General',
     })
@@ -70,6 +71,7 @@ describe('TauriAdapter callControls', () => {
     expect(listen).toHaveBeenCalledWith('hardware-call-control', expect.any(Function))
     expect(onHangup).toHaveBeenCalledTimes(1)
     expect(onToggleMicrophone).toHaveBeenCalledTimes(1)
+    expect(onSetMicrophoneMuted).toHaveBeenCalledWith(true)
     expect(invoke).toHaveBeenCalledWith('call_controls_set_active', {
       title: 'General',
       microphoneActive: true,

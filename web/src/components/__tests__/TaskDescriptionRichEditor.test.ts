@@ -183,6 +183,29 @@ describe('TaskDescriptionRichEditor', () => {
     editor.commands.setTextSelection(targetPos)
   }
 
+  function selectTextRangeInEditor(editor: Editor, fromText: string, toText: string) {
+    let from: number | null = null
+    let to: number | null = null
+    editor.state.doc.descendants((node, pos) => {
+      if (!node.isText || !node.text) return true
+      if (from === null) {
+        const startIndex = node.text.indexOf(fromText)
+        if (startIndex !== -1) {
+          from = pos + startIndex
+        }
+      }
+      const endIndex = node.text.indexOf(toText)
+      if (endIndex !== -1) {
+        to = pos + endIndex + toText.length
+      }
+      return from === null || to === null
+    })
+    if (from === null || to === null) {
+      throw new Error(`editor text range ${JSON.stringify(fromText)}..${JSON.stringify(toText)} not found`)
+    }
+    editor.commands.setTextSelection({ from, to })
+  }
+
   async function waitForTableToolbar(wrapper: ReturnType<typeof mount>) {
     for (let i = 0; i < 10; i += 1) {
       await flushPromises()
@@ -450,6 +473,31 @@ describe('TaskDescriptionRichEditor', () => {
     expect(codeBlocks[1]!.classes()).toContain('language-json')
     expect(codeBlocks[1]!.attributes('data-language')).toBe('JSON')
     expect(wrapper.find('[data-testid="task-description-editor-content"] .ProseMirror pre.language-json .hljs-attr').exists()).toBe(true)
+  })
+
+  it('converts selected multiline text to a fenced code block', async () => {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: 'Before\n\nline one\nline two\n\nAfter',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+
+    const editor = getEditor(wrapper)
+    editor.commands.focus()
+    selectTextRangeInEditor(editor, 'line one', 'line two')
+    await flushPromises()
+    await nextTick()
+    wrapper.vm.convertSelectionToCodeBlock()
+    await flushPromises()
+
+    const codeBlocks = wrapper.findAll('[data-testid="task-description-editor-content"] .ProseMirror pre')
+    expect(codeBlocks).toHaveLength(1)
+    expect(codeBlocks[0]!.text()).toContain('line one')
+    expect(codeBlocks[0]!.text()).toContain('line two')
+    expect(latestMarkdown(wrapper)).toContain('```\nline one\nline two\n```')
   })
 
   it('keeps rendered mode editable after local collab content is cleared', async () => {

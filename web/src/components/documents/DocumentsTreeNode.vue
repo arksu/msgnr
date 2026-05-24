@@ -4,6 +4,7 @@
       class="group flex items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors"
       :class="selectedDocumentId === node.id ? 'bg-sidebar-active text-white' : 'text-sidebar-text hover:bg-sidebar-hover'"
       :style="{ paddingLeft: `${8 + (level * 14)}px` }"
+      :data-document-node-id="node.id"
     >
       <button
         v-if="hasChildren"
@@ -36,6 +37,44 @@
       </button>
       <button
         type="button"
+        class="flex h-5 w-5 shrink-0 items-center justify-center rounded transition disabled:opacity-50"
+        :class="node.is_favorite
+          ? 'opacity-100 text-yellow-300 hover:bg-sidebar-hover hover:text-yellow-200'
+          : selectedDocumentId === node.id
+            ? 'opacity-100 text-sidebar-textMuted hover:bg-sidebar-hover hover:text-yellow-300'
+            : 'opacity-0 text-sidebar-textMuted hover:bg-sidebar-hover hover:text-yellow-300 group-hover:opacity-100 focus-visible:opacity-100'"
+        :data-testid="`documents-node-favorite-toggle-${node.id}`"
+        :title="node.is_favorite ? 'Remove from favorites' : 'Add to favorites'"
+        :aria-label="node.is_favorite ? 'Remove from favorites' : 'Add to favorites'"
+        :disabled="favoriteLoading"
+        @click.stop="toggleFavoriteFromRow"
+      >
+        <svg
+          v-if="node.is_favorite"
+          class="h-3.5 w-3.5"
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          aria-hidden="true"
+          :data-testid="`documents-node-favorite-filled-${node.id}`"
+        >
+          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.175 3.617a1 1 0 0 0 .95.69h3.804c.969 0 1.371 1.24.588 1.81l-3.078 2.237a1 1 0 0 0-.364 1.118l1.176 3.617c.299.921-.756 1.688-1.54 1.118l-3.077-2.236a1 1 0 0 0-1.176 0l-3.077 2.236c-.784.57-1.839-.197-1.54-1.118l1.176-3.617a1 1 0 0 0-.364-1.118L2.526 9.044c-.783-.57-.38-1.81.588-1.81h3.804a1 1 0 0 0 .95-.69l1.181-3.617z" />
+        </svg>
+        <svg
+          v-else
+          class="h-3.5 w-3.5"
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          :data-testid="`documents-node-favorite-outline-${node.id}`"
+        >
+          <path d="M10 2.75l2.11 4.28 4.72.69-3.41 3.32.8 4.7L10 13.52l-4.22 2.22.8-4.7-3.41-3.32 4.72-.69L10 2.75z" />
+        </svg>
+      </button>
+      <button
+        type="button"
         class="h-5 w-5 shrink-0 rounded text-sidebar-textMuted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-sidebar-hover hover:text-sidebar-text"
         :data-testid="`documents-node-add-${node.id}`"
         title="Add child document"
@@ -58,6 +97,13 @@
         </svg>
       </button>
     </div>
+    <p
+      v-if="favoriteError"
+      class="py-1 pr-2 text-xs text-red-400"
+      :style="{ paddingLeft: `${30 + (level * 14)}px` }"
+    >
+      {{ favoriteError }}
+    </p>
 
     <div v-if="hasChildren && !isCollapsed">
       <DocumentsTreeNode
@@ -82,16 +128,6 @@
         :style="{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }"
         @click.stop
       >
-        <button
-          type="button"
-          class="flex w-full items-center rounded px-3 py-2 text-left text-sm text-app-text transition-colors hover:bg-white/10 disabled:opacity-50"
-          :data-testid="`documents-node-favorite-${node.id}`"
-          :disabled="favoriteLoading"
-          @click="toggleFavorite"
-        >
-          {{ node.is_favorite ? 'Remove from favorites' : 'Add to favorites' }}
-        </button>
-        <p v-if="favoriteError" class="px-3 py-1 text-xs text-red-400">{{ favoriteError }}</p>
         <button
           type="button"
           class="flex w-full items-center rounded px-3 py-2 text-left text-sm text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
@@ -188,7 +224,6 @@ function toggleMenu() {
       left: Math.max(8, rect.right - 180),
     }
   }
-  favoriteError.value = ''
   menuOpen.value = true
 }
 
@@ -202,21 +237,26 @@ function openDeleteConfirm() {
   deleteConfirmOpen.value = true
 }
 
-async function toggleFavorite() {
+async function setFavoriteState(isFavorite: boolean): Promise<boolean> {
   favoriteLoading.value = true
   favoriteError.value = ''
   try {
-    if (props.node.is_favorite) {
-      await documentsStore.unfavoriteDocument(props.node.id)
-    } else {
+    if (isFavorite) {
       await documentsStore.favoriteDocument(props.node.id)
+    } else {
+      await documentsStore.unfavoriteDocument(props.node.id)
     }
-    closeMenu()
+    return true
   } catch (e) {
     favoriteError.value = e instanceof Error ? e.message : 'Failed to update favorite'
+    return false
   } finally {
     favoriteLoading.value = false
   }
+}
+
+async function toggleFavoriteFromRow() {
+  await setFavoriteState(!props.node.is_favorite)
 }
 
 function closeDeleteConfirm() {

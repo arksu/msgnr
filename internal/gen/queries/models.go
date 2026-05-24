@@ -108,6 +108,12 @@ type DocumentAttachment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type DocumentFavorite struct {
+	UserID      uuid.UUID `json:"user_id"`
+	DocumentID  uuid.UUID `json:"document_id"`
+	FavoritedAt time.Time `json:"favorited_at"`
+}
+
 type DocumentHistory struct {
 	ID              uuid.UUID      `json:"id"`
 	DocumentID      uuid.UUID      `json:"document_id"`

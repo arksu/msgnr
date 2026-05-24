@@ -47,6 +47,27 @@
       </div>
 
       <template v-else>
+        <section class="space-y-1" data-testid="documents-favorites-section">
+          <div class="px-3 pb-1 text-xs font-semibold uppercase text-sidebar-heading">Favorites</div>
+          <div v-if="documentsStore.favoriteDocuments.length === 0" class="px-3 py-1 text-xs text-gray-500">
+            No favorites yet.
+          </div>
+          <button
+            v-for="favorite in documentsStore.favoriteDocuments"
+            :key="favorite.id"
+            type="button"
+            class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm transition-colors"
+            :class="selectedDocumentId === favorite.id ? 'bg-sidebar-active text-white' : 'text-sidebar-text hover:bg-sidebar-hover'"
+            :data-testid="`documents-favorite-${favorite.id}`"
+            @click="openFavorite(favorite)"
+          >
+            <svg class="h-3.5 w-3.5 shrink-0 text-yellow-300" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.175 3.617a1 1 0 0 0 .95.69h3.804c.969 0 1.371 1.24.588 1.81l-3.078 2.237a1 1 0 0 0-.364 1.118l1.176 3.617c.299.921-.756 1.688-1.54 1.118l-3.077-2.236a1 1 0 0 0-1.176 0l-3.077 2.236c-.784.57-1.839-.197-1.54-1.118l1.176-3.617a1 1 0 0 0-.364-1.118L2.526 9.044c-.783-.57-.38-1.81.588-1.81h3.804a1 1 0 0 0 .95-.69l1.181-3.617z" />
+            </svg>
+            <span class="min-w-0 flex-1 truncate">{{ favorite.title }}</span>
+          </button>
+        </section>
+
         <div class="my-3 border-t border-white/10" />
 
         <div v-if="documentsStore.sidebarTeamspaces.length === 0" class="px-3 py-2 text-xs text-gray-500">
@@ -181,6 +202,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import type { SidebarDocumentNode } from '@/services/http/documentsApi'
+import type { FavoriteSidebarDocument } from '@/stores/documents'
 import { useDocumentsStore } from '@/stores/documents'
 import {
   loadCollapsedDocumentsTeamspaceIds,
@@ -284,6 +306,15 @@ function normalizeNodes(nodes: SidebarDocumentNode[] | null | undefined): Sideba
 
 function collectDocumentIds(nodes: SidebarDocumentNode[] | null | undefined): string[] {
   return normalizeNodes(nodes).flatMap(node => [node.id, ...collectDocumentIds(node.children)])
+}
+
+function openFavorite(favorite: FavoriteSidebarDocument) {
+  collapsedTeamspaceIds.value = collapsedTeamspaceIds.value.filter(id => id !== favorite.teamspace_id)
+  if (favorite.ancestor_document_ids.length > 0) {
+    const ancestorIds = new Set(favorite.ancestor_document_ids)
+    collapsedDocumentIds.value = collapsedDocumentIds.value.filter(id => !ancestorIds.has(id))
+  }
+  emit('openDocument', favorite.id)
 }
 
 function openCreateDocument(teamspaceId: string, parentDocumentId: string | null) {

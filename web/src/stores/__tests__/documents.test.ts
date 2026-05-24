@@ -7,12 +7,14 @@ const documentsApiMocks = vi.hoisted(() => ({
   documentsCreateTeamspace: vi.fn(),
   documentsDeleteDocument: vi.fn(),
   documentsDeleteTeamspace: vi.fn(),
+  documentsFavoriteDocument: vi.fn(),
   documentsGetDocument: vi.fn(),
   documentsJoinTeamspace: vi.fn(),
   documentsListDocumentHistory: vi.fn(),
   documentsListSidebar: vi.fn(),
   documentsListTeamspaces: vi.fn(),
   documentsSearchDocuments: vi.fn(),
+  documentsUnfavoriteDocument: vi.fn(),
   documentsUpdateDocument: vi.fn(),
   documentsUpdateDocumentContent: vi.fn(),
   documentsUpdateTeamspace: vi.fn(),
@@ -23,12 +25,14 @@ vi.mock('@/services/http/documentsApi', () => ({
   documentsCreateTeamspace: documentsApiMocks.documentsCreateTeamspace,
   documentsDeleteDocument: documentsApiMocks.documentsDeleteDocument,
   documentsDeleteTeamspace: documentsApiMocks.documentsDeleteTeamspace,
+  documentsFavoriteDocument: documentsApiMocks.documentsFavoriteDocument,
   documentsGetDocument: documentsApiMocks.documentsGetDocument,
   documentsJoinTeamspace: documentsApiMocks.documentsJoinTeamspace,
   documentsListDocumentHistory: documentsApiMocks.documentsListDocumentHistory,
   documentsListSidebar: documentsApiMocks.documentsListSidebar,
   documentsListTeamspaces: documentsApiMocks.documentsListTeamspaces,
   documentsSearchDocuments: documentsApiMocks.documentsSearchDocuments,
+  documentsUnfavoriteDocument: documentsApiMocks.documentsUnfavoriteDocument,
   documentsUpdateDocument: documentsApiMocks.documentsUpdateDocument,
   documentsUpdateDocumentContent: documentsApiMocks.documentsUpdateDocumentContent,
   documentsUpdateTeamspace: documentsApiMocks.documentsUpdateTeamspace,
@@ -61,6 +65,121 @@ describe('documents store', () => {
 
     expect(documentsApiMocks.documentsDeleteTeamspace).toHaveBeenCalledWith('teamspace-1')
     expect(store.selectedDocument).toBeNull()
+  })
+
+  it('adds a created root document to the sidebar without reloading', async () => {
+    const store = useDocumentsStore()
+    store.sidebarTeamspaces = [
+      {
+        id: 'teamspace-1',
+        name: 'Alpha',
+        documents: [
+          {
+            id: 'existing-doc',
+            teamspace_id: 'teamspace-1',
+            parent_document_id: null,
+            title: 'Existing',
+            children: [],
+          },
+        ],
+      },
+    ] as any
+    documentsApiMocks.documentsCreateDocument.mockResolvedValue({
+      id: 'new-root-doc',
+      teamspace_id: 'teamspace-1',
+      teamspace_name: 'Alpha',
+      parent_document_id: null,
+      parent_title: null,
+      title: 'New root',
+      content_markdown: null,
+      created_by: 'user-1',
+      updated_by: 'user-1',
+      created_at: '2026-05-22T00:00:00Z',
+      updated_at: '2026-05-22T00:00:00Z',
+    })
+
+    const row = await store.createDocument({
+      teamspace_id: 'teamspace-1',
+      parent_document_id: null,
+      title: 'New root',
+      content_markdown: null,
+    })
+
+    expect(row.id).toBe('new-root-doc')
+    expect(store.selectedDocument?.id).toBe('new-root-doc')
+    expect(documentsApiMocks.documentsListSidebar).not.toHaveBeenCalled()
+    expect(store.sidebarTeamspaces[0].documents).toEqual([
+      expect.objectContaining({ id: 'existing-doc' }),
+      expect.objectContaining({
+        id: 'new-root-doc',
+        parent_document_id: null,
+        title: 'New root',
+        children: [],
+      }),
+    ])
+  })
+
+  it('adds a created child document to its parent node without reloading', async () => {
+    const store = useDocumentsStore()
+    store.sidebarTeamspaces = [
+      {
+        id: 'teamspace-1',
+        name: 'Alpha',
+        documents: [
+          {
+            id: 'root-doc',
+            teamspace_id: 'teamspace-1',
+            parent_document_id: null,
+            title: 'Root',
+            children: [
+              {
+                id: 'existing-child-doc',
+                teamspace_id: 'teamspace-1',
+                parent_document_id: 'root-doc',
+                title: 'Existing child',
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    ] as any
+    documentsApiMocks.documentsCreateDocument.mockResolvedValue({
+      id: 'new-child-doc',
+      teamspace_id: 'teamspace-1',
+      teamspace_name: 'Alpha',
+      parent_document_id: 'root-doc',
+      parent_title: 'Root',
+      title: 'New child',
+      content_markdown: null,
+      created_by: 'user-1',
+      updated_by: 'user-1',
+      created_at: '2026-05-22T00:00:00Z',
+      updated_at: '2026-05-22T00:00:00Z',
+    })
+
+    await store.createDocument({
+      teamspace_id: 'teamspace-1',
+      parent_document_id: 'root-doc',
+      title: 'New child',
+      content_markdown: null,
+    })
+
+    expect(documentsApiMocks.documentsListSidebar).not.toHaveBeenCalled()
+    expect(store.sidebarTeamspaces[0].documents).toEqual([
+      expect.objectContaining({
+        id: 'root-doc',
+        children: [
+          expect.objectContaining({ id: 'existing-child-doc' }),
+          expect.objectContaining({
+            id: 'new-child-doc',
+            parent_document_id: 'root-doc',
+            title: 'New child',
+            children: [],
+          }),
+        ],
+      }),
+    ])
   })
 
   it('removes a deleted root document subtree from the sidebar without reloading', async () => {
@@ -165,6 +284,94 @@ describe('documents store', () => {
         ],
       }),
     ])
+  })
+
+  it('updates nested favorite state and exposes newest favorites first', async () => {
+    const store = useDocumentsStore()
+    store.sidebarTeamspaces = [
+      {
+        id: 'teamspace-1',
+        name: 'Alpha',
+        documents: [
+          {
+            id: 'root-doc',
+            teamspace_id: 'teamspace-1',
+            parent_document_id: null,
+            title: 'Root',
+            is_favorite: true,
+            favorited_at: '2026-05-20T00:00:00Z',
+            children: [
+              {
+                id: 'child-doc',
+                teamspace_id: 'teamspace-1',
+                parent_document_id: 'root-doc',
+                title: 'Child',
+                is_favorite: false,
+                favorited_at: null,
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    ] as any
+    documentsApiMocks.documentsFavoriteDocument.mockResolvedValue({
+      document_id: 'child-doc',
+      is_favorite: true,
+      favorited_at: '2026-05-22T00:00:00Z',
+    })
+
+    await store.favoriteDocument('child-doc')
+
+    expect(documentsApiMocks.documentsFavoriteDocument).toHaveBeenCalledWith('child-doc')
+    expect(store.sidebarTeamspaces[0].documents[0].children[0]).toEqual(expect.objectContaining({
+      id: 'child-doc',
+      is_favorite: true,
+      favorited_at: '2026-05-22T00:00:00Z',
+    }))
+    expect(store.favoriteDocuments.map(item => ({
+      id: item.id,
+      ancestors: item.ancestor_document_ids,
+    }))).toEqual([
+      { id: 'child-doc', ancestors: ['root-doc'] },
+      { id: 'root-doc', ancestors: [] },
+    ])
+  })
+
+  it('unfavorites a nested sidebar document in place', async () => {
+    const store = useDocumentsStore()
+    store.sidebarTeamspaces = [
+      {
+        id: 'teamspace-1',
+        name: 'Alpha',
+        documents: [
+          {
+            id: 'root-doc',
+            teamspace_id: 'teamspace-1',
+            parent_document_id: null,
+            title: 'Root',
+            is_favorite: true,
+            favorited_at: '2026-05-22T00:00:00Z',
+            children: [],
+          },
+        ],
+      },
+    ] as any
+    documentsApiMocks.documentsUnfavoriteDocument.mockResolvedValue({
+      document_id: 'root-doc',
+      is_favorite: false,
+      favorited_at: null,
+    })
+
+    await store.unfavoriteDocument('root-doc')
+
+    expect(documentsApiMocks.documentsUnfavoriteDocument).toHaveBeenCalledWith('root-doc')
+    expect(store.sidebarTeamspaces[0].documents[0]).toEqual(expect.objectContaining({
+      id: 'root-doc',
+      is_favorite: false,
+      favorited_at: null,
+    }))
+    expect(store.favoriteDocuments).toEqual([])
   })
 
   it('debounces document search requests and stores results', async () => {

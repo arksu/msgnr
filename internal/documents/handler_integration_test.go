@@ -5,6 +5,7 @@ package documents
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -134,5 +135,61 @@ func TestHandler_DocumentContentItem(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHandler_DocumentFavoriteItem(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := NewService(pool, nil)
+	h := NewHandler(svc, nil, zap.NewNop(), 50)
+
+	ownerID := seedHandlerUser(t, ctx, pool, "Owner")
+
+	teamspace, err := svc.CreateTeamspace(ctx, CreateTeamspaceParams{
+		Name:    "Handler favorite",
+		ActorID: ownerID,
+	}, "member")
+	if err != nil {
+		t.Fatalf("create teamspace: %v", err)
+	}
+
+	doc, err := svc.CreateDocument(ctx, CreateDocumentParams{
+		TeamspaceID: teamspace.ID,
+		Title:       "Favorite me",
+		ActorID:     ownerID,
+	})
+	if err != nil {
+		t.Fatalf("create document: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/documents/"+doc.ID.String()+"/favorite", nil)
+	rec := httptest.NewRecorder()
+	h.documentFavoriteItem(rec, req, auth.Principal{UserID: ownerID, Role: "member"}, doc.ID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var favorite DocumentFavoriteResponse
+	if err := json.NewDecoder(rec.Body).Decode(&favorite); err != nil {
+		t.Fatalf("decode favorite response: %v", err)
+	}
+	if favorite.DocumentID != doc.ID || !favorite.IsFavorite || favorite.FavoritedAt == nil {
+		t.Fatalf("unexpected favorite response: %#v", favorite)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/documents/"+doc.ID.String()+"/favorite", nil)
+	rec = httptest.NewRecorder()
+	h.documentFavoriteItem(rec, req, auth.Principal{UserID: ownerID, Role: "member"}, doc.ID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var unfavorite DocumentFavoriteResponse
+	if err := json.NewDecoder(rec.Body).Decode(&unfavorite); err != nil {
+		t.Fatalf("decode unfavorite response: %v", err)
+	}
+	if unfavorite.DocumentID != doc.ID || unfavorite.IsFavorite || unfavorite.FavoritedAt != nil {
+		t.Fatalf("unexpected unfavorite response: %#v", unfavorite)
 	}
 }

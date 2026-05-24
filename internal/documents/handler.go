@@ -220,6 +220,15 @@ func (h *Handler) documentItem(w http.ResponseWriter, r *http.Request, p auth.Pr
 		writeJSON(w, http.StatusNotFound, errBody("not found"))
 		return
 	}
+	if rawID, ok := strings.CutSuffix(rest, "/favorite"); ok {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid document id"))
+			return
+		}
+		h.documentFavoriteItem(w, r, p, id)
+		return
+	}
 	if rawID, suffix, ok := strings.Cut(rest, "/attachments"); ok {
 		id, err := uuid.Parse(rawID)
 		if err != nil {
@@ -287,6 +296,27 @@ func (h *Handler) documentItem(w http.ResponseWriter, r *http.Request, p auth.Pr
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (h *Handler) documentFavoriteItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {
+	switch r.Method {
+	case http.MethodPost:
+		row, err := h.svc.FavoriteDocument(r.Context(), id, p.UserID)
+		if err != nil {
+			h.serviceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, row)
+	case http.MethodDelete:
+		row, err := h.svc.UnfavoriteDocument(r.Context(), id, p.UserID)
+		if err != nil {
+			h.serviceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, row)
 	default:
 		methodNotAllowed(w)
 	}

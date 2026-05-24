@@ -58,6 +58,8 @@ export interface SidebarDocumentNode {
   teamspace_id: string
   parent_document_id: string | null
   title: string
+  is_favorite?: boolean
+  favorited_at?: string | null
   children: SidebarDocumentNode[]
 }
 
@@ -87,6 +89,12 @@ export interface DocumentSearchResult {
   teamspace_name: string
   title: string
   snippet: string
+}
+
+export interface DocumentFavoriteResponse {
+  document_id: string
+  is_favorite: boolean
+  favorited_at?: string | null
 }
 
 export interface DocumentHistoryEditor {
@@ -185,6 +193,14 @@ export async function documentsUpdateDocumentContent(id: string, payload: Update
 
 export async function documentsDeleteDocument(id: string): Promise<void> {
   return apiCallNoContent(http.delete(`/api/documents/${id}`))
+}
+
+export async function documentsFavoriteDocument(id: string): Promise<DocumentFavoriteResponse> {
+  return apiCall(http.post<DocumentFavoriteResponse>(`/api/documents/${id}/favorite`))
+}
+
+export async function documentsUnfavoriteDocument(id: string): Promise<DocumentFavoriteResponse> {
+  return apiCall(http.delete<DocumentFavoriteResponse>(`/api/documents/${id}/favorite`))
 }
 
 export async function documentsListDocumentHistory(id: string): Promise<DocumentHistoryItem[]> {

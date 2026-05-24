@@ -208,6 +208,81 @@ func TestIntegration_SidebarHierarchyMemberOnly(t *testing.T) {
 	assert.Empty(t, sidebar)
 }
 
+func TestIntegration_DocumentFavoritesArePerUserAndSidebarOnlyShowsVisibleDocuments(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := documents.NewService(pool, nil)
+
+	ownerID := seedDocumentUser(t, ctx, pool, "Owner", "member")
+	memberID := seedDocumentUser(t, ctx, pool, "Member", "member")
+	outsiderID := seedDocumentUser(t, ctx, pool, "Outsider", "member")
+
+	teamspace, err := svc.CreateTeamspace(ctx, documents.CreateTeamspaceParams{
+		Name:      "Favorites",
+		MemberIDs: []uuid.UUID{memberID},
+		ActorID:   ownerID,
+	}, "member")
+	require.NoError(t, err)
+
+	rootDoc, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID: teamspace.ID,
+		Title:       "Root favorite",
+		ActorID:     ownerID,
+	})
+	require.NoError(t, err)
+
+	childDoc, err := svc.CreateDocument(ctx, documents.CreateDocumentParams{
+		TeamspaceID:      teamspace.ID,
+		ParentDocumentID: &rootDoc.ID,
+		Title:            "Child favorite",
+		ActorID:          memberID,
+	})
+	require.NoError(t, err)
+
+	favorite, err := svc.FavoriteDocument(ctx, childDoc.ID, memberID)
+	require.NoError(t, err)
+	assert.Equal(t, childDoc.ID, favorite.DocumentID)
+	assert.True(t, favorite.IsFavorite)
+	require.NotNil(t, favorite.FavoritedAt)
+
+	_, err = svc.FavoriteDocument(ctx, childDoc.ID, outsiderID)
+	require.ErrorIs(t, err, documents.ErrForbidden)
+
+	sidebar, err := svc.ListSidebar(ctx, memberID)
+	require.NoError(t, err)
+	require.Len(t, sidebar, 1)
+	require.Len(t, sidebar[0].Documents, 1)
+	require.Len(t, sidebar[0].Documents[0].Children, 1)
+	memberChild := sidebar[0].Documents[0].Children[0]
+	assert.True(t, memberChild.IsFavorite)
+	require.NotNil(t, memberChild.FavoritedAt)
+
+	sidebar, err = svc.ListSidebar(ctx, ownerID)
+	require.NoError(t, err)
+	require.Len(t, sidebar, 1)
+	require.Len(t, sidebar[0].Documents, 1)
+	require.Len(t, sidebar[0].Documents[0].Children, 1)
+	assert.False(t, sidebar[0].Documents[0].Children[0].IsFavorite)
+	assert.Nil(t, sidebar[0].Documents[0].Children[0].FavoritedAt)
+
+	unfavorite, err := svc.UnfavoriteDocument(ctx, childDoc.ID, memberID)
+	require.NoError(t, err)
+	assert.False(t, unfavorite.IsFavorite)
+
+	unfavorite, err = svc.UnfavoriteDocument(ctx, childDoc.ID, memberID)
+	require.NoError(t, err)
+	assert.False(t, unfavorite.IsFavorite)
+
+	_, err = svc.FavoriteDocument(ctx, rootDoc.ID, memberID)
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteDocument(ctx, rootDoc.ID, ownerID))
+
+	sidebar, err = svc.ListSidebar(ctx, memberID)
+	require.NoError(t, err)
+	require.Len(t, sidebar, 1)
+	assert.Empty(t, sidebar[0].Documents)
+}
+
 func TestIntegration_DocumentMemberEditAndNonMemberForbidden(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

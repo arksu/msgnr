@@ -103,6 +103,8 @@ type SidebarDocumentNode struct {
 	TeamspaceID      uuid.UUID             `json:"teamspace_id"`
 	ParentDocumentID *uuid.UUID            `json:"parent_document_id,omitempty"`
 	Title            string                `json:"title"`
+	IsFavorite       bool                  `json:"is_favorite"`
+	FavoritedAt      *time.Time            `json:"favorited_at,omitempty"`
 	Children         []SidebarDocumentNode `json:"children"`
 }
 
@@ -137,6 +139,12 @@ type DocumentSearchResult struct {
 	TeamspaceName string    `json:"teamspace_name"`
 	Title         string    `json:"title"`
 	Snippet       string    `json:"snippet"`
+}
+
+type DocumentFavoriteResponse struct {
+	DocumentID  uuid.UUID  `json:"document_id"`
+	IsFavorite  bool       `json:"is_favorite"`
+	FavoritedAt *time.Time `json:"favorited_at,omitempty"`
 }
 
 type DocumentHistoryEditor struct {
@@ -465,7 +473,7 @@ func (s *Service) ListSidebar(ctx context.Context, userID uuid.UUID) ([]SidebarT
 	}
 
 	docRows, err := s.pool.Query(ctx,
-		`SELECT d.id, d.teamspace_id, d.parent_document_id, d.title
+		`SELECT d.id, d.teamspace_id, d.parent_document_id, d.title, df.favorited_at
 		   FROM document d
 		   JOIN teamspace t
 		     ON t.id = d.teamspace_id
@@ -473,6 +481,9 @@ func (s *Service) ListSidebar(ctx context.Context, userID uuid.UUID) ([]SidebarT
 		   JOIN teamspace_member tm
 		     ON tm.teamspace_id = d.teamspace_id
 		    AND tm.user_id = $1
+		   LEFT JOIN document_favorite df
+		     ON df.document_id = d.id
+		    AND df.user_id = $1
 		  WHERE d.archived_at IS NULL
 		  ORDER BY d.teamspace_id ASC,
 		           COALESCE(d.parent_document_id::text, '') ASC,
@@ -494,8 +505,9 @@ func (s *Service) ListSidebar(ctx context.Context, userID uuid.UUID) ([]SidebarT
 			teamspaceID      uuid.UUID
 			parentDocumentID uuid.NullUUID
 			title            string
+			favoritedAt      sql.NullTime
 		)
-		if err := docRows.Scan(&id, &teamspaceID, &parentDocumentID, &title); err != nil {
+		if err := docRows.Scan(&id, &teamspaceID, &parentDocumentID, &title, &favoritedAt); err != nil {
 			return nil, fmt.Errorf("documents: scan sidebar document: %w", err)
 		}
 		item := &sidebarTempNode{
@@ -508,6 +520,11 @@ func (s *Service) ListSidebar(ctx context.Context, userID uuid.UUID) ([]SidebarT
 		if parentDocumentID.Valid {
 			parentID := parentDocumentID.UUID
 			item.node.ParentDocumentID = &parentID
+		}
+		if favoritedAt.Valid {
+			favoritedAtValue := favoritedAt.Time
+			item.node.IsFavorite = true
+			item.node.FavoritedAt = &favoritedAtValue
 		}
 		nodeByID[id] = item
 		orderedNodes = append(orderedNodes, item)
@@ -917,6 +934,50 @@ func (s *Service) DeleteDocument(ctx context.Context, documentID, actorID uuid.U
 		return s.documentAccessError(ctx, documentID, actorID)
 	}
 	return nil
+}
+
+func (s *Service) FavoriteDocument(ctx context.Context, documentID, userID uuid.UUID) (DocumentFavoriteResponse, error) {
+	if err := s.ensureDocumentReadable(ctx, documentID, userID); err != nil {
+		return DocumentFavoriteResponse{}, err
+	}
+
+	var favoritedAt time.Time
+	if err := s.pool.QueryRow(ctx,
+		`INSERT INTO document_favorite (user_id, document_id)
+		 VALUES ($1, $2)
+		 ON CONFLICT (user_id, document_id) DO UPDATE
+		       SET favorited_at = document_favorite.favorited_at
+		 RETURNING favorited_at`,
+		userID, documentID,
+	).Scan(&favoritedAt); err != nil {
+		return DocumentFavoriteResponse{}, classifyMutationError("favorite document", err)
+	}
+
+	return DocumentFavoriteResponse{
+		DocumentID:  documentID,
+		IsFavorite:  true,
+		FavoritedAt: &favoritedAt,
+	}, nil
+}
+
+func (s *Service) UnfavoriteDocument(ctx context.Context, documentID, userID uuid.UUID) (DocumentFavoriteResponse, error) {
+	if err := s.ensureDocumentReadable(ctx, documentID, userID); err != nil {
+		return DocumentFavoriteResponse{}, err
+	}
+
+	if _, err := s.pool.Exec(ctx,
+		`DELETE FROM document_favorite
+		  WHERE user_id = $1
+		    AND document_id = $2`,
+		userID, documentID,
+	); err != nil {
+		return DocumentFavoriteResponse{}, classifyMutationError("unfavorite document", err)
+	}
+
+	return DocumentFavoriteResponse{
+		DocumentID: documentID,
+		IsFavorite: false,
+	}, nil
 }
 
 func (s *Service) ListDocumentHistory(ctx context.Context, documentID, userID uuid.UUID) ([]DocumentHistoryItem, error) {

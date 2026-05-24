@@ -78,10 +78,20 @@
   <Teleport to="body">
     <div v-if="menuOpen" class="fixed inset-0 z-50" @click="closeMenu">
       <div
-        class="fixed min-w-[140px] rounded-lg border border-chat-border bg-chat-header p-1 shadow-2xl"
+        class="fixed min-w-[180px] rounded-lg border border-chat-border bg-chat-header p-1 shadow-2xl"
         :style="{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }"
         @click.stop
       >
+        <button
+          type="button"
+          class="flex w-full items-center rounded px-3 py-2 text-left text-sm text-app-text transition-colors hover:bg-white/10 disabled:opacity-50"
+          :data-testid="`documents-node-favorite-${node.id}`"
+          :disabled="favoriteLoading"
+          @click="toggleFavorite"
+        >
+          {{ node.is_favorite ? 'Remove from favorites' : 'Add to favorites' }}
+        </button>
+        <p v-if="favoriteError" class="px-3 py-1 text-xs text-red-400">{{ favoriteError }}</p>
         <button
           type="button"
           class="flex w-full items-center rounded px-3 py-2 text-left text-sm text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
@@ -148,6 +158,8 @@ const menuOpen = ref(false)
 const deleteConfirmOpen = ref(false)
 const deleteLoading = ref(false)
 const deleteError = ref('')
+const favoriteLoading = ref(false)
+const favoriteError = ref('')
 const menuButtonRef = ref<HTMLButtonElement | null>(null)
 const menuPosition = ref({ top: 0, left: 0 })
 
@@ -172,9 +184,10 @@ function toggleMenu() {
   if (rect) {
     menuPosition.value = {
       top: rect.bottom + 6,
-      left: Math.max(8, rect.right - 140),
+      left: Math.max(8, rect.right - 180),
     }
   }
+  favoriteError.value = ''
   menuOpen.value = true
 }
 
@@ -186,6 +199,23 @@ function openDeleteConfirm() {
   closeMenu()
   deleteError.value = ''
   deleteConfirmOpen.value = true
+}
+
+async function toggleFavorite() {
+  favoriteLoading.value = true
+  favoriteError.value = ''
+  try {
+    if (props.node.is_favorite) {
+      await documentsStore.unfavoriteDocument(props.node.id)
+    } else {
+      await documentsStore.favoriteDocument(props.node.id)
+    }
+    closeMenu()
+  } catch (e) {
+    favoriteError.value = e instanceof Error ? e.message : 'Failed to update favorite'
+  } finally {
+    favoriteLoading.value = false
+  }
 }
 
 function closeDeleteConfirm() {

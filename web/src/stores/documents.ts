@@ -5,16 +5,19 @@ import {
   documentsCreateTeamspace,
   documentsDeleteDocument,
   documentsDeleteTeamspace,
+  documentsFavoriteDocument,
   documentsGetDocument,
   documentsJoinTeamspace,
   documentsListDocumentHistory,
   documentsListSidebar,
   documentsListTeamspaces,
   documentsSearchDocuments,
+  documentsUnfavoriteDocument,
   documentsUpdateDocument,
   documentsUpdateDocumentContent,
   documentsUpdateTeamspace,
   type CreateDocumentPayload,
+  type DocumentFavoriteResponse,
   type DocumentHistoryItem,
   type DocumentItem,
   type DocumentSearchResult,
@@ -28,6 +31,15 @@ import {
 import { tasksListUsers, type TaskUser } from '@/services/http/tasksApi'
 import { useChatStore } from '@/stores/chat'
 import { userCustomStatusFromDto } from '@/types/userStatus'
+
+export interface FavoriteSidebarDocument {
+  id: string
+  teamspace_id: string
+  parent_document_id: string | null
+  title: string
+  favorited_at: string
+  ancestor_document_ids: string[]
+}
 
 export const useDocumentsStore = defineStore('documents', () => {
   const teamspaces = ref<Teamspace[]>([])
@@ -56,6 +68,10 @@ export const useDocumentsStore = defineStore('documents', () => {
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
   const memberTeamspaces = computed(() => teamspaces.value.filter(item => item.is_member))
+  const favoriteDocuments = computed<FavoriteSidebarDocument[]>(() => {
+    const favorites = sidebarTeamspaces.value.flatMap(teamspace => collectFavoriteDocuments(teamspace.documents, []))
+    return favorites.sort((a, b) => b.favorited_at.localeCompare(a.favorited_at) || a.title.localeCompare(b.title))
+  })
 
   async function loadTeamspaces(force = false) {
     if (teamspacesLoading.value) return
@@ -221,6 +237,105 @@ export const useDocumentsStore = defineStore('documents', () => {
     }))
   }
 
+  function collectFavoriteDocuments(
+    nodes: SidebarDocumentNode[] | null | undefined,
+    ancestors: string[],
+  ): FavoriteSidebarDocument[] {
+    if (!Array.isArray(nodes)) return []
+    return nodes.flatMap((node) => {
+      const childFavorites = collectFavoriteDocuments(node.children, [...ancestors, node.id])
+      if (!node.is_favorite || !node.favorited_at) return childFavorites
+      return [
+        {
+          id: node.id,
+          teamspace_id: node.teamspace_id,
+          parent_document_id: node.parent_document_id,
+          title: node.title,
+          favorited_at: node.favorited_at,
+          ancestor_document_ids: ancestors,
+        },
+        ...childFavorites,
+      ]
+    })
+  }
+
+  function updateDocumentFavoriteInTree(
+    nodes: SidebarDocumentNode[] | null | undefined,
+    documentId: string,
+    favorite: DocumentFavoriteResponse,
+  ): SidebarDocumentNode[] {
+    if (!Array.isArray(nodes)) return []
+    return nodes.map((node) => {
+      if (node.id === documentId) {
+        return {
+          ...node,
+          is_favorite: favorite.is_favorite,
+          favorited_at: favorite.favorited_at ?? null,
+        }
+      }
+      return {
+        ...node,
+        children: updateDocumentFavoriteInTree(node.children, documentId, favorite),
+      }
+    })
+  }
+
+  function applyDocumentFavorite(favorite: DocumentFavoriteResponse) {
+    sidebarTeamspaces.value = sidebarTeamspaces.value.map(teamspace => ({
+      ...teamspace,
+      documents: updateDocumentFavoriteInTree(teamspace.documents, favorite.document_id, favorite),
+    }))
+  }
+
+  function documentToSidebarNode(documentItem: DocumentItem): SidebarDocumentNode {
+    return {
+      id: documentItem.id,
+      teamspace_id: documentItem.teamspace_id,
+      parent_document_id: documentItem.parent_document_id,
+      title: documentItem.title,
+      is_favorite: false,
+      favorited_at: null,
+      children: [],
+    }
+  }
+
+  function appendDocumentNode(
+    nodes: SidebarDocumentNode[] | null | undefined,
+    parentDocumentId: string,
+    newNode: SidebarDocumentNode,
+  ): SidebarDocumentNode[] {
+    if (!Array.isArray(nodes)) return []
+    return nodes.map((node) => {
+      if (node.id === parentDocumentId) {
+        return {
+          ...node,
+          children: [...(Array.isArray(node.children) ? node.children : []), newNode],
+        }
+      }
+      return {
+        ...node,
+        children: appendDocumentNode(node.children, parentDocumentId, newNode),
+      }
+    })
+  }
+
+  function addDocumentToSidebar(documentItem: DocumentItem) {
+    const newNode = documentToSidebarNode(documentItem)
+    sidebarTeamspaces.value = sidebarTeamspaces.value.map((teamspace) => {
+      if (teamspace.id !== documentItem.teamspace_id) return teamspace
+      if (!documentItem.parent_document_id) {
+        return {
+          ...teamspace,
+          documents: [...(Array.isArray(teamspace.documents) ? teamspace.documents : []), newNode],
+        }
+      }
+      return {
+        ...teamspace,
+        documents: appendDocumentNode(teamspace.documents, documentItem.parent_document_id, newNode),
+      }
+    })
+  }
+
   async function createTeamspace(payload: UpsertTeamspacePayload) {
     const row = await documentsCreateTeamspace(payload)
     await Promise.all([loadTeamspaces(true), loadSidebar(true)])
@@ -250,7 +365,7 @@ export const useDocumentsStore = defineStore('documents', () => {
   async function createDocument(payload: CreateDocumentPayload) {
     const row = await documentsCreateDocument(payload)
     selectedDocument.value = row
-    await loadSidebar(true)
+    addDocumentToSidebar(row)
     return row
   }
 
@@ -281,6 +396,18 @@ export const useDocumentsStore = defineStore('documents', () => {
     removeDocumentFromSidebar(id)
   }
 
+  async function favoriteDocument(id: string) {
+    const row = await documentsFavoriteDocument(id)
+    applyDocumentFavorite(row)
+    return row
+  }
+
+  async function unfavoriteDocument(id: string) {
+    const row = await documentsUnfavoriteDocument(id)
+    applyDocumentFavorite(row)
+    return row
+  }
+
   async function loadDocumentHistory(id: string): Promise<DocumentHistoryItem[]> {
     return documentsListDocumentHistory(id)
   }
@@ -298,6 +425,7 @@ export const useDocumentsStore = defineStore('documents', () => {
     users,
     usersLoaded,
     memberTeamspaces,
+    favoriteDocuments,
     searchQuery,
     searchResults,
     searchLoading,
@@ -319,6 +447,8 @@ export const useDocumentsStore = defineStore('documents', () => {
     updateDocument,
     updateDocumentContent,
     deleteDocument,
+    favoriteDocument,
+    unfavoriteDocument,
     loadDocumentHistory,
   }
 })

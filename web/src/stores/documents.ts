@@ -35,7 +35,6 @@ import { userCustomStatusFromDto } from '@/types/userStatus'
 export interface FavoriteSidebarDocument {
   id: string
   teamspace_id: string
-  parent_document_id: string | null
   title: string
   favorited_at: string
   ancestor_document_ids: string[]
@@ -70,7 +69,9 @@ export const useDocumentsStore = defineStore('documents', () => {
   const memberTeamspaces = computed(() => teamspaces.value.filter(item => item.is_member))
   const favoriteDocuments = computed<FavoriteSidebarDocument[]>(() => {
     const favorites = sidebarTeamspaces.value.flatMap(teamspace => collectFavoriteDocuments(teamspace.documents, []))
-    return favorites.sort((a, b) => b.favorited_at.localeCompare(a.favorited_at) || a.title.localeCompare(b.title))
+    return favorites.sort((a, b) => (
+      b.favorited_at > a.favorited_at ? 1 : b.favorited_at < a.favorited_at ? -1 : 0
+    ) || a.title.localeCompare(b.title))
   })
 
   async function loadTeamspaces(force = false) {
@@ -249,7 +250,6 @@ export const useDocumentsStore = defineStore('documents', () => {
         {
           id: node.id,
           teamspace_id: node.teamspace_id,
-          parent_document_id: node.parent_document_id,
           title: node.title,
           favorited_at: node.favorited_at,
           ancestor_document_ids: ancestors,
@@ -263,28 +263,35 @@ export const useDocumentsStore = defineStore('documents', () => {
     nodes: SidebarDocumentNode[] | null | undefined,
     documentId: string,
     favorite: DocumentFavoriteResponse,
-  ): SidebarDocumentNode[] {
-    if (!Array.isArray(nodes)) return []
-    return nodes.map((node) => {
+  ): SidebarDocumentNode[] | null | undefined {
+    if (!Array.isArray(nodes)) return nodes
+    let changed = false
+    const result = nodes.map((node) => {
       if (node.id === documentId) {
+        changed = true
         return {
           ...node,
           is_favorite: favorite.is_favorite,
           favorited_at: favorite.favorited_at ?? null,
         }
       }
+      const children = updateDocumentFavoriteInTree(node.children, documentId, favorite)
+      if (children === node.children) return node
+      changed = true
       return {
         ...node,
-        children: updateDocumentFavoriteInTree(node.children, documentId, favorite),
+        children: Array.isArray(children) ? children : [],
       }
     })
+    return changed ? result : nodes
   }
 
   function applyDocumentFavorite(favorite: DocumentFavoriteResponse) {
-    sidebarTeamspaces.value = sidebarTeamspaces.value.map(teamspace => ({
-      ...teamspace,
-      documents: updateDocumentFavoriteInTree(teamspace.documents, favorite.document_id, favorite),
-    }))
+    sidebarTeamspaces.value = sidebarTeamspaces.value.map((teamspace) => {
+      const documents = updateDocumentFavoriteInTree(teamspace.documents, favorite.document_id, favorite)
+      if (documents === teamspace.documents) return teamspace
+      return { ...teamspace, documents: Array.isArray(documents) ? documents : [] }
+    })
   }
 
   function documentToSidebarNode(documentItem: DocumentItem): SidebarDocumentNode {

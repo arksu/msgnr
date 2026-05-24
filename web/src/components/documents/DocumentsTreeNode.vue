@@ -142,6 +142,7 @@
 import { computed, ref } from 'vue'
 import type { SidebarDocumentNode } from '@/services/http/documentsApi'
 import { useDocumentsStore } from '@/stores/documents'
+import { normalizeDocumentNodes } from '@/utils/documentsUtils'
 
 const props = defineProps<{
   node: SidebarDocumentNode
@@ -151,7 +152,7 @@ const props = defineProps<{
 }>()
 
 const documentsStore = useDocumentsStore()
-const childNodes = computed(() => normalizeNodes(props.node.children))
+const childNodes = computed(() => normalizeDocumentNodes(props.node.children))
 const hasChildren = computed(() => childNodes.value.length > 0)
 const isCollapsed = computed(() => props.collapsedDocumentIds.includes(props.node.id))
 const menuOpen = ref(false)
@@ -224,12 +225,8 @@ function closeDeleteConfirm() {
   deleteError.value = ''
 }
 
-function normalizeNodes(nodes: SidebarDocumentNode[] | null | undefined): SidebarDocumentNode[] {
-  return Array.isArray(nodes) ? nodes.filter((node): node is SidebarDocumentNode => !!node) : []
-}
-
 function collectSubtreeIds(node: SidebarDocumentNode): string[] {
-  return [node.id, ...normalizeNodes(node.children).flatMap(child => collectSubtreeIds(child))]
+  return [node.id, ...normalizeDocumentNodes(node.children).flatMap(child => collectSubtreeIds(child))]
 }
 
 async function confirmDelete() {

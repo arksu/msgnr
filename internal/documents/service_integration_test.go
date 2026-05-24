@@ -109,6 +109,11 @@ func TestIntegration_DeleteTeamspaceArchivesDocsAndHidesIt(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	_, err = svc.FavoriteDocument(ctx, rootDoc.ID, ownerID)
+	require.NoError(t, err)
+	_, err = svc.FavoriteDocument(ctx, childDoc.ID, memberID)
+	require.NoError(t, err)
+
 	err = svc.DeleteTeamspace(ctx, teamspace.ID, ownerID, "member")
 	require.NoError(t, err)
 
@@ -124,6 +129,15 @@ func TestIntegration_DeleteTeamspaceArchivesDocsAndHidesIt(t *testing.T) {
 		_, err = svc.GetDocument(ctx, documentID, ownerID)
 		require.ErrorIs(t, err, documents.ErrNotFound)
 	}
+
+	var favoriteCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*)
+		   FROM document_favorite
+		  WHERE document_id IN ($1, $2)`,
+		rootDoc.ID, childDoc.ID,
+	).Scan(&favoriteCount))
+	assert.Zero(t, favoriteCount)
 
 	rows, err := svc.ListTeamspaces(ctx, ownerID, "member")
 	require.NoError(t, err)
@@ -276,6 +290,19 @@ func TestIntegration_DocumentFavoritesArePerUserAndSidebarOnlyShowsVisibleDocume
 	_, err = svc.FavoriteDocument(ctx, rootDoc.ID, memberID)
 	require.NoError(t, err)
 	require.NoError(t, svc.DeleteDocument(ctx, rootDoc.ID, ownerID))
+
+	unfavorite, err = svc.UnfavoriteDocument(ctx, rootDoc.ID, memberID)
+	require.NoError(t, err)
+	assert.False(t, unfavorite.IsFavorite)
+
+	var favoriteCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*)
+		   FROM document_favorite
+		  WHERE document_id = $1`,
+		rootDoc.ID,
+	).Scan(&favoriteCount))
+	assert.Zero(t, favoriteCount)
 
 	sidebar, err = svc.ListSidebar(ctx, memberID)
 	require.NoError(t, err)

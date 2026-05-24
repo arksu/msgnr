@@ -392,6 +392,16 @@ func (s *Service) DeleteTeamspace(ctx context.Context, teamspaceID, actorID uuid
 		return classifyMutationError("archive teamspace documents", err)
 	}
 
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM document_favorite df
+		  USING document d
+		  WHERE d.id = df.document_id
+		    AND d.teamspace_id = $1`,
+		teamspaceID,
+	); err != nil {
+		return classifyMutationError("delete teamspace document favorites", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("documents: commit delete teamspace tx: %w", err)
 	}
@@ -906,31 +916,41 @@ func (s *Service) DeleteDocument(ctx context.Context, documentID, actorID uuid.U
 		return err
 	}
 
-	commandTag, err := s.pool.Exec(ctx,
+	var archivedCount int
+	err := s.pool.QueryRow(ctx,
 		`WITH RECURSIVE subtree AS (
 		     SELECT d.id
 		       FROM document d
 		      WHERE d.id = $1
-		        AND d.archived_at IS NULL
 		     UNION ALL
 		     SELECT child.id
 		       FROM document child
 		       JOIN subtree parent
 		         ON child.parent_document_id = parent.id
-		      WHERE child.archived_at IS NULL
-		 )
+		 ),
+		 archived AS (
 		 UPDATE document d
 		    SET archived_at = now(),
 		        updated_by = $2,
 		        updated_at = now()
 		   FROM subtree
-		  WHERE d.id = subtree.id`,
+		  WHERE d.id = subtree.id
+		    AND d.archived_at IS NULL
+		  RETURNING d.id
+		 ),
+		 deleted_favorites AS (
+		 DELETE FROM document_favorite df
+		  USING subtree
+		  WHERE df.document_id = subtree.id
+		  RETURNING df.document_id
+		 )
+		 SELECT count(*) FROM archived`,
 		documentID, actorID,
-	)
+	).Scan(&archivedCount)
 	if err != nil {
 		return classifyMutationError("delete document", err)
 	}
-	if commandTag.RowsAffected() == 0 {
+	if archivedCount == 0 {
 		return s.documentAccessError(ctx, documentID, actorID)
 	}
 	return nil
@@ -961,10 +981,6 @@ func (s *Service) FavoriteDocument(ctx context.Context, documentID, userID uuid.
 }
 
 func (s *Service) UnfavoriteDocument(ctx context.Context, documentID, userID uuid.UUID) (DocumentFavoriteResponse, error) {
-	if err := s.ensureDocumentReadable(ctx, documentID, userID); err != nil {
-		return DocumentFavoriteResponse{}, err
-	}
-
 	if _, err := s.pool.Exec(ctx,
 		`DELETE FROM document_favorite
 		  WHERE user_id = $1

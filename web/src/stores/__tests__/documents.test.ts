@@ -288,6 +288,21 @@ describe('documents store', () => {
 
   it('updates nested favorite state and exposes newest favorites first', async () => {
     const store = useDocumentsStore()
+    const unaffectedTeamspace = {
+      id: 'teamspace-2',
+      name: 'Beta',
+      documents: [
+        {
+          id: 'other-doc',
+          teamspace_id: 'teamspace-2',
+          parent_document_id: null,
+          title: 'Other',
+          is_favorite: false,
+          favorited_at: null,
+          children: [],
+        },
+      ],
+    }
     store.sidebarTeamspaces = [
       {
         id: 'teamspace-1',
@@ -314,7 +329,10 @@ describe('documents store', () => {
           },
         ],
       },
+      unaffectedTeamspace,
     ] as any
+    const unchangedRoot = store.sidebarTeamspaces[0].documents[0]
+    const unchangedTeamspace = store.sidebarTeamspaces[1]
     documentsApiMocks.documentsFavoriteDocument.mockResolvedValue({
       document_id: 'child-doc',
       is_favorite: true,
@@ -324,6 +342,8 @@ describe('documents store', () => {
     await store.favoriteDocument('child-doc')
 
     expect(documentsApiMocks.documentsFavoriteDocument).toHaveBeenCalledWith('child-doc')
+    expect(store.sidebarTeamspaces[0].documents[0]).not.toBe(unchangedRoot)
+    expect(store.sidebarTeamspaces[1]).toBe(unchangedTeamspace)
     expect(store.sidebarTeamspaces[0].documents[0].children[0]).toEqual(expect.objectContaining({
       id: 'child-doc',
       is_favorite: true,

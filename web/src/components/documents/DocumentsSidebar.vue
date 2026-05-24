@@ -115,7 +115,7 @@
 
             <div v-if="!isCollapsed(teamspace.id)" class="space-y-1 py-1">
               <DocumentsTreeNode
-                v-for="node in normalizeNodes(teamspace.documents)"
+                v-for="node in normalizeDocumentNodes(teamspace.documents)"
                 :key="node.id"
                 :node="node"
                 :level="0"
@@ -204,6 +204,7 @@ import { onMounted, ref, watch } from 'vue'
 import type { SidebarDocumentNode } from '@/services/http/documentsApi'
 import type { FavoriteSidebarDocument } from '@/stores/documents'
 import { useDocumentsStore } from '@/stores/documents'
+import { normalizeDocumentNodes } from '@/utils/documentsUtils'
 import {
   loadCollapsedDocumentsTeamspaceIds,
   saveCollapsedDocumentsTeamspaceIds,
@@ -300,12 +301,8 @@ function toggleDocument(documentId: string) {
   collapsedDocumentIds.value = [...collapsedDocumentIds.value, documentId]
 }
 
-function normalizeNodes(nodes: SidebarDocumentNode[] | null | undefined): SidebarDocumentNode[] {
-  return Array.isArray(nodes) ? nodes.filter((node): node is SidebarDocumentNode => !!node) : []
-}
-
 function collectDocumentIds(nodes: SidebarDocumentNode[] | null | undefined): string[] {
-  return normalizeNodes(nodes).flatMap(node => [node.id, ...collectDocumentIds(node.children)])
+  return normalizeDocumentNodes(nodes).flatMap(node => [node.id, ...collectDocumentIds(node.children)])
 }
 
 function openFavorite(favorite: FavoriteSidebarDocument) {

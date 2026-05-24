@@ -136,7 +136,6 @@ describe('DocumentsSidebar', () => {
       {
         id: 'child-doc',
         teamspace_id: 'teamspace-1',
-        parent_document_id: 'root-doc',
         title: 'Child',
         favorited_at: '2026-05-22T00:00:00Z',
         ancestor_document_ids: ['root-doc'],
@@ -201,5 +200,48 @@ describe('DocumentsSidebar', () => {
     await Promise.resolve()
 
     expect(documentsStoreMock.favoriteDocument).toHaveBeenCalledWith('doc-1')
+  })
+
+  it('removes a document from favorites from the row menu', async () => {
+    documentsStoreMock.sidebarTeamspaces = [
+      {
+        id: 'teamspace-1',
+        name: 'Alpha',
+        documents: [
+          {
+            id: 'doc-1',
+            teamspace_id: 'teamspace-1',
+            parent_document_id: null,
+            title: 'Root',
+            is_favorite: true,
+            favorited_at: '2026-05-22T00:00:00Z',
+            children: [],
+          },
+        ],
+      },
+    ]
+
+    const wrapper = mount(DocumentsSidebar, {
+      props: {
+        selectedTeamspaceId: null,
+        selectedDocumentId: null,
+        searchQuery: '',
+      },
+      global: {
+        stubs: {
+          Teleport: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="documents-node-menu-doc-1"]').trigger('click')
+    const favoriteAction = wrapper.get('[data-testid="documents-node-favorite-doc-1"]')
+    expect(favoriteAction.text()).toContain('Remove from favorites')
+
+    await favoriteAction.trigger('click')
+    await Promise.resolve()
+
+    expect(documentsStoreMock.unfavoriteDocument).toHaveBeenCalledWith('doc-1')
+    expect(documentsStoreMock.favoriteDocument).not.toHaveBeenCalled()
   })
 })

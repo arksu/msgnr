@@ -58,8 +58,8 @@ export interface SidebarDocumentNode {
   teamspace_id: string
   parent_document_id: string | null
   title: string
-  is_favorite?: boolean
-  favorited_at?: string | null
+  is_favorite: boolean
+  favorited_at: string | null
   children: SidebarDocumentNode[]
 }
 

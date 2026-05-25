@@ -86,6 +86,8 @@ const wsStore = useWsStore()
 const scrollEl = ref<HTMLElement | null>(null)
 const isNearBottom = ref(true)
 const inlineEditRequest = ref({ messageId: '', token: 0 })
+let activationToken = 0
+let activatedWorkspace: { conversationId: string; rootMessageId: string } | null = null
 let typingIdleTimer: ReturnType<typeof setTimeout> | null = null
 let typingIsActive = false
 let typingLastSentAtMs = 0
@@ -218,13 +220,23 @@ function handleSend(payload: { body: string; entities: NonNullable<Message['enti
 }
 
 watch(() => [props.conversationId, props.rootMessageId] as const, async ([conversationId, rootMessageId]) => {
+  const token = ++activationToken
+  if (
+    activatedWorkspace
+    && (activatedWorkspace.conversationId !== conversationId || activatedWorkspace.rootMessageId !== rootMessageId)
+  ) {
+    chatStore.deactivateThreadWorkspace(activatedWorkspace.conversationId, activatedWorkspace.rootMessageId)
+    activatedWorkspace = null
+  }
   inlineEditRequest.value = { messageId: '', token: inlineEditRequest.value.token }
   if (!conversationId || !rootMessageId) return
   await chatStore.ensureConversationHistory(conversationId)
   if (!chatStore.getThreadRoot(conversationId, rootMessageId)) {
     await chatStore.loadMessageContext(conversationId, rootMessageId)
   }
-  chatStore.ensureThreadSubscribed(conversationId, rootMessageId)
+  if (token !== activationToken) return
+  chatStore.activateThreadWorkspace(conversationId, rootMessageId)
+  activatedWorkspace = { conversationId, rootMessageId }
   await nextTick()
   scrollToBottom()
 }, { immediate: true })
@@ -242,6 +254,11 @@ watch(() => [chatStore.focusedThreadMessageId, replies.value.length, rootMessage
 }, { immediate: true })
 
 onBeforeUnmount(() => {
+  ++activationToken
+  if (activatedWorkspace) {
+    chatStore.deactivateThreadWorkspace(activatedWorkspace.conversationId, activatedWorkspace.rootMessageId)
+    activatedWorkspace = null
+  }
   stopTypingPresence(true)
 })
 </script>

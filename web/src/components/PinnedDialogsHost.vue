@@ -37,6 +37,7 @@
           v-else-if="activeItem.threadRootMessageId"
           :conversation-id="activeItem.conversationId"
           :root-message-id="activeItem.threadRootMessageId"
+          mode="pinned"
         />
       </aside>
     </ResizableSidebar>

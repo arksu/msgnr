@@ -92,6 +92,23 @@ function buildMessage(overrides: Partial<Message> = {}): Message {
   }
 }
 
+function buildUnreadThreadItem(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'thread:reply-1',
+    kind: 'thread',
+    conversationId: 'channel-1',
+    conversationKind: 'channel',
+    conversationVisibility: 'public',
+    conversationTitle: 'general',
+    messageId: 'reply-1',
+    threadRootMessageId: 'root-1',
+    senderName: 'Bob',
+    body: 'reply 1',
+    createdAt: '2026-03-06T00:01:00Z',
+    ...overrides,
+  }
+}
+
 describe('chatStore phase 6 flows', () => {
   beforeEach(() => {
     ensureLocalStorageMock()
@@ -2327,6 +2344,253 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.channels[0].unread).toBe(0)
     expect(ws.sendUpdateReadCursor).toHaveBeenCalledWith('channel-1', 10n)
     expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
+  it('marks live replies read when they arrive in the active visible thread', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn()
+    ws.sendUpdateReadCursor = vi.fn()
+    chat.bootstrapped = true
+    chat.setClientActive(true)
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 1,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', channelSeq: 10n })],
+    }
+    chat.activateThreadWorkspace('channel-1', 'root-1')
+    vi.mocked(ws.sendSubscribeThread).mockClear()
+    vi.mocked(ws.sendUpdateReadCursor).mockClear()
+    chat.unreadFeedItems = [buildUnreadThreadItem({ notificationId: 'notif-1' })] as any
+    chat.notifications = [{
+      id: 'notif-1',
+      type: 'thread_reply',
+      title: 'Reply',
+      body: 'reply 1',
+      conversationId: 'channel-1',
+      isRead: false,
+      createdAt: '2026-03-06T00:01:00Z',
+    }]
+    chat.unreadFeedTotalCount = 1
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-active-thread-reply-1',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-1',
+          senderId: 'user-2',
+          body: 'reply 1',
+          channelSeq: 11n,
+          threadRootMessageId: 'root-1',
+          threadSeq: 1n,
+        }),
+      },
+    }))
+
+    expect(chat.unreadFeedItems).toEqual([])
+    expect(chat.unreadFeedTotalCount).toBe(0)
+    expect(chat.notifications).toEqual([])
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-1')
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 1n)
+  })
+
+  it('keeps live replies unread when they arrive in an inactive pinned thread', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn()
+    chat.bootstrapped = true
+    chat.setClientActive(true)
+    chat.messages = {
+      'channel-1': [
+        buildMessage({ id: 'root-1', channelId: 'channel-1', channelSeq: 10n }),
+        buildMessage({ id: 'root-2', channelId: 'channel-1', channelSeq: 20n }),
+      ],
+    }
+    chat.activateThreadWorkspace('channel-1', 'root-1')
+    vi.mocked(ws.sendSubscribeThread).mockClear()
+    chat.unreadFeedItems = [buildUnreadThreadItem({
+      id: 'thread:reply-2',
+      messageId: 'reply-2',
+      threadRootMessageId: 'root-2',
+    })] as any
+    chat.unreadFeedTotalCount = 1
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-inactive-thread-reply-1',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-2',
+          senderId: 'user-2',
+          body: 'reply 2',
+          channelSeq: 21n,
+          threadRootMessageId: 'root-2',
+          threadSeq: 1n,
+        }),
+      },
+    }))
+
+    expect(chat.unreadFeedItems.map(item => item.id)).toEqual(['thread:reply-2'])
+    expect(chat.unreadFeedTotalCount).toBe(1)
+    expect(ws.sendSubscribeThread).not.toHaveBeenCalledWith('channel-1', 'root-2', expect.anything())
+  })
+
+  it('marks the active visible thread read when the browser regains focus', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn()
+    chat.bootstrapped = true
+    chat.setClientActive(false)
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', channelSeq: 10n })],
+    }
+    chat.activateThreadWorkspace('channel-1', 'root-1')
+    vi.mocked(ws.sendSubscribeThread).mockClear()
+    chat.unreadFeedItems = [buildUnreadThreadItem({ notificationId: 'notif-1' })] as any
+    chat.unreadFeedTotalCount = 1
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-inactive-client-thread-reply-1',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-1',
+          senderId: 'user-2',
+          body: 'reply 1',
+          channelSeq: 11n,
+          threadRootMessageId: 'root-1',
+          threadSeq: 1n,
+        }),
+      },
+    }))
+
+    expect(chat.unreadFeedItems.map(item => item.id)).toEqual(['thread:reply-1'])
+    expect(ws.sendSubscribeThread).not.toHaveBeenCalled()
+
+    chat.setClientActive(true)
+    chat.onClientFocus()
+
+    expect(chat.unreadFeedItems).toEqual([])
+    expect(chat.unreadFeedTotalCount).toBe(0)
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-1')
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 1n)
+  })
+
+  it('scrubs active visible thread items after refreshing the unread feed', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn()
+    chat.bootstrapped = true
+    chat.setClientActive(true)
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', channelSeq: 10n })],
+    }
+    chat.activateThreadWorkspace('channel-1', 'root-1')
+    vi.mocked(ws.sendSubscribeThread).mockClear()
+    chatApiMocks.listUnreadFeed.mockResolvedValue({
+      total_count: 2,
+      items: [
+        {
+          id: 'thread:reply-1',
+          kind: 'thread',
+          notification_id: 'notif-1',
+          conversation_id: 'channel-1',
+          conversation_kind: 'channel',
+          conversation_visibility: 'public',
+          conversation_title: 'general',
+          message_id: 'reply-1',
+          thread_root_message_id: 'root-1',
+          sender_id: 'user-2',
+          sender_name: 'Bob',
+          body: 'reply 1',
+          created_at: '2026-03-06T00:01:00Z',
+        },
+        {
+          id: 'thread:reply-2',
+          kind: 'thread',
+          notification_id: 'notif-2',
+          conversation_id: 'channel-1',
+          conversation_kind: 'channel',
+          conversation_visibility: 'public',
+          conversation_title: 'general',
+          message_id: 'reply-2',
+          thread_root_message_id: 'root-2',
+          sender_id: 'user-3',
+          sender_name: 'Eve',
+          body: 'reply 2',
+          created_at: '2026-03-06T00:02:00Z',
+        },
+      ],
+    })
+
+    await chat.refreshUnreadFeed()
+
+    expect(chat.unreadFeedItems.map(item => item.id)).toEqual(['thread:reply-2'])
+    expect(chat.unreadFeedTotalCount).toBe(1)
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledWith('notif-1')
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
+  it('keeps active visible thread items after refreshing unread feed while the browser is inactive', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn()
+    chat.bootstrapped = true
+    chat.setClientActive(false)
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', channelSeq: 10n })],
+    }
+    chat.activateThreadWorkspace('channel-1', 'root-1')
+    vi.mocked(ws.sendSubscribeThread).mockClear()
+    chatApiMocks.listUnreadFeed.mockResolvedValue({
+      total_count: 1,
+      items: [{
+        id: 'thread:reply-1',
+        kind: 'thread',
+        notification_id: 'notif-1',
+        conversation_id: 'channel-1',
+        conversation_kind: 'channel',
+        conversation_visibility: 'public',
+        conversation_title: 'general',
+        message_id: 'reply-1',
+        thread_root_message_id: 'root-1',
+        sender_id: 'user-2',
+        sender_name: 'Bob',
+        body: 'reply 1',
+        created_at: '2026-03-06T00:01:00Z',
+      }],
+    })
+
+    await chat.refreshUnreadFeed()
+
+    expect(chat.unreadFeedItems.map(item => item.id)).toEqual(['thread:reply-1'])
+    expect(chat.unreadFeedTotalCount).toBe(1)
+    expect(chatApiMocks.resolveUnreadFeedNotification).not.toHaveBeenCalled()
+    expect(ws.sendSubscribeThread).not.toHaveBeenCalled()
   })
 
   it('resolves every unread notification for a thread when marking one thread item read', async () => {

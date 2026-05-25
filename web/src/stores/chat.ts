@@ -887,6 +887,17 @@ export const useChatStore = defineStore('chat', () => {
     return removed
   }
 
+  function rootReadSeq(conversationId: string, threadRootMessageId: string): bigint {
+    return getThreadRoot(conversationId, threadRootMessageId)?.channelSeq ?? 0n
+  }
+
+  function isActiveThreadWorkspace(conversationId: string, threadRootMessageId: string): boolean {
+    return Boolean(conversationId)
+      && Boolean(threadRootMessageId)
+      && activeThreadConversationId.value === conversationId
+      && activeThreadRootId.value === threadRootMessageId
+  }
+
   async function markThreadUnreadAsRead(
     conversationId: string,
     threadRootMessageId: string,
@@ -894,16 +905,26 @@ export const useChatStore = defineStore('chat', () => {
   ): Promise<void> {
     if (!conversationId || !threadRootMessageId) return
     const key = `${conversationId}:${threadRootMessageId}`
+    const removedItems = removeUnreadFeedItemsForThread(conversationId, threadRootMessageId)
+    const notificationIds = Array.from(new Set(
+      removedItems.flatMap(item => item.notificationId ? [item.notificationId] : []),
+    ))
+    const resolveAll = (ids: string[]) => ids.length > 0
+      ? Promise.allSettled(ids.map(notificationId => resolveUnreadFeedNotification(notificationId)))
+      : null
     const existing = pendingThreadReadResolutions.get(key)
-    if (existing) return existing
+    if (existing) {
+      const notificationResolution = resolveAll(notificationIds)
+      if (notificationResolution) {
+        await notificationResolution
+      }
+      return existing
+    }
 
     const pending = (async () => {
-      const removedItems = removeUnreadFeedItemsForThread(conversationId, threadRootMessageId)
-      const notificationIds = Array.from(new Set(
-        removedItems.flatMap(item => item.notificationId ? [item.notificationId] : []),
-      ))
-      if (notificationIds.length > 0) {
-        await Promise.allSettled(notificationIds.map(notificationId => resolveUnreadFeedNotification(notificationId)))
+      const notificationResolution = resolveAll(notificationIds)
+      if (notificationResolution) {
+        await notificationResolution
       }
       if (lastReadSeq > 0n) {
         requestReadMark(conversationId, lastReadSeq)
@@ -914,6 +935,18 @@ export const useChatStore = defineStore('chat', () => {
 
     pendingThreadReadResolutions.set(key, pending)
     return pending
+  }
+
+  function markVisibleThreadRead(conversationId: string, threadRootMessageId: string, lastReadSeq = rootReadSeq(conversationId, threadRootMessageId)) {
+    if (!conversationId || !threadRootMessageId) return
+    void markThreadUnreadAsRead(conversationId, threadRootMessageId, lastReadSeq)
+    useWsStore().sendSubscribeThread(conversationId, threadRootMessageId, threadReplayCursor(threadRootMessageId))
+  }
+
+  function scrubActiveThreadUnreadFeed() {
+    if (!activeThreadConversationId.value || !activeThreadRootId.value) return
+    if (!isClientTabActive()) return
+    markVisibleThreadRead(activeThreadConversationId.value, activeThreadRootId.value)
   }
 
   function selectChannel(id: string) {
@@ -1390,32 +1423,31 @@ export const useChatStore = defineStore('chat', () => {
 
   function openThread(rootMessage: Message) {
     if (rootMessage.threadRootMessageId) return
-    if (activeThreadRootId.value && activeThreadRootId.value !== rootMessage.id) {
-      clearThreadReplayResyncTimer(activeThreadRootId.value)
-    }
-    focusedThreadMessageId.value = ''
-    activeThreadConversationId.value = rootMessage.channelId
-    activeThreadRootId.value = rootMessage.id
-    if (!threadMessages.value[rootMessage.id]) threadMessages.value[rootMessage.id] = []
     requestThreadComposerFocus()
-    void markThreadUnreadAsRead(rootMessage.channelId, rootMessage.id, rootMessage.channelSeq)
+    activateThreadWorkspace(rootMessage.channelId, rootMessage.id)
+  }
+
+  function activateThreadWorkspace(conversationId: string, rootMessageId: string) {
+    if (!conversationId || !rootMessageId) return
+    const switchingThread = Boolean(activeThreadRootId.value)
+      && (activeThreadRootId.value !== rootMessageId || activeThreadConversationId.value !== conversationId)
+    if (switchingThread) {
+      clearThreadReplayResyncTimer(activeThreadRootId.value)
+      focusedThreadMessageId.value = ''
+    }
+    activeThreadConversationId.value = conversationId
+    activeThreadRootId.value = rootMessageId
+    if (!threadMessages.value[rootMessageId]) threadMessages.value[rootMessageId] = []
     // Only server-confirmed replies advance the replay cursor. ACK-only
     // optimistic replies stay visible but must not suppress a later backfill.
     // If the confirmed cache is smaller than the known reply total, reopen
     // from zero so older replies are replayed instead of showing a partial thread.
-    const lastKnownSeq = threadReplayCursor(rootMessage.id)
-    useWsStore().sendSubscribeThread(rootMessage.channelId, rootMessage.id, lastKnownSeq)
+    markVisibleThreadRead(conversationId, rootMessageId)
   }
 
-  function ensureThreadSubscribed(conversationId: string, rootMessageId: string) {
-    if (!conversationId || !rootMessageId) return
-    if (!threadMessages.value[rootMessageId]) threadMessages.value[rootMessageId] = []
-    const rootMessage = getThreadRoot(conversationId, rootMessageId)
-    if (rootMessage) {
-      void markThreadUnreadAsRead(conversationId, rootMessageId, rootMessage.channelSeq)
-    }
-    const ws = useWsStore()
-    ws.sendSubscribeThread(conversationId, rootMessageId, threadReplayCursor(rootMessageId))
+  function deactivateThreadWorkspace(conversationId: string, rootMessageId: string) {
+    if (!isActiveThreadWorkspace(conversationId, rootMessageId)) return
+    closeThread()
   }
 
   function closeThread() {
@@ -2122,6 +2154,7 @@ export const useChatStore = defineStore('chat', () => {
       unreadFeedItems.value = (response.items ?? []).map(unreadFeedItemFromHttp)
       unreadFeedTotalCount.value = Math.max(0, Math.floor(response.total_count ?? 0))
       unreadFeedLoaded.value = true
+      scrubActiveThreadUnreadFeed()
     } catch (err) {
       unreadFeedError.value = err instanceof Error ? err.message : 'Failed to load unread feed'
       unreadFeedLoaded.value = true
@@ -3029,6 +3062,10 @@ export const useChatStore = defineStore('chat', () => {
       } else {
         maybeRecoverActiveThread(rootId, channelId)
       }
+      if (isClientTabActive() && isActiveThreadWorkspace(channelId, rootId)) {
+        markVisibleThreadRead(channelId, rootId)
+        return
+      }
       scheduleUnreadFeedRefresh()
       return
     }
@@ -3109,6 +3146,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function onClientFocus() {
     if (!isClientTabActive()) return
+    scrubActiveThreadUnreadFeed()
     const conversationId = activeChannelId.value
     if (!conversationId) return
 
@@ -3506,7 +3544,9 @@ export const useChatStore = defineStore('chat', () => {
     addMessage,
     openThread,
     closeThread,
-    ensureThreadSubscribed,
+    activateThreadWorkspace,
+    deactivateThreadWorkspace,
+    markVisibleThreadRead,
     sendThreadReply,
     sendMessageToConversation,
     sendThreadReplyToRoot,

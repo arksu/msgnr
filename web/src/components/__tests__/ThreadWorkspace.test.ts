@@ -177,7 +177,6 @@ describe('ThreadWorkspace', () => {
     ws.state = 'LIVE_SYNCED'
     chat.ensureConversationHistory = vi.fn().mockResolvedValue(undefined)
     chat.loadMessageContext = vi.fn().mockResolvedValue(undefined)
-    chat.ensureThreadSubscribed = vi.fn()
     chat.channels = [{
       id: 'channel-1',
       name: 'qa',
@@ -241,6 +240,71 @@ describe('ThreadWorkspace', () => {
     expect(scrollSpy).toHaveBeenCalledWith({ block: 'center' })
   })
 
+  it('activates the mounted thread workspace and only deactivates its own active thread', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSubscribeThread = vi.fn()
+    chat.ensureConversationHistory = vi.fn().mockResolvedValue(undefined)
+    chat.loadMessageContext = vi.fn().mockResolvedValue(undefined)
+    chat.messages = {
+      'channel-1': [
+        {
+          id: 'root-1',
+          channelId: 'channel-1',
+          senderId: 'user-1',
+          senderName: 'Ada',
+          body: 'root 1',
+          channelSeq: 1n,
+          threadSeq: 0n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:00:00Z',
+          reactions: [],
+          myReactions: [],
+        },
+        {
+          id: 'root-2',
+          channelId: 'channel-1',
+          senderId: 'user-2',
+          senderName: 'Bob',
+          body: 'root 2',
+          channelSeq: 2n,
+          threadSeq: 0n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          createdAt: '2026-03-06T00:00:01Z',
+          reactions: [],
+          myReactions: [],
+        },
+      ],
+    }
+
+    const wrapper = mount(ThreadWorkspace, {
+      props: {
+        conversationId: 'channel-1',
+        rootMessageId: 'root-1',
+      },
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+    await nextTick()
+    await nextTick()
+
+    expect(chat.activeThreadConversationId).toBe('channel-1')
+    expect(chat.activeThreadRootId).toBe('root-1')
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+
+    chat.activateThreadWorkspace('channel-1', 'root-2')
+    wrapper.unmount()
+
+    expect(chat.activeThreadConversationId).toBe('channel-1')
+    expect(chat.activeThreadRootId).toBe('root-2')
+  })
+
   it('requests inline edit for the latest editable own thread reply', async () => {
     const auth = useAuthStore()
     const chat = useChatStore()
@@ -249,7 +313,6 @@ describe('ThreadWorkspace', () => {
     ws.state = 'LIVE_SYNCED'
     chat.ensureConversationHistory = vi.fn().mockResolvedValue(undefined)
     chat.loadMessageContext = vi.fn().mockResolvedValue(undefined)
-    chat.ensureThreadSubscribed = vi.fn()
     chat.channels = [{
       id: 'channel-1',
       name: 'qa',

@@ -9,6 +9,7 @@ const filtersMock = {
   selectedStatusIds: ref<string[]>([]),
   selectedTemplateId: ref<string | null>(null),
   selectedAssigneeIds: ref<string[]>([]),
+  selectedDictionaryEnumCodes: ref<Record<string, string[]>>({}),
   showSubtasks: ref(false),
 }
 
@@ -19,11 +20,44 @@ vi.mock('@/composables/useTaskFilters', () => ({
 const tasksStoreMock = reactive({
   activeStatuses: [{ id: 'st-1', name: 'Todo' }],
   activeTemplates: [{ id: 'tpl-1', prefix: 'BUG' }],
+  filterableEnumDictionaries: [
+    {
+      id: 'dict-1',
+      code: 'priority',
+      name: 'Priority',
+      is_public: false,
+      participates_in_filtration: true,
+      current_version: 1,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    },
+  ],
   assigneeFieldIds: ['fld-assignee'],
   users: [{ id: 'u-1', display_name: 'Ada', email: 'ada@example.com', avatar_url: '' }],
   loadConfig: vi.fn(async () => { }),
   loadAllTemplateFields: vi.fn(async () => { }),
   loadUsers: vi.fn(async () => { }),
+  loadFilterableDictionaries: vi.fn(async () => { }),
+  loadEnumItemsFor: vi.fn(async () => { }),
+  searchEnumItemsFor: vi.fn(async () => { }),
+  enumItemsFor: vi.fn(() => [
+    {
+      id: 'item-1',
+      dictionary_version_id: 'ver-1',
+      value_code: 'high',
+      value_name: 'High',
+      sort_order: 1,
+      is_active: true,
+    },
+    {
+      id: 'item-2',
+      dictionary_version_id: 'ver-1',
+      value_code: 'low',
+      value_name: 'Low',
+      sort_order: 2,
+      is_active: true,
+    },
+  ]),
   activeFieldsFor: vi.fn(() => [{ id: 'fld-assignee', field_role: 'assignee', deleted_at: null }]),
 })
 
@@ -37,11 +71,16 @@ describe('TaskTrackerFilters', () => {
     vi.clearAllMocks()
     tasksStoreMock.activeFieldsFor.mockReset()
     tasksStoreMock.activeFieldsFor.mockReturnValue([{ id: 'fld-assignee', field_role: 'assignee', deleted_at: null }])
+    tasksStoreMock.loadFilterableDictionaries.mockClear()
+    tasksStoreMock.loadEnumItemsFor.mockClear()
+    tasksStoreMock.searchEnumItemsFor.mockClear()
+    tasksStoreMock.enumItemsFor.mockClear()
     filtersMock.searchInput.value = ''
     filtersMock.filtersVisible.value = false
     filtersMock.selectedStatusIds.value = []
     filtersMock.selectedTemplateId.value = null
     filtersMock.selectedAssigneeIds.value = []
+    filtersMock.selectedDictionaryEnumCodes.value = {}
     filtersMock.showSubtasks.value = false
   })
 
@@ -87,6 +126,12 @@ describe('TaskTrackerFilters', () => {
     expect(assigneeChip).toBeTruthy()
     await assigneeChip!.trigger('click')
     await wrapper.get('input[type="checkbox"][value="u-1"]').setValue(true)
+
+    const dictionaryChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Priority'))
+    expect(dictionaryChip).toBeTruthy()
+    await dictionaryChip!.trigger('click')
+    await wrapper.findAll('.dropdown-menu--dictionary input[type="checkbox"]')[0].setValue(true)
+    await wrapper.findAll('.dropdown-menu--dictionary input[type="checkbox"]')[1].setValue(true)
     await showSubtasksCheckbox(wrapper).setValue(true)
 
     const emitted = wrapper.emitted('filtersChange')
@@ -98,6 +143,7 @@ describe('TaskTrackerFilters', () => {
       prefixes: ['BUG'],
       include_subtasks: true,
       field_filters: [{ field_definition_id: 'fld-assignee', user_ids: ['u-1'] }],
+      dictionary_filters: [{ dictionary_id: 'dict-1', enum_codes: ['high', 'low'] }],
     })
   })
 
@@ -154,6 +200,13 @@ describe('TaskTrackerFilters', () => {
     const assigneeDropdown = wrapper.get('.dropdown-menu--assignee')
     expect(assigneeDropdown.classes()).toContain('dropdown-menu--tall')
     expect(wrapper.find('.assignee-dropdown-list').exists()).toBe(true)
+
+    const dictionaryChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Priority'))
+    expect(dictionaryChip).toBeTruthy()
+    await dictionaryChip!.trigger('click')
+    const dictionaryDropdown = wrapper.get('.dropdown-menu--dictionary')
+    expect(dictionaryDropdown.classes()).toContain('dropdown-menu--tall')
+    expect(wrapper.find('.dictionary-dropdown-list').exists()).toBe(true)
   })
 
   it('counts and clears the show subtasks toggle as an active filter', async () => {
@@ -188,6 +241,7 @@ describe('TaskTrackerFilters', () => {
 
   it('restores filter state from composable when remounted (view switch)', async () => {
     filtersMock.selectedStatusIds.value = ['st-1']
+    filtersMock.selectedDictionaryEnumCodes.value = { 'dict-1': ['high'] }
     filtersMock.showSubtasks.value = true
     filtersMock.filtersVisible.value = true
 
@@ -204,9 +258,11 @@ describe('TaskTrackerFilters', () => {
     })
     await flushPromises()
 
-    expect(wrapper.get('button.toolbar-btn').text()).toContain('2')
+    expect(wrapper.get('button.toolbar-btn').text()).toContain('3')
     expect((showSubtasksCheckbox(wrapper).element as HTMLInputElement).checked).toBe(true)
     const statusChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Status'))
     expect(statusChip!.classes()).toContain('active')
+    const dictionaryChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Priority'))
+    expect(dictionaryChip!.classes()).toContain('active')
   })
 })

@@ -17,26 +17,33 @@ import (
 
 const enumDictionaryCreate = `-- name: EnumDictionaryCreate :one
 
-INSERT INTO enum_dictionary (code, name, is_public)
-VALUES ($1, $2, $3)
-RETURNING id, code, name, is_public, current_version, created_at, updated_at
+INSERT INTO enum_dictionary (code, name, is_public, participates_in_filtration)
+VALUES ($1, $2, $3, $4)
+RETURNING id, code, name, is_public, participates_in_filtration, current_version, created_at, updated_at
 `
 
 type EnumDictionaryCreateParams struct {
-	Code     string `json:"code"`
-	Name     string `json:"name"`
-	IsPublic bool   `json:"is_public"`
+	Code                     string `json:"code"`
+	Name                     string `json:"name"`
+	IsPublic                 bool   `json:"is_public"`
+	ParticipatesInFiltration bool   `json:"participates_in_filtration"`
 }
 
 // ---- enum_dictionary ----
 func (q *Queries) EnumDictionaryCreate(ctx context.Context, arg EnumDictionaryCreateParams) (EnumDictionary, error) {
-	row := q.db.QueryRowContext(ctx, enumDictionaryCreate, arg.Code, arg.Name, arg.IsPublic)
+	row := q.db.QueryRowContext(ctx, enumDictionaryCreate,
+		arg.Code,
+		arg.Name,
+		arg.IsPublic,
+		arg.ParticipatesInFiltration,
+	)
 	var i EnumDictionary
 	err := row.Scan(
 		&i.ID,
 		&i.Code,
 		&i.Name,
 		&i.IsPublic,
+		&i.ParticipatesInFiltration,
 		&i.CurrentVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -45,7 +52,7 @@ func (q *Queries) EnumDictionaryCreate(ctx context.Context, arg EnumDictionaryCr
 }
 
 const enumDictionaryGet = `-- name: EnumDictionaryGet :one
-SELECT id, code, name, is_public, current_version, created_at, updated_at FROM enum_dictionary WHERE id = $1
+SELECT id, code, name, is_public, participates_in_filtration, current_version, created_at, updated_at FROM enum_dictionary WHERE id = $1
 `
 
 func (q *Queries) EnumDictionaryGet(ctx context.Context, id uuid.UUID) (EnumDictionary, error) {
@@ -56,6 +63,7 @@ func (q *Queries) EnumDictionaryGet(ctx context.Context, id uuid.UUID) (EnumDict
 		&i.Code,
 		&i.Name,
 		&i.IsPublic,
+		&i.ParticipatesInFiltration,
 		&i.CurrentVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -67,7 +75,7 @@ const enumDictionaryIncrementVersion = `-- name: EnumDictionaryIncrementVersion 
 UPDATE enum_dictionary
 SET current_version = current_version + 1, updated_at = now()
 WHERE id = $1
-RETURNING id, code, name, is_public, current_version, created_at, updated_at
+RETURNING id, code, name, is_public, participates_in_filtration, current_version, created_at, updated_at
 `
 
 func (q *Queries) EnumDictionaryIncrementVersion(ctx context.Context, id uuid.UUID) (EnumDictionary, error) {
@@ -78,6 +86,7 @@ func (q *Queries) EnumDictionaryIncrementVersion(ctx context.Context, id uuid.UU
 		&i.Code,
 		&i.Name,
 		&i.IsPublic,
+		&i.ParticipatesInFiltration,
 		&i.CurrentVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -86,7 +95,7 @@ func (q *Queries) EnumDictionaryIncrementVersion(ctx context.Context, id uuid.UU
 }
 
 const enumDictionaryList = `-- name: EnumDictionaryList :many
-SELECT id, code, name, is_public, current_version, created_at, updated_at FROM enum_dictionary ORDER BY name ASC
+SELECT id, code, name, is_public, participates_in_filtration, current_version, created_at, updated_at FROM enum_dictionary ORDER BY name ASC
 `
 
 func (q *Queries) EnumDictionaryList(ctx context.Context) ([]EnumDictionary, error) {
@@ -103,6 +112,7 @@ func (q *Queries) EnumDictionaryList(ctx context.Context) ([]EnumDictionary, err
 			&i.Code,
 			&i.Name,
 			&i.IsPublic,
+			&i.ParticipatesInFiltration,
 			&i.CurrentVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -118,6 +128,73 @@ func (q *Queries) EnumDictionaryList(ctx context.Context) ([]EnumDictionary, err
 		return nil, err
 	}
 	return items, nil
+}
+
+const enumDictionaryListFilterable = `-- name: EnumDictionaryListFilterable :many
+SELECT id, code, name, is_public, participates_in_filtration, current_version, created_at, updated_at FROM enum_dictionary
+WHERE participates_in_filtration = true
+ORDER BY name ASC
+`
+
+func (q *Queries) EnumDictionaryListFilterable(ctx context.Context) ([]EnumDictionary, error) {
+	rows, err := q.db.QueryContext(ctx, enumDictionaryListFilterable)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EnumDictionary
+	for rows.Next() {
+		var i EnumDictionary
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.IsPublic,
+			&i.ParticipatesInFiltration,
+			&i.CurrentVersion,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const enumDictionaryUpdateSettings = `-- name: EnumDictionaryUpdateSettings :one
+UPDATE enum_dictionary
+SET is_public = $2, participates_in_filtration = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, code, name, is_public, participates_in_filtration, current_version, created_at, updated_at
+`
+
+type EnumDictionaryUpdateSettingsParams struct {
+	ID                       uuid.UUID `json:"id"`
+	IsPublic                 bool      `json:"is_public"`
+	ParticipatesInFiltration bool      `json:"participates_in_filtration"`
+}
+
+func (q *Queries) EnumDictionaryUpdateSettings(ctx context.Context, arg EnumDictionaryUpdateSettingsParams) (EnumDictionary, error) {
+	row := q.db.QueryRowContext(ctx, enumDictionaryUpdateSettings, arg.ID, arg.IsPublic, arg.ParticipatesInFiltration)
+	var i EnumDictionary
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.IsPublic,
+		&i.ParticipatesInFiltration,
+		&i.CurrentVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const enumDictionaryVersionCreate = `-- name: EnumDictionaryVersionCreate :one

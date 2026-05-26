@@ -65,15 +65,26 @@ UPDATE task_status SET sort_order = $2, updated_at = now() WHERE id = $1;
 -- ---- enum_dictionary ----
 
 -- name: EnumDictionaryCreate :one
-INSERT INTO enum_dictionary (code, name, is_public)
-VALUES ($1, $2, $3)
+INSERT INTO enum_dictionary (code, name, is_public, participates_in_filtration)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: EnumDictionaryList :many
 SELECT * FROM enum_dictionary ORDER BY name ASC;
 
+-- name: EnumDictionaryListFilterable :many
+SELECT * FROM enum_dictionary
+WHERE participates_in_filtration = true
+ORDER BY name ASC;
+
 -- name: EnumDictionaryGet :one
 SELECT * FROM enum_dictionary WHERE id = $1;
+
+-- name: EnumDictionaryUpdateSettings :one
+UPDATE enum_dictionary
+SET is_public = $2, participates_in_filtration = $3, updated_at = now()
+WHERE id = $1
+RETURNING *;
 
 -- name: EnumDictionaryIncrementVersion :one
 UPDATE enum_dictionary

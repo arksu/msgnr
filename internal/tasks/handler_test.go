@@ -31,6 +31,36 @@ func TestParseTaskFilterParams_IncludeSubtasks(t *testing.T) {
 	})
 }
 
+func TestParseTaskFilterParams_DictionaryEnumFilters(t *testing.T) {
+	dictID := uuid.New()
+	req := httptest.NewRequest(
+		"GET",
+		"/api/tasks?dictionary_"+dictID.String()+"_enum=high&dictionary_"+dictID.String()+"_enum=low",
+		nil,
+	)
+
+	params, err := parseTaskFilterParams(req)
+	require.NoError(t, err)
+	require.Len(t, params.DictionaryFilters, 1)
+	assert.Equal(t, dictID, params.DictionaryFilters[0].DictionaryID)
+	assert.ElementsMatch(t, []string{"high", "low"}, params.DictionaryFilters[0].EnumCodes)
+}
+
+func TestParseTaskFilterParams_TrimsFieldEnumFilters(t *testing.T) {
+	fieldID := uuid.New()
+	req := httptest.NewRequest(
+		"GET",
+		"/api/tasks?field_"+fieldID.String()+"_enum=%20high%20&field_"+fieldID.String()+"_enum=",
+		nil,
+	)
+
+	params, err := parseTaskFilterParams(req)
+	require.NoError(t, err)
+	require.Len(t, params.FieldFilters, 1)
+	assert.Equal(t, fieldID, params.FieldFilters[0].FieldDefinitionID)
+	assert.Equal(t, []string{"high"}, params.FieldFilters[0].EnumCodes)
+}
+
 func TestTaskCommentsRouter_InvalidUpdateCommentID(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodPut, "/api/tasks/task/comments/not-a-uuid", strings.NewReader(`{"body":"x"}`))

@@ -680,6 +680,7 @@ CREATE TABLE IF NOT EXISTS enum_dictionary (
     code            varchar(64) NOT NULL,
     name            varchar(255) NOT NULL,
     is_public       boolean     NOT NULL DEFAULT false,
+    participates_in_filtration boolean NOT NULL DEFAULT false,
     current_version integer     NOT NULL DEFAULT 1,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),

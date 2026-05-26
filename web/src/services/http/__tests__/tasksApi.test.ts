@@ -58,6 +58,7 @@ describe('tasksApi task list queries', () => {
       status_ids: ['status-1'],
       prefixes: ['QA'],
       field_filters: [{ field_definition_id: 'fd-1', enum_codes: ['high'] }],
+      dictionary_filters: [{ dictionary_id: 'dict-1', enum_codes: ['high', 'medium'] }],
     }, 40)
 
     expect(getMock).toHaveBeenCalledTimes(1)
@@ -68,6 +69,8 @@ describe('tasksApi task list queries', () => {
     expect(query).toContain('status_id=status-1')
     expect(query).toContain('prefix=QA')
     expect(query).toContain('field_fd-1_enum=high')
+    expect(query).toContain('dictionary_dict-1_enum=high')
+    expect(query).toContain('dictionary_dict-1_enum=medium')
     expect(query).toContain('limit=40')
   })
 

@@ -139,6 +139,51 @@
         </div>
       </div>
 
+      <div
+        v-for="dictionary in tasksStore.filterableEnumDictionaries"
+        :key="dictionary.id"
+        class="relative"
+        data-dictionary-filter-root="true"
+      >
+        <button
+          class="filter-chip"
+          :class="selectedDictionaryCodes(dictionary.id).length ? 'active' : ''"
+          @click="toggleDictionaryDropdown(dictionary.id)"
+        >
+          {{ dictionary.name }}
+          <span v-if="selectedDictionaryCodes(dictionary.id).length" class="filter-chip-count">{{ selectedDictionaryCodes(dictionary.id).length }}</span>
+          <svg class="w-3 h-3 ml-1" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+        </button>
+        <div v-if="dictionaryDropdownOpenById[dictionary.id]" class="dropdown-menu dropdown-menu--tall dropdown-menu--dictionary w-64">
+          <div class="p-2 border-b border-chat-border">
+            <input
+              :value="dictionarySearchById[dictionary.id] ?? ''"
+              type="text"
+              placeholder="Search values..."
+              class="w-full bg-chat-bg border border-chat-border rounded px-2 py-1 text-white text-sm outline-none focus:border-accent"
+              @input="onDictionarySearchInput(dictionary.id, $event)"
+            />
+          </div>
+          <div class="dictionary-dropdown-list py-1">
+            <div v-if="filteredDictionaryItems(dictionary.id).length === 0" class="px-3 py-2 text-xs text-gray-500">No values found</div>
+            <label
+              v-for="item in filteredDictionaryItems(dictionary.id)"
+              :key="item.value_code"
+              class="dropdown-item cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                class="mr-2 accent-accent shrink-0"
+                :checked="selectedDictionaryCodes(dictionary.id).includes(item.value_code)"
+                @change="setDictionaryCodeSelected(dictionary.id, item.value_code, $event)"
+              />
+              <span class="min-w-0 flex-1 truncate">{{ item.value_name }}</span>
+              <span class="ml-2 shrink-0 font-mono text-[11px] text-gray-500">{{ item.value_code }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
       <label
         class="inline-flex items-center gap-2 rounded border border-chat-border px-2.5 py-1 text-xs text-gray-300 transition-colors hover:border-accent/40 hover:text-white"
         :class="showSubtasks ? 'border-accent/60 text-accent' : ''"
@@ -160,7 +205,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { FieldFilter, TaskFilterPayload } from '@/services/http/tasksApi'
+import type { DictionaryFilter, FieldFilter, TaskFilterPayload } from '@/services/http/tasksApi'
 import { useTasksStore } from '@/stores/tasks'
 import { useTaskFilters } from '@/composables/useTaskFilters'
 import UserAvatar from '@/components/UserAvatar.vue'
@@ -181,7 +226,15 @@ const emit = defineEmits<{
 }>()
 
 const tasksStore = useTasksStore()
-const { searchInput, filtersVisible, selectedStatusIds, selectedTemplateId, selectedAssigneeIds, showSubtasks } = useTaskFilters()
+const {
+  searchInput,
+  filtersVisible,
+  selectedStatusIds,
+  selectedTemplateId,
+  selectedAssigneeIds,
+  selectedDictionaryEnumCodes,
+  showSubtasks,
+} = useTaskFilters()
 
 const statusDropdownOpen = ref(false)
 const templateDropdownOpen = ref(false)
@@ -192,6 +245,8 @@ const assigneeDropdownEl = ref<HTMLElement | null>(null)
 
 const assigneeDropdownOpen = ref(false)
 const assigneeSearch = ref('')
+const dictionaryDropdownOpenById = ref<Record<string, boolean>>({})
+const dictionarySearchById = ref<Record<string, string>>({})
 
 const selectedTemplatePrefix = computed(() =>
   tasksStore.activeTemplates.find(t => t.id === selectedTemplateId.value)?.prefix ?? '',
@@ -221,10 +276,15 @@ function statusTitle(status: UserCustomStatus | null): string {
   return status ? formatUserCustomStatusTitle(status) : ''
 }
 
+const dictionaryActiveFilterCount = computed(() =>
+  tasksStore.filterableEnumDictionaries.filter(dictionary => selectedDictionaryCodes(dictionary.id).length > 0).length,
+)
+
 const activeFilterCount = computed(() =>
   (selectedStatusIds.value.length > 0 ? 1 : 0) +
   (selectedTemplateId.value ? 1 : 0) +
   (selectedAssigneeIds.value.length > 0 ? 1 : 0) +
+  dictionaryActiveFilterCount.value +
   (showSubtasks.value ? 1 : 0),
 )
 
@@ -249,13 +309,20 @@ function buildFilterPayload(): TaskFilterPayload {
     selectedAssigneeIds.value.length && resolvedAssigneeFieldId
       ? [{ field_definition_id: resolvedAssigneeFieldId, user_ids: selectedAssigneeIds.value }]
       : undefined
+  const dictionaryFilters: DictionaryFilter[] = tasksStore.filterableEnumDictionaries
+    .map(dictionary => ({
+      dictionary_id: dictionary.id,
+      enum_codes: selectedDictionaryCodes(dictionary.id),
+    }))
+    .filter(filter => filter.enum_codes.length > 0)
 
   return {
     search: searchInput.value.trim() || undefined,
     status_ids: selectedStatusIds.value.length ? selectedStatusIds.value : undefined,
     prefixes: prefix ? [prefix] : undefined,
-    include_subtasks: showSubtasks.value ? true : false,
+    include_subtasks: showSubtasks.value,
     field_filters: fieldFilters,
+    dictionary_filters: dictionaryFilters.length ? dictionaryFilters : undefined,
   }
 }
 
@@ -275,10 +342,54 @@ function selectTemplate(id: string | null) {
   emitFilters()
 }
 
+function selectedDictionaryCodes(dictionaryId: string): string[] {
+  return selectedDictionaryEnumCodes.value[dictionaryId] ?? []
+}
+
+function filteredDictionaryItems(dictionaryId: string) {
+  const q = (dictionarySearchById.value[dictionaryId] ?? '').trim().toLowerCase()
+  return tasksStore.enumItemsFor(dictionaryId)
+    .filter(item => item.is_active)
+    .filter(item => {
+      if (!q) return true
+      return item.value_name.toLowerCase().includes(q) || item.value_code.toLowerCase().includes(q)
+    })
+}
+
+function toggleDictionaryDropdown(dictionaryId: string) {
+  dictionaryDropdownOpenById.value = {
+    ...dictionaryDropdownOpenById.value,
+    [dictionaryId]: !dictionaryDropdownOpenById.value[dictionaryId],
+  }
+}
+
+function setDictionaryCodeSelected(dictionaryId: string, code: string, event: Event) {
+  const selected = event.target instanceof HTMLInputElement ? event.target.checked : false
+  const current = selectedDictionaryCodes(dictionaryId)
+  const next = selected
+    ? Array.from(new Set([...current, code]))
+    : current.filter(item => item !== code)
+  selectedDictionaryEnumCodes.value = {
+    ...selectedDictionaryEnumCodes.value,
+    [dictionaryId]: next,
+  }
+  emitFilters()
+}
+
+async function onDictionarySearchInput(dictionaryId: string, event: Event) {
+  const query = event.target instanceof HTMLInputElement ? event.target.value : ''
+  dictionarySearchById.value = {
+    ...dictionarySearchById.value,
+    [dictionaryId]: query,
+  }
+  await tasksStore.searchEnumItemsFor(dictionaryId, query, selectedDictionaryCodes(dictionaryId), 20)
+}
+
 function clearFilters() {
   selectedStatusIds.value = []
   selectedTemplateId.value = null
   selectedAssigneeIds.value = []
+  selectedDictionaryEnumCodes.value = {}
   showSubtasks.value = false
   emitFilters()
 }
@@ -292,6 +403,9 @@ function onDocClick(e: MouseEvent) {
   }
   if (assigneeDropdownEl.value && !assigneeDropdownEl.value.contains(e.target as Node)) {
     assigneeDropdownOpen.value = false
+  }
+  if (e.target instanceof Element && !e.target.closest('[data-dictionary-filter-root="true"]')) {
+    dictionaryDropdownOpenById.value = {}
   }
 }
 
@@ -313,7 +427,13 @@ onMounted(() => {
     await Promise.all([
       tasksStore.loadAllTemplateFields(),
       tasksStore.loadUsers(),
+      tasksStore.loadFilterableDictionaries(),
     ])
+    await Promise.all(
+      tasksStore.filterableEnumDictionaries.map(dictionary =>
+        tasksStore.loadEnumItemsFor(dictionary.id, selectedDictionaryCodes(dictionary.id)),
+      ),
+    )
     emitFilters()
   })
 })
@@ -349,7 +469,13 @@ onBeforeUnmount(() => {
 .dropdown-menu--assignee {
   @apply py-0 overflow-hidden flex flex-col;
 }
+.dropdown-menu--dictionary {
+  @apply py-0 overflow-hidden flex flex-col;
+}
 .assignee-dropdown-list {
+  @apply flex-1 min-h-0 overflow-y-auto;
+}
+.dictionary-dropdown-list {
   @apply flex-1 min-h-0 overflow-y-auto;
 }
 .dropdown-item {

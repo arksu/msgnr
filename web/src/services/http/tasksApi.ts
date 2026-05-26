@@ -82,6 +82,7 @@ export interface EnumDictionary {
   code: string
   name: string
   is_public: boolean
+  participates_in_filtration: boolean
   current_version: number
   created_at: string
   updated_at: string
@@ -192,7 +193,12 @@ export async function tasksListDictionaries(): Promise<EnumDictionary[]> {
   } catch (e) { handleError(e) }
 }
 
-export async function tasksCreateDictionary(payload: { code: string; name: string; is_public?: boolean }): Promise<EnumDictionary> {
+export async function tasksCreateDictionary(payload: {
+  code: string
+  name: string
+  is_public?: boolean
+  participates_in_filtration?: boolean
+}): Promise<EnumDictionary> {
   try {
     const { data } = await http.post<EnumDictionary>('/api/admin/enums', payload)
     return data
@@ -208,7 +214,7 @@ export async function tasksGetDictionary(id: string): Promise<EnumDictionary> {
 
 export async function tasksUpdateDictionary(
   id: string,
-  payload: { is_public: boolean },
+  payload: { is_public: boolean; participates_in_filtration: boolean },
 ): Promise<EnumDictionary> {
   try {
     const { data } = await http.patch<EnumDictionary>(`/api/admin/enums/${id}`, payload)
@@ -219,6 +225,13 @@ export async function tasksUpdateDictionary(
 export async function tasksGetConfigDictionary(id: string): Promise<EnumDictionary> {
   try {
     const { data } = await http.get<EnumDictionary>(`/api/tasks/config/enums/${id}`)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksListFilterableDictionaries(): Promise<EnumDictionary[]> {
+  try {
+    const { data } = await http.get<EnumDictionary[]>('/api/tasks/config/enums')
     return data
   } catch (e) { handleError(e) }
 }
@@ -609,6 +622,11 @@ export interface FieldFilter {
   date_to?: string
 }
 
+export interface DictionaryFilter {
+  dictionary_id: string
+  enum_codes: string[]
+}
+
 export interface TaskListParams {
   search?: string
   // Repeatable: maps to multiple status_id= query params
@@ -619,6 +637,8 @@ export interface TaskListParams {
   include_subtasks?: boolean
   // Per-field custom filters (field_<uuid>_user, field_<uuid>_enum, etc.)
   field_filters?: FieldFilter[]
+  // Per-dictionary enum filters (dictionary_<uuid>_enum).
+  dictionary_filters?: DictionaryFilter[]
   sort_by?: SortBy
   sort_order?: SortOrder
   page?: number
@@ -627,7 +647,7 @@ export interface TaskListParams {
 
 export type TaskFilterPayload = Pick<
   TaskListParams,
-  'search' | 'status_ids' | 'prefixes' | 'include_subtasks' | 'field_filters'
+  'search' | 'status_ids' | 'prefixes' | 'include_subtasks' | 'field_filters' | 'dictionary_filters'
 >
 
 // Mirrors backend StatusRow (subset used in list)
@@ -709,6 +729,9 @@ function buildTaskFilterQuery(params: TaskListParams): URLSearchParams {
     ff.enum_codes?.forEach(code => q.append(`field_${ff.field_definition_id}_enum`, code))
     if (ff.date_from) q.set(`field_${ff.field_definition_id}_date_from`, ff.date_from)
     if (ff.date_to) q.set(`field_${ff.field_definition_id}_date_to`, ff.date_to)
+  })
+  params.dictionary_filters?.forEach(df => {
+    df.enum_codes.forEach(code => q.append(`dictionary_${df.dictionary_id}_enum`, code))
   })
   return q
 }

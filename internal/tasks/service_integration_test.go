@@ -443,7 +443,7 @@ func TestIntegration_Dictionary_DuplicateSubmittedCodesConflict(t *testing.T) {
 	require.ErrorIs(t, err, tasks.ErrConflict)
 }
 
-func TestIntegration_Dictionary_UpdateVisibility(t *testing.T) {
+func TestIntegration_Dictionary_UpdateSettings(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 	svc := tasks.NewService(pool, nil)
@@ -451,14 +451,17 @@ func TestIntegration_Dictionary_UpdateVisibility(t *testing.T) {
 	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{Code: "pubdict", Name: "Public Dict"})
 	require.NoError(t, err)
 	assert.False(t, dict.IsPublic)
+	assert.False(t, dict.ParticipatesInFiltration)
 
-	updated, err := svc.UpdateDictionaryVisibility(ctx, dict.ID, true)
+	updated, err := svc.UpdateDictionarySettings(ctx, dict.ID, true, true)
 	require.NoError(t, err)
 	assert.True(t, updated.IsPublic)
+	assert.True(t, updated.ParticipatesInFiltration)
 
 	stored, err := svc.GetDictionary(ctx, dict.ID)
 	require.NoError(t, err)
 	assert.True(t, stored.IsPublic)
+	assert.True(t, stored.ParticipatesInFiltration)
 }
 
 func TestIntegration_Dictionary_CreatePublicItemAppendsToLatestVersion(t *testing.T) {
@@ -2166,6 +2169,81 @@ func TestIntegration_ListTasks_FilterByEnumField(t *testing.T) {
 	assert.Equal(t, highTask.ID, resp.Groups[0].Tasks[0].ID)
 }
 
+func TestIntegration_ListTasks_FilterByDictionaryEnumValues(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tplA := seedTemplate(t, ctx, svc, "DFA", actor)
+	tplB := seedTemplate(t, ctx, svc, "DFB", actor)
+	stTodo := seedStatus(t, ctx, svc, actor)
+	stDone, err := svc.CreateStatus(ctx, tasks.CreateStatusParams{
+		Code:    "done_" + uuid.NewString()[:8],
+		Name:    "Done",
+		ActorID: actor,
+	})
+	require.NoError(t, err)
+
+	dict, err := svc.CreateDictionary(ctx, tasks.CreateDictionaryParams{
+		Code:                     "filter_" + uuid.NewString()[:8],
+		Name:                     "Filter Dict",
+		ParticipatesInFiltration: true,
+	})
+	require.NoError(t, err)
+	ver, err := svc.CreateDictionaryVersion(ctx, dict.ID, []tasks.DictionaryItemInput{
+		{ValueCode: "high", ValueName: "High", SortOrder: 1, IsActive: true},
+		{ValueCode: "medium", ValueName: "Medium", SortOrder: 2, IsActive: true},
+		{ValueCode: "low", ValueName: "Low", SortOrder: 3, IsActive: true},
+		{ValueCode: "blocked", ValueName: "Blocked", SortOrder: 4, IsActive: true},
+	}, actor)
+	require.NoError(t, err)
+	enumVersion := int32(ver.Version)
+
+	priorityField, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tplA.ID, Code: "priority", Name: "Priority",
+		Type: "enum", SortOrder: 1, EnumDictionaryID: &dict.ID,
+	})
+	require.NoError(t, err)
+	labelsField, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tplB.ID, Code: "labels", Name: "Labels",
+		Type: "multi_enum", SortOrder: 1, EnumDictionaryID: &dict.ID,
+	})
+	require.NoError(t, err)
+
+	highTask, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tplA.ID, Title: "High priority", StatusID: stTodo.ID, ActorID: actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: priorityField.ID, ValueText: strPtr("high"), EnumDictionaryID: &dict.ID, EnumVersion: &enumVersion},
+		},
+	})
+	require.NoError(t, err)
+	mediumTask, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tplB.ID, Title: "Medium label", StatusID: stTodo.ID, ActorID: actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: labelsField.ID, ValueJSON: json.RawMessage(`["medium","blocked"]`), EnumDictionaryID: &dict.ID, EnumVersion: &enumVersion},
+		},
+	})
+	require.NoError(t, err)
+	_, err = svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tplA.ID, Title: "Low done", StatusID: stDone.ID, ActorID: actor,
+		FieldValues: []tasks.FieldValueInput{
+			{FieldDefinitionID: priorityField.ID, ValueText: strPtr("low"), EnumDictionaryID: &dict.ID, EnumVersion: &enumVersion},
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.ListTasks(ctx, tasks.ListTasksParams{
+		StatusIDs: []uuid.UUID{stTodo.ID},
+		DictionaryFilters: []tasks.DictionaryFilter{
+			{DictionaryID: dict.ID, EnumCodes: []string{"high", "medium"}},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, resp.GrandTotal)
+	group := findGroup(t, resp.Groups, stTodo.ID)
+	assert.ElementsMatch(t, []uuid.UUID{highTask.ID, mediumTask.ID}, taskIDs(group.Tasks))
+}
+
 func TestIntegration_ListTasks_FilterByDateField(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -2664,6 +2742,14 @@ func findGroup(t *testing.T, groups []tasks.TaskGroup, statusID uuid.UUID) tasks
 	}
 	t.Fatalf("group for status %s not found", statusID)
 	return tasks.TaskGroup{}
+}
+
+func taskIDs(rows []tasks.TaskRow) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.ID)
+	}
+	return out
 }
 
 // uuidPtr wraps a UUID value in a pointer for ParentTaskID params.

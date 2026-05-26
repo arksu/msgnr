@@ -22,16 +22,17 @@
             <th class="text-left px-4 py-3">Code</th>
             <th class="text-left px-4 py-3">Name</th>
             <th class="text-left px-4 py-3">Is Public</th>
+            <th class="text-left px-4 py-3">Filtration</th>
             <th class="text-left px-4 py-3">Current Version</th>
             <th class="px-4 py-3"/>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="5" class="px-4 py-6 text-center text-gray-500">Loading...</td>
+            <td colspan="6" class="px-4 py-6 text-center text-gray-500">Loading...</td>
           </tr>
           <tr v-else-if="dictionaries.length === 0">
-            <td colspan="5" class="px-4 py-6 text-center text-gray-500">No dictionaries</td>
+            <td colspan="6" class="px-4 py-6 text-center text-gray-500">No dictionaries</td>
           </tr>
           <tr
             v-for="d in dictionaries"
@@ -47,9 +48,21 @@
                   ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
                   : 'bg-white/10 text-gray-300 hover:bg-white/15'"
                 :disabled="toggleLoadingById[d.id]"
-                @click="toggleDictionaryVisibility(d)"
+                @click="toggleDictionarySetting(d, 'is_public')"
               >
                 {{ toggleLoadingById[d.id] ? 'Saving...' : (d.is_public ? 'Public' : 'Private') }}
+              </button>
+            </td>
+            <td class="px-4 py-3">
+              <button
+                class="inline-flex min-w-[86px] items-center justify-center rounded px-2 py-1 text-xs transition-colors"
+                :class="d.participates_in_filtration
+                  ? 'bg-blue-500/15 text-blue-300 hover:bg-blue-500/25'
+                  : 'bg-white/10 text-gray-300 hover:bg-white/15'"
+                :disabled="toggleLoadingById[d.id]"
+                @click="toggleDictionarySetting(d, 'participates_in_filtration')"
+              >
+                {{ toggleLoadingById[d.id] ? 'Saving...' : (d.participates_in_filtration ? 'Enabled' : 'Disabled') }}
               </button>
             </td>
             <td class="px-4 py-3 text-gray-400">v{{ d.current_version }}</td>
@@ -143,6 +156,10 @@
               <input v-model="createForm.is_public" type="checkbox" class="rounded border-chat-border bg-chat-input text-accent focus:ring-accent" />
               Is Public
             </label>
+            <label class="flex items-center gap-2 rounded border border-chat-border px-3 py-2 text-sm text-gray-300">
+              <input v-model="createForm.participates_in_filtration" type="checkbox" class="rounded border-chat-border bg-chat-input text-accent focus:ring-accent" />
+              Participates in filtration
+            </label>
           </div>
           <div v-if="createError" class="text-red-400 text-sm mt-3">{{ createError }}</div>
           <div class="flex gap-3 mt-5">
@@ -232,7 +249,7 @@ const itemsError = ref<string | null>(null)
 const createOpen = ref(false)
 const createLoading = ref(false)
 const createError = ref<string | null>(null)
-const createForm = ref({ code: '', name: '', is_public: false })
+const createForm = ref({ code: '', name: '', is_public: false, participates_in_filtration: false })
 const toggleLoadingById = ref<Record<string, boolean>>({})
 
 // Dictionary items dialog
@@ -258,7 +275,7 @@ async function load() {
 }
 
 function openCreate() {
-  createForm.value = { code: '', name: '', is_public: false }
+  createForm.value = { code: '', name: '', is_public: false, participates_in_filtration: false }
   createError.value = null
   createOpen.value = true
 }
@@ -277,14 +294,22 @@ async function submitCreate() {
   }
 }
 
-async function toggleDictionaryVisibility(dictionary: EnumDictionary) {
+async function toggleDictionarySetting(
+  dictionary: EnumDictionary,
+  field: 'is_public' | 'participates_in_filtration',
+) {
   toggleLoadingById.value = { ...toggleLoadingById.value, [dictionary.id]: true }
   listError.value = null
   try {
-    const updated = await tasksUpdateDictionary(dictionary.id, { is_public: !dictionary.is_public })
+    const updated = await tasksUpdateDictionary(dictionary.id, {
+      is_public: field === 'is_public' ? !dictionary.is_public : dictionary.is_public,
+      participates_in_filtration: field === 'participates_in_filtration'
+        ? !dictionary.participates_in_filtration
+        : dictionary.participates_in_filtration,
+    })
     dictionaries.value = dictionaries.value.map(item => item.id === updated.id ? updated : item)
   } catch (e: unknown) {
-    listError.value = e instanceof Error ? e.message : 'Failed to update dictionary visibility'
+    listError.value = e instanceof Error ? e.message : 'Failed to update dictionary'
   } finally {
     toggleLoadingById.value = { ...toggleLoadingById.value, [dictionary.id]: false }
   }
@@ -322,16 +347,11 @@ async function openNewVersion(d: EnumDictionary) {
   versionOpen.value = false
 
   try {
-    // Fetch all versions to find the latest one
+    // Backend returns versions newest-first.
     const versions = await tasksListDictionaryVersions(d.id)
 
     if (versions.length > 0) {
-      // Find the version with the highest version number
-      const latestVersion = versions.reduce((prev, current) =>
-        prev.version > current.version ? prev : current
-      )
-
-      // Fetch items from the latest version
+      const latestVersion = versions[0]
       const items = await tasksGetDictionaryVersionItems(d.id, latestVersion.id)
 
       // Prefill with the latest item order; drag-and-drop will renumber on save.

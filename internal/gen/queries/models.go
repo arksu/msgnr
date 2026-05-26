@@ -124,13 +124,14 @@ type DocumentHistory struct {
 }
 
 type EnumDictionary struct {
-	ID             uuid.UUID `json:"id"`
-	Code           string    `json:"code"`
-	Name           string    `json:"name"`
-	IsPublic       bool      `json:"is_public"`
-	CurrentVersion int       `json:"current_version"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                       uuid.UUID `json:"id"`
+	Code                     string    `json:"code"`
+	Name                     string    `json:"name"`
+	IsPublic                 bool      `json:"is_public"`
+	ParticipatesInFiltration bool      `json:"participates_in_filtration"`
+	CurrentVersion           int       `json:"current_version"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
 }
 
 type EnumDictionaryVersion struct {

@@ -6,6 +6,7 @@ import {
   tasksListFields,
   tasksListUsers,
   tasksGetConfigDictionary,
+  tasksListFilterableDictionaries,
   tasksGetDictionaryVersionItems,
   tasksListDictionaryVersions,
   tasksCreatePublicDictionaryItem,
@@ -85,6 +86,7 @@ export const useTasksStore = defineStore('tasks', () => {
   const users = ref<TaskUser[]>([])
   const usersLoaded = ref(false)
   const enumDictionariesById = ref<Record<string, EnumDictionary>>({})
+  const filterableEnumDictionaries = ref<EnumDictionary[]>([])
   // Latest search result keyed by dictionary_id.
   const enumItemsByDict = ref<Record<string, EnumDictionaryVersionItem[]>>({})
   // Known item labels keyed by dictionary_id; merged from search results and selected-value hydration.
@@ -184,6 +186,7 @@ export const useTasksStore = defineStore('tasks', () => {
       prefixes: listParams.value.prefixes,
       include_subtasks: listParams.value.include_subtasks,
       field_filters: listParams.value.field_filters,
+      dictionary_filters: listParams.value.dictionary_filters,
     }
   }
 
@@ -255,6 +258,19 @@ export const useTasksStore = defineStore('tasks', () => {
       usersLoaded.value = true
     } catch {
       // non-fatal — user selectors will be empty
+    }
+  }
+
+  async function loadFilterableDictionaries() {
+    try {
+      const dictionaries = await tasksListFilterableDictionaries()
+      filterableEnumDictionaries.value = dictionaries
+      enumDictionariesById.value = {
+        ...enumDictionariesById.value,
+        ...Object.fromEntries(dictionaries.map(dictionary => [dictionary.id, dictionary])),
+      }
+    } catch {
+      filterableEnumDictionaries.value = []
     }
   }
 
@@ -780,6 +796,7 @@ export const useTasksStore = defineStore('tasks', () => {
     users.value = []
     usersLoaded.value = false
     enumDictionariesById.value = {}
+    filterableEnumDictionaries.value = []
     enumItemsByDict.value = {}
     enumKnownItemsByDict.value = {}
     enumVersionByDict.value = {}
@@ -825,6 +842,7 @@ export const useTasksStore = defineStore('tasks', () => {
     configError,
     users,
     enumDictionariesById,
+    filterableEnumDictionaries,
     enumItemsByDict,
     enumKnownItemsByDict,
     selectedTask,
@@ -859,6 +877,7 @@ export const useTasksStore = defineStore('tasks', () => {
     loadFieldsFor,
     loadAllTemplateFields,
     loadUsers,
+    loadFilterableDictionaries,
     loadEnumItemsFor,
     searchEnumItemsFor,
     refreshEnumItemsFor,

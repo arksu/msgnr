@@ -94,6 +94,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tasks/config/templates", h.requireAuth(h.configTemplates))
 	mux.HandleFunc("/api/tasks/config/templates/", h.requireAuth(h.configTemplatesRouter))
 	mux.HandleFunc("/api/tasks/config/statuses", h.requireAuth(h.configStatuses))
+	mux.HandleFunc("/api/tasks/config/enums", h.requireAuth(h.configEnums))
 	mux.HandleFunc("/api/tasks/config/enums/", h.requireAuth(h.configEnumsItem))
 
 	// Users — public listing for any authenticated user (used by task field inputs)
@@ -527,18 +528,20 @@ func (h *Handler) enums(w http.ResponseWriter, r *http.Request, _ auth.Principal
 
 	case http.MethodPost:
 		var req struct {
-			Code     string `json:"code"`
-			Name     string `json:"name"`
-			IsPublic bool   `json:"is_public"`
+			Code                     string `json:"code"`
+			Name                     string `json:"name"`
+			IsPublic                 bool   `json:"is_public"`
+			ParticipatesInFiltration bool   `json:"participates_in_filtration"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
 			return
 		}
 		row, err := h.svc.CreateDictionary(r.Context(), CreateDictionaryParams{
-			Code:     req.Code,
-			Name:     req.Name,
-			IsPublic: req.IsPublic,
+			Code:                     req.Code,
+			Name:                     req.Name,
+			IsPublic:                 req.IsPublic,
+			ParticipatesInFiltration: req.ParticipatesInFiltration,
 		})
 		if err != nil {
 			h.serviceError(w, err)
@@ -603,13 +606,14 @@ func (h *Handler) enumItem(w http.ResponseWriter, r *http.Request, id uuid.UUID)
 
 	case http.MethodPatch:
 		var req struct {
-			IsPublic bool `json:"is_public"`
+			IsPublic                 bool `json:"is_public"`
+			ParticipatesInFiltration bool `json:"participates_in_filtration"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
 			return
 		}
-		row, err := h.svc.UpdateDictionaryVisibility(r.Context(), id, req.IsPublic)
+		row, err := h.svc.UpdateDictionarySettings(r.Context(), id, req.IsPublic, req.ParticipatesInFiltration)
 		if err != nil {
 			h.serviceError(w, err)
 			return
@@ -1726,6 +1730,20 @@ func (h *Handler) configStatuses(w http.ResponseWriter, r *http.Request, _ auth.
 	writeJSON(w, http.StatusOK, rows)
 }
 
+// GET /api/tasks/config/enums
+func (h *Handler) configEnums(w http.ResponseWriter, r *http.Request, _ auth.Principal) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	rows, err := h.svc.ListFilterableDictionaries(r.Context())
+	if err != nil {
+		h.internalError(w, "list filterable dictionaries", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
 // Routes under /api/tasks/config/enums/:id[/versions[/:vid]|/items]
 func (h *Handler) configEnumsItem(w http.ResponseWriter, r *http.Request, p auth.Principal) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/config/enums/")
@@ -1965,6 +1983,7 @@ func methodNotAllowed(w http.ResponseWriter) {
 //	field_<id>_enum    (repeatable)     filter enum/multi_enum field by value code(s)
 //	field_<id>_date_from                lower date bound (YYYY-MM-DD)
 //	field_<id>_date_to                  upper date bound (YYYY-MM-DD)
+//	dictionary_<id>_enum (repeatable)   filter any filter-enabled dictionary-backed enum field by value code(s)
 func parseListTasksParams(r *http.Request) (ListTasksParams, error) {
 	q := r.URL.Query()
 
@@ -2007,13 +2026,15 @@ func parseTaskFilterParams(r *http.Request) (ListTasksParams, error) {
 	if err != nil {
 		return ListTasksParams{}, err
 	}
+	dictionaryFilters := parseDictionaryFilters(q)
 
 	return ListTasksParams{
-		Search:          strings.TrimSpace(q.Get("search")),
-		StatusIDs:       statusIDs,
-		Prefixes:        q["prefix"],
-		IncludeSubtasks: queryBool(q.Get("include_subtasks"), false),
-		FieldFilters:    fieldFilters,
+		Search:            strings.TrimSpace(q.Get("search")),
+		StatusIDs:         statusIDs,
+		Prefixes:          q["prefix"],
+		IncludeSubtasks:   queryBool(q.Get("include_subtasks"), false),
+		FieldFilters:      fieldFilters,
+		DictionaryFilters: dictionaryFilters,
 	}, nil
 }
 
@@ -2060,7 +2081,7 @@ func parseFieldFilters(q map[string][]string) ([]FieldFilter, error) {
 			ff.UserIDs = append(ff.UserIDs, ids...)
 
 		case "enum":
-			ff.EnumCodes = append(ff.EnumCodes, vals...)
+			ff.EnumCodes = append(ff.EnumCodes, trimNonEmptyValues(vals)...)
 
 		case "date_from":
 			v := vals[0]
@@ -2077,6 +2098,58 @@ func parseFieldFilters(q map[string][]string) ([]FieldFilter, error) {
 		out = append(out, *ff)
 	}
 	return out, nil
+}
+
+func trimNonEmptyValues(vals []string) []string {
+	out := make([]string, 0, len(vals))
+	for _, val := range vals {
+		trimmed := strings.TrimSpace(val)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func parseDictionaryFilters(q map[string][]string) []DictionaryFilter {
+	byDictionary := map[uuid.UUID]*DictionaryFilter{}
+
+	ensure := func(id uuid.UUID) *DictionaryFilter {
+		if _, ok := byDictionary[id]; !ok {
+			df := &DictionaryFilter{DictionaryID: id}
+			byDictionary[id] = df
+		}
+		return byDictionary[id]
+	}
+
+	for key, vals := range q {
+		if !strings.HasPrefix(key, "dictionary_") {
+			continue
+		}
+		rest := strings.TrimPrefix(key, "dictionary_")
+		if len(rest) < 37 || rest[36] != '_' {
+			continue
+		}
+		rawID := rest[:36]
+		suffix := rest[37:]
+		if suffix != "enum" {
+			continue
+		}
+		dictionaryID, err := uuid.Parse(rawID)
+		if err != nil {
+			continue
+		}
+		df := ensure(dictionaryID)
+		df.EnumCodes = append(df.EnumCodes, trimNonEmptyValues(vals)...)
+	}
+
+	out := make([]DictionaryFilter, 0, len(byDictionary))
+	for _, df := range byDictionary {
+		if len(df.EnumCodes) > 0 {
+			out = append(out, *df)
+		}
+	}
+	return out
 }
 
 // validateSortBy rejects values that are neither a known system column nor a

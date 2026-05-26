@@ -29,6 +29,7 @@ describe('DictionariesTab', () => {
         code: 'priority',
         name: 'Priority',
         is_public: false,
+        participates_in_filtration: false,
         current_version: 2,
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-02T00:00:00Z',
@@ -80,6 +81,7 @@ describe('DictionariesTab', () => {
       code: 'priority',
       name: 'Priority',
       is_public: true,
+      participates_in_filtration: false,
       current_version: 2,
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-03T00:00:00Z',
@@ -200,6 +202,7 @@ describe('DictionariesTab', () => {
       code: 'versions',
       name: 'Versions',
       is_public: true,
+      participates_in_filtration: true,
       current_version: 1,
       created_at: '2026-01-03T00:00:00Z',
       updated_at: '2026-01-03T00:00:00Z',
@@ -224,9 +227,11 @@ describe('DictionariesTab', () => {
     const codeInput = wrapper.find('input[placeholder="priority"]')
     const nameInput = wrapper.find('input[placeholder="Priority"]')
     const publicCheckbox = wrapper.find('input[type="checkbox"]')
+    const filtrationCheckbox = wrapper.findAll('input[type="checkbox"]')[1]
     await codeInput.setValue('versions')
     await nameInput.setValue('Versions')
     await publicCheckbox.setValue(true)
+    await filtrationCheckbox.setValue(true)
 
     const confirmCreateButton = wrapper.findAll('button').find(button => button.text() === 'Create')
     expect(confirmCreateButton).toBeTruthy()
@@ -237,6 +242,7 @@ describe('DictionariesTab', () => {
       code: 'versions',
       name: 'Versions',
       is_public: true,
+      participates_in_filtration: true,
     })
 
     const toggleButton = wrapper.findAll('button').find(button => button.text() === 'Private')
@@ -244,7 +250,43 @@ describe('DictionariesTab', () => {
     await toggleButton!.trigger('click')
     await flushPromises()
 
-    expect(apiMocks.tasksUpdateDictionary).toHaveBeenCalledWith('dict-1', { is_public: true })
+    expect(apiMocks.tasksUpdateDictionary).toHaveBeenCalledWith('dict-1', {
+      is_public: true,
+      participates_in_filtration: false,
+    })
     expect(wrapper.text()).toContain('Public')
+  })
+
+  it('toggles dictionary filtration', async () => {
+    apiMocks.tasksUpdateDictionary.mockResolvedValue({
+      id: 'dict-1',
+      code: 'priority',
+      name: 'Priority',
+      is_public: false,
+      participates_in_filtration: true,
+      current_version: 2,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-03T00:00:00Z',
+    })
+
+    const wrapper = mount(DictionariesTab, {
+      global: {
+        stubs: {
+          Teleport: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const toggleButton = wrapper.findAll('button').find(button => button.text() === 'Disabled')
+    expect(toggleButton).toBeTruthy()
+    await toggleButton!.trigger('click')
+    await flushPromises()
+
+    expect(apiMocks.tasksUpdateDictionary).toHaveBeenCalledWith('dict-1', {
+      is_public: false,
+      participates_in_filtration: true,
+    })
+    expect(wrapper.text()).toContain('Enabled')
   })
 })

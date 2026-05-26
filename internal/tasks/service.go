@@ -96,13 +96,14 @@ type StatusRow struct {
 }
 
 type DictionaryRow struct {
-	ID             uuid.UUID `json:"id"`
-	Code           string    `json:"code"`
-	Name           string    `json:"name"`
-	IsPublic       bool      `json:"is_public"`
-	CurrentVersion int       `json:"current_version"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                       uuid.UUID `json:"id"`
+	Code                     string    `json:"code"`
+	Name                     string    `json:"name"`
+	IsPublic                 bool      `json:"is_public"`
+	ParticipatesInFiltration bool      `json:"participates_in_filtration"`
+	CurrentVersion           int       `json:"current_version"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
 }
 
 type DictionaryVersionRow struct {
@@ -152,9 +153,10 @@ type UpdateStatusParams struct {
 }
 
 type CreateDictionaryParams struct {
-	Code     string
-	Name     string
-	IsPublic bool
+	Code                     string
+	Name                     string
+	IsPublic                 bool
+	ParticipatesInFiltration bool
 }
 
 type DictionaryItemInput struct {
@@ -664,6 +666,14 @@ func (s *Service) ListDictionaries(ctx context.Context) ([]DictionaryRow, error)
 	return mapDictionaries(rows), nil
 }
 
+func (s *Service) ListFilterableDictionaries(ctx context.Context) ([]DictionaryRow, error) {
+	rows, err := s.q.EnumDictionaryListFilterable(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: list filterable dictionaries: %w", err)
+	}
+	return mapDictionaries(rows), nil
+}
+
 func (s *Service) GetDictionary(ctx context.Context, id uuid.UUID) (DictionaryRow, error) {
 	row, err := s.q.EnumDictionaryGet(ctx, id)
 	if err != nil {
@@ -677,9 +687,10 @@ func (s *Service) CreateDictionary(ctx context.Context, p CreateDictionaryParams
 		return DictionaryRow{}, fmt.Errorf("%w: code and name are required", ErrBadRequest)
 	}
 	row, err := s.q.EnumDictionaryCreate(ctx, queries.EnumDictionaryCreateParams{
-		Code:     p.Code,
-		Name:     p.Name,
-		IsPublic: p.IsPublic,
+		Code:                     p.Code,
+		Name:                     p.Name,
+		IsPublic:                 p.IsPublic,
+		ParticipatesInFiltration: p.ParticipatesInFiltration,
 	})
 	if err != nil {
 		return DictionaryRow{}, mapUniqueViolation(err, "code already exists")
@@ -687,22 +698,17 @@ func (s *Service) CreateDictionary(ctx context.Context, p CreateDictionaryParams
 	return mapDictionary(row), nil
 }
 
-func (s *Service) UpdateDictionaryVisibility(ctx context.Context, id uuid.UUID, isPublic bool) (DictionaryRow, error) {
-	var row queries.EnumDictionary
-	err := s.pool.QueryRow(ctx, `
-		UPDATE enum_dictionary
-		SET is_public = $2, updated_at = now()
-		WHERE id = $1
-		RETURNING id, code, name, is_public, current_version, created_at, updated_at
-	`, id, isPublic).Scan(
-		&row.ID,
-		&row.Code,
-		&row.Name,
-		&row.IsPublic,
-		&row.CurrentVersion,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+func (s *Service) UpdateDictionarySettings(
+	ctx context.Context,
+	id uuid.UUID,
+	isPublic bool,
+	participatesInFiltration bool,
+) (DictionaryRow, error) {
+	row, err := s.q.EnumDictionaryUpdateSettings(ctx, queries.EnumDictionaryUpdateSettingsParams{
+		ID:                       id,
+		IsPublic:                 isPublic,
+		ParticipatesInFiltration: participatesInFiltration,
+	})
 	if err != nil {
 		return DictionaryRow{}, mapNotFound(err, "dictionary")
 	}
@@ -1704,13 +1710,14 @@ func mapTaskListStatusSummary(r queries.TaskStatus) TaskListStatusSummary {
 
 func mapDictionary(r queries.EnumDictionary) DictionaryRow {
 	return DictionaryRow{
-		ID:             r.ID,
-		Code:           r.Code,
-		Name:           r.Name,
-		IsPublic:       r.IsPublic,
-		CurrentVersion: r.CurrentVersion,
-		CreatedAt:      r.CreatedAt,
-		UpdatedAt:      r.UpdatedAt,
+		ID:                       r.ID,
+		Code:                     r.Code,
+		Name:                     r.Name,
+		IsPublic:                 r.IsPublic,
+		ParticipatesInFiltration: r.ParticipatesInFiltration,
+		CurrentVersion:           r.CurrentVersion,
+		CreatedAt:                r.CreatedAt,
+		UpdatedAt:                r.UpdatedAt,
 	}
 }
 
@@ -3328,6 +3335,13 @@ type FieldFilter struct {
 	DateTo            *string     // inclusive upper bound (YYYY-MM-DD)
 }
 
+// DictionaryFilter targets any active enum/multi_enum field backed by one
+// filter-enabled enum dictionary.
+type DictionaryFilter struct {
+	DictionaryID uuid.UUID
+	EnumCodes    []string
+}
+
 // ListTasksParams carries all inputs for the task list endpoint.
 type ListTasksParams struct {
 	Page     int // 1-based; default 1
@@ -3338,7 +3352,8 @@ type ListTasksParams struct {
 	Prefixes        []string    // filter by template_snapshot_prefix
 	IncludeSubtasks bool        // include tasks with parent_task_id when true
 
-	FieldFilters []FieldFilter
+	FieldFilters      []FieldFilter
+	DictionaryFilters []DictionaryFilter
 
 	SortBy   string // "id","title","status","created_at","updated_at", or UUID of numeric field
 	SortDesc bool
@@ -3850,6 +3865,11 @@ func buildWhereClause(p ListTasksParams, args *argList) string {
 			clauses = append(clauses, fmt.Sprintf(`EXISTS (%s)`, sub))
 		}
 	}
+	for _, df := range p.DictionaryFilters {
+		if sub := buildDictionaryFilterSubquery(df, args); sub != "" {
+			clauses = append(clauses, fmt.Sprintf(`EXISTS (%s)`, sub))
+		}
+	}
 
 	return "WHERE " + strings.Join(clauses, " AND ")
 }
@@ -3902,6 +3922,26 @@ func buildFieldFilterSubquery(ff FieldFilter, args *argList) string {
 		return ""
 	}
 	return base + " AND (" + strings.Join(conds, " AND ") + ")"
+}
+
+func buildDictionaryFilterSubquery(df DictionaryFilter, args *argList) string {
+	if len(df.EnumCodes) == 0 {
+		return ""
+	}
+	dictPH := args.add(df.DictionaryID)
+	codesPH := args.add(df.EnumCodes)
+	return fmt.Sprintf(
+		`SELECT 1 FROM task_field_value tfv`+
+			` JOIN task_field_definition tfd ON tfd.id = tfv.field_definition_id`+
+			` JOIN enum_dictionary ed ON ed.id = tfd.enum_dictionary_id`+
+			` WHERE tfv.task_id = t.id`+
+			` AND tfd.deleted_at IS NULL`+
+			` AND tfd.type IN ('enum', 'multi_enum')`+
+			` AND tfd.enum_dictionary_id = %s`+
+			` AND ed.participates_in_filtration = true`+
+			` AND (tfv.value_text = ANY(%s::text[]) OR tfv.value_json ?| %s::text[])`,
+		dictPH, codesPH, codesPH,
+	)
 }
 
 // buildSortExpr returns the optional LEFT JOIN clause and the ORDER BY expression.

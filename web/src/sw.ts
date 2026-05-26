@@ -10,7 +10,7 @@ import {
   toNotificationOpenMessage,
   type NotificationOpenIntent,
 } from '@/services/notificationOpen'
-import { decodeNotificationText } from '@/services/notificationText'
+import { normalizePushNotificationDisplayText } from '@/services/notificationText'
 
 declare let self: ServiceWorkerGlobalScope
 
@@ -101,9 +101,10 @@ self.addEventListener('push', (event: PushEvent) => {
     return
   }
 
+  const display = normalizePushNotificationDisplayText(data)
   event.waitUntil(
-    self.registration.showNotification(decodeNotificationText(data.title), {
-      body: decodeNotificationText(data.body),
+    self.registration.showNotification(display.title, {
+      body: display.body,
       // Explicitly allow default OS/browser notification sound.
       silent: false,
       icon: '/pwa-192x192.png',

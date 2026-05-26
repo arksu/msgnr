@@ -1937,45 +1937,107 @@ describe('chatStore phase 6 flows', () => {
     expect(onTaskStatusChanged).not.toHaveBeenCalled()
   })
 
-  it('decodes escaped text in unread feed notification items', async () => {
+  it('decodes escaped text in unread feed items', async () => {
     const chat = useChatStore()
     chat.bootstrapped = true
     chatApiMocks.listUnreadFeed.mockResolvedValue({
-      total_count: 1,
-      items: [{
-        id: 'unread-1',
-        kind: 'mention',
-        notification_id: 'notif-1',
-        conversation_id: 'channel-1',
-        conversation_kind: 'channel',
-        conversation_visibility: 'public',
-        conversation_title: 'team\\/ops',
-        message_id: 'message-1',
-        thread_root_message_id: '',
-        sender_id: 'user-2',
-        sender_name: 'Bob\\u0020Builder',
-        body: 'Escaped\\nmessage \\/ done',
-        created_at: '2026-03-06T00:00:00Z',
-      }],
+      total_count: 3,
+      items: [
+        {
+          id: 'mention:notif-1',
+          kind: 'mention',
+          notification_id: 'notif-1',
+          conversation_id: 'channel-1',
+          conversation_kind: 'channel',
+          conversation_visibility: 'public',
+          conversation_title: 'team\\/ops',
+          message_id: 'message-1',
+          thread_root_message_id: '',
+          sender_id: 'user-2',
+          sender_name: 'Bob\\u0020Builder',
+          body: 'Mention\\nbody \\/ done',
+          created_at: '2026-03-06T00:00:00Z',
+        },
+        {
+          id: 'thread:notif-2',
+          kind: 'thread',
+          notification_id: 'notif-2',
+          conversation_id: 'channel-2',
+          conversation_kind: 'channel',
+          conversation_visibility: 'private',
+          conversation_title: 'private\\u0020team',
+          message_id: 'message-2',
+          thread_root_message_id: 'root-2',
+          sender_id: 'user-3',
+          sender_name: 'Thread\\tSender',
+          body: String.raw`Thread\\nreply \"quoted\"`,
+          created_at: '2026-03-06T00:01:00Z',
+        },
+        {
+          id: 'message:message-3',
+          kind: 'message',
+          conversation_id: 'dm-1',
+          conversation_kind: 'dm',
+          conversation_visibility: 'dm',
+          conversation_title: 'Direct\\u0020Peer',
+          message_id: 'message-3',
+          sender_id: 'user-4',
+          sender_name: String.raw`Path\\User`,
+          body: String.raw`Root\\/message keeps \q`,
+          created_at: '2026-03-06T00:02:00Z',
+        },
+      ],
     })
 
     await chat.refreshUnreadFeed()
 
-    expect(chat.unreadFeedItems).toEqual([{
-      id: 'unread-1',
-      kind: 'mention',
-      notificationId: 'notif-1',
-      conversationId: 'channel-1',
-      conversationKind: 'channel',
-      conversationVisibility: 'public',
-      conversationTitle: 'team/ops',
-      messageId: 'message-1',
-      threadRootMessageId: undefined,
-      senderId: 'user-2',
-      senderName: 'Bob Builder',
-      body: 'Escaped\nmessage / done',
-      createdAt: '2026-03-06T00:00:00Z',
-    }])
+    expect(chat.unreadFeedItems).toEqual([
+      {
+        id: 'mention:notif-1',
+        kind: 'mention',
+        notificationId: 'notif-1',
+        conversationId: 'channel-1',
+        conversationKind: 'channel',
+        conversationVisibility: 'public',
+        conversationTitle: 'team/ops',
+        messageId: 'message-1',
+        threadRootMessageId: undefined,
+        senderId: 'user-2',
+        senderName: 'Bob Builder',
+        body: 'Mention\nbody / done',
+        createdAt: '2026-03-06T00:00:00Z',
+      },
+      {
+        id: 'thread:notif-2',
+        kind: 'thread',
+        notificationId: 'notif-2',
+        conversationId: 'channel-2',
+        conversationKind: 'channel',
+        conversationVisibility: 'private',
+        conversationTitle: 'private team',
+        messageId: 'message-2',
+        threadRootMessageId: 'root-2',
+        senderId: 'user-3',
+        senderName: 'Thread\tSender',
+        body: 'Thread\nreply "quoted"',
+        createdAt: '2026-03-06T00:01:00Z',
+      },
+      {
+        id: 'message:message-3',
+        kind: 'message',
+        notificationId: undefined,
+        conversationId: 'dm-1',
+        conversationKind: 'dm',
+        conversationVisibility: 'dm',
+        conversationTitle: 'Direct Peer',
+        messageId: 'message-3',
+        threadRootMessageId: undefined,
+        senderId: 'user-4',
+        senderName: String.raw`Path\User`,
+        body: String.raw`Root/message keeps \q`,
+        createdAt: '2026-03-06T00:02:00Z',
+      },
+    ])
   })
 
   it('marks active direct message as read for self-authored messages', () => {

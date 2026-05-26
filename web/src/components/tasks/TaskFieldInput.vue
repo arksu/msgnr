@@ -94,51 +94,75 @@
       @input="emit('update:value', ($event.target as HTMLInputElement).value)"
     />
 
-    <MultiSelect
-      v-else-if="field.type === 'user'"
-      :model-value="(value ? [value as string] : [])"
-      :options="userOptions"
-      placeholder="— select user —"
-      single
-      @update:model-value="emit('update:value', $event[0] || null)"
-    />
+    <div
+      v-else-if="isCopyableDropdownField"
+      class="field-dropdown-row"
+    >
+      <MultiSelect
+        v-if="field.type === 'user'"
+        class="min-w-0 flex-1"
+        :model-value="(value ? [value as string] : [])"
+        :options="userOptions"
+        placeholder="— select user —"
+        single
+        @update:model-value="emit('update:value', $event[0] || null)"
+      />
 
-    <MultiSelect
-      v-else-if="field.type === 'users'"
-      :model-value="(value as string[] | null) ?? []"
-      :options="userOptions"
-      placeholder="— select users —"
-      @update:model-value="emit('update:value', $event)"
-    />
+      <MultiSelect
+        v-else-if="field.type === 'users'"
+        class="min-w-0 flex-1"
+        :model-value="(value as string[] | null) ?? []"
+        :options="userOptions"
+        placeholder="— select users —"
+        @update:model-value="emit('update:value', $event)"
+      />
 
-    <MultiSelect
-      v-else-if="field.type === 'enum'"
-      :model-value="(value ? [value as string] : [])"
-      :options="enumOptions"
-      placeholder="— select value —"
-      :allow-create="canCreateEnumItem"
-      :loading="creatingEnumItem || enumItemsLoading"
-      server-search
-      create-label="Add"
-      single
-      @update:model-value="emit('update:value', $event[0] || null)"
-      @create="emit('create:enum-item', $event)"
-      @search-change="emit('search:enum-items', $event)"
-    />
+      <MultiSelect
+        v-else-if="field.type === 'enum'"
+        class="min-w-0 flex-1"
+        :model-value="(value ? [value as string] : [])"
+        :options="enumOptions"
+        placeholder="— select value —"
+        :allow-create="canCreateEnumItem"
+        :loading="creatingEnumItem || enumItemsLoading"
+        server-search
+        create-label="Add"
+        single
+        @update:model-value="emit('update:value', $event[0] || null)"
+        @create="emit('create:enum-item', $event)"
+        @search-change="emit('search:enum-items', $event)"
+      />
 
-    <MultiSelect
-      v-else-if="field.type === 'multi_enum'"
-      :model-value="(value as string[] | null) ?? []"
-      :options="enumOptions"
-      placeholder="— select values —"
-      :allow-create="canCreateEnumItem"
-      :loading="creatingEnumItem || enumItemsLoading"
-      server-search
-      create-label="Add"
-      @update:model-value="emit('update:value', $event)"
-      @create="emit('create:enum-item', $event)"
-      @search-change="emit('search:enum-items', $event)"
-    />
+      <MultiSelect
+        v-else-if="field.type === 'multi_enum'"
+        class="min-w-0 flex-1"
+        :model-value="(value as string[] | null) ?? []"
+        :options="enumOptions"
+        placeholder="— select values —"
+        :allow-create="canCreateEnumItem"
+        :loading="creatingEnumItem || enumItemsLoading"
+        server-search
+        create-label="Add"
+        @update:model-value="emit('update:value', $event)"
+        @create="emit('create:enum-item', $event)"
+        @search-change="emit('search:enum-items', $event)"
+      />
+
+      <button
+        type="button"
+        class="field-copy-button"
+        :disabled="!canCopySelected"
+        :title="canCopySelected ? 'Copy selected values' : 'No selected values to copy'"
+        aria-label="Copy selected values"
+        data-testid="task-field-copy-selected"
+        @click="copySelectedLabels"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+      </button>
+    </div>
   </template>
 </template>
 
@@ -272,6 +296,36 @@ const canCreateEnumItem = computed(() =>
   !!props.enumDictionary?.is_public,
 )
 
+const isCopyableDropdownField = computed(() =>
+  props.field.type === 'user' ||
+  props.field.type === 'users' ||
+  props.field.type === 'enum' ||
+  props.field.type === 'multi_enum',
+)
+
+const selectedCopyLabels = computed(() => {
+  if (props.field.type === 'user') {
+    return props.value ? [resolveUser(props.value as string)] : []
+  }
+  if (props.field.type === 'users') {
+    return Array.isArray(props.value) ? (props.value as string[]).map(resolveUser) : []
+  }
+  if (props.field.type === 'enum') {
+    return props.value ? [resolveEnumLabel(props.value as string)] : []
+  }
+  if (props.field.type === 'multi_enum') {
+    return Array.isArray(props.value) ? (props.value as string[]).map(resolveEnumLabel) : []
+  }
+  return []
+})
+
+const canCopySelected = computed(() => selectedCopyLabels.value.length > 0)
+
+function copySelectedLabels() {
+  if (!canCopySelected.value || !navigator.clipboard) return
+  void navigator.clipboard.writeText(selectedCopyLabels.value.join(', '))
+}
+
 function resolveEnumLabel(code: string): string {
   const item = (props.enumKnownItems ?? props.enumItems)?.find(i => i.value_code === code)
   return item ? item.value_name : code
@@ -290,5 +344,13 @@ function formatDatetime(v: string): string {
 <style scoped>
 .field-input {
   @apply w-full bg-chat-input border border-chat-border rounded px-3 py-1.5 text-white text-sm outline-none focus:border-accent transition-colors;
+}
+
+.field-dropdown-row {
+  @apply flex items-start gap-2;
+}
+
+.field-copy-button {
+  @apply flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded border border-chat-border bg-chat-input text-app-secondaryText transition-colors hover:border-accent/60 hover:text-app-text disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-chat-border disabled:hover:text-app-secondaryText;
 }
 </style>

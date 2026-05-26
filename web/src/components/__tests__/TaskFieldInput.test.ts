@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskFieldInput from '@/components/tasks/TaskFieldInput.vue'
 
 const baseField = {
@@ -35,7 +35,32 @@ const enumItems = [
   },
 ]
 
+const users = [
+  {
+    id: 'user-1',
+    display_name: 'Alice',
+    email: 'alice@example.com',
+  },
+  {
+    id: 'user-2',
+    display_name: '',
+    email: 'bob@example.com',
+  },
+]
+
+const clipboardWriteText = vi.fn()
+
 describe('TaskFieldInput', () => {
+  beforeEach(() => {
+    clipboardWriteText.mockReset()
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: clipboardWriteText,
+      },
+      configurable: true,
+    })
+  })
+
   it('renders searchable combobox for enum fields instead of a native select', async () => {
     const wrapper = mount(TaskFieldInput, {
       props: {
@@ -157,5 +182,84 @@ describe('TaskFieldInput', () => {
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('Add "Version 9"')
+  })
+
+  it('copies the selected enum label', async () => {
+    const wrapper = mount(TaskFieldInput, {
+      props: {
+        field: { ...baseField, type: 'enum' },
+        value: 'v2',
+        mode: 'edit',
+        enumItems,
+      },
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="task-field-copy-selected"]').trigger('click')
+
+    expect(clipboardWriteText).toHaveBeenCalledWith('Version 2')
+  })
+
+  it('copies selected multi-enum labels as a comma-separated list', async () => {
+    const wrapper = mount(TaskFieldInput, {
+      props: {
+        field: { ...baseField, type: 'multi_enum' },
+        value: ['v1', 'v2'],
+        mode: 'edit',
+        enumItems,
+      },
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="task-field-copy-selected"]').trigger('click')
+
+    expect(clipboardWriteText).toHaveBeenCalledWith('Version 1, Version 2')
+  })
+
+  it('copies selected user labels with email fallback', async () => {
+    const wrapper = mount(TaskFieldInput, {
+      props: {
+        field: { ...baseField, enum_dictionary_id: null, type: 'users' },
+        value: ['user-1', 'user-2'],
+        mode: 'edit',
+        users,
+      },
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="task-field-copy-selected"]').trigger('click')
+
+    expect(clipboardWriteText).toHaveBeenCalledWith('Alice, bob@example.com')
+  })
+
+  it('disables copying when no dropdown values are selected', () => {
+    const wrapper = mount(TaskFieldInput, {
+      props: {
+        field: { ...baseField, type: 'multi_enum' },
+        value: [],
+        mode: 'edit',
+        enumItems,
+      },
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    const copyButton = wrapper.get<HTMLButtonElement>('[data-testid="task-field-copy-selected"]')
+    expect(copyButton.element.disabled).toBe(true)
   })
 })

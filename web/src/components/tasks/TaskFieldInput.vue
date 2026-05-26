@@ -96,11 +96,31 @@
 
     <div
       v-else-if="isCopyableDropdownField"
-      class="field-dropdown-row"
+      class="field-dropdown-stack"
     >
+      <div class="field-dropdown-label-row">
+        <div class="min-w-0 flex-1">
+          <slot name="label" />
+        </div>
+        <button
+          type="button"
+          class="field-copy-button"
+          :disabled="!canCopySelected"
+          :title="canCopySelected ? 'Copy selected values' : 'No selected values to copy'"
+          aria-label="Copy selected values"
+          data-testid="task-field-copy-selected"
+          @click="copySelectedLabels"
+        >
+          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
+      </div>
+
       <MultiSelect
         v-if="field.type === 'user'"
-        class="min-w-0 flex-1"
+        class="min-w-0 w-full"
         :model-value="(value ? [value as string] : [])"
         :options="userOptions"
         placeholder="— select user —"
@@ -110,7 +130,7 @@
 
       <MultiSelect
         v-else-if="field.type === 'users'"
-        class="min-w-0 flex-1"
+        class="min-w-0 w-full"
         :model-value="(value as string[] | null) ?? []"
         :options="userOptions"
         placeholder="— select users —"
@@ -119,7 +139,7 @@
 
       <MultiSelect
         v-else-if="field.type === 'enum'"
-        class="min-w-0 flex-1"
+        class="min-w-0 w-full"
         :model-value="(value ? [value as string] : [])"
         :options="enumOptions"
         placeholder="— select value —"
@@ -135,7 +155,7 @@
 
       <MultiSelect
         v-else-if="field.type === 'multi_enum'"
-        class="min-w-0 flex-1"
+        class="min-w-0 w-full"
         :model-value="(value as string[] | null) ?? []"
         :options="enumOptions"
         placeholder="— select values —"
@@ -147,21 +167,6 @@
         @create="emit('create:enum-item', $event)"
         @search-change="emit('search:enum-items', $event)"
       />
-
-      <button
-        type="button"
-        class="field-copy-button"
-        :disabled="!canCopySelected"
-        :title="canCopySelected ? 'Copy selected values' : 'No selected values to copy'"
-        aria-label="Copy selected values"
-        data-testid="task-field-copy-selected"
-        @click="copySelectedLabels"
-      >
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-        </svg>
-      </button>
     </div>
   </template>
 </template>
@@ -346,11 +351,15 @@ function formatDatetime(v: string): string {
   @apply w-full bg-chat-input border border-chat-border rounded px-3 py-1.5 text-white text-sm outline-none focus:border-accent transition-colors;
 }
 
-.field-dropdown-row {
-  @apply flex items-start gap-2;
+.field-dropdown-stack {
+  @apply space-y-1;
+}
+
+.field-dropdown-label-row {
+  @apply flex items-center gap-2;
 }
 
 .field-copy-button {
-  @apply flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded border border-chat-border bg-chat-input text-app-secondaryText transition-colors hover:border-accent/60 hover:text-app-text disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-chat-border disabled:hover:text-app-secondaryText;
+  @apply flex h-5 w-5 shrink-0 items-center justify-center rounded border border-transparent bg-transparent text-app-secondaryText transition-colors hover:border-chat-border hover:bg-chat-input hover:text-app-text disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-transparent disabled:hover:bg-transparent disabled:hover:text-app-secondaryText;
 }
 </style>

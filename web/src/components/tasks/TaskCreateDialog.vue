@@ -88,6 +88,7 @@
             <template v-for="field in activeFields" :key="field.id">
               <div>
                 <label
+                  v-if="!isCopyableDropdownField(field)"
                   class="form-label"
                   :class="isFieldMissing(field.id) ? 'text-red-400' : ''"
                 >
@@ -107,7 +108,17 @@
                   @update:value="customValues[field.id] = $event"
                   @create:enum-item="onCreateFieldEnumItem(field, $event)"
                   @search:enum-items="onSearchFieldEnumItems(field, $event)"
-                />
+                >
+                  <template #label>
+                    <label
+                      class="form-label"
+                      :class="isFieldMissing(field.id) ? 'text-red-400' : ''"
+                    >
+                      {{ field.name }}
+                      <span v-if="field.required" class="text-red-400">*</span>
+                    </label>
+                  </template>
+                </TaskFieldInput>
                 <p v-if="isFieldMissing(field.id)" class="text-red-400 text-xs mt-1">
                   This field is required
                 </p>
@@ -209,6 +220,13 @@ function resolveInitialTemplateId(): string {
 
 function isFieldMissing(id: string): boolean {
   return showValidation.value && missingFields.value.includes(id)
+}
+
+function isCopyableDropdownField(field: TaskFieldDefinition): boolean {
+  return field.type === 'user' ||
+    field.type === 'users' ||
+    field.type === 'enum' ||
+    field.type === 'multi_enum'
 }
 
 async function selectTemplate(id: string) {

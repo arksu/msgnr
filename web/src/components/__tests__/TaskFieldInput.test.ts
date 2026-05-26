@@ -204,6 +204,32 @@ describe('TaskFieldInput', () => {
     expect(clipboardWriteText).toHaveBeenCalledWith('Version 2')
   })
 
+  it('renders the copy button in the label row above the dropdown', () => {
+    const wrapper = mount(TaskFieldInput, {
+      props: {
+        field: { ...baseField, type: 'enum' },
+        value: 'v2',
+        mode: 'edit',
+        enumItems,
+      },
+      slots: {
+        label: '<span data-testid="field-label">Version</span>',
+      },
+      global: {
+        stubs: {
+          UserAvatar: true,
+        },
+      },
+    })
+
+    const labelRow = wrapper.get('.field-dropdown-label-row')
+    expect(labelRow.find('[data-testid="field-label"]').text()).toBe('Version')
+    expect(labelRow.find('[data-testid="task-field-copy-selected"]').exists()).toBe(true)
+    const stackChildren = wrapper.get('.field-dropdown-stack').element.children
+    expect(stackChildren[0].classList.contains('field-dropdown-label-row')).toBe(true)
+    expect(stackChildren[1].querySelector('.multiselect-trigger')).not.toBeNull()
+  })
+
   it('copies selected multi-enum labels as a comma-separated list', async () => {
     const wrapper = mount(TaskFieldInput, {
       props: {

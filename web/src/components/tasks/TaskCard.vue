@@ -123,6 +123,7 @@
       <div v-if="customFields.length > 0" class="border-t border-chat-border pt-4 space-y-4">
         <div v-for="field in customFields" :key="field.id">
           <div
+            v-if="!isCopyableDropdownField(field)"
             class="field-label"
             :class="isFieldMissing(field.id) ? 'text-red-400' : ''"
           >
@@ -142,7 +143,17 @@
             @update:value="onFieldValueChange(field, $event)"
             @create:enum-item="onInlineCreateEnumItem(field, $event)"
             @search:enum-items="onSearchInlineEnumItems(field, $event)"
-          />
+          >
+            <template #label>
+              <div
+                class="field-label"
+                :class="isFieldMissing(field.id) ? 'text-red-400' : ''"
+              >
+                {{ field.name }}
+                <span v-if="field.required" class="text-red-400">*</span>
+              </div>
+            </template>
+          </TaskFieldInput>
           <p v-if="isFieldMissing(field.id)" class="text-red-400 text-xs mt-1">
             This field is required
           </p>
@@ -277,6 +288,7 @@
           <template v-for="field in subtaskFields" :key="field.id">
             <div>
               <label
+                v-if="!isCopyableDropdownField(field)"
                 class="form-label"
                 :class="isSubtaskFieldMissing(field.id) ? 'text-red-400' : ''"
               >
@@ -296,7 +308,17 @@
                 @update:value="subtaskCustomValues[field.id] = $event"
                 @create:enum-item="onSubtaskCreateEnumItem(field, $event)"
                 @search:enum-items="onSearchSubtaskEnumItems(field, $event)"
-              />
+              >
+                <template #label>
+                  <label
+                    class="form-label"
+                    :class="isSubtaskFieldMissing(field.id) ? 'text-red-400' : ''"
+                  >
+                    {{ field.name }}
+                    <span v-if="field.required" class="text-red-400">*</span>
+                  </label>
+                </template>
+              </TaskFieldInput>
               <p v-if="isSubtaskFieldMissing(field.id)" class="text-red-400 text-xs mt-1">
                 This field is required
               </p>
@@ -779,6 +801,13 @@ function descLog(event: string, payload: Record<string, unknown>) {
 
 function isFieldMissing(id: string): boolean {
   return !!fieldRequiredErrors[id]
+}
+
+function isCopyableDropdownField(field: TaskFieldDefinition): boolean {
+  return field.type === 'user' ||
+    field.type === 'users' ||
+    field.type === 'enum' ||
+    field.type === 'multi_enum'
 }
 
 function getStoredValue(field: TaskFieldDefinition): unknown {

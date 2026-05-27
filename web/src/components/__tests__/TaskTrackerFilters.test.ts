@@ -209,6 +209,38 @@ describe('TaskTrackerFilters', () => {
     expect(wrapper.find('.dictionary-dropdown-list').exists()).toBe(true)
   })
 
+  it('keeps status and assignee controls clickable after dictionary dropdown state changes', async () => {
+    const wrapper = mount(TaskTrackerFilters, {
+      props: {
+        templateFilter: null,
+        total: 1,
+      },
+      global: {
+        stubs: {
+          UserAvatar: { template: '<div />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('button.toolbar-btn').trigger('click')
+
+    const dictionaryChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Priority'))
+    expect(dictionaryChip).toBeTruthy()
+    await dictionaryChip!.trigger('click')
+    expect(wrapper.find('.dropdown-menu--dictionary').exists()).toBe(true)
+
+    const statusChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Status'))
+    expect(statusChip).toBeTruthy()
+    await statusChip!.trigger('click')
+    expect(wrapper.findAll('.dropdown-menu').some(menu => menu.text().includes('Todo'))).toBe(true)
+
+    const assigneeChip = wrapper.findAll('button.filter-chip').find(btn => btn.text().includes('Assignee'))
+    expect(assigneeChip).toBeTruthy()
+    await assigneeChip!.trigger('click')
+    expect(wrapper.find('.dropdown-menu--assignee').exists()).toBe(true)
+  })
+
   it('counts and clears the show subtasks toggle as an active filter', async () => {
     const wrapper = mount(TaskTrackerFilters, {
       props: {

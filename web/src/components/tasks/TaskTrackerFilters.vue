@@ -363,6 +363,11 @@ function toggleDictionaryDropdown(dictionaryId: string) {
   }
 }
 
+function closeDictionaryDropdowns() {
+  if (!Object.values(dictionaryDropdownOpenById.value).some(Boolean)) return
+  dictionaryDropdownOpenById.value = {}
+}
+
 function setDictionaryCodeSelected(dictionaryId: string, code: string, event: Event) {
   const selected = event.target instanceof HTMLInputElement ? event.target.checked : false
   const current = selectedDictionaryCodes(dictionaryId)
@@ -405,7 +410,7 @@ function onDocClick(e: MouseEvent) {
     assigneeDropdownOpen.value = false
   }
   if (e.target instanceof Element && !e.target.closest('[data-dictionary-filter-root="true"]')) {
-    dictionaryDropdownOpenById.value = {}
+    closeDictionaryDropdowns()
   }
 }
 

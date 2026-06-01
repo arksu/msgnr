@@ -1919,6 +1919,25 @@ func seedTask(t *testing.T, ctx context.Context, svc *tasks.Service, tplID, stat
 	return resp
 }
 
+func setTaskCreatedAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID, createdAt time.Time) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `UPDATE task SET created_at = $2 WHERE id = $1`, taskID, createdAt)
+	require.NoError(t, err)
+}
+
+func setTaskUpdatedAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID, updatedAt time.Time) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, err = tx.Exec(ctx, `SET LOCAL msgnr.preserve_task_updated_at = 'on'`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE task SET updated_at = $2 WHERE id = $1`, taskID, updatedAt)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+}
+
 func TestIntegration_ListTasks_EmptyReturnsStatusGroups(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -2306,6 +2325,7 @@ func TestIntegration_ListTasks_SortByCreatedAt(t *testing.T) {
 	assert.Equal(t, t1.ID, grp.Tasks[0].ID)
 	assert.Equal(t, t2.ID, grp.Tasks[1].ID)
 	assert.Equal(t, t3.ID, grp.Tasks[2].ID)
+	assert.Equal(t, []uuid.UUID{t1.ID, t2.ID, t3.ID}, taskIDs(resp.Tasks))
 
 	// DESC: newest first.
 	resp, err = svc.ListTasks(ctx, tasks.ListTasksParams{SortBy: "created_at", SortDesc: true})
@@ -2314,6 +2334,151 @@ func TestIntegration_ListTasks_SortByCreatedAt(t *testing.T) {
 	require.Len(t, grp.Tasks, 3)
 	assert.Equal(t, t3.ID, grp.Tasks[0].ID)
 	assert.Equal(t, t1.ID, grp.Tasks[2].ID)
+	assert.Equal(t, []uuid.UUID{t3.ID, t2.ID, t1.ID}, taskIDs(resp.Tasks))
+}
+
+func TestIntegration_ListTasks_FlatPageSortsCreatedAtAcrossStatuses(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "FCA", actor)
+	firstStatus, err := svc.CreateStatus(ctx, tasks.CreateStatusParams{
+		Code: "fca_first_" + uuid.NewString()[:8], Name: "First", SortOrder: 1, ActorID: actor,
+	})
+	require.NoError(t, err)
+	secondStatus, err := svc.CreateStatus(ctx, tasks.CreateStatusParams{
+		Code: "fca_second_" + uuid.NewString()[:8], Name: "Second", SortOrder: 2, ActorID: actor,
+	})
+	require.NoError(t, err)
+
+	oldest := seedTask(t, ctx, svc, tpl.ID, firstStatus.ID, actor, "Oldest")
+	newest := seedTask(t, ctx, svc, tpl.ID, secondStatus.ID, actor, "Newest")
+	middle := seedTask(t, ctx, svc, tpl.ID, firstStatus.ID, actor, "Middle")
+
+	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	setTaskCreatedAt(t, ctx, pool, oldest.ID, base)
+	setTaskCreatedAt(t, ctx, pool, newest.ID, base.Add(2*time.Hour))
+	setTaskCreatedAt(t, ctx, pool, middle.ID, base.Add(time.Hour))
+
+	resp, err := svc.ListTasks(ctx, tasks.ListTasksParams{
+		SortBy: "created_at", SortDesc: true, Page: 1, PageSize: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Tasks, 2)
+	assert.Equal(t, newest.ID, resp.Tasks[0].ID)
+	assert.Equal(t, middle.ID, resp.Tasks[1].ID)
+	assert.Equal(t, 3, resp.GrandTotal)
+}
+
+func TestIntegration_ListTasks_FlatPageSortsUpdatedAtAcrossStatuses(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "FUA", actor)
+	firstStatus, err := svc.CreateStatus(ctx, tasks.CreateStatusParams{
+		Code: "fua_first_" + uuid.NewString()[:8], Name: "First", SortOrder: 1, ActorID: actor,
+	})
+	require.NoError(t, err)
+	secondStatus, err := svc.CreateStatus(ctx, tasks.CreateStatusParams{
+		Code: "fua_second_" + uuid.NewString()[:8], Name: "Second", SortOrder: 2, ActorID: actor,
+	})
+	require.NoError(t, err)
+
+	oldest := seedTask(t, ctx, svc, tpl.ID, firstStatus.ID, actor, "Oldest updated")
+	newest := seedTask(t, ctx, svc, tpl.ID, secondStatus.ID, actor, "Newest updated")
+	middle := seedTask(t, ctx, svc, tpl.ID, firstStatus.ID, actor, "Middle updated")
+
+	base := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
+	setTaskUpdatedAt(t, ctx, pool, oldest.ID, base)
+	setTaskUpdatedAt(t, ctx, pool, newest.ID, base.Add(2*time.Hour))
+	setTaskUpdatedAt(t, ctx, pool, middle.ID, base.Add(time.Hour))
+
+	resp, err := svc.ListTasks(ctx, tasks.ListTasksParams{
+		SortBy: "updated_at", SortDesc: true, Page: 1, PageSize: 3,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Tasks, 3)
+	assert.Equal(t, newest.ID, resp.Tasks[0].ID)
+	assert.Equal(t, middle.ID, resp.Tasks[1].ID)
+	assert.Equal(t, oldest.ID, resp.Tasks[2].ID)
+}
+
+func TestIntegration_ListTasks_FlatPageSortsUpdatedAtTiesByID(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "FUT", actor)
+	st := seedStatus(t, ctx, svc, actor)
+
+	first := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "Same timestamp A")
+	second := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "Same timestamp B")
+	sameUpdatedAt := time.Date(2026, 5, 3, 10, 0, 0, 0, time.UTC)
+	setTaskUpdatedAt(t, ctx, pool, first.ID, sameUpdatedAt)
+	setTaskUpdatedAt(t, ctx, pool, second.ID, sameUpdatedAt)
+
+	rows, err := pool.Query(ctx,
+		`SELECT id FROM task WHERE id = ANY($1::uuid[]) ORDER BY id DESC`,
+		[]string{first.ID.String(), second.ID.String()},
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+	expected := make([]uuid.UUID, 0, 2)
+	for rows.Next() {
+		var id uuid.UUID
+		require.NoError(t, rows.Scan(&id))
+		expected = append(expected, id)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, expected, 2)
+
+	resp, err := svc.ListTasks(ctx, tasks.ListTasksParams{
+		SortBy: "updated_at", SortDesc: true, Page: 1, PageSize: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Tasks, 2)
+	assert.Equal(t, expected[0], resp.Tasks[0].ID)
+	assert.Equal(t, expected[1], resp.Tasks[1].ID)
+}
+
+func TestIntegration_ListTasks_FlatPageSortsCreatedAtTiesByID(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "FCT", actor)
+	st := seedStatus(t, ctx, svc, actor)
+
+	first := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "Same created A")
+	second := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "Same created B")
+	sameCreatedAt := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	setTaskCreatedAt(t, ctx, pool, first.ID, sameCreatedAt)
+	setTaskCreatedAt(t, ctx, pool, second.ID, sameCreatedAt)
+
+	rows, err := pool.Query(ctx,
+		`SELECT id FROM task WHERE id = ANY($1::uuid[]) ORDER BY id DESC`,
+		[]string{first.ID.String(), second.ID.String()},
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+	expected := make([]uuid.UUID, 0, 2)
+	for rows.Next() {
+		var id uuid.UUID
+		require.NoError(t, rows.Scan(&id))
+		expected = append(expected, id)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, expected, 2)
+
+	resp, err := svc.ListTasks(ctx, tasks.ListTasksParams{
+		SortBy: "created_at", SortDesc: true, Page: 1, PageSize: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Tasks, 2)
+	assert.Equal(t, expected[0], resp.Tasks[0].ID)
+	assert.Equal(t, expected[1], resp.Tasks[1].ID)
 }
 
 func TestIntegration_ListTasks_SortByNumericField(t *testing.T) {
@@ -2354,6 +2519,7 @@ func TestIntegration_ListTasks_SortByNumericField(t *testing.T) {
 	require.Len(t, grp.Tasks, 2)
 	assert.Equal(t, lowPts.ID, grp.Tasks[0].ID)
 	assert.Equal(t, highPts.ID, grp.Tasks[1].ID)
+	assert.Equal(t, []uuid.UUID{lowPts.ID, highPts.ID}, taskIDs(resp.Tasks))
 }
 
 func TestIntegration_ListTasks_Pagination(t *testing.T) {

@@ -107,6 +107,58 @@ describe('descriptionMentions', () => {
     expect(documentsSearchDocuments).toHaveBeenCalledWith('ali')
   })
 
+  it('prefers globally sorted flat task search results when present', async () => {
+    vi.mocked(tasksListUsers).mockResolvedValueOnce([])
+    vi.mocked(tasksListTasks).mockResolvedValueOnce({
+      tasks: [
+        {
+          id: 'task-flat',
+          public_id: 'TASK-999',
+          title: 'Flat newest',
+          template_id: 'tpl-1',
+          template_snapshot_prefix: 'TASK',
+          status_id: 'status-2',
+          created_at: '2026-04-09T00:00:00Z',
+          updated_at: '2026-04-09T00:00:00Z',
+        },
+      ],
+      groups: [
+        {
+          status: { id: 'status-1', code: 'todo', name: 'Todo', sort_order: 1 },
+          tasks: [
+            {
+              id: 'task-grouped',
+              public_id: 'TASK-123',
+              title: 'Grouped fallback',
+              template_id: 'tpl-1',
+              template_snapshot_prefix: 'TASK',
+              status_id: 'status-1',
+              created_at: '2026-04-08T00:00:00Z',
+              updated_at: '2026-04-08T00:00:00Z',
+            },
+          ],
+          total: 1,
+          page: 1,
+          page_size: 10,
+        },
+      ],
+      grand_total: 2,
+    })
+    vi.mocked(documentsSearchDocuments).mockResolvedValueOnce([])
+
+    const results = await searchDescriptionMentionSuggestions('task')
+
+    expect(results).toContainEqual(expect.objectContaining({
+      kind: 'task',
+      id: 'task-flat',
+      label: '@TASK-999 Flat newest',
+    }))
+    expect(results).not.toContainEqual(expect.objectContaining({
+      kind: 'task',
+      id: 'task-grouped',
+    }))
+  })
+
   it('skips document search for empty mention queries because document search requires text', async () => {
     await searchDescriptionMentionSuggestions('')
 

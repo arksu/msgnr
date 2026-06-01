@@ -1997,7 +1997,10 @@ func parseListTasksParams(r *http.Request) (ListTasksParams, error) {
 		return ListTasksParams{}, err
 	}
 	sortOrder := strings.ToLower(strings.TrimSpace(q.Get("sort_order")))
-	sortDesc := sortOrder != "asc"
+	sortDesc, err := parseSortDesc(sortOrder)
+	if err != nil {
+		return ListTasksParams{}, err
+	}
 
 	params, err := parseTaskFilterParams(r)
 	if err != nil {
@@ -2165,6 +2168,17 @@ func validateSortBy(sortBy string) error {
 		return nil
 	}
 	return errors.New("invalid sort_by value: must be id|title|status|created_at|updated_at or a field-definition UUID")
+}
+
+func parseSortDesc(sortOrder string) (bool, error) {
+	switch sortOrder {
+	case "", "desc":
+		return true, nil
+	case "asc":
+		return false, nil
+	default:
+		return false, errors.New("invalid sort_order value: must be asc or desc")
+	}
 }
 
 // parseUUIDs converts a slice of raw strings to []uuid.UUID.

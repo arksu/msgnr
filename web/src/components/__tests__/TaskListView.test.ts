@@ -63,6 +63,9 @@ describe('TaskListView', () => {
   beforeEach(() => {
     storage.clear()
     vi.clearAllMocks()
+    tasksStoreMock.listParams = { page: 1, page_size: 50 }
+    tasksStoreMock.taskList = []
+    tasksStoreMock.taskListTotal = 1
   })
 
   it('renders list/grouped switcher without kanban option', async () => {
@@ -166,6 +169,60 @@ describe('TaskListView', () => {
       field_filters: [{ field_definition_id: 'fld-1', user_ids: ['u-1'] }],
       page: 1,
     }, 'grouped')
+  })
+
+  it('uses descending as the first-click sort order for date columns', async () => {
+    tasksStoreMock.taskList = [
+      {
+        id: 'task-1',
+        public_id: 'BUG-1',
+        title: 'Visible Task',
+        status_id: 'st-1',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-02-03T00:00:00Z',
+      },
+    ]
+    const wrapper = mount(TaskListView, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskTrackerFilters: { template: '<div><slot name="after-controls" /><slot /></div>' },
+          UserAvatar: { template: '<div class="user-avatar-stub" />' },
+          TaskRow: { template: '<tr />' },
+          SortIcon: { template: '<span />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    const headers = wrapper.findAll('th')
+    const createdHeader = headers.find(header => header.text().includes('Created'))
+    const titleHeader = headers.find(header => header.text().includes('Title'))
+    const updatedHeader = headers.find(header => header.text().includes('Updated'))
+    expect(createdHeader).toBeTruthy()
+    expect(titleHeader).toBeTruthy()
+    expect(updatedHeader).toBeTruthy()
+
+    await createdHeader!.trigger('click')
+    expect(tasksStoreMock.setListParams).toHaveBeenLastCalledWith({
+      page: 1,
+      sort_by: 'created_at',
+      sort_order: 'desc',
+    }, 'list')
+
+    await titleHeader!.trigger('click')
+    expect(tasksStoreMock.setListParams).toHaveBeenLastCalledWith({
+      page: 1,
+      sort_by: 'title',
+      sort_order: 'asc',
+    }, 'list')
+
+    await updatedHeader!.trigger('click')
+    expect(tasksStoreMock.setListParams).toHaveBeenLastCalledWith({
+      page: 1,
+      sort_by: 'updated_at',
+      sort_order: 'desc',
+    }, 'list')
   })
 
   it('emits task public id when a grouped row is clicked', async () => {

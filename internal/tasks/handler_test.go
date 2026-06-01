@@ -61,6 +61,32 @@ func TestParseTaskFilterParams_TrimsFieldEnumFilters(t *testing.T) {
 	assert.Equal(t, []string{"high"}, params.FieldFilters[0].EnumCodes)
 }
 
+func TestParseListTasksParams_SortOrderValidation(t *testing.T) {
+	t.Run("defaults to descending", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+
+		params, err := parseListTasksParams(req)
+		require.NoError(t, err)
+		assert.True(t, params.SortDesc)
+	})
+
+	t.Run("parses ascending", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/tasks?sort_order=asc", nil)
+
+		params, err := parseListTasksParams(req)
+		require.NoError(t, err)
+		assert.False(t, params.SortDesc)
+	})
+
+	t.Run("rejects invalid values", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/tasks?sort_order=newest", nil)
+
+		_, err := parseListTasksParams(req)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid sort_order")
+	})
+}
+
 func TestTaskCommentsRouter_InvalidUpdateCommentID(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodPut, "/api/tasks/task/comments/not-a-uuid", strings.NewReader(`{"body":"x"}`))

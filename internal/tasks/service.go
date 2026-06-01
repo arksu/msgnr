@@ -3368,8 +3368,10 @@ type TaskGroup struct {
 	PageSize int       `json:"page_size"`
 }
 
-// ListTasksResponse is the always-grouped task list response.
+// ListTasksResponse carries a globally sorted flat page for list mode while
+// preserving the grouped payload shape used by older clients.
 type ListTasksResponse struct {
+	Tasks      []TaskRow   `json:"tasks"`
 	Groups     []TaskGroup `json:"groups"`
 	GrandTotal int         `json:"grand_total"`
 }
@@ -3428,14 +3430,14 @@ type ListTasksStatusPortionResponse struct {
 	HasMore    bool              `json:"has_more"`
 }
 
-// ListTasks returns tasks grouped by status with optional search, filters,
-// sorting and per-group pagination.
+// ListTasks returns a globally sorted flat page plus status-grouped
+// compatibility data with optional search, filters and sorting.
 //
 // Implementation uses two queries total regardless of status count:
 //  1. Fetch all statuses (ordered by sort_order).
-//  2. Fetch all matching tasks with COUNT(*) OVER (PARTITION BY t.status_id)
-//     as a window function so per-status totals come for free; per-group
-//     pagination is then applied in Go.
+//  2. Fetch all matching tasks in the requested sort order with COUNT(*) OVER
+//     (PARTITION BY t.status_id) as a window function so per-status totals come
+//     for free. Global and per-group pagination are then applied in Go.
 //
 // Dynamic WHERE/ORDER BY is hand-written because sqlc cannot express variable
 // filter predicates or sort columns. Every user-supplied value goes through
@@ -3470,6 +3472,7 @@ func (s *Service) ListTasks(ctx context.Context, p ListTasksParams) (ListTasksRe
 		tasks []TaskRow
 	}
 	byStatus := make(map[uuid.UUID]*rawGroup)
+	allTasks := make([]TaskRow, 0)
 
 	defer rows.Close()
 	for rows.Next() {
@@ -3484,6 +3487,7 @@ func (s *Service) ListTasks(ctx context.Context, p ListTasksParams) (ListTasksRe
 			byStatus[t.StatusID] = g
 		}
 		g.tasks = append(g.tasks, t)
+		allTasks = append(allTasks, t)
 	}
 	if err := rows.Err(); err != nil {
 		return ListTasksResponse{}, fmt.Errorf("tasks: iterate task rows: %w", err)
@@ -3491,8 +3495,17 @@ func (s *Service) ListTasks(ctx context.Context, p ListTasksParams) (ListTasksRe
 
 	// 3. Assemble groups in status sort_order; apply per-group pagination in Go.
 	offset := (p.Page - 1) * p.PageSize
+	grandTotal := len(allTasks)
+	flatPage := []TaskRow{}
+	if offset < len(allTasks) {
+		end := offset + p.PageSize
+		if end > len(allTasks) {
+			end = len(allTasks)
+		}
+		flatPage = allTasks[offset:end]
+	}
+
 	groups := make([]TaskGroup, 0, len(statusRows))
-	grandTotal := 0
 
 	for _, sr := range statusRows {
 		st := statusByID[sr.ID]
@@ -3507,7 +3520,6 @@ func (s *Service) ListTasks(ctx context.Context, p ListTasksParams) (ListTasksRe
 		var page []TaskRow
 		if g != nil {
 			total = g.total
-			grandTotal += total
 			end := offset + p.PageSize
 			if offset < len(g.tasks) {
 				if end > len(g.tasks) {
@@ -3529,7 +3541,7 @@ func (s *Service) ListTasks(ctx context.Context, p ListTasksParams) (ListTasksRe
 		})
 	}
 
-	return ListTasksResponse{Groups: groups, GrandTotal: grandTotal}, nil
+	return ListTasksResponse{Tasks: flatPage, Groups: groups, GrandTotal: grandTotal}, nil
 }
 
 // ListTasksGrouped returns status buckets with a first portion of items
@@ -3954,8 +3966,12 @@ func buildSortExpr(sortBy string, desc bool, args *argList) (join, orderBy strin
 		dir = "DESC"
 	}
 
+	if sortBy == "id" {
+		return "", systemSortColumns[sortBy] + " " + dir
+	}
+
 	if col, ok := systemSortColumns[sortBy]; ok {
-		return "", col + " " + dir + " NULLS LAST"
+		return "", col + " " + dir + " NULLS LAST, t.id " + dir
 	}
 
 	if sortBy != "" {
@@ -3966,11 +3982,11 @@ func buildSortExpr(sortBy string, desc bool, args *argList) (join, orderBy strin
 					` ON tfv_sort.task_id = t.id AND tfv_sort.field_definition_id = %s`,
 				ph,
 			)
-			return join, "tfv_sort.value_number " + dir + " NULLS LAST, t.updated_at DESC"
+			return join, "tfv_sort.value_number " + dir + " NULLS LAST, t.updated_at DESC, t.id DESC"
 		}
 	}
 
-	return "", "t.updated_at DESC"
+	return "", "t.updated_at DESC, t.id DESC"
 }
 
 // argList is a small helper that accumulates bound values and assigns

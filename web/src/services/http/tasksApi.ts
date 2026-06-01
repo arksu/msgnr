@@ -669,6 +669,7 @@ export interface TaskListGroup {
 
 // Mirrors backend ListTasksResponse
 export interface TaskListResponse {
+  tasks?: TaskListItem[]
   groups: TaskListGroup[]
   grand_total: number
 }

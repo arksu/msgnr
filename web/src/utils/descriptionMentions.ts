@@ -1,4 +1,4 @@
-import type { TaskListItem, TaskUser } from '@/services/http/tasksApi'
+import type { TaskListItem, TaskListResponse, TaskUser } from '@/services/http/tasksApi'
 import { tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
 import { documentsSearchDocuments, type DocumentSearchResult } from '@/services/http/documentsApi'
 import { taskSlugFromPublicId } from '@/services/taskRoute'
@@ -101,15 +101,24 @@ function filterUsers(users: TaskUser[], query: string, limit: number): TaskUser[
 }
 
 function flattenTaskSearch(groups: { tasks: TaskListItem[] }[]): TaskListItem[] {
+  return dedupeTaskSearch(groups.flatMap(group => group.tasks ?? []))
+}
+
+function dedupeTaskSearch(tasks: TaskListItem[]): TaskListItem[] {
   const unique = new Map<string, TaskListItem>()
-  for (const group of groups) {
-    for (const task of group.tasks ?? []) {
-      if (!unique.has(task.id)) {
-        unique.set(task.id, task)
-      }
+  for (const task of tasks) {
+    if (!unique.has(task.id)) {
+      unique.set(task.id, task)
     }
   }
   return Array.from(unique.values())
+}
+
+function taskSearchResults(response: TaskListResponse): TaskListItem[] {
+  if (response.tasks) {
+    return dedupeTaskSearch(response.tasks)
+  }
+  return flattenTaskSearch(response.groups ?? [])
 }
 
 function documentSubtitle(document: DocumentSearchResult): string {
@@ -249,7 +258,7 @@ export async function searchDescriptionMentionSuggestions(query: string): Promis
     flatIndex: index,
   }))
 
-  const taskItems = flattenTaskSearch(taskResponse.groups ?? []).map((task, index) => ({
+  const taskItems = taskSearchResults(taskResponse).map((task, index) => ({
     kind: 'task' as const,
     id: task.id,
     label: buildTaskMentionLabel(task.public_id, task.title),

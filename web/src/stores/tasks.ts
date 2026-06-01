@@ -64,6 +64,13 @@ function tasksDescLog(event: string, payload: Record<string, unknown>) {
 
 type TaskListLoadMode = 'list' | 'grouped'
 
+const DEFAULT_LIST_PARAMS: TaskListParams = {
+  page: 1,
+  page_size: 50,
+  sort_by: 'updated_at',
+  sort_order: 'desc',
+}
+
 type GroupedTaskGroupState = TaskGroupedStatusBucket & {
   next_offset: number
   has_more: boolean
@@ -108,28 +115,21 @@ export const useTasksStore = defineStore('tasks', () => {
   const createDialogOpen = ref(false)
 
   // ---- Task list ----
-  // The backend always returns a grouped response. The flat list is derived
-  // from groups so both flat and grouped views share the same data.
+  // List mode prefers the backend's globally sorted flat page and falls back
+  // to flattening groups for compatibility with older responses.
+  const taskListItems = ref<TaskListItem[]>([])
   const taskListGroups = ref<TaskListGroup[]>([])
   const taskListTotal = ref(0)
   const taskListLoading = ref(false)
   const taskListError = ref<string | null>(null)
-  const listParams = ref<TaskListParams>({
-    page: 1,
-    page_size: 50,
-    sort_by: 'updated_at',
-    sort_order: 'desc' as SortOrder,
-  })
+  const listParams = ref<TaskListParams>({ ...DEFAULT_LIST_PARAMS })
 
   // Grouped mode (GET /api/tasks/grouped + /api/tasks/status/:id/portion)
   const groupedTaskStatusOrder = ref<string[]>([])
   const groupedTaskGroupsByStatus = ref<Record<string, GroupedTaskGroupState>>({})
   const groupedTaskPortionLimit = ref(50)
 
-  // Flat list derived from all group pages currently loaded
-  const taskList = computed<TaskListItem[]>(() =>
-    taskListGroups.value.flatMap(g => g.tasks),
-  )
+  const taskList = computed<TaskListItem[]>(() => taskListItems.value)
 
   // ---- Derived ----
   const activeTemplates = computed(() =>
@@ -586,7 +586,9 @@ export const useTasksStore = defineStore('tasks', () => {
     taskListError.value = null
     try {
       const res = await tasksListTasks(listParams.value)
-      taskListGroups.value = res.groups ?? []
+      const groups = res.groups ?? []
+      taskListGroups.value = groups
+      taskListItems.value = res.tasks ?? groups.flatMap(g => g.tasks)
       taskListTotal.value = res.grand_total ?? 0
     } catch (e) {
       taskListError.value = e instanceof Error ? e.message : 'Failed to load tasks'
@@ -776,7 +778,7 @@ export const useTasksStore = defineStore('tasks', () => {
   }
 
   function resetListParams(mode: TaskListLoadMode = 'list') {
-    listParams.value = { page: 1, page_size: 50, sort_by: 'updated_at', sort_order: 'desc' }
+    listParams.value = { ...DEFAULT_LIST_PARAMS }
     if (mode === 'grouped') {
       loadGroupedTaskList()
       return
@@ -812,18 +814,14 @@ export const useTasksStore = defineStore('tasks', () => {
     createDialogOpen.value = false
 
     taskListGroups.value = []
+    taskListItems.value = []
     groupedTaskStatusOrder.value = []
     groupedTaskGroupsByStatus.value = {}
     groupedTaskPortionLimit.value = 50
     taskListTotal.value = 0
     taskListLoading.value = false
     taskListError.value = null
-    listParams.value = {
-      page: 1,
-      page_size: 50,
-      sort_by: 'updated_at',
-      sort_order: 'desc',
-    }
+    listParams.value = { ...DEFAULT_LIST_PARAMS }
   }
 
   const taskListGroupsReadonly = readonly(taskListGroups)

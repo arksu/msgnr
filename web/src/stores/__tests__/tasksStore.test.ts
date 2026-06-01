@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useTasksStore } from '@/stores/tasks'
 import {
+  tasksListTasks,
   tasksListStatuses,
   tasksListTemplates,
   tasksUpdateTaskDescription,
@@ -68,6 +69,19 @@ function makeTask(id: string, description: string) {
     subtasks: [],
     updated_at: '2026-03-17T00:00:00Z',
   } as any
+}
+
+function makeListItem(id: string, title = id) {
+  return {
+    id,
+    public_id: id.toUpperCase(),
+    title,
+    template_id: 'template-1',
+    template_snapshot_prefix: 'TASK',
+    status_id: 'status-1',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  }
 }
 
 describe('tasksStore.updateTaskDescription', () => {
@@ -186,5 +200,65 @@ describe('tasksStore.loadConfig', () => {
     expect(store.configLoaded).toBe(true)
     expect(store.activeTemplates.map(template => template.id)).toEqual(['tpl-1'])
     expect(store.activeStatuses.map(status => status.id)).toEqual(['st-1'])
+  })
+})
+
+describe('tasksStore.loadTaskList', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('uses backend flat tasks before grouped fallback rows', async () => {
+    const store = useTasksStore()
+    vi.mocked(tasksListTasks).mockResolvedValueOnce({
+      tasks: [
+        makeListItem('newest'),
+        makeListItem('middle'),
+      ],
+      groups: [
+        {
+          status: { id: 'status-1', code: 'todo', name: 'Todo', sort_order: 1 },
+          tasks: [makeListItem('grouped-old')],
+          total: 1,
+          page: 1,
+          page_size: 50,
+        },
+      ],
+      grand_total: 3,
+    })
+
+    await store.loadTaskList()
+
+    expect(store.taskList.map(task => task.id)).toEqual(['newest', 'middle'])
+    expect(store.taskListGroups[0].tasks.map(task => task.id)).toEqual(['grouped-old'])
+    expect(store.taskListTotal).toBe(3)
+  })
+
+  it('falls back to grouped rows for older task list responses', async () => {
+    const store = useTasksStore()
+    vi.mocked(tasksListTasks).mockResolvedValueOnce({
+      groups: [
+        {
+          status: { id: 'status-1', code: 'todo', name: 'Todo', sort_order: 1 },
+          tasks: [makeListItem('grouped-1')],
+          total: 1,
+          page: 1,
+          page_size: 50,
+        },
+        {
+          status: { id: 'status-2', code: 'done', name: 'Done', sort_order: 2 },
+          tasks: [makeListItem('grouped-2')],
+          total: 1,
+          page: 1,
+          page_size: 50,
+        },
+      ],
+      grand_total: 2,
+    })
+
+    await store.loadTaskList()
+
+    expect(store.taskList.map(task => task.id)).toEqual(['grouped-1', 'grouped-2'])
   })
 })

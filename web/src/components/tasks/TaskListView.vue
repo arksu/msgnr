@@ -278,9 +278,13 @@ function toggleSort(field: SortBy) {
     sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
   } else {
     sortBy.value = field
-    sortOrder.value = 'asc'
+    sortOrder.value = defaultSortOrderFor(field)
   }
   applyParams()
+}
+
+function defaultSortOrderFor(field: SortBy): SortOrder {
+  return field === 'created_at' || field === 'updated_at' ? 'desc' : 'asc'
 }
 
 function goToPage(page: number) {

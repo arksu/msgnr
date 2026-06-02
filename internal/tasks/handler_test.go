@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,41 @@ func TestParseTaskFilterParams_DictionaryEnumFilters(t *testing.T) {
 	require.Len(t, params.DictionaryFilters, 1)
 	assert.Equal(t, dictID, params.DictionaryFilters[0].DictionaryID)
 	assert.ElementsMatch(t, []string{"high", "low"}, params.DictionaryFilters[0].EnumCodes)
+}
+
+func TestParseTaskFilterParams_CreatedDateFilters(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/tasks?created_from=2026-05-01&created_to=2026-05-03",
+		nil,
+	)
+
+	params, err := parseTaskFilterParams(req)
+	require.NoError(t, err)
+	require.NotNil(t, params.CreatedFrom)
+	require.NotNil(t, params.CreatedTo)
+	assert.Equal(t, time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC), *params.CreatedFrom)
+	assert.Equal(t, time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC), *params.CreatedTo)
+}
+
+func TestParseTaskFilterParams_InvalidCreatedDateFilters(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks?created_from=2026-13-01", nil)
+
+	_, err := parseTaskFilterParams(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid created_from")
+}
+
+func TestParseTaskFilterParams_InvertedCreatedDateFilters(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/tasks?created_from=2026-05-10&created_to=2026-05-01",
+		nil,
+	)
+
+	_, err := parseTaskFilterParams(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "created_from must be before or equal to created_to")
 }
 
 func TestParseTaskFilterParams_TrimsFieldEnumFilters(t *testing.T) {

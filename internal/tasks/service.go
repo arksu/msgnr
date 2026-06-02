@@ -3351,6 +3351,8 @@ type ListTasksParams struct {
 	StatusIDs       []uuid.UUID // filter by one or more status IDs
 	Prefixes        []string    // filter by template_snapshot_prefix
 	IncludeSubtasks bool        // include tasks with parent_task_id when true
+	CreatedFrom     *time.Time  // inclusive lower created_at bound
+	CreatedTo       *time.Time  // exclusive upper created_at bound
 
 	FieldFilters      []FieldFilter
 	DictionaryFilters []DictionaryFilter
@@ -3870,6 +3872,16 @@ func buildWhereClause(p ListTasksParams, args *argList) string {
 
 	if !p.IncludeSubtasks {
 		clauses = append(clauses, `t.parent_task_id IS NULL`)
+	}
+
+	if p.CreatedFrom != nil {
+		ph := args.add(*p.CreatedFrom)
+		clauses = append(clauses, fmt.Sprintf(`t.created_at >= %s`, ph))
+	}
+
+	if p.CreatedTo != nil {
+		ph := args.add(*p.CreatedTo)
+		clauses = append(clauses, fmt.Sprintf(`t.created_at < %s`, ph))
 	}
 
 	for _, ff := range p.FieldFilters {

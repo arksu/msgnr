@@ -6,6 +6,8 @@ const selectedStatusIds = ref<string[]>([])
 const selectedTemplateId = ref<string | null>(null)
 const selectedAssigneeIds = ref<string[]>([])
 const selectedDictionaryEnumCodes = ref<Record<string, string[]>>({})
+const createdFrom = ref('')
+const createdTo = ref('')
 const showSubtasks = ref(false)
 
 export function useTaskFilters() {
@@ -16,6 +18,8 @@ export function useTaskFilters() {
     selectedTemplateId,
     selectedAssigneeIds,
     selectedDictionaryEnumCodes,
+    createdFrom,
+    createdTo,
     showSubtasks,
   }
 }

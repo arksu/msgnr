@@ -10,6 +10,8 @@ const filtersMock = {
   selectedTemplateId: ref<string | null>(null),
   selectedAssigneeIds: ref<string[]>([]),
   selectedDictionaryEnumCodes: ref<Record<string, string[]>>({}),
+  createdFrom: ref(''),
+  createdTo: ref(''),
   showSubtasks: ref(false),
 }
 
@@ -81,6 +83,8 @@ describe('TaskTrackerFilters', () => {
     filtersMock.selectedTemplateId.value = null
     filtersMock.selectedAssigneeIds.value = []
     filtersMock.selectedDictionaryEnumCodes.value = {}
+    filtersMock.createdFrom.value = ''
+    filtersMock.createdTo.value = ''
     filtersMock.showSubtasks.value = false
   })
 
@@ -96,6 +100,7 @@ describe('TaskTrackerFilters', () => {
       props: {
         templateFilter: null,
         total: 1,
+        showCreatedDateFilter: true,
       },
       global: {
         stubs: {
@@ -132,6 +137,8 @@ describe('TaskTrackerFilters', () => {
     await dictionaryChip!.trigger('click')
     await wrapper.findAll('.dropdown-menu--dictionary input[type="checkbox"]')[0].setValue(true)
     await wrapper.findAll('.dropdown-menu--dictionary input[type="checkbox"]')[1].setValue(true)
+    await wrapper.get('input[type="date"][aria-label="Created from"]').setValue('2026-05-01')
+    await wrapper.get('input[type="date"][aria-label="Created to"]').setValue('2026-05-03')
     await showSubtasksCheckbox(wrapper).setValue(true)
 
     const emitted = wrapper.emitted('filtersChange')
@@ -142,6 +149,8 @@ describe('TaskTrackerFilters', () => {
       status_ids: ['st-1'],
       prefixes: ['BUG'],
       include_subtasks: true,
+      created_from: '2026-05-01',
+      created_to: '2026-05-03',
       field_filters: [{ field_definition_id: 'fld-assignee', user_ids: ['u-1'] }],
       dictionary_filters: [{ dictionary_id: 'dict-1', enum_codes: ['high', 'low'] }],
     })
@@ -269,6 +278,48 @@ describe('TaskTrackerFilters', () => {
     const latest = emitted![emitted!.length - 1][0] as any
     expect(latest.include_subtasks).toBe(false)
     expect(wrapper.get('button.toolbar-btn').text()).not.toContain('1')
+  })
+
+  it('counts, emits, clears, and hides created date filters', async () => {
+    const wrapper = mount(TaskTrackerFilters, {
+      props: {
+        templateFilter: null,
+        total: 1,
+        showCreatedDateFilter: true,
+      },
+      global: {
+        stubs: {
+          UserAvatar: { template: '<div />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('button.toolbar-btn').trigger('click')
+    await wrapper.get('input[type="date"][aria-label="Created from"]').setValue('2026-05-01')
+    await wrapper.get('input[type="date"][aria-label="Created to"]').setValue('2026-05-03')
+
+    expect(wrapper.get('button.toolbar-btn').text()).toContain('1')
+
+    let emitted = wrapper.emitted('filtersChange')
+    expect(emitted).toBeTruthy()
+    let latest = emitted![emitted!.length - 1][0] as any
+    expect(latest.created_from).toBe('2026-05-01')
+    expect(latest.created_to).toBe('2026-05-03')
+
+    const clearButton = wrapper.findAll('button').find(button => button.text() === 'Clear all')
+    expect(clearButton).toBeTruthy()
+    await clearButton!.trigger('click')
+
+    emitted = wrapper.emitted('filtersChange')
+    latest = emitted![emitted!.length - 1][0] as any
+    expect(latest.created_from).toBeUndefined()
+    expect(latest.created_to).toBeUndefined()
+    expect(wrapper.get('button.toolbar-btn').text()).not.toContain('1')
+
+    await wrapper.setProps({ showCreatedDateFilter: false })
+    await flushPromises()
+    expect(wrapper.find('input[type="date"]').exists()).toBe(false)
   })
 
   it('restores filter state from composable when remounted (view switch)', async () => {

@@ -3,6 +3,7 @@
     <TaskTrackerFilters
       :template-filter="templateFilter"
       :total="tasksStore.taskListTotal"
+      :show-created-date-filter="!isGrouped"
       @filters-change="onFiltersChange"
     >
       <template #after-controls>
@@ -247,7 +248,6 @@ function setViewMode(mode: TaskListViewMode) {
   if (mode === viewMode.value) return
   viewMode.value = mode
   saveTaskListViewMode(mode)
-  applyParams()
 }
 
 function onFiltersChange(payload: TaskFilterPayload) {
@@ -262,7 +262,8 @@ function applyParams() {
   }
 
   if (isGrouped.value) {
-    tasksStore.setListParams(commonParams, 'grouped')
+    const { created_from: _createdFrom, created_to: _createdTo, ...groupedParams } = commonParams
+    tasksStore.setListParams(groupedParams, 'grouped')
     return
   }
 

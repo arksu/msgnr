@@ -184,6 +184,29 @@
         </div>
       </div>
 
+      <div v-if="showCreatedDateFilter" class="created-date-filters">
+        <label class="created-date-filter">
+          <span>Created from</span>
+          <input
+            v-model="createdFrom"
+            type="date"
+            aria-label="Created from"
+            class="created-date-input"
+            @change="emitFilters"
+          />
+        </label>
+        <label class="created-date-filter">
+          <span>Created to</span>
+          <input
+            v-model="createdTo"
+            type="date"
+            aria-label="Created to"
+            class="created-date-input"
+            @change="emitFilters"
+          />
+        </label>
+      </div>
+
       <label
         class="inline-flex items-center gap-2 rounded border border-chat-border px-2.5 py-1 text-xs text-gray-300 transition-colors hover:border-accent/40 hover:text-white"
         :class="showSubtasks ? 'border-accent/60 text-accent' : ''"
@@ -219,6 +242,7 @@ import {
 const props = defineProps<{
   templateFilter: string | null
   total: number
+  showCreatedDateFilter?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -233,6 +257,8 @@ const {
   selectedTemplateId,
   selectedAssigneeIds,
   selectedDictionaryEnumCodes,
+  createdFrom,
+  createdTo,
   showSubtasks,
 } = useTaskFilters()
 
@@ -285,6 +311,7 @@ const activeFilterCount = computed(() =>
   (selectedTemplateId.value ? 1 : 0) +
   (selectedAssigneeIds.value.length > 0 ? 1 : 0) +
   dictionaryActiveFilterCount.value +
+  (props.showCreatedDateFilter && (createdFrom.value || createdTo.value) ? 1 : 0) +
   (showSubtasks.value ? 1 : 0),
 )
 
@@ -315,12 +342,19 @@ function buildFilterPayload(): TaskFilterPayload {
       enum_codes: selectedDictionaryCodes(dictionary.id),
     }))
     .filter(filter => filter.enum_codes.length > 0)
+  const createdDateFilters = props.showCreatedDateFilter
+    ? {
+        created_from: createdFrom.value || undefined,
+        created_to: createdTo.value || undefined,
+      }
+    : {}
 
   return {
     search: searchInput.value.trim() || undefined,
     status_ids: selectedStatusIds.value.length ? selectedStatusIds.value : undefined,
     prefixes: prefix ? [prefix] : undefined,
     include_subtasks: showSubtasks.value,
+    ...createdDateFilters,
     field_filters: fieldFilters,
     dictionary_filters: dictionaryFilters.length ? dictionaryFilters : undefined,
   }
@@ -395,6 +429,8 @@ function clearFilters() {
   selectedTemplateId.value = null
   selectedAssigneeIds.value = []
   selectedDictionaryEnumCodes.value = {}
+  createdFrom.value = ''
+  createdTo.value = ''
   showSubtasks.value = false
   emitFilters()
 }
@@ -417,6 +453,7 @@ function onDocClick(e: MouseEvent) {
 watch(selectedStatusIds, () => emitFilters(), { deep: true })
 watch(selectedAssigneeIds, () => emitFilters(), { deep: true })
 watch(showSubtasks, () => emitFilters())
+watch(() => props.showCreatedDateFilter, () => emitFilters())
 
 watch(() => props.templateFilter, (val) => {
   selectedTemplateId.value = val
@@ -485,5 +522,15 @@ onBeforeUnmount(() => {
 }
 .dropdown-item {
   @apply flex items-center px-3 py-1.5 text-sm text-gray-200 hover:bg-white/10 cursor-pointer;
+}
+.created-date-filters {
+  @apply flex items-center gap-2 rounded border border-chat-border px-2.5 py-1;
+}
+.created-date-filter {
+  @apply flex items-center gap-1.5 text-xs text-gray-400;
+}
+.created-date-input {
+  @apply h-7 w-32 rounded border border-chat-border bg-chat-input px-2 text-xs text-gray-200 outline-none transition-colors
+         focus:border-accent;
 }
 </style>

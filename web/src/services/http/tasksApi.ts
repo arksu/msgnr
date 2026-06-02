@@ -635,6 +635,9 @@ export interface TaskListParams {
   prefixes?: string[]
   // Include subtasks alongside top-level tasks when true; default hides them.
   include_subtasks?: boolean
+  // Created-at date bounds in YYYY-MM-DD form.
+  created_from?: string
+  created_to?: string
   // Per-field custom filters (field_<uuid>_user, field_<uuid>_enum, etc.)
   field_filters?: FieldFilter[]
   // Per-dictionary enum filters (dictionary_<uuid>_enum).
@@ -647,7 +650,7 @@ export interface TaskListParams {
 
 export type TaskFilterPayload = Pick<
   TaskListParams,
-  'search' | 'status_ids' | 'prefixes' | 'include_subtasks' | 'field_filters' | 'dictionary_filters'
+  'search' | 'status_ids' | 'prefixes' | 'include_subtasks' | 'created_from' | 'created_to' | 'field_filters' | 'dictionary_filters'
 >
 
 // Mirrors backend StatusRow (subset used in list)
@@ -724,6 +727,8 @@ function buildTaskFilterQuery(params: TaskListParams): URLSearchParams {
   // Serialize the boolean explicitly when provided so the client does not
   // depend on the backend default for subtask visibility.
   if (params.include_subtasks != null) q.set('include_subtasks', String(params.include_subtasks))
+  if (params.created_from) q.set('created_from', params.created_from)
+  if (params.created_to) q.set('created_to', params.created_to)
 
   params.field_filters?.forEach(ff => {
     ff.user_ids?.forEach(uid => q.append(`field_${ff.field_definition_id}_user`, uid))

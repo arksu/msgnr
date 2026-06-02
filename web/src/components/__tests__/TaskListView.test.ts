@@ -150,7 +150,7 @@ describe('TaskListView', () => {
         stubs: {
           TaskTrackerFilters: {
             emits: ['filtersChange'],
-            template: '<div><slot name="after-controls" /><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', status_ids: [\'st-1\'], prefixes: [\'BUG\'], include_subtasks: true, field_filters: [{ field_definition_id: \'fld-1\', user_ids: [\'u-1\'] }] })">emit</button></div>',
+            template: '<div><slot name="after-controls" /><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', status_ids: [\'st-1\'], prefixes: [\'BUG\'], include_subtasks: true, created_from: \'2026-05-01\', created_to: \'2026-05-03\', field_filters: [{ field_definition_id: \'fld-1\', user_ids: [\'u-1\'] }] })">emit</button></div>',
           },
           UserAvatar: { template: '<div class="user-avatar-stub" />' },
           TaskRow: { template: '<tr />' },
@@ -169,6 +169,69 @@ describe('TaskListView', () => {
       field_filters: [{ field_definition_id: 'fld-1', user_ids: ['u-1'] }],
       page: 1,
     }, 'grouped')
+  })
+
+  it('applies created date filters in flat list mode', async () => {
+    const wrapper = mount(TaskListView, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskTrackerFilters: {
+            emits: ['filtersChange'],
+            template: '<div><slot name="after-controls" /><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', created_from: \'2026-05-01\', created_to: \'2026-05-03\' })">emit</button></div>',
+          },
+          UserAvatar: { template: '<div class="user-avatar-stub" />' },
+          TaskRow: { template: '<tr />' },
+          SortIcon: { template: '<span />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="filters-emit"]').trigger('click')
+    expect(tasksStoreMock.setListParams).toHaveBeenCalledWith({
+      search: 'bug',
+      created_from: '2026-05-01',
+      created_to: '2026-05-03',
+      page: 1,
+      sort_by: 'updated_at',
+      sort_order: 'desc',
+    }, 'list')
+  })
+
+  it('waits for filter re-emit before fetching after grouped-to-list mode switch', async () => {
+    storage.setItem('msgnr:tasks:view-mode:v1', 'grouped')
+    const wrapper = mount(TaskListView, {
+      props: { templateFilter: null },
+      global: {
+        stubs: {
+          TaskTrackerFilters: {
+            emits: ['filtersChange'],
+            template: '<div><slot name="after-controls" /><button data-testid="filters-emit" @click="$emit(\'filtersChange\', { search: \'bug\', created_from: \'2026-05-01\', created_to: \'2026-05-03\' })">emit</button></div>',
+          },
+          UserAvatar: { template: '<div class="user-avatar-stub" />' },
+          TaskRow: { template: '<tr />' },
+          SortIcon: { template: '<span />' },
+        },
+      },
+    })
+    await flushPromises()
+
+    tasksStoreMock.setListParams.mockClear()
+    const listModeInput = wrapper.findAll('input[name="tasks-view-mode"]')[0]
+    expect(listModeInput).toBeTruthy()
+    await listModeInput.trigger('change')
+    expect(tasksStoreMock.setListParams).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="filters-emit"]').trigger('click')
+    expect(tasksStoreMock.setListParams).toHaveBeenCalledWith({
+      search: 'bug',
+      created_from: '2026-05-01',
+      created_to: '2026-05-03',
+      page: 1,
+      sort_by: 'updated_at',
+      sort_order: 'desc',
+    }, 'list')
   })
 
   it('uses descending as the first-click sort order for date columns', async () => {

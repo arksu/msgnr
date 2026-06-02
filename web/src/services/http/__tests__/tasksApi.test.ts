@@ -28,6 +28,8 @@ describe('tasksApi task list queries', () => {
       search: 'abc',
       status_ids: ['status-1'],
       prefixes: ['BUG'],
+      created_from: '2026-05-01',
+      created_to: '2026-05-03',
       sort_by: 'created_at',
       sort_order: 'desc',
       page: 2,
@@ -41,6 +43,8 @@ describe('tasksApi task list queries', () => {
     expect(query).toContain('search=abc')
     expect(query).toContain('status_id=status-1')
     expect(query).toContain('prefix=BUG')
+    expect(query).toContain('created_from=2026-05-01')
+    expect(query).toContain('created_to=2026-05-03')
     expect(query).toContain('sort_by=created_at')
     expect(query).toContain('sort_order=desc')
     expect(query).toContain('page=2')

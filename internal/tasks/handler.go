@@ -1972,6 +1972,8 @@ func methodNotAllowed(w http.ResponseWriter) {
 //	status_id   (repeatable)            filter by status UUID(s)
 //	prefix      (repeatable)            filter by template_snapshot_prefix
 //	include_subtasks                    include subtasks when true; default false
+//	created_from                        inclusive created_at lower date bound (YYYY-MM-DD)
+//	created_to                          inclusive created_at upper date bound (YYYY-MM-DD)
 //	sort_by                             id|title|status|created_at|updated_at|<field-def-uuid>
 //	sort_order                          desc (default) | asc
 //	page                                1-based page number (default 1)
@@ -2030,15 +2032,52 @@ func parseTaskFilterParams(r *http.Request) (ListTasksParams, error) {
 		return ListTasksParams{}, err
 	}
 	dictionaryFilters := parseDictionaryFilters(q)
+	createdFrom, createdTo, err := parseCreatedDateFilters(q.Get("created_from"), q.Get("created_to"))
+	if err != nil {
+		return ListTasksParams{}, err
+	}
 
 	return ListTasksParams{
 		Search:            strings.TrimSpace(q.Get("search")),
 		StatusIDs:         statusIDs,
 		Prefixes:          q["prefix"],
 		IncludeSubtasks:   queryBool(q.Get("include_subtasks"), false),
+		CreatedFrom:       createdFrom,
+		CreatedTo:         createdTo,
 		FieldFilters:      fieldFilters,
 		DictionaryFilters: dictionaryFilters,
 	}, nil
+}
+
+func parseCreatedDateFilters(rawFrom, rawTo string) (*time.Time, *time.Time, error) {
+	createdFrom, err := parseCreatedDateFilter(rawFrom, "created_from")
+	if err != nil {
+		return nil, nil, err
+	}
+	createdTo, err := parseCreatedDateFilter(rawTo, "created_to")
+	if err != nil {
+		return nil, nil, err
+	}
+	if createdTo != nil {
+		upper := createdTo.AddDate(0, 0, 1)
+		createdTo = &upper
+	}
+	if createdFrom != nil && createdTo != nil && !createdFrom.Before(*createdTo) {
+		return nil, nil, errors.New("created_from must be before or equal to created_to")
+	}
+	return createdFrom, createdTo, nil
+}
+
+func parseCreatedDateFilter(raw, name string) (*time.Time, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := time.ParseInLocation(time.DateOnly, trimmed, time.UTC)
+	if err != nil {
+		return nil, errors.New("invalid " + name + ": must be YYYY-MM-DD")
+	}
+	return &parsed, nil
 }
 
 // parseFieldFilters scans all query params looking for keys of the form

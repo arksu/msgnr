@@ -2304,6 +2304,46 @@ func TestIntegration_ListTasks_FilterByDateField(t *testing.T) {
 	assert.Equal(t, earlyTask.ID, resp.Groups[0].Tasks[0].ID)
 }
 
+func TestIntegration_ListTasks_FilterByCreatedDateBounds(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actor := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "CDB", actor)
+	st := seedStatus(t, ctx, svc, actor)
+
+	oldTask := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "Old task")
+	midTask := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "Middle task")
+	newTask := seedTask(t, ctx, svc, tpl.ID, st.ID, actor, "New task")
+
+	setTaskCreatedAt(t, ctx, pool, oldTask.ID, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	setTaskCreatedAt(t, ctx, pool, midTask.ID, time.Date(2026, 5, 2, 15, 0, 0, 0, time.UTC))
+	setTaskCreatedAt(t, ctx, pool, newTask.ID, time.Date(2026, 5, 3, 8, 0, 0, 0, time.UTC))
+
+	from := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC)
+	toInclusive := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+
+	fromOnly, err := svc.ListTasks(ctx, tasks.ListTasksParams{CreatedFrom: &from, SortBy: "created_at", SortDesc: false})
+	require.NoError(t, err)
+	assert.Equal(t, 2, fromOnly.GrandTotal)
+	assert.Equal(t, []uuid.UUID{midTask.ID, newTask.ID}, taskIDs(fromOnly.Tasks))
+
+	toOnly, err := svc.ListTasks(ctx, tasks.ListTasksParams{CreatedTo: &toInclusive, SortBy: "created_at", SortDesc: false})
+	require.NoError(t, err)
+	assert.Equal(t, 2, toOnly.GrandTotal)
+	assert.Equal(t, []uuid.UUID{oldTask.ID, midTask.ID}, taskIDs(toOnly.Tasks))
+
+	combined, err := svc.ListTasks(ctx, tasks.ListTasksParams{
+		CreatedFrom: &from,
+		CreatedTo:   &toInclusive,
+		SortBy:      "created_at",
+		SortDesc:    false,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, combined.GrandTotal)
+	assert.Equal(t, []uuid.UUID{midTask.ID}, taskIDs(combined.Tasks))
+}
+
 func TestIntegration_ListTasks_SortByCreatedAt(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

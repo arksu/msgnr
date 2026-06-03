@@ -5099,16 +5099,18 @@ func (x *CallInviteSummary) GetState() InviteState {
 }
 
 type NotificationSummary struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	NotificationId string                 `protobuf:"bytes,1,opt,name=notification_id,json=notificationId,proto3" json:"notification_id,omitempty"`
-	Type           NotificationType       `protobuf:"varint,2,opt,name=type,proto3,enum=packets.v1.NotificationType" json:"type,omitempty"`
-	Title          string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
-	Body           string                 `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"`
-	ConversationId string                 `protobuf:"bytes,5,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	IsRead         bool                   `protobuf:"varint,6,opt,name=is_read,json=isRead,proto3" json:"is_read,omitempty"`
-	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	NotificationId      string                 `protobuf:"bytes,1,opt,name=notification_id,json=notificationId,proto3" json:"notification_id,omitempty"`
+	Type                NotificationType       `protobuf:"varint,2,opt,name=type,proto3,enum=packets.v1.NotificationType" json:"type,omitempty"`
+	Title               string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	Body                string                 `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"`
+	ConversationId      string                 `protobuf:"bytes,5,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	IsRead              bool                   `protobuf:"varint,6,opt,name=is_read,json=isRead,proto3" json:"is_read,omitempty"`
+	CreatedAt           *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	MessageId           string                 `protobuf:"bytes,8,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	ThreadRootMessageId string                 `protobuf:"bytes,9,opt,name=thread_root_message_id,json=threadRootMessageId,proto3" json:"thread_root_message_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *NotificationSummary) Reset() {
@@ -5188,6 +5190,20 @@ func (x *NotificationSummary) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *NotificationSummary) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *NotificationSummary) GetThreadRootMessageId() string {
+	if x != nil {
+		return x.ThreadRootMessageId
+	}
+	return ""
 }
 
 type BootstrapRequest struct {
@@ -8139,7 +8155,7 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12-\n" +
-	"\x05state\x18\a \x01(\x0e2\x17.packets.v1.InviteStateR\x05state\"\x97\x02\n" +
+	"\x05state\x18\a \x01(\x0e2\x17.packets.v1.InviteStateR\x05state\"\xeb\x02\n" +
 	"\x13NotificationSummary\x12'\n" +
 	"\x0fnotification_id\x18\x01 \x01(\tR\x0enotificationId\x120\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x1c.packets.v1.NotificationTypeR\x04type\x12\x14\n" +
@@ -8148,7 +8164,10 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	"\x0fconversation_id\x18\x05 \x01(\tR\x0econversationId\x12\x17\n" +
 	"\ais_read\x18\x06 \x01(\bR\x06isRead\x129\n" +
 	"\n" +
-	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xe2\x01\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\b \x01(\tR\tmessageId\x123\n" +
+	"\x16thread_root_message_id\x18\t \x01(\tR\x13threadRootMessageId\"\xe2\x01\n" +
 	"\x10BootstrapRequest\x12,\n" +
 	"\x12client_instance_id\x18\x01 \x01(\tR\x10clientInstanceId\x12)\n" +
 	"\x10include_archived\x18\x02 \x01(\bR\x0fincludeArchived\x12$\n" +

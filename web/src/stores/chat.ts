@@ -212,6 +212,8 @@ export interface NotificationItem {
   title: string
   body: string
   conversationId: string
+  messageId?: string
+  threadRootMessageId?: string
   isRead: boolean
   createdAt: string
 }
@@ -864,6 +866,63 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function notificationIdsFromUnreadItems(items: UnreadFeedItem[]): string[] {
+    return Array.from(new Set(items.flatMap(item => item.notificationId ? [item.notificationId] : [])))
+  }
+
+  function notificationIdsForTarget(
+    conversationId: string,
+    messageId?: string,
+    threadRootMessageId?: string,
+  ): string[] {
+    if (!conversationId) return []
+    return notifications.value
+      .filter(item => {
+        if (item.conversationId !== conversationId) return false
+        if (threadRootMessageId) {
+          return item.threadRootMessageId === threadRootMessageId
+        }
+        if (!messageId) return false
+        return item.messageId === messageId && !item.threadRootMessageId
+      })
+      .map(item => item.id)
+  }
+
+  function resolveNotificationIds(ids: string[]): Promise<PromiseSettledResult<void>[]> | null {
+    const uniqueIds = Array.from(new Set(ids.filter(Boolean)))
+    return uniqueIds.length > 0
+      ? Promise.allSettled(uniqueIds.map(notificationId => resolveUnreadFeedNotification(notificationId)))
+      : null
+  }
+
+  function removeNotificationsByIds(ids: string[]) {
+    const uniqueIds = new Set(ids.filter(Boolean))
+    if (uniqueIds.size === 0) return
+    notifications.value = notifications.value.filter(item => !uniqueIds.has(item.id))
+  }
+
+  function removeUnreadFeedItemsForRootMessages(conversationId: string, messageId?: string): UnreadFeedItem[] {
+    if (!conversationId) return []
+    const removed = unreadFeedItems.value.filter(item =>
+      item.conversationId === conversationId
+      && !item.threadRootMessageId
+      && (!messageId || item.messageId === messageId),
+    )
+    if (removed.length === 0) return []
+
+    const removedIds = new Set(removed.map(item => item.id))
+    const removedNotificationIds = new Set(notificationIdsFromUnreadItems(removed))
+
+    unreadFeedItems.value = unreadFeedItems.value.filter(item => !removedIds.has(item.id))
+    unreadFeedTotalCount.value = Math.max(0, unreadFeedTotalCount.value - removed.length)
+
+    if (removedNotificationIds.size > 0) {
+      notifications.value = notifications.value.filter(item => !removedNotificationIds.has(item.id))
+    }
+
+    return removed
+  }
+
   function removeUnreadFeedItemsForThread(conversationId: string, threadRootMessageId: string): UnreadFeedItem[] {
     if (!conversationId || !threadRootMessageId) return []
     const removed = unreadFeedItems.value.filter(item =>
@@ -898,6 +957,39 @@ export const useChatStore = defineStore('chat', () => {
       && activeThreadRootId.value === threadRootMessageId
   }
 
+  function isVisibleRootConversation(conversationId: string): boolean {
+    return Boolean(conversationId)
+      && isClientTabActive()
+      && chatViewMode.value === 'conversation'
+      && activeChannelId.value === conversationId
+  }
+
+  function isVisibleMessageTarget(conversationId: string, threadRootMessageId = ''): boolean {
+    if (threadRootMessageId) {
+      return isClientTabActive() && isActiveThreadWorkspace(conversationId, threadRootMessageId)
+    }
+    return isVisibleRootConversation(conversationId)
+  }
+
+  function resolveVisibleRootNotifications(conversationId: string, messageId?: string) {
+    const removedItems = removeUnreadFeedItemsForRootMessages(conversationId, messageId)
+    const notificationIds = [
+      ...notificationIdsFromUnreadItems(removedItems),
+      ...notificationIdsForTarget(conversationId, messageId),
+    ]
+    removeNotificationsByIds(notificationIds)
+    const resolution = resolveNotificationIds(notificationIds)
+    if (resolution) void resolution
+  }
+
+  function markVisibleConversationRead(conversationId: string, lastReadSeq = 0n, messageId?: string) {
+    if (!conversationId) return
+    if (lastReadSeq > 0n) {
+      requestReadMark(conversationId, lastReadSeq)
+    }
+    resolveVisibleRootNotifications(conversationId, messageId)
+  }
+
   async function markThreadUnreadAsRead(
     conversationId: string,
     threadRootMessageId: string,
@@ -906,12 +998,12 @@ export const useChatStore = defineStore('chat', () => {
     if (!conversationId || !threadRootMessageId) return
     const key = `${conversationId}:${threadRootMessageId}`
     const removedItems = removeUnreadFeedItemsForThread(conversationId, threadRootMessageId)
-    const notificationIds = Array.from(new Set(
-      removedItems.flatMap(item => item.notificationId ? [item.notificationId] : []),
-    ))
-    const resolveAll = (ids: string[]) => ids.length > 0
-      ? Promise.allSettled(ids.map(notificationId => resolveUnreadFeedNotification(notificationId)))
-      : null
+    const notificationIds = [
+      ...notificationIdsFromUnreadItems(removedItems),
+      ...notificationIdsForTarget(conversationId, undefined, threadRootMessageId),
+    ]
+    removeNotificationsByIds(notificationIds)
+    const resolveAll = resolveNotificationIds
     const existing = pendingThreadReadResolutions.get(key)
     if (existing) {
       const notificationResolution = resolveAll(notificationIds)
@@ -949,6 +1041,17 @@ export const useChatStore = defineStore('chat', () => {
     markVisibleThreadRead(activeThreadConversationId.value, activeThreadRootId.value)
   }
 
+  function scrubVisibleUnreadTargets() {
+    if (!isClientTabActive()) return
+    if (isVisibleRootConversation(activeChannelId.value)) {
+      const lastReadSeq = channels.value.find(item => item.id === activeChannelId.value)?.lastMessageSeq
+        ?? directMessages.value.find(item => item.id === activeChannelId.value)?.lastMessageSeq
+        ?? 0n
+      markVisibleConversationRead(activeChannelId.value, lastReadSeq)
+    }
+    scrubActiveThreadUnreadFeed()
+  }
+
   function selectChannel(id: string) {
     const selectStartedAt = performance.now()
     logConversationPerf('select', {
@@ -966,16 +1069,16 @@ export const useChatStore = defineStore('chat', () => {
     }
     const historyPromise = ensureConversationHistory(id, selectStartedAt)
     const ch = channels.value.find(c => c.id === id)
+    let visibleLastReadSeq = 0n
     if (ch) {
-      if (ch.unread > 0 && typeof ch.lastMessageSeq === 'bigint' && ch.lastMessageSeq > 0n) {
-        requestReadMark(ch.id, ch.lastMessageSeq)
-      }
+      visibleLastReadSeq = typeof ch.lastMessageSeq === 'bigint' ? ch.lastMessageSeq : 0n
     }
     const dm = directMessages.value.find(d => d.id === id)
     if (dm) {
-      if (dm.unread > 0 && typeof dm.lastMessageSeq === 'bigint' && dm.lastMessageSeq > 0n) {
-        requestReadMark(dm.id, dm.lastMessageSeq)
-      }
+      visibleLastReadSeq = typeof dm.lastMessageSeq === 'bigint' ? dm.lastMessageSeq : 0n
+    }
+    if (isVisibleRootConversation(id)) {
+      markVisibleConversationRead(id, visibleLastReadSeq)
     }
     return historyPromise
   }
@@ -2154,7 +2257,7 @@ export const useChatStore = defineStore('chat', () => {
       unreadFeedItems.value = (response.items ?? []).map(unreadFeedItemFromHttp)
       unreadFeedTotalCount.value = Math.max(0, Math.floor(response.total_count ?? 0))
       unreadFeedLoaded.value = true
-      scrubActiveThreadUnreadFeed()
+      scrubVisibleUnreadTargets()
     } catch (err) {
       unreadFeedError.value = err instanceof Error ? err.message : 'Failed to load unread feed'
       unreadFeedLoaded.value = true
@@ -2726,6 +2829,18 @@ export const useChatStore = defineStore('chat', () => {
       notificationSummaryToItem(evt.notification),
       ...notifications.value.filter(item => item.id !== evt.notification?.notificationId),
     ]
+    const conversationId = evt.notification.conversationId
+    const messageId = evt.notification.messageId
+    const threadRootMessageId = evt.notification.threadRootMessageId
+    if (threadRootMessageId && isVisibleMessageTarget(conversationId, threadRootMessageId)) {
+      markVisibleThreadRead(conversationId, threadRootMessageId)
+      return
+    }
+    if (messageId && !threadRootMessageId && isVisibleMessageTarget(conversationId)) {
+      const messageSeq = messages.value[conversationId]?.find(item => item.id === messageId)?.channelSeq ?? 0n
+      markVisibleConversationRead(conversationId, messageSeq, messageId)
+      return
+    }
     const isHighPriorityNotification =
       evt.notification.type === NotificationType.MENTION
       || evt.notification.type === NotificationType.THREAD_REPLY
@@ -2734,13 +2849,14 @@ export const useChatStore = defineStore('chat', () => {
       emitIncomingMessageNotification({
         reason: evt.notification.type === NotificationType.MENTION ? 'mention' : 'notification',
         conversationId: evt.notification.conversationId,
+        messageId: messageId || undefined,
+        threadRootMessageId: threadRootMessageId || undefined,
         senderId: '',
         senderName,
         body,
         attachmentCount: 0,
       })
     }
-    const conversationId = evt.notification.conversationId
     if (!conversationId) return
     scheduleUnreadFeedRefresh()
     if (conversationExists(conversationId)) return
@@ -2750,7 +2866,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function applyMessageAlert(evt: MessageAlertEvent) {
-    if (isClientTabActive()) return
+    if (isVisibleMessageTarget(evt.conversationId, evt.threadRootMessageId)) return
     emitIncomingMessageNotification({
       reason: 'message_alert',
       conversationId: evt.conversationId,
@@ -3062,7 +3178,7 @@ export const useChatStore = defineStore('chat', () => {
       } else {
         maybeRecoverActiveThread(rootId, channelId)
       }
-      if (isClientTabActive() && isActiveThreadWorkspace(channelId, rootId)) {
+      if (isVisibleMessageTarget(channelId, rootId)) {
         markVisibleThreadRead(channelId, rootId)
         return
       }
@@ -3081,14 +3197,12 @@ export const useChatStore = defineStore('chat', () => {
     if (channel) channel.lastMessageSeq = evt.channelSeq
     const dm = directMessages.value.find(item => item.id === channelId)
     if (dm) dm.lastMessageSeq = evt.channelSeq
-    if (channelId === activeChannelId.value) {
-      if (isClientTabActive()) {
-        requestReadMark(channelId, evt.channelSeq)
-      } else {
-        queuePendingReadMark(channelId, evt.channelSeq)
-      }
-      scheduleUnreadFeedRefresh()
+    if (isVisibleMessageTarget(channelId)) {
+      markVisibleConversationRead(channelId, evt.channelSeq, evt.messageId)
       return
+    }
+    if (channelId === activeChannelId.value && !isClientTabActive()) {
+      queuePendingReadMark(channelId, evt.channelSeq)
     }
     scheduleUnreadFeedRefresh()
   }
@@ -3146,7 +3260,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function onClientFocus() {
     if (!isClientTabActive()) return
-    scrubActiveThreadUnreadFeed()
+    scrubVisibleUnreadTargets()
     const conversationId = activeChannelId.value
     if (!conversationId) return
 
@@ -3613,6 +3727,8 @@ function notificationSummaryToItem(summary: NotificationSummary): NotificationIt
     title: decodeNotificationText(summary.title),
     body: decodeNotificationText(summary.body),
     conversationId: summary.conversationId,
+    messageId: summary.messageId || undefined,
+    threadRootMessageId: summary.threadRootMessageId || undefined,
     isRead: summary.isRead,
     createdAt: summary.createdAt
       ? new Date(Number(summary.createdAt.seconds) * 1000).toISOString()

@@ -156,7 +156,27 @@ func TestIntegration_Bootstrap_FirstPageAndContinuation(t *testing.T) {
 	ch2 := seedBootstrapChannel(t, ctx, pool, userID, "random", time.Now())
 	_, err := pool.Exec(ctx, `INSERT INTO user_presence (user_id, status) VALUES ($1, 'online')`, userID)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO notifications (user_id, type, title, body, channel_id) VALUES ($1, 'mention', 't', 'b', $2)`, userID, ch2)
+	var rootMessageID uuid.UUID
+	err = pool.QueryRow(ctx,
+		`INSERT INTO messages (channel_id, channel_seq, sender_id, client_msg_id, body, thread_seq)
+		 VALUES ($1, 1, $2, $3, 'root', 0)
+		 RETURNING id`,
+		ch2, userID, uuid.NewString(),
+	).Scan(&rootMessageID)
+	require.NoError(t, err)
+	var replyMessageID uuid.UUID
+	err = pool.QueryRow(ctx,
+		`INSERT INTO messages (channel_id, channel_seq, sender_id, client_msg_id, body, thread_root_id, thread_seq)
+		 VALUES ($1, 2, $2, $3, 'reply', $4, 1)
+		 RETURNING id`,
+		ch2, userID, uuid.NewString(), rootMessageID,
+	).Scan(&replyMessageID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO notifications (user_id, type, title, body, channel_id, message_id, thread_root_message_id)
+		VALUES ($1, 'mention', 't', 'b', $2, $3, $4)`,
+		userID, ch2, replyMessageID, rootMessageID,
+	)
 	require.NoError(t, err)
 
 	appendMessageEvent(t, ctx, pool, store, ch1, "older", time.Now().Add(-2*time.Minute))
@@ -174,6 +194,8 @@ func TestIntegration_Bootstrap_FirstPageAndContinuation(t *testing.T) {
 	require.NotEmpty(t, first.GetBootstrapSessionId())
 	require.NotNil(t, first.GetWorkspace())
 	require.NotEmpty(t, first.GetNotifications())
+	require.Equal(t, replyMessageID.String(), first.GetNotifications()[0].GetMessageId())
+	require.Equal(t, rootMessageID.String(), first.GetNotifications()[0].GetThreadRootMessageId())
 
 	second, err := bootstrapSvc.Bootstrap(ctx, principal, &packetspb.BootstrapRequest{
 		ClientInstanceId:   "client-1",

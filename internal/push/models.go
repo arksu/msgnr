@@ -26,6 +26,7 @@ type PushPayload struct {
 	Body           string `json:"body"`
 	ConversationID string `json:"conversationId,omitempty"`
 	MessageID      string `json:"messageId,omitempty"`
+	ThreadRootID   string `json:"threadRootMessageId,omitempty"`
 	Tag            string `json:"tag,omitempty"`
 	URL            string `json:"url"`
 }

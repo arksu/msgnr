@@ -242,7 +242,8 @@ func (s *Service) PushChatDeliveries(deliveries []chat.DirectDelivery) {
 				Title:          truncate(n.Title, 120),
 				Body:           truncate(n.Body, 200),
 				ConversationID: n.ConversationId,
-				MessageID:      n.NotificationId,
+				MessageID:      n.MessageId,
+				ThreadRootID:   n.ThreadRootMessageId,
 				URL:            "/",
 			})
 		}
@@ -311,6 +312,7 @@ func (s *Service) PushMessageCreated(evt *packetspb.ServerEvent) {
 			Body:           body,
 			ConversationID: msg.GetConversationId(),
 			MessageID:      msg.GetMessageId(),
+			ThreadRootID:   msg.GetThreadRootMessageId(),
 			URL:            "/",
 		})
 	}

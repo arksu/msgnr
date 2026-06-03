@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"msgnr/internal/auth"
+	"msgnr/internal/chat"
 	"msgnr/internal/config"
 	"msgnr/internal/events"
 	packetspb "msgnr/internal/gen/proto"
@@ -52,6 +53,33 @@ func testPrincipalWithUser(userID, sessionID string) auth.Principal {
 		SessionID: uuid.MustParse(sessionID),
 		Role:      "member",
 	}
+}
+
+func TestShouldPushChatDeliveryRequiresNoActiveWindowSessions(t *testing.T) {
+	srv := newTestServer(nil)
+	userID := uuid.NewString()
+	delivery := chat.DirectDelivery{
+		UserID: userID,
+		Event: &packetspb.ServerEvent{
+			EventType: packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT,
+		},
+	}
+
+	assert.True(t, srv.shouldPushChatDelivery(delivery))
+
+	inactiveCh := make(chan outboundMsg, 1)
+	inactiveState := newSessionState(nil, true, nil)
+	inactiveState.setWindowActive(false)
+	srv.sessionsByUser[userID] = map[chan outboundMsg]*sessionState{
+		inactiveCh: inactiveState,
+	}
+	assert.True(t, srv.shouldPushChatDelivery(delivery))
+
+	activeCh := make(chan outboundMsg, 1)
+	activeState := newSessionState(nil, true, nil)
+	activeState.setWindowActive(true)
+	srv.sessionsByUser[userID][activeCh] = activeState
+	assert.False(t, srv.shouldPushChatDelivery(delivery))
 }
 
 // pipeConn returns a pair of connected net.Conn backed by net.Pipe.

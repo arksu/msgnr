@@ -2209,6 +2209,10 @@ func TestIntegration_UpdateReadCursor_ResolvesMentionNotifications(t *testing.T)
 	notificationDeliveries := filterDirectDeliveriesByType(msg.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
 	require.Len(t, notificationDeliveries, 1)
 	assert.Equal(t, mentionedUserID.String(), notificationDeliveries[0].UserID)
+	mentionNotification := notificationDeliveries[0].Event.GetNotificationAdded().GetNotification()
+	require.NotNil(t, mentionNotification)
+	assert.Equal(t, msg.MessageID.String(), mentionNotification.GetMessageId())
+	assert.Empty(t, mentionNotification.GetThreadRootMessageId())
 	readCounterDeliveries := filterDirectDeliveriesByType(msg.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)
 	require.Len(t, readCounterDeliveries, 2)
 
@@ -2665,7 +2669,11 @@ func TestIntegration_SendMessage_ThreadRepliesNotifyOnlyThreadMembers(t *testing
 	threadNotifications := filterDirectDeliveriesByType(reply.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
 	require.Len(t, threadNotifications, 1)
 	assert.Equal(t, rootAuthorID.String(), threadNotifications[0].UserID)
-	assert.Equal(t, packetspb.NotificationType_NOTIFICATION_TYPE_THREAD_REPLY, threadNotifications[0].Event.GetNotificationAdded().GetNotification().GetType())
+	threadNotification := threadNotifications[0].Event.GetNotificationAdded().GetNotification()
+	require.NotNil(t, threadNotification)
+	assert.Equal(t, packetspb.NotificationType_NOTIFICATION_TYPE_THREAD_REPLY, threadNotification.GetType())
+	assert.Equal(t, reply.MessageID.String(), threadNotification.GetMessageId())
+	assert.Equal(t, root.MessageID.String(), threadNotification.GetThreadRootMessageId())
 
 	for _, delivery := range reply.DirectDeliveries {
 		if delivery.UserID == bystanderID.String() && delivery.Event != nil {

@@ -1673,6 +1673,121 @@ describe('chatStore phase 6 flows', () => {
     off()
   })
 
+  it('suppresses backend-routed message_alert events for the active visible conversation', () => {
+    const chat = useChatStore()
+    chat.setClientActive(true)
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.activeChannelId = 'channel-1'
+    chat.chatViewMode = 'conversation'
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-msg-visible-1',
+      eventType: EventType.MESSAGE_ALERT,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageAlert',
+        value: create(MessageAlertEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-visible-1',
+          senderId: 'user-2',
+          senderName: 'Bob',
+          body: 'visible hello',
+          threadRootMessageId: '',
+          attachmentCount: 0,
+        }),
+      },
+    }))
+
+    expect(onIncoming).not.toHaveBeenCalled()
+    off()
+  })
+
+  it('emits backend-routed message_alert events for hidden targets while the client is active', () => {
+    const chat = useChatStore()
+    chat.setClientActive(true)
+    chat.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
+    }, {
+      id: 'channel-2',
+      name: 'random',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.activeChannelId = 'channel-2'
+    chat.chatViewMode = 'conversation'
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-msg-hidden-active-1',
+      eventType: EventType.MESSAGE_ALERT,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageAlert',
+        value: create(MessageAlertEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-hidden-active-1',
+          senderId: 'user-2',
+          senderName: 'Bob',
+          body: 'hidden hello',
+          threadRootMessageId: '',
+          attachmentCount: 0,
+        }),
+      },
+    }))
+
+    expect(onIncoming).toHaveBeenCalledWith({
+      reason: 'message_alert',
+      conversationId: 'channel-1',
+      messageId: 'message-hidden-active-1',
+      threadRootMessageId: undefined,
+      senderId: 'user-2',
+      senderName: 'Bob',
+      body: 'hidden hello',
+      attachmentCount: 0,
+    })
+    off()
+  })
+
   it('decodes escaped text for backend-routed message_alert notifications', () => {
     const chat = useChatStore()
     chat.setClientActive(false)
@@ -1798,9 +1913,11 @@ describe('chatStore phase 6 flows', () => {
     off()
   })
 
-  it('emits mention notifications even when the client is active', () => {
+  it('emits mention notifications for hidden targets while the client is active', () => {
     const chat = useChatStore()
     chat.setClientActive(true)
+    chat.activeChannelId = 'channel-2'
+    chat.chatViewMode = 'conversation'
     chat.bootstrapped = true
 
     const onIncoming = vi.fn()
@@ -1821,6 +1938,7 @@ describe('chatStore phase 6 flows', () => {
             title: 'Mention',
             body: 'You were mentioned',
             conversationId: 'channel-1',
+            messageId: 'message-hidden-mention-1',
             isRead: false,
           }),
         }),
@@ -1830,6 +1948,8 @@ describe('chatStore phase 6 flows', () => {
     expect(onIncoming).toHaveBeenCalledWith({
       reason: 'mention',
       conversationId: 'channel-1',
+      messageId: 'message-hidden-mention-1',
+      threadRootMessageId: undefined,
       senderId: '',
       senderName: 'Mention',
       body: 'You were mentioned',
@@ -1839,9 +1959,144 @@ describe('chatStore phase 6 flows', () => {
     off()
   })
 
-  it('emits thread reply notifications even when the client is active', () => {
+  it('marks visible mention notifications read without emitting incoming hooks', () => {
     const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendUpdateReadCursor = vi.fn()
     chat.setClientActive(true)
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 1,
+      lastMessageSeq: 2n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'message-visible-mention-1', channelId: 'channel-1', channelSeq: 2n })],
+    }
+    chat.activeChannelId = 'channel-1'
+    chat.chatViewMode = 'conversation'
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-mention-visible-1',
+      eventType: EventType.NOTIFICATION_ADDED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'notificationAdded',
+        value: create(NotificationAddedEventSchema, {
+          userId: 'user-1',
+          notification: create(NotificationSummarySchema, {
+            notificationId: 'mention-visible-1',
+            type: NotificationType.MENTION,
+            title: 'Mention',
+            body: 'You were mentioned',
+            conversationId: 'channel-1',
+            messageId: 'message-visible-mention-1',
+            isRead: false,
+          }),
+        }),
+      },
+    }))
+
+    expect(onIncoming).not.toHaveBeenCalled()
+    expect(chat.notifications).toEqual([])
+    expect(chat.channels[0].unread).toBe(0)
+    expect(ws.sendUpdateReadCursor).toHaveBeenCalledWith('channel-1', 2n)
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledWith('mention-visible-1')
+    off()
+  })
+
+  it('resolves notification_added before message_created only for the visible root target', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendUpdateReadCursor = vi.fn()
+    chat.setClientActive(true)
+    chat.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 1,
+      lastMessageSeq: 1n,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.activeChannelId = 'channel-1'
+    chat.chatViewMode = 'conversation'
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-mention-before-message-1',
+      eventType: EventType.NOTIFICATION_ADDED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'notificationAdded',
+        value: create(NotificationAddedEventSchema, {
+          userId: 'user-1',
+          notification: create(NotificationSummarySchema, {
+            notificationId: 'mention-before-message-1',
+            type: NotificationType.MENTION,
+            title: 'Mention',
+            body: 'You were mentioned',
+            conversationId: 'channel-1',
+            messageId: 'message-before-notification-1',
+            isRead: false,
+          }),
+        }),
+      },
+    }))
+
+    expect(onIncoming).not.toHaveBeenCalled()
+    expect(ws.sendUpdateReadCursor).not.toHaveBeenCalled()
+    expect(chat.notifications).toEqual([])
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledWith('mention-before-message-1')
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 2n,
+      eventId: 'evt-message-after-notification-1',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-before-notification-1',
+          senderId: 'user-2',
+          body: 'now visible',
+          channelSeq: 2n,
+        }),
+      },
+    }))
+
+    expect(onIncoming).not.toHaveBeenCalled()
+    expect(ws.sendUpdateReadCursor).toHaveBeenCalledWith('channel-1', 2n)
+    off()
+  })
+
+  it('emits thread reply notifications for inactive pinned threads while the client is active', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn()
+    chat.setClientActive(true)
+    chat.messages = {
+      'channel-1': [
+        buildMessage({ id: 'root-1', channelId: 'channel-1', channelSeq: 10n }),
+        buildMessage({ id: 'root-2', channelId: 'channel-1', channelSeq: 20n }),
+      ],
+    }
+    chat.activateThreadWorkspace('channel-1', 'root-1')
+    vi.mocked(ws.sendSubscribeThread).mockClear()
     chat.bootstrapped = true
 
     const onIncoming = vi.fn()
@@ -1862,6 +2117,8 @@ describe('chatStore phase 6 flows', () => {
             title: 'Thread reply',
             body: 'Someone replied in a thread',
             conversationId: 'channel-1',
+            messageId: 'reply-inactive-thread-1',
+            threadRootMessageId: 'root-2',
             isRead: false,
           }),
         }),
@@ -1871,11 +2128,62 @@ describe('chatStore phase 6 flows', () => {
     expect(onIncoming).toHaveBeenCalledWith({
       reason: 'notification',
       conversationId: 'channel-1',
+      messageId: 'reply-inactive-thread-1',
+      threadRootMessageId: 'root-2',
       senderId: '',
       senderName: 'Thread reply',
       body: 'Someone replied in a thread',
       attachmentCount: 0,
     })
+    expect(chat.notifications.map(item => item.id)).toEqual(['thread-reply-active-1'])
+    expect(ws.sendSubscribeThread).not.toHaveBeenCalledWith('channel-1', 'root-2', expect.anything())
+
+    off()
+  })
+
+  it('marks visible thread notifications read without emitting incoming hooks', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn()
+    chat.setClientActive(true)
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', channelSeq: 10n })],
+    }
+    chat.activateThreadWorkspace('channel-1', 'root-1')
+    vi.mocked(ws.sendSubscribeThread).mockClear()
+    chat.bootstrapped = true
+
+    const onIncoming = vi.fn()
+    const off = chat.onIncomingMessageNotification(onIncoming)
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-thread-reply-visible-1',
+      eventType: EventType.NOTIFICATION_ADDED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'notificationAdded',
+        value: create(NotificationAddedEventSchema, {
+          userId: 'user-1',
+          notification: create(NotificationSummarySchema, {
+            notificationId: 'thread-reply-visible-1',
+            type: NotificationType.THREAD_REPLY,
+            title: 'Thread reply',
+            body: 'Someone replied in a thread',
+            conversationId: 'channel-1',
+            messageId: 'reply-visible-thread-1',
+            threadRootMessageId: 'root-1',
+            isRead: false,
+          }),
+        }),
+      },
+    }))
+
+    expect(onIncoming).not.toHaveBeenCalled()
+    expect(chat.notifications).toEqual([])
+    expect(chatApiMocks.resolveUnreadFeedNotification).toHaveBeenCalledWith('thread-reply-visible-1')
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
 
     off()
   })

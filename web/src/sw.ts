@@ -86,6 +86,7 @@ interface PushPayload {
   body: string
   conversationId?: string
   messageId?: string
+  threadRootMessageId?: string
   tag?: string
   url: string
 }
@@ -114,6 +115,7 @@ self.addEventListener('push', (event: PushEvent) => {
         url: data.url || '/',
         conversationId: data.conversationId,
         messageId: data.messageId,
+        threadRootMessageId: data.threadRootMessageId,
         type: data.type,
       },
     }),
@@ -135,10 +137,14 @@ self.addEventListener('notificationclick', (event: NotificationEvent) => {
   const messageId = typeof event.notification.data?.messageId === 'string'
     ? event.notification.data.messageId.trim()
     : ''
+  const threadRootMessageId = typeof event.notification.data?.threadRootMessageId === 'string'
+    ? event.notification.data.threadRootMessageId.trim()
+    : ''
   const intent: NotificationOpenIntent | null = conversationId
     ? {
         conversationId,
         ...(messageId ? { messageId } : {}),
+        ...(threadRootMessageId ? { threadRootMessageId } : {}),
         url: targetUrl,
       }
     : null

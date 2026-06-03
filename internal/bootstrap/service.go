@@ -351,14 +351,24 @@ func (s *Service) fillFirstPageFields(ctx context.Context, userID uuid.UUID, res
 		if row.ChannelID.Valid {
 			conversationID = row.ChannelID.UUID.String()
 		}
+		messageID := ""
+		if row.MessageID.Valid {
+			messageID = row.MessageID.UUID.String()
+		}
+		threadRootMessageID := ""
+		if row.ThreadRootMessageID.Valid {
+			threadRootMessageID = row.ThreadRootMessageID.UUID.String()
+		}
 		resp.Notifications = append(resp.Notifications, &packetspb.NotificationSummary{
-			NotificationId: row.ID.String(),
-			Type:           mapNotificationType(row.Type),
-			Title:          row.Title,
-			Body:           row.Body,
-			ConversationId: conversationID,
-			IsRead:         row.IsRead,
-			CreatedAt:      timestamppb.New(row.CreatedAt),
+			NotificationId:      row.ID.String(),
+			Type:                mapNotificationType(row.Type),
+			Title:               row.Title,
+			Body:                row.Body,
+			ConversationId:      conversationID,
+			IsRead:              row.IsRead,
+			CreatedAt:           timestamppb.New(row.CreatedAt),
+			MessageId:           messageID,
+			ThreadRootMessageId: threadRootMessageID,
 		})
 	}
 

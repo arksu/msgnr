@@ -569,6 +569,8 @@ message NotificationSummary {
   string conversation_id = 5;
   bool is_read = 6;
   google.protobuf.Timestamp created_at = 7;
+  string message_id = 8;
+  string thread_root_message_id = 9;
 }
 
 message BootstrapRequest {

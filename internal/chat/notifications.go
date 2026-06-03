@@ -104,14 +104,24 @@ func (s *Service) createNotificationTx(ctx context.Context, tx pgx.Tx, p createN
 		return DirectDelivery{}, err
 	}
 
+	messageID := ""
+	if p.MessageID != uuid.Nil {
+		messageID = p.MessageID.String()
+	}
+	threadRootID := ""
+	if p.ThreadRootID != uuid.Nil {
+		threadRootID = p.ThreadRootID.String()
+	}
 	notification := &packetspb.NotificationSummary{
-		NotificationId: notificationID.String(),
-		Type:           notificationTypeToProto(p.Type),
-		Title:          p.Title,
-		Body:           p.Body,
-		ConversationId: p.ConversationID,
-		IsRead:         false,
-		CreatedAt:      timestamppb.New(createdAt),
+		NotificationId:      notificationID.String(),
+		Type:                notificationTypeToProto(p.Type),
+		Title:               p.Title,
+		Body:                p.Body,
+		ConversationId:      p.ConversationID,
+		IsRead:              false,
+		CreatedAt:           timestamppb.New(createdAt),
+		MessageId:           messageID,
+		ThreadRootMessageId: threadRootID,
 	}
 	serverEvt := &packetspb.ServerEvent{
 		EventType:      packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED,

@@ -3,7 +3,14 @@ import { mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
-import { NotificationLevel, PresenceStatus } from '@/shared/proto/packets_pb'
+import { create } from '@bufbuild/protobuf'
+import {
+  EventType,
+  MessageAlertEventSchema,
+  NotificationLevel,
+  PresenceStatus,
+  ServerEventSchema,
+} from '@/shared/proto/packets_pb'
 import { useAuthStore } from '@/stores/auth'
 import { useTasksStore } from '@/stores/tasks'
 import { useDocumentsStore } from '@/stores/documents'
@@ -31,6 +38,20 @@ const taskRouteStorageMocks = vi.hoisted(() => ({
   clearLastOpenedTaskPublicId: vi.fn<() => void>(),
 }))
 
+const soundMocks = vi.hoisted(() => ({
+  playMessagePing: vi.fn<() => Promise<void>>(),
+  startCallInviteRing: vi.fn<() => Promise<void>>(),
+  stopCallInviteRing: vi.fn<() => void>(),
+}))
+
+const platformMocks = vi.hoisted(() => ({
+  adapter: null as any,
+  show: vi.fn<(payload: Record<string, unknown>) => Promise<void>>(),
+  playSound: vi.fn<(name: string) => Promise<void>>(),
+  setBadge: vi.fn<(count: number) => Promise<void>>(),
+  clearBadge: vi.fn<() => Promise<void>>(),
+}))
+
 vi.mock('@/composables/useSessionOrchestrator', () => ({
   useSessionOrchestrator: () => ({
     logout: orchestratorMocks.logout,
@@ -42,10 +63,14 @@ vi.mock('@/composables/useSessionOrchestrator', () => ({
 
 vi.mock('@/services/sound', () => ({
   useNotificationSoundEngine: () => ({
-    playMessagePing: vi.fn().mockResolvedValue(undefined),
-    startCallInviteRing: vi.fn().mockResolvedValue(undefined),
-    stopCallInviteRing: vi.fn(),
+    playMessagePing: soundMocks.playMessagePing,
+    startCallInviteRing: soundMocks.startCallInviteRing,
+    stopCallInviteRing: soundMocks.stopCallInviteRing,
   }),
+}))
+
+vi.mock('@/platform', () => ({
+  getPlatformOrNull: () => platformMocks.adapter,
 }))
 
 vi.mock('@/services/storage/lastTaskRouteStorage', () => ({
@@ -341,6 +366,14 @@ describe('MainView server unavailable state', () => {
       configurable: true,
       value: serviceWorkerContainerMock,
     })
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+    Object.defineProperty(document, 'hasFocus', {
+      configurable: true,
+      value: vi.fn(() => true),
+    })
     orchestratorMocks.logout.mockReset()
     orchestratorMocks.logout.mockResolvedValue()
     orchestratorMocks.reconnectNow.mockReset()
@@ -350,6 +383,20 @@ describe('MainView server unavailable state', () => {
     taskRouteStorageMocks.loadLastOpenedTaskPublicId.mockReturnValue('')
     taskRouteStorageMocks.saveLastOpenedTaskPublicId.mockReset()
     taskRouteStorageMocks.clearLastOpenedTaskPublicId.mockReset()
+    soundMocks.playMessagePing.mockReset()
+    soundMocks.playMessagePing.mockResolvedValue(undefined)
+    soundMocks.startCallInviteRing.mockReset()
+    soundMocks.startCallInviteRing.mockResolvedValue(undefined)
+    soundMocks.stopCallInviteRing.mockReset()
+    platformMocks.adapter = null
+    platformMocks.show.mockReset()
+    platformMocks.show.mockResolvedValue(undefined)
+    platformMocks.playSound.mockReset()
+    platformMocks.playSound.mockResolvedValue(undefined)
+    platformMocks.setBadge.mockReset()
+    platformMocks.setBadge.mockResolvedValue(undefined)
+    platformMocks.clearBadge.mockReset()
+    platformMocks.clearBadge.mockResolvedValue(undefined)
 
     const tasksStore = useTasksStore(pinia)
     vi.spyOn(tasksStore, 'selectTask').mockImplementation(async (id: string) => {
@@ -598,6 +645,127 @@ describe('MainView server unavailable state', () => {
     expect(router.currentRoute.value.name).toBe('main')
     expect(chatStore.activeChannelId).toBe('dm-1')
     expect(requestConversationComposerFocusSpy).toHaveBeenCalled()
+  })
+
+  it('shows a local notification and plays sound for active-window hidden targets', async () => {
+    platformMocks.adapter = {
+      type: 'pwa',
+      notifications: {
+        show: platformMocks.show,
+        playSound: platformMocks.playSound,
+        setBadge: platformMocks.setBadge,
+        clearBadge: platformMocks.clearBadge,
+      },
+    }
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const chatStore = useChatStore()
+    chatStore.setClientActive(true)
+    chatStore.bootstrapped = true
+    chatStore.chatViewMode = 'conversation' as any
+    chatStore.activeChannelId = 'channel-2'
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }, {
+      id: 'channel-2',
+      name: 'random',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+
+    mountAtRoute(router)
+    await flushUi()
+
+    chatStore.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-hidden-target-main-1',
+      eventType: EventType.MESSAGE_ALERT,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageAlert',
+        value: create(MessageAlertEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-hidden-target-main-1',
+          senderId: 'user-2',
+          senderName: 'Bob',
+          body: 'hidden hello',
+          threadRootMessageId: '',
+          attachmentCount: 0,
+        }),
+      },
+    }))
+    await flushUi()
+
+    expect(platformMocks.show).toHaveBeenCalledWith(expect.objectContaining({
+      body: 'Bob: hidden hello',
+      conversationId: 'channel-1',
+      tag: 'conv:channel-1',
+    }))
+    expect(soundMocks.playMessagePing).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not play sound for active visible message targets', async () => {
+    platformMocks.adapter = {
+      type: 'pwa',
+      notifications: {
+        show: platformMocks.show,
+        playSound: platformMocks.playSound,
+        setBadge: platformMocks.setBadge,
+        clearBadge: platformMocks.clearBadge,
+      },
+    }
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const chatStore = useChatStore()
+    chatStore.setClientActive(true)
+    chatStore.bootstrapped = true
+    chatStore.chatViewMode = 'conversation' as any
+    chatStore.activeChannelId = 'channel-1'
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }] as any
+
+    mountAtRoute(router)
+    await flushUi()
+
+    chatStore.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-visible-target-main-1',
+      eventType: EventType.MESSAGE_ALERT,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageAlert',
+        value: create(MessageAlertEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-visible-target-main-1',
+          senderId: 'user-2',
+          senderName: 'Bob',
+          body: 'visible hello',
+          threadRootMessageId: '',
+          attachmentCount: 0,
+        }),
+      },
+    }))
+    await flushUi()
+
+    expect(platformMocks.show).not.toHaveBeenCalled()
+    expect(soundMocks.playMessagePing).not.toHaveBeenCalled()
   })
 
   it('consumes cold-start notification query params after bootstrap and clears them', async () => {

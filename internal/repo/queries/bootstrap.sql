@@ -254,7 +254,9 @@ SELECT
   COALESCE(n.body, '') AS body,
   n.channel_id,
   n.is_read,
-  n.created_at
+  n.created_at,
+  n.message_id,
+  n.thread_root_message_id
 FROM notifications n
 WHERE n.user_id = @user_id
   AND n.resolved_at IS NULL

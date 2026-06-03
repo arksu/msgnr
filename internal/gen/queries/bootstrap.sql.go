@@ -478,7 +478,9 @@ SELECT
   COALESCE(n.body, '') AS body,
   n.channel_id,
   n.is_read,
-  n.created_at
+  n.created_at,
+  n.message_id,
+  n.thread_root_message_id
 FROM notifications n
 WHERE n.user_id = $1
   AND n.resolved_at IS NULL
@@ -486,13 +488,15 @@ ORDER BY n.created_at DESC
 `
 
 type ListBootstrapNotificationsRow struct {
-	ID        uuid.UUID     `json:"id"`
-	Type      string        `json:"type"`
-	Title     string        `json:"title"`
-	Body      string        `json:"body"`
-	ChannelID uuid.NullUUID `json:"channel_id"`
-	IsRead    bool          `json:"is_read"`
-	CreatedAt time.Time     `json:"created_at"`
+	ID                  uuid.UUID     `json:"id"`
+	Type                string        `json:"type"`
+	Title               string        `json:"title"`
+	Body                string        `json:"body"`
+	ChannelID           uuid.NullUUID `json:"channel_id"`
+	IsRead              bool          `json:"is_read"`
+	CreatedAt           time.Time     `json:"created_at"`
+	MessageID           uuid.NullUUID `json:"message_id"`
+	ThreadRootMessageID uuid.NullUUID `json:"thread_root_message_id"`
 }
 
 func (q *Queries) ListBootstrapNotifications(ctx context.Context, userID uuid.UUID) ([]ListBootstrapNotificationsRow, error) {
@@ -512,6 +516,8 @@ func (q *Queries) ListBootstrapNotifications(ctx context.Context, userID uuid.UU
 			&i.ChannelID,
 			&i.IsRead,
 			&i.CreatedAt,
+			&i.MessageID,
+			&i.ThreadRootMessageID,
 		); err != nil {
 			return nil, err
 		}

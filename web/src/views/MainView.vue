@@ -1861,15 +1861,16 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 onMounted(async () => {
   unsubscribeIncomingMessageSound = chatStore.onIncomingMessageNotification((event) => {
     const windowActive = isChatWindowActive()
+    const shouldShowLocalNotification = platform?.type === 'tauri' || windowActive
+    if (platform && shouldShowLocalNotification) {
+      void platform.notifications.show({
+        title: conversationNotificationTitle(event.conversationId),
+        body: conversationNotificationBody(event),
+        conversationId: event.conversationId,
+        tag: `conv:${event.conversationId}`,
+      })
+    }
     if (platform?.type === 'tauri') {
-      if (!windowActive) {
-        void platform.notifications.show({
-          title: conversationNotificationTitle(event.conversationId),
-          body: conversationNotificationBody(event),
-          conversationId: event.conversationId,
-          tag: `conv:${event.conversationId}`,
-        })
-      }
       void platform.notifications.playSound?.('message-ping')
       return
     }

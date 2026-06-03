@@ -2825,6 +2825,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!evt.notification) return
     const senderName = decodeNotificationText(evt.notification.title) || 'Msgnr'
     const body = decodeNotificationText(evt.notification.body)
+    // Add first so visible-target resolution can look up this notification by message/thread target.
     notifications.value = [
       notificationSummaryToItem(evt.notification),
       ...notifications.value.filter(item => item.id !== evt.notification?.notificationId),
@@ -2844,6 +2845,8 @@ export const useChatStore = defineStore('chat', () => {
     const isHighPriorityNotification =
       evt.notification.type === NotificationType.MENTION
       || evt.notification.type === NotificationType.THREAD_REPLY
+    // Visible targets already returned above. Hidden mentions/thread replies still need attention while active;
+    // inactive windows emit all server-routed notifications so native/browser delivery can decide presentation.
     const shouldEmitIncoming = isHighPriorityNotification || !isClientTabActive()
     if (shouldEmitIncoming) {
       emitIncomingMessageNotification({

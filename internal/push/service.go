@@ -228,6 +228,7 @@ func (s *Service) PushChatDeliveries(deliveries []chat.DirectDelivery) {
 				Body:           messagePushBody(alert.GetBody(), alert.GetAttachmentCount() > 0),
 				ConversationID: alert.GetConversationId(),
 				MessageID:      alert.GetMessageId(),
+				ThreadRootID:   alert.GetThreadRootMessageId(),
 				URL:            "/",
 			})
 

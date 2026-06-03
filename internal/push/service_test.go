@@ -61,3 +61,35 @@ func TestPushChatDeliveriesUsesNotificationMessageTargets(t *testing.T) {
 	assert.Equal(t, "reply-1", job.payload.MessageID)
 	assert.Equal(t, "root-1", job.payload.ThreadRootID)
 }
+
+func TestPushChatDeliveriesMessageAlertCarriesThreadRoot(t *testing.T) {
+	svc := newQueueOnlyPushServiceForTest()
+
+	svc.PushChatDeliveries([]chat.DirectDelivery{{
+		UserID: "user-1",
+		Event: &packetspb.ServerEvent{
+			EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_ALERT,
+			ConversationId: "channel-1",
+			Payload: &packetspb.ServerEvent_MessageAlert{
+				MessageAlert: &packetspb.MessageAlertEvent{
+					ConversationId:      "channel-1",
+					MessageId:           "reply-1",
+					ThreadRootMessageId: "root-1",
+					SenderName:          "Bob",
+					Body:                "reply",
+				},
+			},
+		},
+	}})
+
+	var job pushJob
+	select {
+	case job = <-svc.enqueueCh:
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected push job to be enqueued")
+	}
+	assert.Equal(t, "user-1", job.userID)
+	assert.Equal(t, "channel-1", job.payload.ConversationID)
+	assert.Equal(t, "reply-1", job.payload.MessageID)
+	assert.Equal(t, "root-1", job.payload.ThreadRootID)
+}

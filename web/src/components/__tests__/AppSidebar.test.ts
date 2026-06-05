@@ -8,6 +8,8 @@ import AppSidebar from '@/components/AppSidebar.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
+import { ensureLocalStorageMock } from '@/__tests__/testUtils'
+import { storage } from '@/services/storage/storageAdapter'
 
 const chatApiMocks = vi.hoisted(() => ({
   listDmCandidates: vi.fn(),
@@ -15,6 +17,7 @@ const chatApiMocks = vi.hoisted(() => ({
   listAvailableChannels: vi.fn(),
   joinChannels: vi.fn(),
   leaveConversation: vi.fn(),
+  clearDMConversationHistory: vi.fn(),
   listMessageReactionUsers: vi.fn(),
   listUnreadFeed: vi.fn(),
   listSavedMessages: vi.fn(),
@@ -30,6 +33,7 @@ vi.mock('@/services/http/chatApi', () => ({
   listAvailableChannels: chatApiMocks.listAvailableChannels,
   joinChannels: chatApiMocks.joinChannels,
   leaveConversation: chatApiMocks.leaveConversation,
+  clearDMConversationHistory: chatApiMocks.clearDMConversationHistory,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
   listUnreadFeed: chatApiMocks.listUnreadFeed,
   listSavedMessages: chatApiMocks.listSavedMessages,
@@ -52,7 +56,9 @@ async function flushAll() {
 
 describe('AppSidebar', () => {
   beforeEach(() => {
+    ensureLocalStorageMock()
     setActivePinia(createPinia())
+    storage.clear()
     vi.clearAllMocks()
     chatApiMocks.listDmCandidates.mockResolvedValue([
       { user_id: 'user-2', display_name: 'Bob', email: 'bob@example.com', avatar_url: '' },
@@ -75,6 +81,7 @@ describe('AppSidebar', () => {
       { id: 'channel-2', name: 'Random', kind: 'channel', visibility: 'public', last_activity_at: '2026-03-06T00:00:00Z' },
     ])
     chatApiMocks.leaveConversation.mockResolvedValue(undefined)
+    chatApiMocks.clearDMConversationHistory.mockResolvedValue(undefined)
     chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
     chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
     chatApiMocks.saveMessage.mockResolvedValue(undefined)
@@ -863,7 +870,7 @@ describe('AppSidebar', () => {
     await wrapper.get('[data-testid="presence-set-away"]').trigger('click')
 
     expect(sendSetPresenceSpy).toHaveBeenCalledWith(PresenceStatus.AWAY)
-    expect(localStorage.getItem('msgnr:manual-presence')).toBe('away')
+    expect(storage.getItem('msgnr:manual-presence')).toBe('away')
   })
 
   it('leaves selected channel via conversation menu', async () => {
@@ -911,6 +918,83 @@ describe('AppSidebar', () => {
     expect(chatApiMocks.leaveConversation).toHaveBeenCalledWith('channel-1')
     expect(chatStore.channels).toEqual([])
     expect(chatStore.activeChannelId).toBe('')
+  })
+
+  it('clears DM history from the conversation menu after confirmation', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    authStore.sessionRole = 'member'
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chatStore.directMessages = [
+      {
+        id: 'dm-1',
+        userId: 'user-2',
+        displayName: 'Bob',
+        avatarUrl: '',
+        presence: 'online',
+        unread: 2,
+        hasUnreadThreadReplies: true,
+        notificationLevel: NotificationLevel.ALL,
+      },
+    ]
+    chatStore.messages = {
+      'dm-1': [{
+        id: 'message-1',
+        channelId: 'dm-1',
+        senderId: 'user-2',
+        senderName: 'Bob',
+        body: 'history',
+        channelSeq: 1n,
+        threadSeq: 0n,
+        mentionedUserIds: [],
+        mentionEveryone: false,
+        createdAt: '2026-03-06T00:00:00Z',
+        reactions: [],
+        myReactions: [],
+      }],
+    }
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            template: '<button class="sidebar-item" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="conversation-menu-button-dm-dm-1"]').trigger('click')
+    await wrapper.get('[data-testid="conversation-clear-history-dm-dm-1"]').trigger('click')
+    await flushAll()
+
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(chatApiMocks.clearDMConversationHistory).toHaveBeenCalledWith('dm-1')
+    expect(chatStore.directMessages).toHaveLength(1)
+    expect(chatStore.directMessages[0].unread).toBe(0)
+    expect(chatStore.directMessages[0].hasUnreadThreadReplies).toBe(false)
+    expect(chatStore.messages['dm-1']).toEqual([])
+
+    confirmSpy.mockRestore()
   })
 
   it('uses workspace user call presence for DM icons and keeps channel icons conversation-scoped', async () => {

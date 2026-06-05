@@ -55,6 +55,12 @@ export async function leaveConversation(conversationId: string): Promise<void> {
   } catch (e) { handleError(e) }
 }
 
+export async function clearDMConversationHistory(conversationId: string): Promise<void> {
+  try {
+    await http.post('/api/conversations/clear-history', { conversation_id: conversationId })
+  } catch (e) { handleError(e) }
+}
+
 export interface DmCandidateItem {
   user_id: string
   display_name: string

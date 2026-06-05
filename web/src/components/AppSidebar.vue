@@ -251,6 +251,14 @@
                   />
                   <div class="border-t border-white/10 p-1">
                     <button
+                      :data-testid="`conversation-clear-history-dm-${dm.id}`"
+                      class="w-full text-left px-2 py-1 rounded text-xs text-red-300 hover:bg-sidebar-hover disabled:opacity-50"
+                      :disabled="isClearingConversation('dm', dm.id)"
+                      @click.stop="clearDMHistoryFromSidebar(dm.id)"
+                    >
+                      Clear history
+                    </button>
+                    <button
                       v-if="!isSelfDirectMessage(dm.id)"
                       :data-testid="`conversation-leave-dm-${dm.id}`"
                       class="w-full text-left px-2 py-1 rounded text-xs text-red-300 hover:bg-sidebar-hover disabled:opacity-50"
@@ -540,6 +548,7 @@ const presenceMenuOpen = ref(false)
 const manualPresence = ref<'online' | 'away'>(loadManualPresencePreference() ?? 'online')
 const openConversationMenuKey = ref('')
 const leavingConversationKey = ref('')
+const clearingConversationKey = ref('')
 const conversationActionError = ref('')
 
 const isAdmin = computed(() => {
@@ -670,6 +679,10 @@ function isLeavingConversation(kind: 'channel' | 'dm', conversationId: string) {
   return leavingConversationKey.value === conversationMenuKey(kind, conversationId)
 }
 
+function isClearingConversation(kind: 'channel' | 'dm', conversationId: string) {
+  return clearingConversationKey.value === conversationMenuKey(kind, conversationId)
+}
+
 function toggleConversationMenu(kind: 'channel' | 'dm', conversationId: string) {
   const key = conversationMenuKey(kind, conversationId)
   openConversationMenuKey.value = openConversationMenuKey.value === key ? '' : key
@@ -696,6 +709,25 @@ async function leaveConversationFromSidebar(kind: 'channel' | 'dm', conversation
   } finally {
     if (leavingConversationKey.value === key) {
       leavingConversationKey.value = ''
+    }
+  }
+}
+
+async function clearDMHistoryFromSidebar(conversationId: string) {
+  if (typeof window !== 'undefined' && !window.confirm('Clear this direct message history for both members?')) {
+    return
+  }
+  const key = conversationMenuKey('dm', conversationId)
+  clearingConversationKey.value = key
+  conversationActionError.value = ''
+  try {
+    await chatStore.clearDMConversationHistory(conversationId)
+    openConversationMenuKey.value = ''
+  } catch (err) {
+    conversationActionError.value = err instanceof Error ? err.message : 'Failed to clear history'
+  } finally {
+    if (clearingConversationKey.value === key) {
+      clearingConversationKey.value = ''
     }
   }
 }

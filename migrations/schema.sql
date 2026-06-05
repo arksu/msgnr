@@ -620,7 +620,8 @@ CREATE TABLE IF NOT EXISTS workspace_events (
                 'thread_summary_updated',
                 'reaction_updated',
                 'user_identity_updated',
-                'task_status_changed'
+                'task_status_changed',
+                'dm_history_cleared'
               )),
   channel_id  UUID        REFERENCES channels(id) ON DELETE SET NULL,
   payload     JSONB       NOT NULL,

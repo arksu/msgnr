@@ -562,6 +562,75 @@ func TestDirectEnvelope_ConversationRemovedRevokesConversationCache(t *testing.T
 	}
 }
 
+func TestEventFanout_DMHistoryClearedScopedByConversationMembership(t *testing.T) {
+	bus := events.NewBus(zap.NewNop())
+	srv := newTestServer(bus)
+	srv.authSvc = &auth.Service{}
+	srv.authorizeEvent = func(_ context.Context, _ auth.Principal, _ *packetspb.ServerEvent) bool {
+		t.Fatal("fallback authorizer should not be called for cached dm_history_cleared fanout")
+		return false
+	}
+
+	targetConversation := uuid.New()
+	memberPrincipal := testPrincipalWithUser(
+		"00000000-0000-0000-0000-000000000101",
+		"00000000-0000-0000-0000-000000000102",
+	)
+	nonMemberPrincipal := testPrincipalWithUser(
+		"00000000-0000-0000-0000-000000000201",
+		"00000000-0000-0000-0000-000000000202",
+	)
+	_, memberConn := pipeConn(t)
+	_, nonMemberConn := pipeConn(t)
+	memberOutbound := make(chan outboundMsg, srv.config.WsOutboundQueueMax+4)
+	nonMemberOutbound := make(chan outboundMsg, srv.config.WsOutboundQueueMax+4)
+	memberState := newSessionState([]uuid.UUID{targetConversation}, true, nil)
+	nonMemberState := newSessionState(nil, true, nil)
+
+	memberUnsubscribe, memberDone := srv.startEventFanout(memberConn, memberPrincipal, memberOutbound, srv.config.WsOutboundQueueMax, memberState)
+	defer func() {
+		memberUnsubscribe()
+		<-memberDone
+	}()
+	nonMemberUnsubscribe, nonMemberDone := srv.startEventFanout(nonMemberConn, nonMemberPrincipal, nonMemberOutbound, srv.config.WsOutboundQueueMax, nonMemberState)
+	defer func() {
+		nonMemberUnsubscribe()
+		<-nonMemberDone
+	}()
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:       41,
+		EventId:        "evt-dm-history-cleared",
+		EventType:      packetspb.EventType_EVENT_TYPE_DM_HISTORY_CLEARED,
+		ConversationId: targetConversation.String(),
+		Payload: &packetspb.ServerEvent_DmHistoryCleared{
+			DmHistoryCleared: &packetspb.DmHistoryClearedEvent{
+				ConversationId:       targetConversation.String(),
+				ClearedByUserId:      memberPrincipal.UserID.String(),
+				DeletedMessagesCount: 3,
+			},
+		},
+	})
+
+	select {
+	case msg := <-memberOutbound:
+		require.NotNil(t, msg.env)
+		evt := msg.env.GetServerEvent()
+		require.NotNil(t, evt)
+		assert.Equal(t, packetspb.EventType_EVENT_TYPE_DM_HISTORY_CLEARED, evt.GetEventType())
+		require.NotNil(t, evt.GetDmHistoryCleared())
+		assert.Equal(t, int32(3), evt.GetDmHistoryCleared().GetDeletedMessagesCount())
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for dm_history_cleared event")
+	}
+
+	select {
+	case msg := <-nonMemberOutbound:
+		t.Fatalf("unexpected dm_history_cleared event for non-member: %#v", msg.env)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestTaskCollabRecipientsScopedByTask(t *testing.T) {
 	srv := newTestServer(nil)
 	chA := make(chan outboundMsg, 1)

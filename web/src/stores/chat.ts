@@ -18,6 +18,7 @@ import type {
   ReactionUpdatedEvent,
   MessageUpdatedEvent,
   MessageDeletedEvent,
+  DmHistoryClearedEvent,
   BootstrapResponse,
   SyncSinceResponse,
   AckResponse,
@@ -47,7 +48,7 @@ import {
   saveLastOpenedConversation,
   clearLastOpenedConversation,
 } from '@/services/storage/lastConversationStorage'
-import { ChatApiError, forwardMessage as forwardMessageApi, getMessageContext, listConversationMessages, listDmCandidates, listSavedMessages, listUnreadFeed, resolveUnreadFeedNotification, saveMessage as saveMessageApi, unsaveMessage as unsaveMessageApi } from '@/services/http/chatApi'
+import { ChatApiError, clearDMConversationHistory as clearDMConversationHistoryApi, forwardMessage as forwardMessageApi, getMessageContext, listConversationMessages, listDmCandidates, listSavedMessages, listUnreadFeed, resolveUnreadFeedNotification, saveMessage as saveMessageApi, unsaveMessage as unsaveMessageApi } from '@/services/http/chatApi'
 import type {
   ConversationMessageItem,
   MessageEntityItem,
@@ -64,6 +65,7 @@ import {
   loadCachedConversations,
   cacheMessages,
   cacheSingleMessage,
+  clearCachedMessages,
   loadCachedMessages,
   cacheThreadSummaries,
   loadCachedThreadSummaries,
@@ -2697,6 +2699,9 @@ export const useChatStore = defineStore('chat', () => {
       case 'messageDeleted':
         _onMessageDeleted(evt.payload.value)
         break
+      case 'dmHistoryCleared':
+        applyDMHistoryCleared(evt.payload.value)
+        break
       case 'conversationUpserted':
         applyConversationSummary(evt.payload.value.conversation)
         break
@@ -3064,6 +3069,64 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
     scheduleUnreadFeedRefresh()
+  }
+
+  function clearDMConversationHistoryLocal(conversationId: string) {
+    if (!conversationId) return
+
+    const rootIds = new Set((messages.value[conversationId] ?? []).map(message => message.id))
+    for (const [rootId, replies] of Object.entries(threadMessages.value)) {
+      if (rootIds.has(rootId) || replies.some(reply => reply.channelId === conversationId)) {
+        delete threadMessages.value[rootId]
+        delete threadReplayVersionByRoot.value[rootId]
+        delete threadSummaries.value[rootId]
+      }
+    }
+
+    messages.value[conversationId] = []
+    pendingReadByConversation.delete(conversationId)
+    historyLoadTokenByConversation.set(conversationId, ++historyLoadToken)
+    conversationHistoryState.set(conversationId, {
+      initialized: true,
+      loading: false,
+      hasMore: false,
+    })
+    if (conversationInitialLoadingById.value[conversationId]) {
+      conversationInitialLoadingById.value = {
+        ...conversationInitialLoadingById.value,
+        [conversationId]: false,
+      }
+    }
+
+    const dm = directMessages.value.find(item => item.id === conversationId)
+    if (dm) {
+      dm.unread = 0
+      dm.hasUnreadThreadReplies = false
+    }
+
+    if (activeThreadConversationId.value === conversationId) {
+      closeThread()
+    }
+    notifications.value = notifications.value.filter(item => item.conversationId !== conversationId)
+    unreadFeedItems.value = unreadFeedItems.value.filter(item => item.conversationId !== conversationId)
+    unreadFeedTotalCount.value = unreadFeedItems.value.length
+    if (savedMessagesLoaded.value) {
+      savedMessageItems.value = savedMessageItems.value.filter(item => item.conversationId !== conversationId)
+      savedMessageTotalCount.value = savedMessageItems.value.length
+    }
+
+    void clearCachedMessages(conversationId)
+    scheduleUnreadFeedRefresh()
+  }
+
+  function applyDMHistoryCleared(evt: DmHistoryClearedEvent) {
+    // Persisted event only: it is intentionally not listed as a seq=0 direct-immediate event.
+    clearDMConversationHistoryLocal(evt.conversationId)
+  }
+
+  async function clearDMConversationHistory(conversationId: string): Promise<void> {
+    await clearDMConversationHistoryApi(conversationId)
+    clearDMConversationHistoryLocal(conversationId)
   }
 
   function removeConversationLocal(conversationId: string) {
@@ -3700,6 +3763,7 @@ export const useChatStore = defineStore('chat', () => {
     markUnreadFeedItemRead,
     loadOlderConversationHistory,
     openDirectMessage,
+    clearDMConversationHistory,
     removeConversationLocal,
     onClientFocus,
     setClientActive,

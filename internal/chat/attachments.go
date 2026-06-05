@@ -411,6 +411,42 @@ func (s *Service) listMessageAttachmentsForDeleteTargetTx(ctx context.Context, t
 	return items, nil
 }
 
+func (s *Service) listMessageAttachmentsForConversationDeleteTx(ctx context.Context, tx pgx.Tx, conversationID uuid.UUID) ([]MessageAttachment, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT ma.id,
+		       ma.conversation_id,
+		       ma.message_id,
+		       ma.file_name,
+		       ma.file_size,
+		       ma.mime_type,
+		       ma.storage_key,
+		       ma.uploaded_by,
+		       ma.created_at
+		  FROM message_attachment ma
+		  JOIN messages m ON m.id = ma.message_id
+		 WHERE m.channel_id = $1
+		 ORDER BY ma.created_at, ma.id`,
+		conversationID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]MessageAttachment, 0)
+	for rows.Next() {
+		row, err := scanMessageAttachment(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (s *Service) cleanupDeletedAttachments(items []MessageAttachment) {
 	if s.attachmentStore == nil || len(items) == 0 {
 		return

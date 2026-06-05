@@ -342,6 +342,16 @@ type DeleteMessageResult struct {
 	DirectDeliveries []DirectDelivery
 }
 
+type ClearDMConversationHistoryParams struct {
+	ConversationID uuid.UUID
+	ActorID        uuid.UUID
+}
+
+type ClearDMConversationHistoryResult struct {
+	ConversationID       uuid.UUID
+	DeletedMessagesCount int32
+}
+
 type DirectDelivery struct {
 	UserID string
 	Event  *packetspb.ServerEvent

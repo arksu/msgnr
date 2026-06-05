@@ -167,6 +167,47 @@ describe('TaskDescriptionRichEditor', () => {
     return String(updates[updates.length - 1]?.[0] ?? '')
   }
 
+  function rect(top: number, bottom: number): DOMRect {
+    return {
+      x: 0,
+      y: top,
+      width: 100,
+      height: bottom - top,
+      top,
+      right: 100,
+      bottom,
+      left: 0,
+      toJSON: () => ({}),
+    } as DOMRect
+  }
+
+  function mountScrollHost() {
+    const host = document.createElement('div')
+    host.style.overflowY = 'auto'
+    Object.defineProperty(host, 'clientHeight', {
+      configurable: true,
+      value: 300,
+    })
+    Object.defineProperty(host, 'scrollHeight', {
+      configurable: true,
+      value: 900,
+    })
+    Object.defineProperty(host, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => rect(100, 400),
+    })
+    document.body.appendChild(host)
+    return host
+  }
+
+  function scrollToSelectionHandled(editor: Editor): boolean {
+    const handler = editor.view.someProp('handleScrollToSelection')
+    if (!handler) {
+      throw new Error('handleScrollToSelection prop missing')
+    }
+    return handler(editor.view)
+  }
+
   function selectTextInEditor(editor: Editor, text: string) {
     let targetPos: number | null = null
     editor.state.doc.descendants((node, pos) => {
@@ -636,6 +677,56 @@ describe('TaskDescriptionRichEditor', () => {
     expect(updateCount).toBe(0)
     expect(String(collabFragment)).not.toContain('New')
     expect(String(collabFragment)).toContain('Old')
+  })
+
+  it('handles scroll-to-selection when the caret is already visible in the task body', async () => {
+    const host = mountScrollHost()
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: 'Visible caret',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: host,
+    })
+    await waitForRichEditor(wrapper)
+    const editor = getEditor(wrapper)
+    vi.spyOn(editor.view, 'coordsAtPos').mockReturnValue(rect(180, 198))
+
+    expect(scrollToSelectionHandled(editor)).toBe(true)
+  })
+
+  it('allows default scroll-to-selection when the caret is outside the task body viewport', async () => {
+    const host = mountScrollHost()
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: 'Hidden caret',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: host,
+    })
+    await waitForRichEditor(wrapper)
+    const editor = getEditor(wrapper)
+    vi.spyOn(editor.view, 'coordsAtPos').mockReturnValue(rect(430, 448))
+
+    expect(scrollToSelectionHandled(editor)).toBe(false)
+  })
+
+  it('falls back to default scroll-to-selection when caret layout cannot be read', async () => {
+    const host = mountScrollHost()
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: 'Missing layout',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: host,
+    })
+    await waitForRichEditor(wrapper)
+    const editor = getEditor(wrapper)
+    vi.spyOn(editor.view, 'coordsAtPos').mockImplementation(() => {
+      throw new Error('layout unavailable')
+    })
+
+    expect(scrollToSelectionHandled(editor)).toBe(false)
   })
 
   it('uploads image files from the rendered editor and serializes them back to markdown tokens', async () => {

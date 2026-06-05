@@ -28,6 +28,7 @@ import {
   ReadCounterUpdatedEventSchema,
   MessageUpdatedEventSchema,
   MessageDeletedEventSchema,
+  DmHistoryClearedEventSchema,
   MessageAlertEventSchema,
   ThreadSummaryUpdatedEventSchema,
   TaskStatusChangedEventSchema,
@@ -47,6 +48,7 @@ const chatApiMocks = vi.hoisted(() => ({
   listUnreadFeed: vi.fn(),
   listSavedMessages: vi.fn(),
   forwardMessage: vi.fn(),
+  clearDMConversationHistory: vi.fn(),
   saveMessage: vi.fn(),
   unsaveMessage: vi.fn(),
   getMessageContext: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock('@/services/http/chatApi', () => ({
   listUnreadFeed: chatApiMocks.listUnreadFeed,
   listSavedMessages: chatApiMocks.listSavedMessages,
   forwardMessage: chatApiMocks.forwardMessage,
+  clearDMConversationHistory: chatApiMocks.clearDMConversationHistory,
   saveMessage: chatApiMocks.saveMessage,
   unsaveMessage: chatApiMocks.unsaveMessage,
   getMessageContext: chatApiMocks.getMessageContext,
@@ -120,6 +123,7 @@ describe('chatStore phase 6 flows', () => {
     chatApiMocks.listUnreadFeed.mockReset()
     chatApiMocks.listSavedMessages.mockReset()
     chatApiMocks.forwardMessage.mockReset()
+    chatApiMocks.clearDMConversationHistory.mockReset()
     chatApiMocks.saveMessage.mockReset()
     chatApiMocks.unsaveMessage.mockReset()
     chatApiMocks.getMessageContext.mockReset()
@@ -129,6 +133,7 @@ describe('chatStore phase 6 flows', () => {
     chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
     chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
     chatApiMocks.forwardMessage.mockResolvedValue(undefined)
+    chatApiMocks.clearDMConversationHistory.mockResolvedValue(undefined)
     chatApiMocks.saveMessage.mockResolvedValue(undefined)
     chatApiMocks.unsaveMessage.mockResolvedValue(undefined)
     chatApiMocks.getMessageContext.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
@@ -3642,6 +3647,159 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.threadSummaries['root-1']).toBeUndefined()
     expect(chat.isThreadPanelOpen).toBe(false)
     expect(chat.activeThreadRootId).toBe('')
+  })
+
+  it('keeps a DM visible while clearing history caches on dm_history_cleared', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    chat.bootstrapped = true
+
+    chat.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      avatarUrl: '',
+      presence: 'online',
+      unread: 3,
+      hasUnreadThreadReplies: true,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.messages = {
+      'dm-1': [buildMessage({ id: 'root-1', channelId: 'dm-1', channelSeq: 10n })],
+    }
+    chat.threadMessages = {
+      'root-1': [buildMessage({ id: 'reply-1', channelId: 'dm-1', threadRootMessageId: 'root-1', threadSeq: 1n })],
+    }
+    chat.threadSummaries = {
+      'root-1': {
+        replyCount: 1,
+        lastThreadSeq: 1n,
+      },
+    }
+    chat.unreadFeedItems = [buildUnreadThreadItem({ conversationId: 'dm-1', conversationKind: 'dm' }) as any]
+    chat.unreadFeedTotalCount = 1
+    chat.savedMessageItems = [{
+      id: 'saved:root-1',
+      conversationId: 'dm-1',
+      conversationKind: 'dm',
+      conversationVisibility: 'dm',
+      conversationTitle: 'Bob',
+      messageId: 'root-1',
+      senderId: 'user-2',
+      senderName: 'Bob',
+      body: 'saved',
+      createdAt: '2026-03-06T00:00:00Z',
+      savedAt: '2026-03-06T00:01:00Z',
+    }]
+    chat.savedMessageTotalCount = 1
+    chat.savedMessagesLoaded = true
+    chat.activeThreadConversationId = 'dm-1'
+    chat.activeThreadRootId = 'root-1'
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-dm-clear-1',
+      eventType: EventType.DM_HISTORY_CLEARED,
+      conversationId: 'dm-1',
+      payload: {
+        case: 'dmHistoryCleared',
+        value: create(DmHistoryClearedEventSchema, {
+          conversationId: 'dm-1',
+          clearedByUserId: 'user-1',
+          deletedMessagesCount: 2,
+        }),
+      },
+    }))
+
+    expect(chat.directMessages).toHaveLength(1)
+    expect(chat.directMessages[0].unread).toBe(0)
+    expect(chat.directMessages[0].hasUnreadThreadReplies).toBe(false)
+    expect(chat.messages['dm-1']).toEqual([])
+    expect(chat.threadMessages['root-1']).toBeUndefined()
+    expect(chat.threadSummaries['root-1']).toBeUndefined()
+    expect(chat.unreadFeedItems).toEqual([])
+    expect(chat.unreadFeedTotalCount).toBe(0)
+    expect(chat.savedMessageItems).toEqual([])
+    expect(chat.savedMessageTotalCount).toBe(0)
+    expect(chat.isThreadPanelOpen).toBe(false)
+  })
+
+  it('does not let stale history responses repopulate a cleared DM', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    chat.bootstrapped = true
+    chat.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      avatarUrl: '',
+      presence: 'online',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+
+    let resolveHistory!: (page: {
+      messages: Array<{
+        id: string
+        conversation_id: string
+        sender_id: string
+        sender_name: string
+        body: string
+        channel_seq: string
+        thread_seq: string
+        thread_root_message_id: string
+        mention_everyone: boolean
+        created_at: string
+        entities: []
+      }>
+      has_more: boolean
+      page_size: number
+    }) => void
+    chatApiMocks.listConversationMessages.mockReturnValueOnce(new Promise(resolve => {
+      resolveHistory = resolve
+    }))
+
+    const pendingLoad = chat.ensureConversationHistory('dm-1')
+    await Promise.resolve()
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-dm-clear-stale',
+      eventType: EventType.DM_HISTORY_CLEARED,
+      conversationId: 'dm-1',
+      payload: {
+        case: 'dmHistoryCleared',
+        value: create(DmHistoryClearedEventSchema, {
+          conversationId: 'dm-1',
+          clearedByUserId: 'user-1',
+          deletedMessagesCount: 1,
+        }),
+      },
+    }))
+
+    resolveHistory({
+      messages: [{
+        id: 'old-message',
+        conversation_id: 'dm-1',
+        sender_id: 'user-2',
+        sender_name: 'Bob',
+        body: 'old history',
+        channel_seq: '1',
+        thread_seq: '0',
+        thread_root_message_id: '',
+        mention_everyone: false,
+        created_at: '2026-03-06T00:00:00Z',
+        entities: [],
+      }],
+      has_more: false,
+      page_size: 1,
+    })
+    await pendingLoad
+
+    expect(chat.messages['dm-1']).toEqual([])
+    expect(chat.conversationHasMoreHistory('dm-1')).toBe(false)
   })
 
   it('uses thread_summary_updated.lastThreadSeq as cursor and allows reply_count decreases', () => {

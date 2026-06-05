@@ -43,6 +43,7 @@ var eventTypeToProto = map[string]packetspb.EventType{
 	"call_invite_cancelled":      packetspb.EventType_EVENT_TYPE_CALL_INVITE_CANCELLED,
 	"call_state_changed":         packetspb.EventType_EVENT_TYPE_CALL_STATE_CHANGED,
 	"user_call_presence_changed": packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED,
+	"dm_history_cleared":         packetspb.EventType_EVENT_TYPE_DM_HISTORY_CLEARED,
 	"thread_summary_updated":     packetspb.EventType_EVENT_TYPE_THREAD_SUMMARY_UPDATED,
 	"reaction_updated":           packetspb.EventType_EVENT_TYPE_REACTION_UPDATED,
 	"user_identity_updated":      packetspb.EventType_EVENT_TYPE_USER_IDENTITY_UPDATED,
@@ -157,6 +158,10 @@ func ValidateEventTypePayload(dbText string, evt *packetspb.ServerEvent) error {
 	case packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED:
 		if evt.GetTaskStatusChanged() == nil {
 			return fmt.Errorf("event_type %q requires task_status_changed payload", dbText)
+		}
+	case packetspb.EventType_EVENT_TYPE_DM_HISTORY_CLEARED:
+		if evt.GetDmHistoryCleared() == nil {
+			return fmt.Errorf("event_type %q requires dm_history_cleared payload", dbText)
 		}
 	}
 	return nil

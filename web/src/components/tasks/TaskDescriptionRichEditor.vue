@@ -275,6 +275,7 @@ import TableHeader from '@tiptap/extension-table-header'
 import TableCell from '@tiptap/extension-table-cell'
 import { DOMParser as ProseMirrorDOMParser } from '@tiptap/pm/model'
 import { TextSelection } from '@tiptap/pm/state'
+import type { EditorView } from '@tiptap/pm/view'
 import { prosemirrorJSONToYXmlFragment } from '@tiptap/y-tiptap'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { BubbleMenu, FloatingMenu } from '@tiptap/vue-3/menus'
@@ -345,6 +346,8 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   'blur': []
 }>()
+
+const SCROLL_SELECTION_VISIBILITY_MARGIN_PX = 4
 
 const markdownDraft = ref(props.modelValue ?? '')
 const suppressEditorSync = ref(false)
@@ -734,6 +737,43 @@ async function uploadAndInsertFiles(files: File[]) {
   queueResolveEditorAttachmentImages()
 }
 
+function isScrollableY(element: HTMLElement): boolean {
+  const style = window.getComputedStyle(element)
+  const overflowY = style.overflowY
+  if (overflowY !== 'auto' && overflowY !== 'scroll' && overflowY !== 'overlay') return false
+  return element.scrollHeight > element.clientHeight + 1
+}
+
+function findNearestVerticalScrollContainer(start: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = start.parentElement
+  while (node && node !== document.body && node !== document.documentElement) {
+    if (isScrollableY(node)) return node
+    node = node.parentElement
+  }
+  return null
+}
+
+function isFiniteRect(rect: Pick<DOMRect, 'top' | 'bottom'>): boolean {
+  return Number.isFinite(rect.top) && Number.isFinite(rect.bottom)
+}
+
+function shouldKeepCurrentScrollForSelection(view: EditorView): boolean {
+  try {
+    const scrollContainer = findNearestVerticalScrollContainer(view.dom as HTMLElement)
+    if (!scrollContainer) return false
+
+    const selectionRect = view.coordsAtPos(view.state.selection.head, 1)
+    const containerRect = scrollContainer.getBoundingClientRect()
+    if (!isFiniteRect(selectionRect) || !isFiniteRect(containerRect)) return false
+
+    const visibleTop = containerRect.top + SCROLL_SELECTION_VISIBILITY_MARGIN_PX
+    const visibleBottom = containerRect.bottom - SCROLL_SELECTION_VISIBILITY_MARGIN_PX
+    return selectionRect.top >= visibleTop && selectionRect.bottom <= visibleBottom
+  } catch {
+    return false
+  }
+}
+
 const extensions = computed(() => {
   const list: AnyExtension[] = [
     StarterKit.configure({
@@ -790,6 +830,9 @@ const editor = useEditor({
   editorProps: {
     attributes: {
       class: 'min-h-[140px] text-sm text-gray-100 outline-none',
+    },
+    handleScrollToSelection(view) {
+      return shouldKeepCurrentScrollForSelection(view)
     },
     handleKeyDown(_view, event) {
       if (mentionPickerOpen.value) {

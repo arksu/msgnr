@@ -1132,6 +1132,207 @@ func TestIntegration_CreateOrOpenDirectMessage_ReusesExistingPair(t *testing.T) 
 	assert.Equal(t, 2, memberCount)
 }
 
+func TestIntegration_ClearDMConversationHistory_HardDeletesMessagesAndKeepsDM(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	userA := seedChatUserWithAttrs(t, ctx, pool, "Clear Actor", "member", "active")
+	userB := seedChatUserWithAttrs(t, ctx, pool, "Clear Peer", "member", "active")
+
+	dm, err := svc.CreateOrOpenDirectMessage(ctx, userA, userB)
+	require.NoError(t, err)
+	conversationID := dm.DM.ConversationID
+
+	_, err = pool.Exec(ctx,
+		`UPDATE channel_members
+		    SET notification_level = $3
+		  WHERE channel_id = $1
+		    AND user_id = $2`,
+		conversationID,
+		userA,
+		int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY),
+	)
+	require.NoError(t, err)
+
+	root, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   conversationID,
+		SenderID:    userA,
+		ClientMsgID: "root-" + uuid.NewString(),
+		Body:        "root message",
+	})
+	require.NoError(t, err)
+
+	reply, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           conversationID,
+		SenderID:            userB,
+		ClientMsgID:         "reply-" + uuid.NewString(),
+		Body:                "reply message",
+		ThreadRootMessageID: root.MessageID,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SaveMessage(ctx, userA, root.MessageID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO message_mentions (message_id, user_id)
+		VALUES ($1, $2)`,
+		root.MessageID,
+		userB,
+	)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO message_entities (message_id, ordinal, kind, target_id, label, href, start_offset, end_offset)
+		VALUES ($1, 0, 'user', $2, 'Clear Peer', '', 0, 10)`,
+		root.MessageID,
+		userB,
+	)
+	require.NoError(t, err)
+	_, err = svc.AddReaction(ctx, chat.ReactionParams{
+		ChannelID:  conversationID,
+		MessageID:  root.MessageID,
+		UserID:     userB,
+		Emoji:      ":+1:",
+		ClientOpID: "react-" + uuid.NewString(),
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO message_attachment (conversation_id, message_id, file_name, file_size, mime_type, storage_key, uploaded_by)
+		VALUES ($1, $2, 'root.txt', 12, 'text/plain', 'chat/root.txt', $3)`,
+		conversationID,
+		root.MessageID,
+		userA,
+	)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO thread_reads (root_message_id, user_id, last_read_thread_seq)
+		VALUES ($1, $2, 1)`,
+		root.MessageID,
+		userA,
+	)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO notifications (user_id, type, title, body, channel_id, message_id, thread_root_message_id)
+		VALUES ($1, 'mention', 'Mention', 'body should be deleted', $2, $3, NULL),
+		       ($1, 'thread_reply', 'Thread', 'thread body should be deleted', $2, $4, $3)`,
+		userA,
+		conversationID,
+		root.MessageID,
+		reply.MessageID,
+	)
+	require.NoError(t, err)
+
+	result, err := svc.ClearDMConversationHistory(ctx, chat.ClearDMConversationHistoryParams{
+		ConversationID: conversationID,
+		ActorID:        userA,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, conversationID, result.ConversationID)
+	assert.Equal(t, int32(2), result.DeletedMessagesCount)
+
+	countRows := func(query string, args ...any) int {
+		t.Helper()
+		var count int
+		err := pool.QueryRow(ctx, query, args...).Scan(&count)
+		require.NoError(t, err)
+		return count
+	}
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM messages WHERE channel_id = $1`, conversationID))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM message_saves`))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM reactions`))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM reaction_counts`))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM message_mentions`))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM message_entities`))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM message_attachment`))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM thread_summaries`))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM thread_reads`))
+	assert.Equal(t, 0, countRows(`SELECT COUNT(*) FROM notifications WHERE channel_id = $1`, conversationID))
+
+	var memberCount int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*)
+		   FROM channel_members
+		  WHERE channel_id = $1
+		    AND is_archived = false`,
+		conversationID,
+	).Scan(&memberCount)
+	require.NoError(t, err)
+	assert.Equal(t, 2, memberCount)
+
+	var notificationLevel int16
+	err = pool.QueryRow(ctx,
+		`SELECT notification_level
+		   FROM channel_members
+		  WHERE channel_id = $1
+		    AND user_id = $2`,
+		conversationID,
+		userA,
+	).Scan(&notificationLevel)
+	require.NoError(t, err)
+	assert.Equal(t, int16(packetspb.NotificationLevel_NOTIFICATION_LEVEL_MENTIONS_ONLY), notificationLevel)
+
+	storedEvents, err := store.ListEventsAfterSeq(ctx, 0, 20)
+	require.NoError(t, err)
+	var clearEvent *packetspb.DmHistoryClearedEvent
+	for _, stored := range storedEvents {
+		if stored.EventType == "dm_history_cleared" {
+			clearEvent = stored.Proto.GetDmHistoryCleared()
+			break
+		}
+	}
+	require.NotNil(t, clearEvent)
+	assert.Equal(t, conversationID.String(), clearEvent.GetConversationId())
+	assert.Equal(t, userA.String(), clearEvent.GetClearedByUserId())
+	assert.Equal(t, int32(2), clearEvent.GetDeletedMessagesCount())
+
+	next, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   conversationID,
+		SenderID:    userB,
+		ClientMsgID: "after-clear-" + uuid.NewString(),
+		Body:        "new start",
+	})
+	require.NoError(t, err)
+	assert.Greater(t, next.ChannelSeq, reply.ChannelSeq)
+
+	secondClear, err := svc.ClearDMConversationHistory(ctx, chat.ClearDMConversationHistoryParams{
+		ConversationID: conversationID,
+		ActorID:        userB,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), secondClear.DeletedMessagesCount)
+}
+
+func TestIntegration_ClearDMConversationHistory_RejectsUnsupportedOrUnauthorized(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	userA := seedChatUserWithAttrs(t, ctx, pool, "Clear A", "member", "active")
+	userB := seedChatUserWithAttrs(t, ctx, pool, "Clear B", "member", "active")
+	outsider := seedChatUserWithAttrs(t, ctx, pool, "Clear Outsider", "member", "active")
+
+	dm, err := svc.CreateOrOpenDirectMessage(ctx, userA, userB)
+	require.NoError(t, err)
+
+	_, err = svc.ClearDMConversationHistory(ctx, chat.ClearDMConversationHistoryParams{
+		ConversationID: dm.DM.ConversationID,
+		ActorID:        outsider,
+	})
+	assert.ErrorIs(t, err, chat.ErrNotMember)
+
+	channelID := seedChannelForUser(t, ctx, pool, userA, "clear unsupported")
+	_, err = svc.ClearDMConversationHistory(ctx, chat.ClearDMConversationHistoryParams{
+		ConversationID: channelID,
+		ActorID:        userA,
+	})
+	assert.ErrorIs(t, err, chat.ErrClearHistoryUnsupported)
+}
+
 func TestIntegration_CreateOrOpenDirectMessage_SelfUsesSingleMemberConversation(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

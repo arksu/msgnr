@@ -32,6 +32,7 @@ var (
 	ErrInvalidMessageEntity       = errors.New("invalid message entity")
 	ErrRemoveMemberForbidden      = errors.New("not allowed to remove channel members")
 	ErrRemoveUnsupportedTarget    = errors.New("conversation does not support member removal")
+	ErrClearHistoryUnsupported    = errors.New("conversation does not support clear history")
 )
 
 // Service handles messaging, reactions, and thread subscriptions.

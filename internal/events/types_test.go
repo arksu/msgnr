@@ -2,6 +2,7 @@ package events
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,6 +91,15 @@ func TestValidateEventTypePayload_Valid(t *testing.T) {
 				},
 			},
 		},
+		{
+			"dm_history_cleared",
+			&packetspb.ServerEvent{
+				EventType: packetspb.EventType_EVENT_TYPE_DM_HISTORY_CLEARED,
+				Payload: &packetspb.ServerEvent_DmHistoryCleared{
+					DmHistoryCleared: &packetspb.DmHistoryClearedEvent{},
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -124,4 +134,20 @@ func TestValidateEventTypePayload_UnknownDBText(t *testing.T) {
 	evt := &packetspb.ServerEvent{}
 	err := ValidateEventTypePayload("bogus_type", evt)
 	assert.Error(t, err)
+}
+
+func TestBuildServerEventFromStored_DmHistoryCleared(t *testing.T) {
+	evt, err := buildServerEventFromStored(
+		"dm_history_cleared",
+		"evt-1",
+		"dm-1",
+		time.Now().UTC(),
+		[]byte(`{"conversationId":"dm-1","clearedByUserId":"user-1","deletedMessagesCount":3}`),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, packetspb.EventType_EVENT_TYPE_DM_HISTORY_CLEARED, evt.GetEventType())
+	assert.Equal(t, "dm-1", evt.GetConversationId())
+	require.NotNil(t, evt.GetDmHistoryCleared())
+	assert.Equal(t, "user-1", evt.GetDmHistoryCleared().GetClearedByUserId())
+	assert.Equal(t, int32(3), evt.GetDmHistoryCleared().GetDeletedMessagesCount())
 }

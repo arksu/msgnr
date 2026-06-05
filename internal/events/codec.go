@@ -69,6 +69,12 @@ func buildServerEventFromStored(
 			return nil, fmt.Errorf("decode message_deleted payload: %w", err)
 		}
 		evt.Payload = &packetspb.ServerEvent_MessageDeleted{MessageDeleted: msg}
+	case packetspb.EventType_EVENT_TYPE_DM_HISTORY_CLEARED:
+		msg := &packetspb.DmHistoryClearedEvent{}
+		if err := payloadUnmarshalOptions.Unmarshal(payloadJSON, msg); err != nil {
+			return nil, fmt.Errorf("decode dm_history_cleared payload: %w", err)
+		}
+		evt.Payload = &packetspb.ServerEvent_DmHistoryCleared{DmHistoryCleared: msg}
 	case packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED:
 		msg := &packetspb.ReadCounterUpdatedEvent{}
 		if err := payloadUnmarshalOptions.Unmarshal(payloadJSON, msg); err != nil {

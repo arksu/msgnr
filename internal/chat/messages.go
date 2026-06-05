@@ -1221,6 +1221,98 @@ func (s *Service) DeleteMessage(ctx context.Context, p DeleteMessageParams) (Del
 	}, nil
 }
 
+func (s *Service) ClearDMConversationHistory(ctx context.Context, p ClearDMConversationHistoryParams) (ClearDMConversationHistoryResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var kind string
+	var visibility string
+	var isMember bool
+	if err := tx.QueryRow(ctx, `
+		SELECT c.kind,
+		       c.visibility,
+		       EXISTS (
+		         SELECT 1
+		           FROM channel_members cm
+		          WHERE cm.channel_id = c.id
+		            AND cm.user_id = $2
+		            AND cm.is_archived = false
+		       ) AS is_member
+		  FROM channels c
+		 WHERE c.id = $1
+		   AND c.is_archived = false
+		   AND c.hidden = false`,
+		p.ConversationID,
+		p.ActorID,
+	).Scan(&kind, &visibility, &isMember); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ClearDMConversationHistoryResult{}, ErrNotMember
+		}
+		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory load conversation: %w", err)
+	}
+	if !isMember {
+		return ClearDMConversationHistoryResult{}, ErrNotMember
+	}
+	if kind != "dm" || visibility != "dm" {
+		return ClearDMConversationHistoryResult{}, ErrClearHistoryUnsupported
+	}
+
+	attachmentsToDelete, err := s.listMessageAttachmentsForConversationDeleteTx(ctx, tx, p.ConversationID)
+	if err != nil {
+		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory list attachments: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM notifications
+		 WHERE channel_id = $1`,
+		p.ConversationID,
+	); err != nil {
+		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory delete notifications: %w", err)
+	}
+
+	var deletedMessagesCount int32
+	if err := tx.QueryRow(ctx, `
+		WITH deleted AS (
+			DELETE FROM messages
+			 WHERE channel_id = $1
+			 RETURNING id
+		)
+		SELECT COUNT(*)::int
+		  FROM deleted`,
+		p.ConversationID,
+	).Scan(&deletedMessagesCount); err != nil {
+		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory delete messages: %w", err)
+	}
+
+	clearedEvt := &packetspb.DmHistoryClearedEvent{
+		ConversationId:       p.ConversationID.String(),
+		ClearedByUserId:      p.ActorID.String(),
+		DeletedMessagesCount: deletedMessagesCount,
+	}
+	clearedServerEvt := &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_DM_HISTORY_CLEARED,
+		ConversationId: p.ConversationID.String(),
+		Payload:        &packetspb.ServerEvent_DmHistoryCleared{DmHistoryCleared: clearedEvt},
+	}
+	if err := s.appendAndNotifyTx(ctx, tx, "dm_history_cleared", p.ConversationID.String(), clearedEvt, clearedServerEvt); err != nil {
+		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory commit: %w", err)
+	}
+
+	s.cleanupDeletedAttachments(attachmentsToDelete)
+
+	return ClearDMConversationHistoryResult{
+		ConversationID:       p.ConversationID,
+		DeletedMessagesCount: deletedMessagesCount,
+	}, nil
+}
+
 type existingMessageRow struct {
 	ID          uuid.UUID
 	ChannelSeq  int64

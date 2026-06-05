@@ -51,6 +51,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/channels/available", h.requireAuth(h.listAvailableChannels))
 	mux.HandleFunc("/api/channels/join", h.requireAuth(h.joinChannels))
 	mux.HandleFunc("/api/conversations/leave", h.requireAuth(h.leaveConversation))
+	mux.HandleFunc("/api/conversations/clear-history", h.requireAuth(h.clearConversationHistory))
 	mux.HandleFunc("/api/conversations/members", h.requireAuth(h.listConversationMembers))
 	mux.HandleFunc("/api/conversations/members/remove", h.requireAuth(h.removeConversationMember))
 	mux.HandleFunc("/api/conversations/active-call-members", h.requireAuth(h.listActiveCallMembers))
@@ -96,6 +97,15 @@ type joinChannelsRequest struct {
 
 type leaveConversationRequest struct {
 	ConversationID string `json:"conversation_id"`
+}
+
+type clearConversationHistoryRequest struct {
+	ConversationID string `json:"conversation_id"`
+}
+
+type clearConversationHistoryResponse struct {
+	ConversationID       string `json:"conversation_id"`
+	DeletedMessagesCount int32  `json:"deleted_messages_count"`
 }
 
 type inviteConversationRequest struct {
@@ -573,6 +583,46 @@ func (h *Handler) leaveConversation(w http.ResponseWriter, r *http.Request, prin
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) clearConversationHistory(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodPost {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	var req clearConversationHistoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
+		return
+	}
+	conversationID, err := uuid.Parse(strings.TrimSpace(req.ConversationID))
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
+		return
+	}
+
+	result, err := h.svc.ClearDMConversationHistory(r.Context(), ClearDMConversationHistoryParams{
+		ConversationID: conversationID,
+		ActorID:        principal.UserID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
+		case errors.Is(err, ErrClearHistoryUnsupported):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("clear history is only supported for direct messages"))
+		default:
+			h.log.Error("clearConversationHistory error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, clearConversationHistoryResponse{
+		ConversationID:       result.ConversationID.String(),
+		DeletedMessagesCount: result.DeletedMessagesCount,
+	})
 }
 
 func (h *Handler) listConversationMembers(w http.ResponseWriter, r *http.Request, principal auth.Principal) {

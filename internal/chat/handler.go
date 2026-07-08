@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +69,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chat/attachments", h.requireAuth(h.chatAttachments))
 	mux.HandleFunc("/api/chat/attachments/", h.requireAuth(h.chatAttachmentItem))
 	mux.HandleFunc("/api/dm-candidates", h.requireAuth(h.listDMCandidates))
+	mux.HandleFunc("/api/e2ee/devices", h.requireAuth(h.e2eeDevices))
+	mux.HandleFunc("/api/e2ee/conversation-devices", h.requireAuth(h.listEncryptedDMDevices))
+	mux.HandleFunc("/api/dms/e2ee", h.requireAuth(h.createOrOpenEncryptedDirectMessage))
 	mux.HandleFunc("/api/dms", h.requireAuth(h.createOrOpenDirectMessage))
 }
 
@@ -89,6 +93,29 @@ type dmCandidateResponse struct {
 
 type createDirectMessageRequest struct {
 	UserID string `json:"user_id"`
+}
+
+type createEncryptedDirectMessageRequest struct {
+	ConversationID string `json:"conversation_id"`
+}
+
+type registerE2EEDeviceRequest struct {
+	DeviceID              string `json:"device_id"`
+	DeviceLabel           string `json:"device_label"`
+	IdentityKeyPublic     string `json:"identity_key_public"`
+	SignedPrekeyID        int    `json:"signed_prekey_id"`
+	SignedPrekeyPublic    string `json:"signed_prekey_public"`
+	SignedPrekeySignature string `json:"signed_prekey_signature"`
+}
+
+type e2eeDeviceResponse struct {
+	DeviceID              string `json:"device_id"`
+	UserID                string `json:"user_id"`
+	DeviceLabel           string `json:"device_label"`
+	IdentityKeyPublic     string `json:"identity_key_public"`
+	SignedPrekeyID        int    `json:"signed_prekey_id"`
+	SignedPrekeyPublic    string `json:"signed_prekey_public"`
+	SignedPrekeySignature string `json:"signed_prekey_signature"`
 }
 
 type joinChannelsRequest struct {
@@ -135,6 +162,7 @@ type directMessageResponse struct {
 	CustomStatus   *userstatus.Body `json:"custom_status"`
 	Kind           string           `json:"kind"`
 	Visibility     string           `json:"visibility"`
+	EncryptionMode string           `json:"encryption_mode"`
 }
 
 type conversationMessageResponse struct {
@@ -156,6 +184,17 @@ type conversationMessageResponse struct {
 	MyReactions         []string                    `json:"my_reactions"`
 	Attachments         []messageAttachmentResponse `json:"attachments"`
 	IsSaved             bool                        `json:"is_saved"`
+	ContentMode         string                      `json:"content_mode"`
+	SenderDeviceID      string                      `json:"sender_device_id,omitempty"`
+	EncryptedDMPayloads []encryptedDMPayloadBody    `json:"encrypted_dm_payloads,omitempty"`
+}
+
+type encryptedDMPayloadBody struct {
+	RecipientDeviceID string `json:"recipient_device_id"`
+	SenderDeviceID    string `json:"sender_device_id"`
+	Algorithm         string `json:"algorithm"`
+	SessionMessage    string `json:"session_message"`
+	MetadataAAD       string `json:"metadata_aad"`
 }
 
 type forwardedMessageResponse struct {
@@ -759,6 +798,14 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
 		return
 	}
+	var requesterDeviceID uuid.UUID
+	if rawDeviceID := strings.TrimSpace(r.URL.Query().Get("e2ee_device_id")); rawDeviceID != "" {
+		requesterDeviceID, err = uuid.Parse(rawDeviceID)
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid e2ee_device_id"))
+			return
+		}
+	}
 
 	var beforeChannelSeq *int64
 	if raw := r.URL.Query().Get("before_channel_seq"); raw != "" {
@@ -785,6 +832,7 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 		conversationID,
 		beforeChannelSeq,
 		pageSize,
+		requesterDeviceID,
 	)
 	if err != nil {
 		switch {
@@ -842,6 +890,9 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 			MyReactions:         msg.MyReactions,
 			Attachments:         attachments,
 			IsSaved:             msg.IsSaved,
+			ContentMode:         msg.ContentMode,
+			SenderDeviceID:      uuidStringOrEmpty(msg.SenderDeviceID),
+			EncryptedDMPayloads: encodeEncryptedDMPayloads(msg.EncryptedDMPayloads),
 		})
 	}
 
@@ -873,10 +924,18 @@ func (h *Handler) getMessageContext(w http.ResponseWriter, r *http.Request, prin
 		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid message_id"))
 		return
 	}
+	var requesterDeviceID uuid.UUID
+	if rawDeviceID := strings.TrimSpace(r.URL.Query().Get("e2ee_device_id")); rawDeviceID != "" {
+		requesterDeviceID, err = uuid.Parse(rawDeviceID)
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid e2ee_device_id"))
+			return
+		}
+	}
 
 	// Match the default 50-message conversation page closely enough that an
 	// anchored open can merge surrounding context without overfetching.
-	messages, err := h.svc.ListMessageContext(r.Context(), principal.UserID, conversationID, messageID, 20, 20)
+	messages, err := h.svc.ListMessageContext(r.Context(), principal.UserID, conversationID, messageID, 20, 20, requesterDeviceID)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotMember):
@@ -935,6 +994,9 @@ func (h *Handler) getMessageContext(w http.ResponseWriter, r *http.Request, prin
 			MyReactions:         msg.MyReactions,
 			Attachments:         attachments,
 			IsSaved:             msg.IsSaved,
+			ContentMode:         msg.ContentMode,
+			SenderDeviceID:      uuidStringOrEmpty(msg.SenderDeviceID),
+			EncryptedDMPayloads: encodeEncryptedDMPayloads(msg.EncryptedDMPayloads),
 		})
 	}
 
@@ -1398,6 +1460,8 @@ func (h *Handler) forwardMessage(w http.ResponseWriter, r *http.Request, princip
 			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
 		case errors.Is(err, ErrInvalidThread):
 			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid destination thread"))
+		case errors.Is(err, ErrEncryptedMessageUnsupported):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("encrypted messages cannot be forwarded"))
 		case errors.Is(err, ErrInvalidAttachment), errors.Is(err, ErrInvalidMessageEntity), errors.Is(err, ErrEmptyMessage):
 			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("message cannot be forwarded"))
 		default:
@@ -1447,6 +1511,8 @@ func (h *Handler) patchMessage(w http.ResponseWriter, r *http.Request, principal
 			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("only author can edit this message"))
 		case errors.Is(err, ErrEmptyMessage):
 			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("message body and attachments are both empty"))
+		case errors.Is(err, ErrEncryptedMessageUnsupported):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("encrypted messages cannot be edited yet"))
 		case errors.Is(err, ErrInvalidMessageEntity):
 			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid entities"))
 		default:
@@ -1598,7 +1664,164 @@ func (h *Handler) createOrOpenDirectMessage(w http.ResponseWriter, r *http.Reque
 		CustomStatus:   userstatus.ToBody(dm.CustomStatus),
 		Kind:           dm.Kind,
 		Visibility:     dm.Visibility,
+		EncryptionMode: dm.EncryptionMode,
 	})
+}
+
+func (h *Handler) createOrOpenEncryptedDirectMessage(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodPost {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	var req createEncryptedDirectMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
+		return
+	}
+
+	conversationID, err := uuid.Parse(req.ConversationID)
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
+		return
+	}
+
+	result, err := h.svc.CreateOrOpenEncryptedDirectMessage(r.Context(), principal.UserID, conversationID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidDMTarget):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid dm target"))
+		case errors.Is(err, ErrBlockedDMTarget):
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("user not available"))
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a dm member"))
+		default:
+			h.log.Error("createOrOpenEncryptedDirectMessage error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+
+	if len(result.DirectDeliveries) > 0 && h.notifier != nil {
+		h.notifier.SendChatDirectServerEvents(result.DirectDeliveries)
+	}
+
+	dm := result.DM
+	httputil.WriteJSON(w, http.StatusOK, directMessageResponse{
+		ConversationID: dm.ConversationID.String(),
+		UserID:         dm.UserID.String(),
+		DisplayName:    dm.DisplayName,
+		Email:          dm.Email,
+		AvatarURL:      dm.AvatarURL,
+		CustomStatus:   userstatus.ToBody(dm.CustomStatus),
+		Kind:           dm.Kind,
+		Visibility:     dm.Visibility,
+		EncryptionMode: dm.EncryptionMode,
+	})
+}
+
+func (h *Handler) e2eeDevices(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodPost {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	var req registerE2EEDeviceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
+		return
+	}
+	var deviceID uuid.UUID
+	if strings.TrimSpace(req.DeviceID) != "" {
+		parsed, err := uuid.Parse(req.DeviceID)
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid device_id"))
+			return
+		}
+		deviceID = parsed
+	}
+	identityKeyPublic, err := base64.StdEncoding.DecodeString(req.IdentityKeyPublic)
+	if err != nil || len(identityKeyPublic) == 0 {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid identity_key_public"))
+		return
+	}
+	signedPrekeyPublic, err := base64.StdEncoding.DecodeString(req.SignedPrekeyPublic)
+	if err != nil || len(signedPrekeyPublic) == 0 {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid signed_prekey_public"))
+		return
+	}
+	signedPrekeySignature, err := base64.StdEncoding.DecodeString(req.SignedPrekeySignature)
+	if err != nil || len(signedPrekeySignature) == 0 {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid signed_prekey_signature"))
+		return
+	}
+	device, err := h.svc.RegisterDevice(r.Context(), RegisterDeviceParams{
+		DeviceID:              deviceID,
+		UserID:                principal.UserID,
+		DeviceLabel:           req.DeviceLabel,
+		IdentityKeyPublic:     identityKeyPublic,
+		SignedPrekeyID:        req.SignedPrekeyID,
+		SignedPrekeyPublic:    signedPrekeyPublic,
+		SignedPrekeySignature: signedPrekeySignature,
+	})
+	if err != nil {
+		h.log.Error("register e2ee device error", zap.Error(err))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, mapE2EEDeviceResponse(device))
+}
+
+func (h *Handler) listEncryptedDMDevices(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodGet {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+	conversationID, err := uuid.Parse(r.URL.Query().Get("conversation_id"))
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid conversation_id"))
+		return
+	}
+	devices, err := h.svc.ListEncryptedDMDevices(r.Context(), principal.UserID, conversationID)
+	if err != nil {
+		h.log.Error("list encrypted dm devices error", zap.Error(err))
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		return
+	}
+	resp := make([]e2eeDeviceResponse, 0, len(devices))
+	for _, device := range devices {
+		resp = append(resp, mapE2EEDeviceResponse(device))
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
+}
+
+func mapE2EEDeviceResponse(device UserDeviceBundle) e2eeDeviceResponse {
+	return e2eeDeviceResponse{
+		DeviceID:              device.DeviceID.String(),
+		UserID:                device.UserID.String(),
+		DeviceLabel:           device.DeviceLabel,
+		IdentityKeyPublic:     base64.StdEncoding.EncodeToString(device.IdentityKeyPublic),
+		SignedPrekeyID:        device.SignedPrekeyID,
+		SignedPrekeyPublic:    base64.StdEncoding.EncodeToString(device.SignedPrekeyPublic),
+		SignedPrekeySignature: base64.StdEncoding.EncodeToString(device.SignedPrekeySignature),
+	}
+}
+
+func encodeEncryptedDMPayloads(items []EncryptedDMRecipientPayload) []encryptedDMPayloadBody {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]encryptedDMPayloadBody, 0, len(items))
+	for _, item := range items {
+		out = append(out, encryptedDMPayloadBody{
+			RecipientDeviceID: item.RecipientDeviceID.String(),
+			SenderDeviceID:    item.SenderDeviceID.String(),
+			Algorithm:         item.Algorithm,
+			SessionMessage:    base64.StdEncoding.EncodeToString(item.SessionMessage),
+			MetadataAAD:       base64.StdEncoding.EncodeToString(item.MetadataAAD),
+		})
+	}
+	return out
 }
 
 func (h *Handler) inviteToConversation(w http.ResponseWriter, r *http.Request, principal auth.Principal) {

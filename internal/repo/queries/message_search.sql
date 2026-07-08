@@ -57,6 +57,8 @@ WITH search_results AS (
     LIMIT 1
   ) dm_peer ON true
   WHERE m.body ILIKE @like_query::text ESCAPE '\'
+    AND m.content_mode = 'plaintext'
+    AND c.encryption_mode = 'none'
 
   UNION ALL
 
@@ -119,6 +121,7 @@ WITH search_results AS (
     ON actor.id = m.sender_id
   WHERE m.thread_root_id IS NOT NULL
     AND m.body ILIKE @like_query::text ESCAPE '\'
+    AND m.content_mode = 'plaintext'
 )
 SELECT source, id, body, created_at, actor_id, actor_name,
        conversation_id, conversation_title, conversation_kind, conversation_visibility,
@@ -175,6 +178,8 @@ WITH search_results AS (
     LIMIT 1
   ) dm_peer ON true
   WHERE m.body ILIKE @like_query::text ESCAPE '\'
+    AND m.content_mode = 'plaintext'
+    AND c.encryption_mode = 'none'
 )
 SELECT source, id, body, created_at, actor_id, actor_name,
        conversation_id, conversation_title, conversation_kind, conversation_visibility,

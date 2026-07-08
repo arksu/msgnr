@@ -1132,6 +1132,222 @@ func TestIntegration_CreateOrOpenDirectMessage_ReusesExistingPair(t *testing.T) 
 	assert.Equal(t, 2, memberCount)
 }
 
+func TestIntegration_CreateOrOpenEncryptedDirectMessage_CreatesSeparateSibling(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	userA := seedChatUserWithAttrs(t, ctx, pool, "E2E Ada", "member", "active")
+	userB := seedChatUserWithAttrs(t, ctx, pool, "E2E Bob", "member", "active")
+
+	plaintext, err := svc.CreateOrOpenDirectMessage(ctx, userA, userB)
+	require.NoError(t, err)
+	require.Equal(t, "none", plaintext.DM.EncryptionMode)
+
+	encrypted, err := svc.CreateOrOpenEncryptedDirectMessage(ctx, userA, plaintext.DM.ConversationID)
+	require.NoError(t, err)
+	require.NotEqual(t, plaintext.DM.ConversationID, encrypted.DM.ConversationID)
+	require.Equal(t, "dm_pairwise_signal_v1", encrypted.DM.EncryptionMode)
+
+	reopenedPlaintext, err := svc.CreateOrOpenDirectMessage(ctx, userA, userB)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext.DM.ConversationID, reopenedPlaintext.DM.ConversationID)
+
+	reopenedEncrypted, err := svc.CreateOrOpenEncryptedDirectMessage(ctx, userA, plaintext.DM.ConversationID)
+	require.NoError(t, err)
+	assert.Equal(t, encrypted.DM.ConversationID, reopenedEncrypted.DM.ConversationID)
+
+	var dmCount int
+	err = pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM channels
+		 WHERE kind = 'dm'
+		   AND visibility = 'dm'
+		   AND id IN ($1, $2)`,
+		plaintext.DM.ConversationID,
+		encrypted.DM.ConversationID,
+	).Scan(&dmCount)
+	require.NoError(t, err)
+	assert.Equal(t, 2, dmCount)
+}
+
+func TestIntegration_SendMessage_StoresEncryptedDMCiphertexts(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	userA := seedChatUserWithAttrs(t, ctx, pool, "E2E Sender", "member", "active")
+	userB := seedChatUserWithAttrs(t, ctx, pool, "E2E Receiver", "member", "active")
+
+	plaintext, err := svc.CreateOrOpenDirectMessage(ctx, userA, userB)
+	require.NoError(t, err)
+	encrypted, err := svc.CreateOrOpenEncryptedDirectMessage(ctx, userA, plaintext.DM.ConversationID)
+	require.NoError(t, err)
+
+	senderDevice, err := svc.RegisterDevice(ctx, chat.RegisterDeviceParams{
+		UserID:                userA,
+		IdentityKeyPublic:     []byte("sender identity"),
+		SignedPrekeyID:        1,
+		SignedPrekeyPublic:    []byte("sender signed prekey"),
+		SignedPrekeySignature: []byte("sender signature"),
+	})
+	require.NoError(t, err)
+	recipientDevice, err := svc.RegisterDevice(ctx, chat.RegisterDeviceParams{
+		UserID:                userB,
+		IdentityKeyPublic:     []byte("recipient identity"),
+		SignedPrekeyID:        1,
+		SignedPrekeyPublic:    []byte("recipient signed prekey"),
+		SignedPrekeySignature: []byte("recipient signature"),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:      encrypted.DM.ConversationID,
+		SenderID:       userA,
+		ClientMsgID:    uuid.NewString(),
+		ContentMode:    chat.MessageContentDMPairwiseSignal,
+		SenderDeviceID: senderDevice.DeviceID,
+		EncryptedDMPayloads: []chat.EncryptedDMRecipientPayload{
+			{
+				RecipientDeviceID: senderDevice.DeviceID,
+				SenderDeviceID:    senderDevice.DeviceID,
+				Algorithm:         "dm-p256-aesgcm-v1",
+				SessionMessage:    []byte("sender ciphertext"),
+			},
+		},
+	})
+	require.ErrorIs(t, err, chat.ErrInvalidEncryptedPayload)
+
+	sent, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:      encrypted.DM.ConversationID,
+		SenderID:       userA,
+		ClientMsgID:    uuid.NewString(),
+		ContentMode:    chat.MessageContentDMPairwiseSignal,
+		SenderDeviceID: senderDevice.DeviceID,
+		EncryptedDMPayloads: []chat.EncryptedDMRecipientPayload{
+			{
+				RecipientDeviceID: senderDevice.DeviceID,
+				SenderDeviceID:    senderDevice.DeviceID,
+				Algorithm:         "dm-p256-aesgcm-v1",
+				SessionMessage:    []byte("sender ciphertext"),
+			},
+			{
+				RecipientDeviceID: recipientDevice.DeviceID,
+				SenderDeviceID:    senderDevice.DeviceID,
+				Algorithm:         "dm-p256-aesgcm-v1",
+				SessionMessage:    []byte("recipient ciphertext"),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	var body string
+	var contentMode string
+	var ciphertextCount int
+	err = pool.QueryRow(ctx, `
+		SELECT m.body,
+		       m.content_mode,
+		       COUNT(mrc.recipient_device_id)::int
+		  FROM messages m
+		  LEFT JOIN message_recipient_ciphertexts mrc
+		    ON mrc.message_id = m.id
+		 WHERE m.id = $1
+		 GROUP BY m.id`,
+		sent.MessageID,
+	).Scan(&body, &contentMode, &ciphertextCount)
+	require.NoError(t, err)
+	assert.Equal(t, "", body)
+	assert.Equal(t, "dm_pairwise_signal_v1", contentMode)
+	assert.Equal(t, 2, ciphertextCount)
+
+	senderHistory, _, err := svc.ListMessagePage(ctx, userA, encrypted.DM.ConversationID, nil, 20, senderDevice.DeviceID)
+	require.NoError(t, err)
+	require.Len(t, senderHistory, 1)
+	require.Len(t, senderHistory[0].EncryptedDMPayloads, 1)
+	assert.Equal(t, senderDevice.DeviceID, senderHistory[0].EncryptedDMPayloads[0].RecipientDeviceID)
+
+	crossDeviceHistory, _, err := svc.ListMessagePage(ctx, userA, encrypted.DM.ConversationID, nil, 20, recipientDevice.DeviceID)
+	require.NoError(t, err)
+	require.Len(t, crossDeviceHistory, 1)
+	assert.Empty(t, crossDeviceHistory[0].EncryptedDMPayloads)
+
+	recipientHistory, _, err := svc.ListMessagePage(ctx, userB, encrypted.DM.ConversationID, nil, 20, recipientDevice.DeviceID)
+	require.NoError(t, err)
+	require.Len(t, recipientHistory, 1)
+	require.Len(t, recipientHistory[0].EncryptedDMPayloads, 1)
+	assert.Equal(t, recipientDevice.DeviceID, recipientHistory[0].EncryptedDMPayloads[0].RecipientDeviceID)
+
+	var storedMessageCreated *packetspb.ServerEvent
+	storedEvents, listErr := store.ListEventsAfterSeq(ctx, 0, 20)
+	require.NoError(t, listErr)
+	for _, stored := range storedEvents {
+		if stored.EventType == "message_created" {
+			storedMessageCreated = stored.Proto
+			break
+		}
+	}
+	require.NotNil(t, storedMessageCreated)
+	filteredForSender, err := svc.FilterEncryptedEventPayloadsForUser(ctx, storedMessageCreated, userA)
+	require.NoError(t, err)
+	require.NotNil(t, filteredForSender)
+	require.Len(t, filteredForSender.GetMessageCreated().GetEncryptedDmPayload().GetRecipients(), 1)
+
+	_, err = svc.EditMessage(ctx, chat.EditMessageParams{
+		MessageID: sent.MessageID,
+		ActorID:   userA,
+		Body:      "plaintext edit must not apply",
+	})
+	require.ErrorIs(t, err, chat.ErrEncryptedMessageUnsupported)
+
+	_, err = svc.ForwardMessage(ctx, chat.ForwardMessageParams{
+		SourceMessageID:           sent.MessageID,
+		ActorID:                   userA,
+		DestinationConversationID: plaintext.DM.ConversationID,
+	})
+	require.ErrorIs(t, err, chat.ErrEncryptedMessageUnsupported)
+
+	_, err = svc.AddReaction(ctx, chat.ReactionParams{
+		ChannelID: encrypted.DM.ConversationID,
+		MessageID: sent.MessageID,
+		UserID:    userB,
+		Emoji:     "ok",
+	})
+	require.ErrorIs(t, err, chat.ErrEncryptedMessageUnsupported)
+
+	_, err = svc.SaveMessage(ctx, userB, sent.MessageID)
+	require.NoError(t, err)
+	savedItems, err := svc.ListSavedMessages(ctx, userB)
+	require.NoError(t, err)
+	require.Len(t, savedItems, 1)
+	assert.Equal(t, "Encrypted message", savedItems[0].Body)
+
+	unreadItems, err := svc.ListUnreadFeed(ctx, userB)
+	require.NoError(t, err)
+	require.NotEmpty(t, unreadItems)
+	assert.Equal(t, "Encrypted message", unreadItems[0].Body)
+
+	clearResult, err := svc.ClearDMConversationHistory(ctx, chat.ClearDMConversationHistoryParams{
+		ConversationID: encrypted.DM.ConversationID,
+		ActorID:        userB,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), clearResult.DeletedMessagesCount)
+
+	var remainingMessages int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*)::int FROM messages WHERE channel_id = $1`, encrypted.DM.ConversationID).Scan(&remainingMessages)
+	require.NoError(t, err)
+	assert.Equal(t, 0, remainingMessages)
+
+	var remainingCiphertexts int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*)::int FROM message_recipient_ciphertexts WHERE message_id = $1`, sent.MessageID).Scan(&remainingCiphertexts)
+	require.NoError(t, err)
+	assert.Equal(t, 0, remainingCiphertexts)
+}
+
 func TestIntegration_ClearDMConversationHistory_HardDeletesMessagesAndKeepsDM(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

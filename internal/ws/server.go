@@ -703,13 +703,14 @@ func (s *Server) startEventFanout(
 		userID := principal.UserID.String()
 
 		for evt := range eventCh {
+			deliveredEvt := s.filterEncryptedEventForUser(userID, evt)
 			if state != nil {
-				state.applyAuthorizationEvent(userID, evt)
+				state.applyAuthorizationEvent(userID, deliveredEvt)
 			}
 			env := &packetspb.Envelope{
 				ProtocolVersion: protocolVersion,
 				Payload: &packetspb.Envelope_ServerEvent{
-					ServerEvent: evt,
+					ServerEvent: deliveredEvt,
 				},
 			}
 
@@ -719,8 +720,8 @@ func (s *Server) startEventFanout(
 				s.log.Debug("ws fanout: delivered event",
 					zap.String("session_id", sessionID),
 					zap.String("user_id", userID),
-					zap.Int64("event_seq", evt.GetEventSeq()),
-					zap.String("event_type", evt.GetEventType().String()),
+					zap.Int64("event_seq", deliveredEvt.GetEventSeq()),
+					zap.String("event_type", deliveredEvt.GetEventType().String()),
 				)
 			default:
 				// outboundCh is full — send overflow error then close.
@@ -883,17 +884,23 @@ func (s *Server) sendDirectEnvelope(userIDs []string, env *packetspb.Envelope) {
 
 	evt := env.GetServerEvent()
 	for _, target := range targets {
-		if evt != nil && target.state != nil {
-			target.state.applyAuthorizationEvent(target.userID, evt)
+		targetEnv := env
+		targetEvt := evt
+		if evt != nil {
+			targetEvt = s.filterEncryptedEventForUser(target.userID, evt)
+			targetEnv = envelopeWithServerEvent(env, targetEvt)
+		}
+		if targetEvt != nil && target.state != nil {
+			target.state.applyAuthorizationEvent(target.userID, targetEvt)
 		}
 		select {
-		case target.ch <- outboundMsg{env: env}:
+		case target.ch <- outboundMsg{env: targetEnv}:
 		default:
 			metrics.WsFanoutDroppedTotal.WithLabelValues("direct_overflow").Inc()
-			if evt != nil {
+			if targetEvt != nil {
 				s.log.Warn("ws direct fanout: outbound queue overflow, forcing reconnect",
 					zap.String("user_id", target.userID),
-					zap.String("event_type", evt.GetEventType().String()),
+					zap.String("event_type", targetEvt.GetEventType().String()),
 				)
 			}
 			metrics.WsSessionDesyncTotal.WithLabelValues("direct_overflow").Inc()
@@ -902,6 +909,45 @@ func (s *Server) sendDirectEnvelope(userIDs []string, env *packetspb.Envelope) {
 			}
 		}
 	}
+}
+
+func envelopeWithServerEvent(env *packetspb.Envelope, evt *packetspb.ServerEvent) *packetspb.Envelope {
+	if env.GetServerEvent() == evt {
+		return env
+	}
+	return &packetspb.Envelope{
+		RequestId:       env.GetRequestId(),
+		TraceId:         env.GetTraceId(),
+		ProtocolVersion: env.GetProtocolVersion(),
+		Payload:         &packetspb.Envelope_ServerEvent{ServerEvent: evt},
+	}
+}
+
+func (s *Server) filterEncryptedEventForUser(userID string, evt *packetspb.ServerEvent) *packetspb.ServerEvent {
+	msg := evt.GetMessageCreated()
+	if msg == nil ||
+		msg.GetContentMode() != packetspb.MessageContentMode_MESSAGE_CONTENT_MODE_DM_PAIRWISE_SIGNAL_V1 ||
+		msg.GetEncryptedDmPayload() == nil {
+		return evt
+	}
+	if s.chatSvc == nil {
+		return chat.StripEncryptedEventPayloads(evt)
+	}
+	parsedUserID, err := uuid.Parse(userID)
+	if err != nil {
+		return chat.StripEncryptedEventPayloads(evt)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	filtered, err := s.chatSvc.FilterEncryptedEventPayloadsForUser(ctx, evt, parsedUserID)
+	cancel()
+	if err != nil {
+		s.log.Warn("ws: failed to filter encrypted dm payloads",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
+		return chat.StripEncryptedEventPayloads(evt)
+	}
+	return filtered
 }
 
 func cloneTaskCollabBytes(src []byte) []byte {
@@ -1763,6 +1809,49 @@ func (s *Server) handleDomainPayload(
 				return
 			}
 		}
+		var contentMode string
+		switch req.GetContentMode() {
+		case packetspb.MessageContentMode_MESSAGE_CONTENT_MODE_PLAINTEXT:
+			contentMode = chat.MessageContentPlaintext
+		case packetspb.MessageContentMode_MESSAGE_CONTENT_MODE_DM_PAIRWISE_SIGNAL_V1:
+			contentMode = chat.MessageContentDMPairwiseSignal
+		default:
+			badReq("send_message_request: unsupported content_mode")
+			return
+		}
+		var senderDeviceID uuid.UUID
+		if req.GetSenderDeviceId() != "" {
+			if senderDeviceID, err = uuid.Parse(req.GetSenderDeviceId()); err != nil {
+				badReq("send_message_request: invalid sender_device_id")
+				return
+			}
+		}
+		encryptedPayloads := make([]chat.EncryptedDMRecipientPayload, 0)
+		if req.GetEncryptedDmPayload() != nil {
+			for _, rawPayload := range req.GetEncryptedDmPayload().GetRecipients() {
+				if rawPayload == nil {
+					badReq("send_message_request: invalid encrypted_dm_payload")
+					return
+				}
+				recipientDeviceID, err := uuid.Parse(rawPayload.GetRecipientDeviceId())
+				if err != nil {
+					badReq("send_message_request: invalid recipient_device_id")
+					return
+				}
+				payloadSenderDeviceID, err := uuid.Parse(rawPayload.GetSenderDeviceId())
+				if err != nil {
+					badReq("send_message_request: invalid payload sender_device_id")
+					return
+				}
+				encryptedPayloads = append(encryptedPayloads, chat.EncryptedDMRecipientPayload{
+					RecipientDeviceID: recipientDeviceID,
+					SenderDeviceID:    payloadSenderDeviceID,
+					Algorithm:         rawPayload.GetAlgorithm(),
+					SessionMessage:    append([]byte(nil), rawPayload.GetSessionMessage()...),
+					MetadataAAD:       append([]byte(nil), rawPayload.GetMetadataAad()...),
+				})
+			}
+		}
 		attachmentIDs := make([]uuid.UUID, 0, len(req.GetAttachmentIds()))
 		for _, rawID := range req.GetAttachmentIds() {
 			attachmentID, err := uuid.Parse(rawID)
@@ -1813,6 +1902,9 @@ func (s *Server) handleDomainPayload(
 			Entities:            entities,
 			ThreadRootMessageID: threadRootID,
 			AttachmentIDs:       attachmentIDs,
+			ContentMode:         contentMode,
+			SenderDeviceID:      senderDeviceID,
+			EncryptedDMPayloads: encryptedPayloads,
 		})
 		if err != nil {
 			if errors.Is(err, chat.ErrNotMember) {
@@ -1821,6 +1913,14 @@ func (s *Server) handleDomainPayload(
 			}
 			if errors.Is(err, chat.ErrMessageNotFound) || errors.Is(err, chat.ErrInvalidThread) {
 				badReq("send_message_request: invalid thread root message")
+				return
+			}
+			if errors.Is(err, chat.ErrEncryptedMessagesUnsupported) {
+				badReq("send_message_request: encrypted dm payload required")
+				return
+			}
+			if errors.Is(err, chat.ErrInvalidEncryptedPayload) {
+				badReq("send_message_request: invalid encrypted dm payload")
 				return
 			}
 			if errors.Is(err, chat.ErrAttachmentNotFound) ||
@@ -2377,6 +2477,10 @@ func (s *Server) handleDomainPayload(
 				badReq("add_reaction_request: message not found")
 				return
 			}
+			if errors.Is(err, chat.ErrEncryptedMessageUnsupported) {
+				badReq("add_reaction_request: encrypted message reactions are not available")
+				return
+			}
 			s.log.Error("ws: AddReaction error", zap.Error(err))
 			badReq("add_reaction_request: internal error")
 			return
@@ -2428,6 +2532,10 @@ func (s *Server) handleDomainPayload(
 			}
 			if errors.Is(err, chat.ErrMessageNotFound) {
 				badReq("remove_reaction_request: message not found")
+				return
+			}
+			if errors.Is(err, chat.ErrEncryptedMessageUnsupported) {
+				badReq("remove_reaction_request: encrypted message reactions are not available")
 				return
 			}
 			s.log.Error("ws: RemoveReaction error", zap.Error(err))

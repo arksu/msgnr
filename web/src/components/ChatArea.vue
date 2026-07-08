@@ -225,6 +225,8 @@
       :channel-name="conversation?.title ?? 'conversation'"
       :conversation-id="chatStore.activeChannelId"
       :draft-scope="conversationDraftScope"
+      :placeholder="composerPlaceholder"
+      :encrypted="isEncryptedDMConversation"
       :disabled="!canComposeMessage"
       :typing-label="typingLabel"
       :online="wsStore.state !== 'DISCONNECTED' && wsStore.state !== 'CONNECTING'"
@@ -353,6 +355,7 @@ import UserAvatar from './UserAvatar.vue'
 import BusyCallConfirmDialog from './BusyCallConfirmDialog.vue'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import { userCustomStatusFromProto, type UserCustomStatus } from '@/types/userStatus'
+import { encryptDMMessage, ensureEncryptedDMDevice } from '@/services/e2ee/dmE2ee'
 
 const emit = defineEmits<{
   'search-conversation': []
@@ -404,8 +407,12 @@ interface ScrollMetrics {
 type BottomStickReason = 'conversation-open' | 'send' | 'composer-resize' | 'inline-edit' | 'content-resize'
 
 const conversation = computed(() => chatStore.activeConversation)
+const isEncryptedDMConversation = computed(() =>
+  conversation.value?.kind === 'dm' && conversation.value.encryptionMode === 'dm_pairwise_signal_v1'
+)
 const conversationDraftScope = computed<ChatDraftScope | null>(() => {
   if (!chatStore.activeChannelId) return null
+  if (isEncryptedDMConversation.value) return null
   return {
     kind: 'conversation',
     conversationId: chatStore.activeChannelId,
@@ -423,6 +430,12 @@ const isConversationPinned = computed(() => {
   return pinnedDialogsStore.isPinned(pinnedDialogueId(kind, conversationId))
 })
 const canComposeMessage = computed(() => Boolean(conversation.value))
+const composerPlaceholder = computed(() =>
+  isEncryptedDMConversation.value ? 'Encrypted message' : undefined
+)
+watch(isEncryptedDMConversation, (encrypted) => {
+  if (encrypted) void ensureEncryptedDMDevice().catch(() => {})
+}, { immediate: true })
 const activeConversationCall = computed(() => {
   const conversationId = conversation.value?.id
   if (!conversationId) return null
@@ -725,6 +738,7 @@ function canInlineEditMessage(message: Message): boolean {
     && message.senderId === selfUserId
     && !message.sendStatus
     && !message.pending
+    && message.contentMode !== 'dm_pairwise_signal_v1'
 }
 
 function editRequestTokenFor(messageId: string): number {
@@ -749,6 +763,7 @@ function handleEditLastMessage() {
 }
 
 function openThreadFromMessage(message: Message) {
+  if (message.contentMode === 'dm_pairwise_signal_v1') return
   // Keep main conversation visible. Thread opens only in global pinned workspace.
   pinnedDialogsStore.ensureThreadPinned(message.channelId, message.id)
 }
@@ -765,7 +780,7 @@ function pinActiveConversation() {
   pinnedDialogsStore.ensureConversationPinned(conversationId)
 }
 
-function handleSend(
+async function handleSend(
   body: string | { body: string; entities: NonNullable<Message['entities']>; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> },
 ) {
   const payload = typeof body === 'string'
@@ -794,6 +809,17 @@ function handleSend(
   }
 
   const clientMsgId = generateId()
+  let encrypted: Awaited<ReturnType<typeof encryptDMMessage>> | undefined
+  if (isEncryptedDMConversation.value) {
+    if (payload.attachmentIds.length > 0 || payload.entities.length > 0) return
+    if (wsStore.state === 'DISCONNECTED' || wsStore.state === 'CONNECTING') return
+    try {
+      encrypted = await encryptDMMessage(channelId, clientMsgId, messageBody)
+    } catch (err) {
+      console.error('[e2ee] failed to encrypt direct message', err)
+      return
+    }
+  }
   const now = new Date().toISOString()
   const isOffline = wsStore.state === 'DISCONNECTED' || wsStore.state === 'CONNECTING'
   scheduleStableBottomStick('send')
@@ -814,6 +840,8 @@ function handleSend(
     createdAt: now,
     reactions: [],
     myReactions: [],
+    contentMode: encrypted ? 'dm_pairwise_signal_v1' : 'plaintext',
+    senderDeviceId: encrypted?.senderDeviceId,
     attachments: payload.attachments.map(att => ({
       id: att.id,
       fileName: att.fileName,
@@ -828,7 +856,12 @@ function handleSend(
     // Queue for delivery after reconnect
     offlineQueue.enqueue({ conversationId: channelId, body: messageBody, entities: payload.entities, clientMsgId })
   } else {
-    const sent = payload.entities.length > 0
+    const sent = encrypted
+      ? wsStore.sendMessage(channelId, '', clientMsgId, undefined, [], [], {
+          senderDeviceId: encrypted.senderDeviceId,
+          recipients: encrypted.envelopes,
+        })
+      : payload.entities.length > 0
       ? wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds, payload.entities)
       : wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds)
     if (!sent) {

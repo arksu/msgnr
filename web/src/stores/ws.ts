@@ -3,6 +3,8 @@ import { ref } from 'vue'
 import { create, toBinary, fromBinary } from '@bufbuild/protobuf'
 import {
   AcceptCallInviteRequestSchema,
+  EncryptedDMMessagePayloadSchema,
+  EncryptedDMRecipientPayloadSchema,
   EnvelopeSchema,
   ListActiveCallMembersRequestSchema,
   ListConversationMembersRequestSchema,
@@ -37,6 +39,7 @@ import {
   NotificationLevel,
   TaskDescriptionCollabMessageKind,
   DocumentContentCollabMessageKind,
+  MessageContentMode,
 } from '@/shared/proto/packets_pb'
 import { generateId } from '@/services/id'
 
@@ -172,7 +175,7 @@ export const useWsStore = defineStore('ws', () => {
   let onTaskDescriptionCollabMessageCallback: TaskDescriptionCollabMessageHandler | null = null
   let onDocumentContentCollabSubscribeResponseCallback: DocumentContentCollabSubscribeResponseHandler | null = null
   let onDocumentContentCollabMessageCallback: DocumentContentCollabMessageHandler | null = null
-  let onProtocolErrorCallback: ProtocolErrorHandler | null = null
+  const protocolErrorHandlers = new Set<ProtocolErrorHandler>()
   const pendingRequests = new Map<string, PendingRequest>()
   let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null
 
@@ -322,7 +325,7 @@ export const useWsStore = defineStore('ws', () => {
   }
 
   function onProtocolError(cb: ProtocolErrorHandler) {
-    onProtocolErrorCallback = cb
+    protocolErrorHandlers.add(cb)
   }
 
   function connect(url: string) {
@@ -456,7 +459,7 @@ export const useWsStore = defineStore('ws', () => {
     onTaskDescriptionCollabMessageCallback = null
     onDocumentContentCollabSubscribeResponseCallback = null
     onDocumentContentCollabMessageCallback = null
-    onProtocolErrorCallback = null
+    protocolErrorHandlers.clear()
   }
 
   function rejectPendingRequests(err: Error) {
@@ -576,6 +579,16 @@ export const useWsStore = defineStore('ws', () => {
     threadRootMessageId?: string,
     attachmentIds: string[] = [],
     entities: Array<{ kind: 'user' | 'task' | 'document'; targetId: string; label: string; href: string; start: number; end: number }> = [],
+    encrypted?: {
+      senderDeviceId: string
+      recipients: Array<{
+        recipientDeviceId: string
+        senderDeviceId: string
+        algorithm: string
+        sessionMessage: Uint8Array
+        metadataAad: Uint8Array
+      }>
+    },
   ): boolean {
     const protoEntities = entities.map(entity => create(MessageEntitySchema, {
       kind: entity.kind === 'user'
@@ -590,7 +603,7 @@ export const useWsStore = defineStore('ws', () => {
       end: entity.end,
     }))
     return sendEnvelope(create(EnvelopeSchema, {
-      requestId: generateId(),
+      requestId: clientMsgId,
       traceId: generateId(),
       protocolVersion: PROTOCOL_VERSION,
       payload: {
@@ -603,6 +616,19 @@ export const useWsStore = defineStore('ws', () => {
           threadRootMessageId: threadRootMessageId ?? '',
           attachmentIds,
           entities: protoEntities,
+          contentMode: encrypted ? MessageContentMode.DM_PAIRWISE_SIGNAL_V1 : MessageContentMode.PLAINTEXT,
+          senderDeviceId: encrypted?.senderDeviceId ?? '',
+          encryptedDmPayload: encrypted
+            ? create(EncryptedDMMessagePayloadSchema, {
+                recipients: encrypted.recipients.map(item => create(EncryptedDMRecipientPayloadSchema, {
+                  recipientDeviceId: item.recipientDeviceId,
+                  senderDeviceId: item.senderDeviceId,
+                  algorithm: item.algorithm,
+                  sessionMessage: item.sessionMessage,
+                  metadataAad: item.metadataAad,
+                })),
+              })
+            : undefined,
         },
       },
     }))
@@ -1115,12 +1141,13 @@ export const useWsStore = defineStore('ws', () => {
 
       case 'error': {
         const err = envelope.payload.value
-        onProtocolErrorCallback?.({
+        const protocolError = {
           requestId: envelope.requestId,
           code: err.code,
           message: err.message,
           retryAfterMs: err.retryAfterMs,
-        })
+        }
+        protocolErrorHandlers.forEach(handler => handler(protocolError))
         rejectPendingRequest(envelope.requestId, new Error(err.message || `Protocol error: ${err.code}`))
         const kind = mapErrorCode(err.code)
         lastError.value = err.message || `Protocol error: ${err.code}`

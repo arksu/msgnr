@@ -43,9 +43,29 @@ RETURNING id, channel_id, channel_seq, sender_id, client_msg_id, body,
           thread_root_id, thread_seq, mention_everyone, edited_at, created_at
 `
 
-func (q *Queries) DeleteMessageByID(ctx context.Context, messageID uuid.UUID) (Message, error) {
+type DeleteMessageByIDRow struct {
+	ID                             uuid.UUID      `json:"id"`
+	ChannelID                      uuid.UUID      `json:"channel_id"`
+	ChannelSeq                     int64          `json:"channel_seq"`
+	SenderID                       uuid.UUID      `json:"sender_id"`
+	ClientMsgID                    string         `json:"client_msg_id"`
+	Body                           string         `json:"body"`
+	ForwardedFromMessageID         uuid.NullUUID  `json:"forwarded_from_message_id"`
+	ForwardedFromSenderID          uuid.NullUUID  `json:"forwarded_from_sender_id"`
+	ForwardedFromSenderName        sql.NullString `json:"forwarded_from_sender_name"`
+	ForwardedFromConversationKind  sql.NullString `json:"forwarded_from_conversation_kind"`
+	ForwardedFromConversationTitle sql.NullString `json:"forwarded_from_conversation_title"`
+	ForwardedFromThreadTitle       sql.NullString `json:"forwarded_from_thread_title"`
+	ThreadRootID                   uuid.NullUUID  `json:"thread_root_id"`
+	ThreadSeq                      int64          `json:"thread_seq"`
+	MentionEveryone                bool           `json:"mention_everyone"`
+	EditedAt                       sql.NullTime   `json:"edited_at"`
+	CreatedAt                      time.Time      `json:"created_at"`
+}
+
+func (q *Queries) DeleteMessageByID(ctx context.Context, messageID uuid.UUID) (DeleteMessageByIDRow, error) {
 	row := q.db.QueryRowContext(ctx, deleteMessageByID, messageID)
-	var i Message
+	var i DeleteMessageByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.ChannelID,
@@ -138,9 +158,29 @@ type GetMessageByClientMsgIDParams struct {
 	ClientMsgID string    `json:"client_msg_id"`
 }
 
-func (q *Queries) GetMessageByClientMsgID(ctx context.Context, arg GetMessageByClientMsgIDParams) (Message, error) {
+type GetMessageByClientMsgIDRow struct {
+	ID                             uuid.UUID      `json:"id"`
+	ChannelID                      uuid.UUID      `json:"channel_id"`
+	ChannelSeq                     int64          `json:"channel_seq"`
+	SenderID                       uuid.UUID      `json:"sender_id"`
+	ClientMsgID                    string         `json:"client_msg_id"`
+	Body                           string         `json:"body"`
+	ForwardedFromMessageID         uuid.NullUUID  `json:"forwarded_from_message_id"`
+	ForwardedFromSenderID          uuid.NullUUID  `json:"forwarded_from_sender_id"`
+	ForwardedFromSenderName        sql.NullString `json:"forwarded_from_sender_name"`
+	ForwardedFromConversationKind  sql.NullString `json:"forwarded_from_conversation_kind"`
+	ForwardedFromConversationTitle sql.NullString `json:"forwarded_from_conversation_title"`
+	ForwardedFromThreadTitle       sql.NullString `json:"forwarded_from_thread_title"`
+	ThreadRootID                   uuid.NullUUID  `json:"thread_root_id"`
+	ThreadSeq                      int64          `json:"thread_seq"`
+	MentionEveryone                bool           `json:"mention_everyone"`
+	EditedAt                       sql.NullTime   `json:"edited_at"`
+	CreatedAt                      time.Time      `json:"created_at"`
+}
+
+func (q *Queries) GetMessageByClientMsgID(ctx context.Context, arg GetMessageByClientMsgIDParams) (GetMessageByClientMsgIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getMessageByClientMsgID, arg.ChannelID, arg.ClientMsgID)
-	var i Message
+	var i GetMessageByClientMsgIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.ChannelID,
@@ -173,9 +213,29 @@ FROM messages
 WHERE id = $1
 `
 
-func (q *Queries) GetMessageByID(ctx context.Context, messageID uuid.UUID) (Message, error) {
+type GetMessageByIDRow struct {
+	ID                             uuid.UUID      `json:"id"`
+	ChannelID                      uuid.UUID      `json:"channel_id"`
+	ChannelSeq                     int64          `json:"channel_seq"`
+	SenderID                       uuid.UUID      `json:"sender_id"`
+	ClientMsgID                    string         `json:"client_msg_id"`
+	Body                           string         `json:"body"`
+	ForwardedFromMessageID         uuid.NullUUID  `json:"forwarded_from_message_id"`
+	ForwardedFromSenderID          uuid.NullUUID  `json:"forwarded_from_sender_id"`
+	ForwardedFromSenderName        sql.NullString `json:"forwarded_from_sender_name"`
+	ForwardedFromConversationKind  sql.NullString `json:"forwarded_from_conversation_kind"`
+	ForwardedFromConversationTitle sql.NullString `json:"forwarded_from_conversation_title"`
+	ForwardedFromThreadTitle       sql.NullString `json:"forwarded_from_thread_title"`
+	ThreadRootID                   uuid.NullUUID  `json:"thread_root_id"`
+	ThreadSeq                      int64          `json:"thread_seq"`
+	MentionEveryone                bool           `json:"mention_everyone"`
+	EditedAt                       sql.NullTime   `json:"edited_at"`
+	CreatedAt                      time.Time      `json:"created_at"`
+}
+
+func (q *Queries) GetMessageByID(ctx context.Context, messageID uuid.UUID) (GetMessageByIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getMessageByID, messageID)
-	var i Message
+	var i GetMessageByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.ChannelID,
@@ -245,15 +305,35 @@ type GetThreadMessagesParams struct {
 	AfterThreadSeq int64         `json:"after_thread_seq"`
 }
 
-func (q *Queries) GetThreadMessages(ctx context.Context, arg GetThreadMessagesParams) ([]Message, error) {
+type GetThreadMessagesRow struct {
+	ID                             uuid.UUID      `json:"id"`
+	ChannelID                      uuid.UUID      `json:"channel_id"`
+	ChannelSeq                     int64          `json:"channel_seq"`
+	SenderID                       uuid.UUID      `json:"sender_id"`
+	ClientMsgID                    string         `json:"client_msg_id"`
+	Body                           string         `json:"body"`
+	ForwardedFromMessageID         uuid.NullUUID  `json:"forwarded_from_message_id"`
+	ForwardedFromSenderID          uuid.NullUUID  `json:"forwarded_from_sender_id"`
+	ForwardedFromSenderName        sql.NullString `json:"forwarded_from_sender_name"`
+	ForwardedFromConversationKind  sql.NullString `json:"forwarded_from_conversation_kind"`
+	ForwardedFromConversationTitle sql.NullString `json:"forwarded_from_conversation_title"`
+	ForwardedFromThreadTitle       sql.NullString `json:"forwarded_from_thread_title"`
+	ThreadRootID                   uuid.NullUUID  `json:"thread_root_id"`
+	ThreadSeq                      int64          `json:"thread_seq"`
+	MentionEveryone                bool           `json:"mention_everyone"`
+	EditedAt                       sql.NullTime   `json:"edited_at"`
+	CreatedAt                      time.Time      `json:"created_at"`
+}
+
+func (q *Queries) GetThreadMessages(ctx context.Context, arg GetThreadMessagesParams) ([]GetThreadMessagesRow, error) {
 	rows, err := q.db.QueryContext(ctx, getThreadMessages, arg.RootMessageID, arg.AfterThreadSeq)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Message
+	var items []GetThreadMessagesRow
 	for rows.Next() {
-		var i Message
+		var i GetThreadMessagesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ChannelID,
@@ -369,7 +449,27 @@ type InsertMessageParams struct {
 	MentionEveryone bool          `json:"mention_everyone"`
 }
 
-func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (Message, error) {
+type InsertMessageRow struct {
+	ID                             uuid.UUID      `json:"id"`
+	ChannelID                      uuid.UUID      `json:"channel_id"`
+	ChannelSeq                     int64          `json:"channel_seq"`
+	SenderID                       uuid.UUID      `json:"sender_id"`
+	ClientMsgID                    string         `json:"client_msg_id"`
+	Body                           string         `json:"body"`
+	ForwardedFromMessageID         uuid.NullUUID  `json:"forwarded_from_message_id"`
+	ForwardedFromSenderID          uuid.NullUUID  `json:"forwarded_from_sender_id"`
+	ForwardedFromSenderName        sql.NullString `json:"forwarded_from_sender_name"`
+	ForwardedFromConversationKind  sql.NullString `json:"forwarded_from_conversation_kind"`
+	ForwardedFromConversationTitle sql.NullString `json:"forwarded_from_conversation_title"`
+	ForwardedFromThreadTitle       sql.NullString `json:"forwarded_from_thread_title"`
+	ThreadRootID                   uuid.NullUUID  `json:"thread_root_id"`
+	ThreadSeq                      int64          `json:"thread_seq"`
+	MentionEveryone                bool           `json:"mention_everyone"`
+	EditedAt                       sql.NullTime   `json:"edited_at"`
+	CreatedAt                      time.Time      `json:"created_at"`
+}
+
+func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (InsertMessageRow, error) {
 	row := q.db.QueryRowContext(ctx, insertMessage,
 		arg.ChannelID,
 		arg.SenderID,
@@ -379,7 +479,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (M
 		arg.ThreadSeq,
 		arg.MentionEveryone,
 	)
-	var i Message
+	var i InsertMessageRow
 	err := row.Scan(
 		&i.ID,
 		&i.ChannelID,
@@ -648,9 +748,29 @@ type UpdateMessageBodyParams struct {
 	MessageID       uuid.UUID `json:"message_id"`
 }
 
-func (q *Queries) UpdateMessageBody(ctx context.Context, arg UpdateMessageBodyParams) (Message, error) {
+type UpdateMessageBodyRow struct {
+	ID                             uuid.UUID      `json:"id"`
+	ChannelID                      uuid.UUID      `json:"channel_id"`
+	ChannelSeq                     int64          `json:"channel_seq"`
+	SenderID                       uuid.UUID      `json:"sender_id"`
+	ClientMsgID                    string         `json:"client_msg_id"`
+	Body                           string         `json:"body"`
+	ForwardedFromMessageID         uuid.NullUUID  `json:"forwarded_from_message_id"`
+	ForwardedFromSenderID          uuid.NullUUID  `json:"forwarded_from_sender_id"`
+	ForwardedFromSenderName        sql.NullString `json:"forwarded_from_sender_name"`
+	ForwardedFromConversationKind  sql.NullString `json:"forwarded_from_conversation_kind"`
+	ForwardedFromConversationTitle sql.NullString `json:"forwarded_from_conversation_title"`
+	ForwardedFromThreadTitle       sql.NullString `json:"forwarded_from_thread_title"`
+	ThreadRootID                   uuid.NullUUID  `json:"thread_root_id"`
+	ThreadSeq                      int64          `json:"thread_seq"`
+	MentionEveryone                bool           `json:"mention_everyone"`
+	EditedAt                       sql.NullTime   `json:"edited_at"`
+	CreatedAt                      time.Time      `json:"created_at"`
+}
+
+func (q *Queries) UpdateMessageBody(ctx context.Context, arg UpdateMessageBodyParams) (UpdateMessageBodyRow, error) {
 	row := q.db.QueryRowContext(ctx, updateMessageBody, arg.Body, arg.MentionEveryone, arg.MessageID)
-	var i Message
+	var i UpdateMessageBodyRow
 	err := row.Scan(
 		&i.ID,
 		&i.ChannelID,

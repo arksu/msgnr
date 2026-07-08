@@ -252,8 +252,14 @@ func (s *Service) emitReactionUpdated(ctx context.Context, tx pgx.Tx, p Reaction
 }
 
 func (s *Service) validateReactionTargetTx(ctx context.Context, tx pgx.Tx, p ReactionParams) error {
-	actualChannelID, err := s.messageChannelByIDTx(ctx, tx, p.MessageID)
-	if err != nil {
+	var actualChannelID uuid.UUID
+	var contentMode string
+	if err := tx.QueryRow(ctx, `
+		SELECT channel_id, content_mode
+		  FROM messages
+		 WHERE id = $1`,
+		p.MessageID,
+	).Scan(&actualChannelID, &contentMode); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrMessageNotFound
 		}
@@ -277,6 +283,9 @@ func (s *Service) validateReactionTargetTx(ctx context.Context, tx pgx.Tx, p Rea
 	}
 	if !isMember {
 		return ErrNotMember
+	}
+	if contentMode == MessageContentDMPairwiseSignal {
+		return ErrEncryptedMessageUnsupported
 	}
 	return nil
 }

@@ -283,6 +283,42 @@ describe('MessageInput', () => {
     expect(wrapper.text()).toContain('photo.png')
   })
 
+  it('disables plaintext-only composer features in encrypted DMs', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'Encrypted DM',
+        conversationId: 'dm-e2ee-1',
+        draftScope: conversationDraftScope,
+        encrypted: true,
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+
+    expect(composer(wrapper).props('enableMessageEntities')).toBe(false)
+    expect(composer(wrapper).props('onFiles')).toBeNull()
+    expect(wrapper.get('[data-testid="composer-attach-button"]').attributes('disabled')).toBeDefined()
+
+    await typeText(wrapper, 'secret body')
+    const file = new File(['test'], 'secret.txt', { type: 'text/plain' })
+    await (composer(wrapper).vm as unknown as { receiveFiles: (files: File[]) => Promise<void> }).receiveFiles([file])
+    await flushAll()
+
+    expect(uploadChatAttachment).not.toHaveBeenCalled()
+    expect(localStorage.getItem('msgnr:chat:drafts:v1')).toBeNull()
+
+    await wrapper.get('[data-testid="composer-send-button"]').trigger('click')
+
+    expect(wrapper.emitted('send')).toEqual([[
+      {
+        body: 'secret body',
+        entities: [],
+        attachmentIds: [],
+        attachments: [],
+      },
+    ]])
+  })
+
   it('does not upload dropped files when conversation is not selected', async () => {
     const wrapper = mount(MessageInput, {
       props: {

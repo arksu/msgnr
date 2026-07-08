@@ -119,10 +119,14 @@ SELECT
   COALESCE((c.is_archived OR cm_self.is_archived), false)::bool AS is_archived,
   cm_self.notification_level,
   c.next_seq AS last_message_seq,
-  COALESCE(last_message.body, '') AS last_message_preview,
+  CASE
+    WHEN c.encryption_mode = 'dm_pairwise_signal_v1' THEN ''
+    ELSE COALESCE(last_message.body, '')
+  END::text AS last_message_preview,
   c.last_activity_at,
   member_stats.member_count,
-  COALESCE(dm_peer.status, self_presence.status, 'offline') AS presence
+  COALESCE(dm_peer.status, self_presence.status, 'offline') AS presence,
+  c.encryption_mode
 FROM bootstrap_session_items bsi
 JOIN bootstrap_sessions bs ON bs.id = bsi.session_id
 JOIN channels c ON c.id = bsi.conversation_id

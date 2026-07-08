@@ -139,6 +139,63 @@ describe('ChatArea', () => {
     expect(wsStore.sendMessage).toHaveBeenCalledWith('channel-1', 'hello world', expect.any(String), undefined, [])
   })
 
+  it('does not auto-encrypt a normal plaintext direct message', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+
+    authStore.user = {
+      id: 'user-1',
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      avatarUrl: '',
+      role: 'member',
+    }
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfAvatarUrl: '',
+      selfRole: 'member',
+    }
+    chatStore.directMessages = [{
+      id: 'dm-plain-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      presence: 'offline',
+      encryptionMode: 'none',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'dm-plain-1'
+    wsStore.state = 'LIVE_SYNCED'
+    wsStore.sendMessage = vi.fn(() => true)
+    chatStore.addOptimisticMessage = vi.fn()
+    const markEncrypted = vi.spyOn(chatStore, 'markDirectMessageEncrypted')
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: {
+            template: '<button data-testid="emit-send" @click="$emit(\'send\', { body: \'plain dm\', entities: [], attachmentIds: [], attachments: [] })">send</button>',
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="emit-send"]').trigger('click')
+
+    expect(markEncrypted).not.toHaveBeenCalled()
+    expect(chatStore.addOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'dm-plain-1',
+      body: 'plain dm',
+      contentMode: 'plaintext',
+    }))
+    expect(wsStore.sendMessage).toHaveBeenCalledWith('dm-plain-1', 'plain dm', expect.any(String), undefined, [])
+  })
+
   it('passes the conversation focus token to the main composer', () => {
     const chatStore = useChatStore()
 

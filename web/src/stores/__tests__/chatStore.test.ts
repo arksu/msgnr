@@ -38,6 +38,7 @@ import {
   EventType,
   NotificationType,
   NotificationLevel,
+  ConversationEncryptionMode,
   ReactionAggregateSchema,
 } from '@/shared/proto/packets_pb'
 
@@ -1095,6 +1096,51 @@ describe('chatStore phase 6 flows', () => {
     }))
 
     expect(chat.directMessages[0].presence).toBe('online')
+  })
+
+  it('preserves encrypted DM mode from bootstrap after page refresh', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.setLiveSynced = vi.fn()
+    ws.sendAck = vi.fn()
+
+    chat.handleBootstrapResponse(create(BootstrapResponseSchema, {
+      snapshotSeq: 12n,
+      userRole: 2,
+      workspace: {
+        workspaceId: 'workspace-1',
+        workspaceName: 'Acme',
+        selfUser: create(UserSummarySchema, { userId: 'self-user', displayName: 'Self', avatarUrl: '' }),
+        selfRole: 3,
+      },
+      conversations: [create(ConversationSummarySchema, {
+        conversationId: 'dm-e2ee-conversation-1',
+        conversationType: 1,
+        title: 'Bob',
+        topic: 'peer-user-1',
+        isArchived: false,
+        notificationLevel: NotificationLevel.ALL,
+        lastMessageSeq: 0n,
+        lastMessagePreview: '',
+        memberCount: 2,
+        presence: 3,
+        encryptionMode: ConversationEncryptionMode.DM_PAIRWISE_SIGNAL_V1,
+      })],
+      unread: [],
+      activeCalls: [],
+      pendingInvites: [],
+      notifications: [],
+      hasMore: false,
+      nextPageToken: '',
+      bootstrapSessionId: 'session-dm-e2ee',
+      pageIndex: 0,
+      pageSizeEffective: 1,
+      estimatedTotalConversations: 1,
+      presence: [],
+    }))
+
+    expect(chat.directMessages).toHaveLength(1)
+    expect(chat.directMessages[0].encryptionMode).toBe('dm_pairwise_signal_v1')
   })
 
   it('hydrates DM avatar from user directory after bootstrap refresh', async () => {

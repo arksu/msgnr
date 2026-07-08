@@ -259,6 +259,30 @@ message RateLimitPolicy {
   uint32 max_sync_batch = 7;
 }
 
+enum MessageContentMode {
+  MESSAGE_CONTENT_MODE_PLAINTEXT = 0;
+  MESSAGE_CONTENT_MODE_DM_PAIRWISE_SIGNAL_V1 = 1;
+  MESSAGE_CONTENT_MODE_CHANNEL_RESERVED = 2;
+}
+
+enum ConversationEncryptionMode {
+  CONVERSATION_ENCRYPTION_MODE_NONE = 0;
+  CONVERSATION_ENCRYPTION_MODE_DM_PAIRWISE_SIGNAL_V1 = 1;
+  CONVERSATION_ENCRYPTION_MODE_CHANNEL_RESERVED = 2;
+}
+
+message EncryptedDMRecipientPayload {
+  string recipient_device_id = 1;
+  string sender_device_id = 2;
+  string algorithm = 3;
+  bytes session_message = 4;
+  bytes metadata_aad = 5;
+}
+
+message EncryptedDMMessagePayload {
+  repeated EncryptedDMRecipientPayload recipients = 1;
+}
+
 message SendMessageRequest {
   string conversation_id = 1;
   ConversationType conversation_type = 2;
@@ -269,6 +293,9 @@ message SendMessageRequest {
   // Pre-uploaded attachment ids to bind to the new message.
   repeated string attachment_ids = 6;
   repeated MessageEntity entities = 7;
+  MessageContentMode content_mode = 8;
+  string sender_device_id = 9;
+  EncryptedDMMessagePayload encrypted_dm_payload = 10;
 }
 
 message SendMessageAck {
@@ -320,6 +347,9 @@ message MessageEvent {
   string forwarded_from_conversation_title = 19;
   string forwarded_from_thread_title = 20;
   string forwarded_from_conversation_kind = 21;
+  MessageContentMode content_mode = 22;
+  string sender_device_id = 23;
+  EncryptedDMMessagePayload encrypted_dm_payload = 24;
 }
 
 message MessageAttachment {
@@ -530,6 +560,7 @@ message ConversationSummary {
   google.protobuf.Timestamp last_activity_at = 9;
   int32 member_count = 10;
   PresenceStatus presence = 11;
+  ConversationEncryptionMode encryption_mode = 12;
 }
 
 message UnreadCounter {

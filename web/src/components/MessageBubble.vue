@@ -749,7 +749,8 @@ const senderStatusTitle = computed(() =>
   senderStatus.value ? formatUserCustomStatusTitle(senderStatus.value) : '',
 )
 
-const hasReactions = computed(() => props.message.reactions.length > 0)
+const isEncryptedMessage = computed(() => props.message.contentMode === 'dm_pairwise_signal_v1')
+const hasReactions = computed(() => !isEncryptedMessage.value && props.message.reactions.length > 0)
 const emojiPickerAccentColor = computed(() => currentTheme.value.tokens.accent)
 const reactionPopupVisible = computed(() => Boolean(activeReactionEmoji.value))
 const activeReactionUsers = computed(() => {
@@ -765,10 +766,12 @@ const isThreadReply = computed(() => {
 const canSaveMessage = computed(() => !props.message.sendStatus && !props.message.pending)
 
 const showThreadAction = computed(() => {
+  if (isEncryptedMessage.value) return false
   if (props.showThreadAction === false) return false
   return !isThreadReply.value
 })
 const showFirstReactionAction = computed(() => {
+  if (isEncryptedMessage.value) return false
   if (typeof props.showFirstReactionAction === 'boolean') {
     return props.showFirstReactionAction
   }
@@ -778,8 +781,8 @@ const messageAttachments = computed(() => props.message.attachments ?? [])
 const selfUserId = computed(() => auth.user?.id || chat.workspace?.selfUserId || '')
 const isOwnMessage = computed(() => Boolean(selfUserId.value) && props.message.senderId === selfUserId.value)
 const isServerConfirmed = computed(() => !props.message.sendStatus && !props.message.pending)
-const canModifyMessage = computed(() => isOwnMessage.value && isServerConfirmed.value)
-const canForwardMessage = computed(() => isServerConfirmed.value)
+const canModifyMessage = computed(() => isOwnMessage.value && isServerConfirmed.value && !isEncryptedMessage.value)
+const canForwardMessage = computed(() => isServerConfirmed.value && !isEncryptedMessage.value)
 const canSaveEdit = computed(() =>
   !editSaving.value
   && (editBody.value.trim().length > 0 || messageAttachments.value.length > 0),
@@ -856,6 +859,7 @@ function closeEditTagPicker() {
 }
 
 function openForwardDialog() {
+  if (!canForwardMessage.value) return
   showContextMenu.value = false
   forwardDialogOpen.value = true
 }
@@ -1181,6 +1185,7 @@ function toggleReaction(emoji: string) {
     messageId: props.message.id,
     mine: props.message.myReactions.includes(emoji),
   })
+  if (isEncryptedMessage.value) return
   if (!props.message.channelId) return
   if (chat.isReactionOpPending(props.message.channelId, props.message.id, emoji)) return
   const mine = props.message.myReactions.includes(emoji)
@@ -1208,6 +1213,7 @@ function addReaction(emoji: string) {
     alreadyMine: props.message.myReactions.includes(emoji),
   })
   showEmojiPicker.value = false
+  if (isEncryptedMessage.value) return
   if (!props.message.channelId) return
   if (props.message.myReactions.includes(emoji)) return
   if (chat.isReactionOpPending(props.message.channelId, props.message.id, emoji)) return
@@ -1228,6 +1234,7 @@ function onSelectEmoji(emoji: { native?: string; colons?: string; id?: string })
 // ── Emoji picker ─────────────────────────────────────────────────────────────
 
 function togglePickerButton() {
+  if (isEncryptedMessage.value) return
   if (showEmojiPicker.value) {
     showEmojiPicker.value = false
     if (activeEmojiPickerId.value === instanceId) {
@@ -1544,6 +1551,7 @@ function toggleContextMenu() {
     showContextMenu.value = false
     return
   }
+  if (isEncryptedMessage.value && !canSaveMessage.value) return
   // Calculate position from trigger button before showing
   const trigger = contextMenuTrigger.value
   if (trigger) {

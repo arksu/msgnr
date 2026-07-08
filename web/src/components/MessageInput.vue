@@ -43,14 +43,14 @@
         v-model="text"
         v-model:entities="entities"
         data-testid="composer-editor"
-        :placeholder="`Message #${channelName}`"
+        :placeholder="placeholder || `Message #${channelName}`"
         :disabled="disabled"
         :focus-token="focusToken"
         :max-lines="MAX_COMPOSER_LINES"
-        :enable-message-entities="true"
+        :enable-message-entities="!encrypted"
         :conversation-id="conversationId"
         :submit-on-enter="true"
-        :on-files="handleComposerFiles"
+        :on-files="encrypted ? null : handleComposerFiles"
         @submit="submit"
         @empty-arrow-up="requestEditLastMessage"
         @resize="handleComposerResize"
@@ -61,7 +61,7 @@
           <button
             data-testid="composer-attach-button"
             class="shrink-0 text-app-muted transition-colors hover:text-app-text disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="disabled || uploading || !conversationId || attachments.length >= MAX_ATTACHMENTS"
+            :disabled="disabled || encrypted || uploading || !conversationId || attachments.length >= MAX_ATTACHMENTS"
             :title="attachButtonTitle"
             @click="openFilePicker"
           >
@@ -193,6 +193,8 @@ const props = defineProps<{
   channelName: string
   conversationId?: string
   draftScope?: ChatDraftScope | null
+  placeholder?: string
+  encrypted?: boolean
   disabled?: boolean
   typingLabel?: string
   online?: boolean
@@ -238,6 +240,9 @@ const {
 })
 
 const attachmentWarning = computed(() => {
+  if (props.encrypted) {
+    return 'Attachments are disabled in encrypted DMs'
+  }
   if (attachments.value.length > 0 && props.online === false) {
     return 'Reconnect to send attachments'
   }
@@ -252,6 +257,7 @@ const canSend = computed(() => {
 })
 
 const attachButtonTitle = computed(() => {
+  if (props.encrypted) return 'Encrypted DM attachments are not available yet'
   if (!props.conversationId) return 'Open a conversation to attach files'
   if (attachments.value.length >= MAX_ATTACHMENTS) return `Max ${MAX_ATTACHMENTS} attachments per message`
   return 'Attach file'
@@ -273,7 +279,7 @@ function submit() {
   const body = text.value.trim()
   emit('send', {
     body,
-    entities: normalizedEntitiesForSend(body),
+    entities: props.encrypted ? [] : normalizedEntitiesForSend(body),
     attachmentIds: attachments.value.map(item => item.id),
     attachments: attachments.value.slice(),
   })
@@ -305,12 +311,14 @@ function requestEditLastMessage() {
 }
 
 async function handleComposerFiles(files: File[]) {
+  if (props.encrypted) return
   if (!props.conversationId || props.disabled || uploading.value) return
   isDragOver.value = false
   await uploadFiles(files)
 }
 
 function openFilePicker() {
+  if (props.encrypted) return
   fileInputEl.value?.click()
 }
 
@@ -323,6 +331,7 @@ async function onFileInputChange(event: Event) {
 }
 
 async function uploadFiles(files: File[]) {
+  if (props.encrypted) return
   if (!props.conversationId) return
   if (props.disabled || uploading.value) return
   attachmentError.value = ''
@@ -422,6 +431,7 @@ watch(
 watch(
   () => [props.draftScope, text.value, JSON.stringify(entities.value)] as const,
   ([scope]) => {
+    if (props.encrypted) return
     if (!scope || syncingDraft.value) return
     saveChatDraft(scope, {
       body: text.value,
@@ -430,6 +440,14 @@ watch(
   },
   { deep: true },
 )
+
+watch(() => props.encrypted, (encrypted) => {
+  if (!encrypted) return
+  entities.value = []
+  if (attachments.value.length > 0) {
+    void cleanupStagedAttachments()
+  }
+})
 
 watch(() => props.conversationId, (next, prev) => {
   closeEmojiPicker()

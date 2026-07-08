@@ -75,6 +75,7 @@ function dmToCached(dm: DirectMessage): CachedConversation {
     avatarUrl: dm.avatarUrl,
     presence: dm.presence,
     customStatus: dm.customStatus ?? null,
+    encryptionMode: dm.encryptionMode ?? 'none',
     unread: dm.unread,
     hasUnreadThreadReplies: dm.hasUnreadThreadReplies,
     lastMessageSeq: bigintToStr(dm.lastMessageSeq),
@@ -105,6 +106,7 @@ function cachedToDm(c: CachedConversation): DirectMessage {
     avatarUrl: c.avatarUrl,
     presence: (c.presence as 'online' | 'away' | 'offline') ?? 'offline',
     customStatus: c.customStatus ?? null,
+    encryptionMode: c.encryptionMode ?? 'none',
     unread: c.unread,
     hasUnreadThreadReplies: c.hasUnreadThreadReplies,
     lastMessageSeq: strToBigint(c.lastMessageSeq),
@@ -213,7 +215,7 @@ export async function cacheMessages(
 ): Promise<void> {
   try {
     // Filter out optimistic messages and convert
-    const confirmed = msgs.filter(m => !m.sendStatus && !m.pending)
+    const confirmed = msgs.filter(m => !m.sendStatus && !m.pending && m.contentMode !== 'dm_pairwise_signal_v1')
     const rows = confirmed.map(messageToCache)
 
     await db.transaction('rw', db.messages, async () => {
@@ -237,6 +239,7 @@ export async function cacheMessages(
 /** Append a single confirmed message to the cache, trimming if needed. */
 export async function cacheSingleMessage(msg: Message): Promise<void> {
   if (msg.sendStatus || msg.pending) return
+  if (msg.contentMode === 'dm_pairwise_signal_v1') return
   try {
     const row = messageToCache(msg)
     await db.transaction('rw', db.messages, async () => {

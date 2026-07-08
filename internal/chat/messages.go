@@ -31,7 +31,7 @@ import (
 // generation across the repo.
 
 func (s *Service) ListRecentMessages(ctx context.Context, requesterID, conversationID uuid.UUID, limit int) ([]ConversationMessage, error) {
-	messages, _, err := s.ListMessagePage(ctx, requesterID, conversationID, nil, limit)
+	messages, _, err := s.ListMessagePage(ctx, requesterID, conversationID, nil, limit, uuid.Nil)
 	return messages, err
 }
 
@@ -128,6 +128,7 @@ func (s *Service) ListMessagePage(
 	requesterID, conversationID uuid.UUID,
 	beforeChannelSeq *int64,
 	limit int,
+	requesterDeviceID ...uuid.UUID,
 ) ([]ConversationMessage, bool, error) {
 	isMember, err := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
 		ChannelID: conversationID,
@@ -173,6 +174,7 @@ func (s *Service) ListMessagePage(
 			Body:             row.Body,
 			ForwardedFrom:    forwardedMessageInfoFromRow(row.ForwardedFromMessageID, row.ForwardedFromSenderID, row.ForwardedFromSenderName, row.ForwardedFromConversationKind, row.ForwardedFromConversationTitle, row.ForwardedFromThreadTitle),
 			ChannelSeq:       row.ChannelSeq,
+			ContentMode:      row.ContentMode,
 			ThreadSeq:        row.ThreadSeq,
 			ThreadReplyCount: int32(row.ThreadReplyCount),
 			CreatedAt:        row.CreatedAt,
@@ -185,6 +187,9 @@ func (s *Service) ListMessagePage(
 		}
 		if row.ThreadRootID.Valid {
 			item.ThreadRootMessageID = row.ThreadRootID.UUID
+		}
+		if row.SenderDeviceID.Valid {
+			item.SenderDeviceID = row.SenderDeviceID.UUID
 		}
 		if err := hydrateMessageJSONFields(row.Reactions, row.MyReactions, row.Attachments, &item); err != nil {
 			return nil, false, fmt.Errorf("chat.ListMessagePage hydrate: %w", err)
@@ -207,6 +212,9 @@ func (s *Service) ListMessagePage(
 	}
 	for i := range messages {
 		messages[i].Entities = entitiesByMessageID[messages[i].ID.String()]
+	}
+	if err := s.hydrateEncryptedDMPayloads(ctx, requesterID, optionalUUID(requesterDeviceID), messages); err != nil {
+		return nil, false, fmt.Errorf("chat.ListMessagePage load encrypted payloads: %w", err)
 	}
 
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
@@ -259,6 +267,7 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 		SenderID          uuid.UUID
 		SenderName        string
 		Body              string
+		ContentMode       string
 		ConversationKind  string
 		ConversationTitle string
 		ThreadTitle       sql.NullString
@@ -269,6 +278,7 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 		       m.sender_id,
 		       COALESCE(NULLIF(u.display_name, ''), u.email),
 		       m.body,
+		       m.content_mode,
 		       c.kind,
 		       COALESCE(
 		         NULLIF(CASE
@@ -304,6 +314,7 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 		&source.SenderID,
 		&source.SenderName,
 		&source.Body,
+		&source.ContentMode,
 		&source.ConversationKind,
 		&source.ConversationTitle,
 		&source.ThreadTitle,
@@ -323,6 +334,9 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 	}
 	if !isSourceMember {
 		return ForwardMessageResult{}, ErrNotMember
+	}
+	if source.ContentMode == MessageContentDMPairwiseSignal {
+		return ForwardMessageResult{}, ErrEncryptedMessageUnsupported
 	}
 
 	entitiesByMessageID, err := s.loadMessageEntitiesByMessageIDs(ctx, []uuid.UUID{p.SourceMessageID})
@@ -450,6 +464,11 @@ func (s *Service) ListForwardTargets(ctx context.Context, requesterID uuid.UUID)
 // thread_summary_updated) events. It manages its own pgx transaction.
 func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMessageResult, error) {
 	p.Body = strings.TrimSpace(p.Body)
+	contentMode := p.ContentMode
+	if contentMode == "" {
+		contentMode = MessageContentPlaintext
+	}
+	isEncryptedContent := contentMode == MessageContentDMPairwiseSignal
 	if len(p.AttachmentIDs) > maxMessageAttachments {
 		return SendMessageResult{}, fmt.Errorf("%w: too many attachments (max %d)", ErrInvalidAttachment, maxMessageAttachments)
 	}
@@ -459,8 +478,11 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	if len(p.AttachmentIDs) > 0 && len(p.AttachmentCopies) > 0 {
 		return SendMessageResult{}, fmt.Errorf("%w: cannot mix staged and copied attachments", ErrInvalidAttachment)
 	}
-	if p.Body == "" && len(p.AttachmentIDs) == 0 && len(p.AttachmentCopies) == 0 {
+	if !isEncryptedContent && p.Body == "" && len(p.AttachmentIDs) == 0 && len(p.AttachmentCopies) == 0 {
 		return SendMessageResult{}, ErrEmptyMessage
+	}
+	if isEncryptedContent && len(p.EncryptedDMPayloads) == 0 {
+		return SendMessageResult{}, ErrInvalidEncryptedPayload
 	}
 
 	// Dedup check outside transaction (read-only, idempotent).
@@ -489,6 +511,59 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	if !isMember {
 		return SendMessageResult{}, ErrNotMember
 	}
+	var conversationEncryptionMode string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT encryption_mode
+		  FROM channels
+		 WHERE id = $1`,
+		p.ChannelID,
+	).Scan(&conversationEncryptionMode); err != nil {
+		return SendMessageResult{}, fmt.Errorf("chat.SendMessage conversation encryption mode: %w", err)
+	}
+	switch {
+	case isEncryptedContent:
+		if conversationEncryptionMode != ConversationEncryptionDMPairwiseSignal {
+			return SendMessageResult{}, ErrInvalidEncryptedPayload
+		}
+		if p.ThreadRootMessageID != uuid.Nil || len(p.AttachmentIDs) > 0 || len(p.AttachmentCopies) > 0 || len(p.Entities) > 0 || p.SenderDeviceID == uuid.Nil {
+			return SendMessageResult{}, ErrInvalidEncryptedPayload
+		}
+		isActiveSenderDevice, err := s.q.IsActiveUserDevice(ctx, queries.IsActiveUserDeviceParams{
+			DeviceID: p.SenderDeviceID,
+			UserID:   p.SenderID,
+		})
+		if err != nil {
+			return SendMessageResult{}, fmt.Errorf("chat.SendMessage sender device: %w", err)
+		}
+		if !isActiveSenderDevice {
+			return SendMessageResult{}, ErrInvalidEncryptedPayload
+		}
+		requiredDevices, err := s.requiredEncryptedDMRecipientDevices(ctx, p.SenderID, p.ChannelID)
+		if err != nil {
+			return SendMessageResult{}, err
+		}
+		if len(requiredDevices) == 0 || len(p.EncryptedDMPayloads) != len(requiredDevices) {
+			return SendMessageResult{}, ErrInvalidEncryptedPayload
+		}
+		seenRecipients := make(map[uuid.UUID]struct{}, len(p.EncryptedDMPayloads))
+		for _, payload := range p.EncryptedDMPayloads {
+			if payload.RecipientDeviceID == uuid.Nil || payload.SenderDeviceID != p.SenderDeviceID || strings.TrimSpace(payload.Algorithm) != encryptedDMEnvelopeAlgorithm || len(payload.SessionMessage) == 0 {
+				return SendMessageResult{}, ErrInvalidEncryptedPayload
+			}
+			if _, ok := requiredDevices[payload.RecipientDeviceID]; !ok {
+				return SendMessageResult{}, ErrInvalidEncryptedPayload
+			}
+			if _, duplicate := seenRecipients[payload.RecipientDeviceID]; duplicate {
+				return SendMessageResult{}, ErrInvalidEncryptedPayload
+			}
+			seenRecipients[payload.RecipientDeviceID] = struct{}{}
+		}
+		if len(seenRecipients) != len(requiredDevices) {
+			return SendMessageResult{}, ErrInvalidEncryptedPayload
+		}
+	case conversationEncryptionMode != ConversationEncryptionNone:
+		return SendMessageResult{}, ErrEncryptedMessagesUnsupported
+	}
 
 	isReply := p.ThreadRootMessageID != uuid.Nil
 
@@ -512,7 +587,9 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		copy(attachments, p.AttachmentCopies)
 	}
 	var normalizedEntities []MessageEntity
-	if p.SuppressMentions {
+	if isEncryptedContent {
+		normalizedEntities = nil
+	} else if p.SuppressMentions {
 		normalizedEntities = append([]MessageEntity(nil), p.Entities...)
 	} else {
 		normalizedEntities, err = s.validateAndNormalizeMessageEntities(ctx, tx, p.ChannelID, p.SenderID, p.Body, p.Entities)
@@ -521,7 +598,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		}
 	}
 
-	mentionEveryone := !p.SuppressMentions && detectMentionEveryone(p.Body)
+	mentionEveryone := !isEncryptedContent && !p.SuppressMentions && detectMentionEveryone(p.Body)
 
 	var threadSeq int64
 	var threadReplyAt time.Time
@@ -585,6 +662,14 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	var channelSeq int64
 	var clientMsgID string
 	var createdAt time.Time
+	bodyToStore := p.Body
+	if isEncryptedContent {
+		bodyToStore = ""
+	}
+	var senderDeviceArg interface{} = nil
+	if p.SenderDeviceID != uuid.Nil {
+		senderDeviceArg = p.SenderDeviceID
+	}
 
 	if err := tx.QueryRow(ctx, `
 		WITH seq AS (
@@ -594,14 +679,14 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		    WHERE id = $1
 		    RETURNING next_seq
 		)
-		INSERT INTO messages (channel_id, channel_seq, sender_id, client_msg_id, body,
+		INSERT INTO messages (channel_id, channel_seq, sender_id, client_msg_id, body, content_mode, sender_device_id,
 		                      forwarded_from_message_id, forwarded_from_sender_id, forwarded_from_sender_name,
 		                      forwarded_from_conversation_kind,
 		                      forwarded_from_conversation_title, forwarded_from_thread_title,
 		                      thread_root_id, thread_seq, mention_everyone, created_at)
-		VALUES ($1, (SELECT next_seq FROM seq), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+		VALUES ($1, (SELECT next_seq FROM seq), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
 		RETURNING id, channel_seq, client_msg_id, created_at`,
-		p.ChannelID, p.SenderID, p.ClientMsgID, p.Body,
+		p.ChannelID, p.SenderID, p.ClientMsgID, bodyToStore, contentMode, senderDeviceArg,
 		forwardedFromMessageArg, forwardedFromSenderArg, forwardedFromSenderNameArg,
 		forwardedFromConversationKindArg, forwardedFromConversationTitleArg, forwardedFromThreadTitleArg,
 		threadRootArg, threadSeq, mentionEveryone,
@@ -619,6 +704,37 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			}
 		}
 		return SendMessageResult{}, fmt.Errorf("chat.SendMessage insert message: %w", err)
+	}
+	if isEncryptedContent {
+		batch := &pgx.Batch{}
+		for _, payload := range p.EncryptedDMPayloads {
+			metadataAAD := payload.MetadataAAD
+			if metadataAAD == nil {
+				metadataAAD = []byte{}
+			}
+			batch.Queue(`
+				INSERT INTO message_recipient_ciphertexts (
+					message_id, recipient_device_id, sender_device_id, algorithm, session_message, metadata_aad
+				)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+				msgID,
+				payload.RecipientDeviceID,
+				payload.SenderDeviceID,
+				strings.TrimSpace(payload.Algorithm),
+				payload.SessionMessage,
+				metadataAAD,
+			)
+		}
+		results := tx.SendBatch(ctx, batch)
+		for range p.EncryptedDMPayloads {
+			if _, err := results.Exec(); err != nil {
+				_ = results.Close()
+				return SendMessageResult{}, fmt.Errorf("chat.SendMessage insert encrypted payload: %w", err)
+			}
+		}
+		if err := results.Close(); err != nil {
+			return SendMessageResult{}, fmt.Errorf("chat.SendMessage insert encrypted payload: %w", err)
+		}
 	}
 
 	if len(attachments) > 0 && len(p.AttachmentCopies) == 0 {
@@ -695,7 +811,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 	directDeliveries := make([]DirectDelivery, 0)
 	if restoredDMPeer != nil {
 		// First event recreates the DM in sidebar before unread counters/message fanout arrive.
-		upsert := s.buildDMConversationUpsertedDeliveries(p.ChannelID, *restoredDMPeer, sender)
+		upsert := s.buildDMConversationUpsertedDeliveries(p.ChannelID, *restoredDMPeer, sender, ConversationEncryptionNone)
 		if len(upsert) > 0 {
 			directDeliveries = append(directDeliveries, upsert[0])
 		}
@@ -723,7 +839,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		actorID:          p.SenderID,
 		messageID:        msgID,
 		threadRootID:     p.ThreadRootMessageID,
-		body:             p.Body,
+		body:             bodyToStore,
 		conversationKind: conversationKind,
 		mentionedIDs:     mentionedIDs,
 	})
@@ -740,13 +856,18 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		ConversationId:   p.ChannelID.String(),
 		MessageId:        msgID.String(),
 		SenderId:         p.SenderID.String(),
-		Body:             p.Body,
+		Body:             bodyToStore,
 		ChannelSeq:       channelSeq,
 		CreatedAt:        createdAtTS,
 		MentionedUserIds: mentionedStrs,
 		MentionEveryone:  mentionEveryone,
 		Attachments:      toProtoMessageAttachments(attachments),
 		Entities:         toProtoMessageEntities(normalizedEntities),
+		ContentMode:      mapMessageContentMode(contentMode),
+		SenderDeviceId:   uuidStringOrEmpty(p.SenderDeviceID),
+		EncryptedDmPayload: &packetspb.EncryptedDMMessagePayload{
+			Recipients: toProtoEncryptedDMRecipientPayloads(p.EncryptedDMPayloads),
+		},
 	}
 	if p.ForwardedFrom != nil {
 		msgProto.ForwardedFromMessageId = p.ForwardedFrom.MessageID.String()
@@ -844,7 +965,7 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			p.ThreadRootMessageID,
 			p.SenderID,
 			senderName,
-			p.Body,
+			messageAlertBody(contentMode, p.Body),
 			len(attachments),
 			alertRecipients,
 			isDMConversation,
@@ -864,6 +985,53 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 		Deduped:          false,
 		DirectDeliveries: directDeliveries,
 	}, nil
+}
+
+func mapMessageContentMode(raw string) packetspb.MessageContentMode {
+	switch raw {
+	case MessageContentDMPairwiseSignal:
+		return packetspb.MessageContentMode_MESSAGE_CONTENT_MODE_DM_PAIRWISE_SIGNAL_V1
+	default:
+		return packetspb.MessageContentMode_MESSAGE_CONTENT_MODE_PLAINTEXT
+	}
+}
+
+func uuidStringOrEmpty(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
+}
+
+func optionalUUID(ids []uuid.UUID) uuid.UUID {
+	if len(ids) == 0 {
+		return uuid.Nil
+	}
+	return ids[0]
+}
+
+func messageAlertBody(contentMode, body string) string {
+	if contentMode == MessageContentDMPairwiseSignal {
+		return "New encrypted message"
+	}
+	return body
+}
+
+func toProtoEncryptedDMRecipientPayloads(items []EncryptedDMRecipientPayload) []*packetspb.EncryptedDMRecipientPayload {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]*packetspb.EncryptedDMRecipientPayload, 0, len(items))
+	for _, item := range items {
+		out = append(out, &packetspb.EncryptedDMRecipientPayload{
+			RecipientDeviceId: item.RecipientDeviceID.String(),
+			SenderDeviceId:    item.SenderDeviceID.String(),
+			Algorithm:         item.Algorithm,
+			SessionMessage:    append([]byte(nil), item.SessionMessage...),
+			MetadataAad:       append([]byte(nil), item.MetadataAAD...),
+		})
+	}
+	return out
 }
 
 type membershipNoticeAction string
@@ -999,6 +1167,9 @@ func (s *Service) EditMessage(ctx context.Context, p EditMessageParams) (EditMes
 	}
 	if target.SenderID != p.ActorID {
 		return EditMessageResult{}, ErrMessageNotAuthor
+	}
+	if target.ContentMode == MessageContentDMPairwiseSignal {
+		return EditMessageResult{}, ErrEncryptedMessageUnsupported
 	}
 
 	attachmentCount, err := s.messageAttachmentCountTx(ctx, tx, p.MessageID)
@@ -1273,6 +1444,16 @@ func (s *Service) ClearDMConversationHistory(ctx context.Context, p ClearDMConve
 		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory delete notifications: %w", err)
 	}
 
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM message_recipient_ciphertexts mrc
+		 USING messages m
+		 WHERE mrc.message_id = m.id
+		   AND m.channel_id = $1`,
+		p.ConversationID,
+	); err != nil {
+		return ClearDMConversationHistoryResult{}, fmt.Errorf("chat.ClearDMConversationHistory delete encrypted payloads: %w", err)
+	}
+
 	var deletedMessagesCount int32
 	if err := tx.QueryRow(ctx, `
 		WITH deleted AS (
@@ -1384,18 +1565,19 @@ type messageMutationTarget struct {
 	ChannelID    uuid.UUID
 	SenderID     uuid.UUID
 	ThreadRootID uuid.UUID
+	ContentMode  string
 }
 
 func (s *Service) loadMessageMutationTargetTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) (messageMutationTarget, error) {
 	var target messageMutationTarget
 	var threadRootID uuid.NullUUID
 	err := tx.QueryRow(ctx, `
-		SELECT id, channel_id, sender_id, thread_root_id
+		SELECT id, channel_id, sender_id, thread_root_id, content_mode
 		  FROM messages
 		 WHERE id = $1
 		 FOR UPDATE`,
 		messageID,
-	).Scan(&target.MessageID, &target.ChannelID, &target.SenderID, &threadRootID)
+	).Scan(&target.MessageID, &target.ChannelID, &target.SenderID, &threadRootID, &target.ContentMode)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return messageMutationTarget{}, sql.ErrNoRows
@@ -1517,6 +1699,7 @@ func (s *Service) ListMessageContext(
 	requesterID, conversationID, targetMessageID uuid.UUID,
 	beforeLimit int,
 	afterLimit int,
+	requesterDeviceID ...uuid.UUID,
 ) ([]ConversationMessage, error) {
 	isMember, err := s.q.IsChannelMember(ctx, queries.IsChannelMemberParams{
 		ChannelID: conversationID,
@@ -1557,6 +1740,7 @@ func (s *Service) ListMessageContext(
 			Body:             row.Body,
 			ForwardedFrom:    forwardedMessageInfoFromRow(row.ForwardedFromMessageID, row.ForwardedFromSenderID, row.ForwardedFromSenderName, row.ForwardedFromConversationKind, row.ForwardedFromConversationTitle, row.ForwardedFromThreadTitle),
 			ChannelSeq:       row.ChannelSeq,
+			ContentMode:      row.ContentMode,
 			ThreadSeq:        row.ThreadSeq,
 			ThreadReplyCount: int32(row.ThreadReplyCount),
 			CreatedAt:        row.CreatedAt,
@@ -1565,6 +1749,9 @@ func (s *Service) ListMessageContext(
 		}
 		if row.ThreadRootID.Valid {
 			item.ThreadRootMessageID = row.ThreadRootID.UUID
+		}
+		if row.SenderDeviceID.Valid {
+			item.SenderDeviceID = row.SenderDeviceID.UUID
 		}
 		if row.EditedAt.Valid {
 			edited := row.EditedAt.Time
@@ -1590,8 +1777,54 @@ func (s *Service) ListMessageContext(
 	for i := range messages {
 		messages[i].Entities = entitiesByMessageID[messages[i].ID.String()]
 	}
+	if err := s.hydrateEncryptedDMPayloads(ctx, requesterID, optionalUUID(requesterDeviceID), messages); err != nil {
+		return nil, fmt.Errorf("chat.ListMessageContext load encrypted payloads: %w", err)
+	}
 
 	return messages, nil
+}
+
+func (s *Service) hydrateEncryptedDMPayloads(ctx context.Context, requesterID, requesterDeviceID uuid.UUID, messages []ConversationMessage) error {
+	messageIDs := make([]uuid.UUID, 0)
+	indexByID := make(map[uuid.UUID]int, len(messages))
+	for i, message := range messages {
+		if message.ContentMode != MessageContentDMPairwiseSignal {
+			continue
+		}
+		messageIDs = append(messageIDs, message.ID)
+		indexByID[message.ID] = i
+	}
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	allowedDeviceIDs, err := s.activeUserDeviceIDs(ctx, requesterID, requesterDeviceID)
+	if err != nil {
+		return err
+	}
+	if len(allowedDeviceIDs) == 0 {
+		return nil
+	}
+	rows, err := s.q.ListMessageRecipientCiphertexts(ctx, messageIDs)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if _, ok := allowedDeviceIDs[row.RecipientDeviceID]; !ok {
+			continue
+		}
+		idx, ok := indexByID[row.MessageID]
+		if !ok {
+			continue
+		}
+		messages[idx].EncryptedDMPayloads = append(messages[idx].EncryptedDMPayloads, EncryptedDMRecipientPayload{
+			RecipientDeviceID: row.RecipientDeviceID,
+			SenderDeviceID:    row.SenderDeviceID,
+			Algorithm:         row.Algorithm,
+			SessionMessage:    append([]byte(nil), row.SessionMessage...),
+			MetadataAAD:       append([]byte(nil), row.MetadataAad...),
+		})
+	}
+	return nil
 }
 
 // hydrateMessageJSONFields decodes the reactions / my_reactions / attachments

@@ -223,6 +223,7 @@ func (s *Service) buildResponse(ctx context.Context, userID uuid.UUID, session q
 			LastActivityAt:     timestamppb.New(row.LastActivityAt),
 			MemberCount:        int32(row.MemberCount),
 			Presence:           mapPresenceStatus(row.Presence),
+			EncryptionMode:     mapConversationEncryptionMode(row.EncryptionMode),
 		})
 	}
 
@@ -475,6 +476,15 @@ func mapPresenceStatus(raw string) packetspb.PresenceStatus {
 		return packetspb.PresenceStatus_PRESENCE_STATUS_OFFLINE
 	default:
 		return packetspb.PresenceStatus_PRESENCE_STATUS_UNSPECIFIED
+	}
+}
+
+func mapConversationEncryptionMode(raw string) packetspb.ConversationEncryptionMode {
+	switch raw {
+	case "dm_pairwise_signal_v1":
+		return packetspb.ConversationEncryptionMode_CONVERSATION_ENCRYPTION_MODE_DM_PAIRWISE_SIGNAL_V1
+	default:
+		return packetspb.ConversationEncryptionMode_CONVERSATION_ENCRYPTION_MODE_NONE
 	}
 }
 

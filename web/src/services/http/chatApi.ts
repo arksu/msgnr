@@ -86,6 +86,25 @@ export interface DirectMessageItem {
   custom_status?: UserCustomStatusDto | null
   kind: string
   visibility: string
+  encryption_mode?: string
+}
+
+export interface E2EEDeviceItem {
+  device_id: string
+  user_id: string
+  device_label: string
+  identity_key_public: string
+  signed_prekey_id: number
+  signed_prekey_public: string
+  signed_prekey_signature: string
+}
+
+export interface EncryptedDMPayloadItem {
+  recipient_device_id: string
+  sender_device_id: string
+  algorithm: string
+  session_message: string
+  metadata_aad: string
 }
 
 export interface ConversationMessageItem {
@@ -107,6 +126,9 @@ export interface ConversationMessageItem {
   my_reactions?: string[]
   attachments?: ChatMessageAttachmentItem[]
   is_saved?: boolean
+  content_mode?: string
+  sender_device_id?: string
+  encrypted_dm_payloads?: EncryptedDMPayloadItem[]
 }
 
 export interface ForwardedMessageItem {
@@ -268,6 +290,36 @@ export async function createOrOpenDm(userId: string): Promise<DirectMessageItem>
   } catch (e) { handleError(e) }
 }
 
+export async function createOrOpenEncryptedDm(conversationId: string): Promise<DirectMessageItem> {
+  try {
+    const { data } = await http.post<DirectMessageItem>('/api/dms/e2ee', { conversation_id: conversationId })
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function registerE2EEDevice(payload: {
+  device_id: string
+  device_label: string
+  identity_key_public: string
+  signed_prekey_id: number
+  signed_prekey_public: string
+  signed_prekey_signature: string
+}): Promise<E2EEDeviceItem> {
+  try {
+    const { data } = await http.post<E2EEDeviceItem>('/api/e2ee/devices', payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function listEncryptedDMDevices(conversationId: string): Promise<E2EEDeviceItem[]> {
+  try {
+    const { data } = await http.get<E2EEDeviceItem[]>('/api/e2ee/conversation-devices', {
+      params: { conversation_id: conversationId },
+    })
+    return data
+  } catch (e) { handleError(e) }
+}
+
 export async function inviteToConversation(conversationId: string, userId: string): Promise<void> {
   try {
     await http.post('/api/conversations/invite', { conversation_id: conversationId, user_id: userId })
@@ -301,6 +353,7 @@ export async function listActiveCallMembers(conversationId: string): Promise<Con
 export async function listConversationMessages(
   conversationId: string,
   beforeChannelSeq?: bigint,
+  e2eeDeviceId?: string,
 ): Promise<ConversationHistoryPage> {
   const startedAt = performance.now()
   console.debug('[perf][conversation-open] api:listConversationMessages:start', {
@@ -314,6 +367,7 @@ export async function listConversationMessages(
         ...(typeof beforeChannelSeq === 'bigint'
           ? { before_channel_seq: beforeChannelSeq.toString() }
           : {}),
+        ...(e2eeDeviceId ? { e2ee_device_id: e2eeDeviceId } : {}),
       },
     })
     const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100
@@ -337,12 +391,14 @@ export async function listConversationMessages(
 export async function getMessageContext(
   conversationId: string,
   messageId: string,
+  e2eeDeviceId?: string,
 ): Promise<ConversationHistoryPage> {
   try {
     const { data } = await http.get<ConversationHistoryPage>('/api/messages/context', {
       params: {
         conversation_id: conversationId,
         message_id: messageId,
+        ...(e2eeDeviceId ? { e2ee_device_id: e2eeDeviceId } : {}),
       },
     })
     return data

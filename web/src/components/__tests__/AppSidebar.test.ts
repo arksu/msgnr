@@ -14,6 +14,7 @@ import { storage } from '@/services/storage/storageAdapter'
 const chatApiMocks = vi.hoisted(() => ({
   listDmCandidates: vi.fn(),
   createOrOpenDm: vi.fn(),
+  createOrOpenEncryptedDm: vi.fn(),
   listAvailableChannels: vi.fn(),
   joinChannels: vi.fn(),
   leaveConversation: vi.fn(),
@@ -30,6 +31,7 @@ const chatApiMocks = vi.hoisted(() => ({
 vi.mock('@/services/http/chatApi', () => ({
   listDmCandidates: chatApiMocks.listDmCandidates,
   createOrOpenDm: chatApiMocks.createOrOpenDm,
+  createOrOpenEncryptedDm: chatApiMocks.createOrOpenEncryptedDm,
   listAvailableChannels: chatApiMocks.listAvailableChannels,
   joinChannels: chatApiMocks.joinChannels,
   leaveConversation: chatApiMocks.leaveConversation,
@@ -71,6 +73,16 @@ describe('AppSidebar', () => {
       avatar_url: '',
       kind: 'dm',
       visibility: 'dm',
+    })
+    chatApiMocks.createOrOpenEncryptedDm.mockResolvedValue({
+      conversation_id: 'dm-e2ee-1',
+      user_id: 'user-2',
+      display_name: 'Bob',
+      email: 'bob@example.com',
+      avatar_url: '',
+      kind: 'dm',
+      visibility: 'dm',
+      encryption_mode: 'dm_pairwise_signal_v1',
     })
     chatApiMocks.listAvailableChannels.mockResolvedValue([
       { id: 'channel-1', name: 'General', kind: 'channel', visibility: 'public', last_activity_at: '2026-03-06T00:00:00Z' },
@@ -152,6 +164,7 @@ describe('AppSidebar', () => {
         displayName: 'eve@example.com',
         avatarUrl: '',
         presence: 'offline',
+        encryptionMode: 'none',
         unread: 0,
         notificationLevel: NotificationLevel.ALL,
       },
@@ -209,11 +222,68 @@ describe('AppSidebar', () => {
         displayName: 'Bob',
         avatarUrl: '',
         presence: 'offline',
+        encryptionMode: 'none',
         unread: 0,
         notificationLevel: NotificationLevel.ALL,
       },
     ])
     expect(chatStore.activeChannelId).toBe('dm-1')
+  })
+
+  it('shows the encrypted DM icon immediately after starting an E2E session', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    authStore.sessionRole = 'member'
+    chatStore.workspace = {
+      id: 'workspace-1',
+      name: 'Acme',
+      selfUserId: 'user-1',
+      selfDisplayName: 'Ada',
+      selfRole: 'member',
+    }
+    chatStore.directMessages = [{
+      id: 'dm-plain-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      avatarUrl: '',
+      presence: 'offline',
+      encryptionMode: 'none',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/', component: { template: '<div />' } }],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppSidebar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          SidebarItem: {
+            template: '<button class="sidebar-item" @click="$emit(\'click\')"><slot name="icon" /><slot /><slot name="actions" /></button>',
+          },
+          RouterLink: {
+            template: '<a><slot /></a>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.find('[aria-label="Encrypted DM"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="conversation-menu-button-dm-dm-plain-1"]').trigger('click')
+    await wrapper.get('[data-testid="conversation-start-e2ee-dm-dm-plain-1"]').trigger('click')
+    await flushAll()
+
+    expect(chatApiMocks.createOrOpenEncryptedDm).toHaveBeenCalledWith('dm-plain-1')
+    expect(chatStore.activeChannelId).toBe('dm-e2ee-1')
+    expect(chatStore.directMessages.find(dm => dm.id === 'dm-e2ee-1')?.encryptionMode).toBe('dm_pairwise_signal_v1')
+    expect(wrapper.find('[aria-label="Encrypted DM"]').exists()).toBe(true)
   })
 
   it('includes self in the dm picker and opens a self dm', async () => {
@@ -281,6 +351,7 @@ describe('AppSidebar', () => {
         displayName: 'Ada',
         avatarUrl: '/api/public/avatars/avatars/user-1/avatar.png',
         presence: 'offline',
+        encryptionMode: 'none',
         unread: 0,
         notificationLevel: NotificationLevel.ALL,
       },

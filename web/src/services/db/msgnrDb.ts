@@ -19,6 +19,8 @@ export interface CachedConversation {
   presence?: string
   /** DM peer custom status */
   customStatus?: UserCustomStatus | null
+  /** DM encryption mode */
+  encryptionMode?: 'none' | 'dm_pairwise_signal_v1'
   unread: number
   hasUnreadThreadReplies?: boolean
   /** bigint as decimal string */

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 
 	"msgnr/internal/auth"
+	"msgnr/internal/chat"
 	"msgnr/internal/config"
 	"msgnr/internal/events"
 	packetspb "msgnr/internal/gen/proto"
@@ -150,7 +151,7 @@ func (s *Service) SyncSince(ctx context.Context, principal auth.Principal, req *
 			scanCursor = stored.Seq
 			expectedSeq++
 			if s.authorize(ctx, principal, stored.Proto) {
-				resp.Events = append(resp.Events, stored.Proto)
+				resp.Events = append(resp.Events, chat.StripEncryptedEventPayloads(stored.Proto))
 				if resp.FromSeq == 0 {
 					resp.FromSeq = stored.Seq
 				}

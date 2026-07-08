@@ -63,17 +63,19 @@ type CallParticipant struct {
 }
 
 type Channel struct {
-	ID             uuid.UUID      `json:"id"`
-	Kind           string         `json:"kind"`
-	Visibility     string         `json:"visibility"`
-	Name           sql.NullString `json:"name"`
-	Topic          string         `json:"topic"`
-	IsArchived     bool           `json:"is_archived"`
-	CreatedBy      uuid.UUID      `json:"created_by"`
-	NextSeq        int64          `json:"next_seq"`
-	LastActivityAt time.Time      `json:"last_activity_at"`
-	Hidden         bool           `json:"hidden"`
-	CreatedAt      time.Time      `json:"created_at"`
+	ID                            uuid.UUID      `json:"id"`
+	Kind                          string         `json:"kind"`
+	Visibility                    string         `json:"visibility"`
+	Name                          sql.NullString `json:"name"`
+	Topic                         string         `json:"topic"`
+	IsArchived                    bool           `json:"is_archived"`
+	CreatedBy                     uuid.UUID      `json:"created_by"`
+	NextSeq                       int64          `json:"next_seq"`
+	LastActivityAt                time.Time      `json:"last_activity_at"`
+	Hidden                        bool           `json:"hidden"`
+	EncryptionMode                string         `json:"encryption_mode"`
+	EncryptedStartedFromChannelID uuid.NullUUID  `json:"encrypted_started_from_channel_id"`
+	CreatedAt                     time.Time      `json:"created_at"`
 }
 
 type ChannelMember struct {
@@ -82,6 +84,14 @@ type ChannelMember struct {
 	NotificationLevel int16     `json:"notification_level"`
 	IsArchived        bool      `json:"is_archived"`
 	CreatedAt         time.Time `json:"created_at"`
+}
+
+type DeviceOneTimePrekey struct {
+	DeviceID     uuid.UUID    `json:"device_id"`
+	PrekeyID     int          `json:"prekey_id"`
+	PrekeyPublic []byte       `json:"prekey_public"`
+	ClaimedAt    sql.NullTime `json:"claimed_at"`
+	CreatedAt    time.Time    `json:"created_at"`
 }
 
 type Document struct {
@@ -167,6 +177,8 @@ type Message struct {
 	SenderID                       uuid.UUID      `json:"sender_id"`
 	ClientMsgID                    string         `json:"client_msg_id"`
 	Body                           string         `json:"body"`
+	ContentMode                    string         `json:"content_mode"`
+	SenderDeviceID                 uuid.NullUUID  `json:"sender_device_id"`
 	ForwardedFromMessageID         uuid.NullUUID  `json:"forwarded_from_message_id"`
 	ForwardedFromSenderID          uuid.NullUUID  `json:"forwarded_from_sender_id"`
 	ForwardedFromSenderName        sql.NullString `json:"forwarded_from_sender_name"`
@@ -215,6 +227,16 @@ type MessageRead struct {
 	UserID      uuid.UUID `json:"user_id"`
 	LastReadSeq int64     `json:"last_read_seq"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type MessageRecipientCiphertext struct {
+	MessageID         uuid.UUID `json:"message_id"`
+	RecipientDeviceID uuid.UUID `json:"recipient_device_id"`
+	SenderDeviceID    uuid.UUID `json:"sender_device_id"`
+	Algorithm         string    `json:"algorithm"`
+	SessionMessage    []byte    `json:"session_message"`
+	MetadataAad       []byte    `json:"metadata_aad"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type MessageSafe struct {
@@ -446,6 +468,19 @@ type User struct {
 	NeedChangePassword    bool         `json:"need_change_password"`
 	CreatedAt             time.Time    `json:"created_at"`
 	UpdatedAt             time.Time    `json:"updated_at"`
+}
+
+type UserDevice struct {
+	ID                    uuid.UUID    `json:"id"`
+	UserID                uuid.UUID    `json:"user_id"`
+	DeviceLabel           string       `json:"device_label"`
+	IdentityKeyPublic     []byte       `json:"identity_key_public"`
+	SignedPrekeyID        int          `json:"signed_prekey_id"`
+	SignedPrekeyPublic    []byte       `json:"signed_prekey_public"`
+	SignedPrekeySignature []byte       `json:"signed_prekey_signature"`
+	CreatedAt             time.Time    `json:"created_at"`
+	LastSeenAt            sql.NullTime `json:"last_seen_at"`
+	RevokedAt             sql.NullTime `json:"revoked_at"`
 }
 
 type UserPresence struct {

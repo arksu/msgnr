@@ -29,7 +29,10 @@ SELECT ms.message_id::text AS message_id,
        END)::text AS conversation_title,
        m.sender_id::text AS sender_id,
        COALESCE(NULLIF(sender.display_name, ''), sender.email)::text AS sender_name,
-       m.body,
+       CASE
+         WHEN m.content_mode = 'dm_pairwise_signal_v1' THEN 'Encrypted message'
+         ELSE m.body
+       END::text AS body,
        COALESCE(m.forwarded_from_message_id::text, '')::text AS forwarded_from_message_id,
        COALESCE(m.forwarded_from_sender_id::text, '')::text AS forwarded_from_sender_id,
        COALESCE(m.forwarded_from_sender_name, '')::text AS forwarded_from_sender_name,

@@ -562,6 +562,52 @@ func TestDirectEnvelope_ConversationRemovedRevokesConversationCache(t *testing.T
 	}
 }
 
+func TestDirectEnvelope_StripsEncryptedPayloadWhenFilterUnavailable(t *testing.T) {
+	bus := events.NewBus(zap.NewNop())
+	srv := newTestServer(bus)
+
+	principal := testPrincipal()
+	outboundCh := make(chan outboundMsg, srv.config.WsOutboundQueueMax+4)
+	state := newSessionState(nil, true, nil)
+	unregister := srv.registerUserSession(principal.UserID.String(), outboundCh, state)
+	defer unregister()
+
+	evt := &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
+		ConversationId: uuid.NewString(),
+		Payload: &packetspb.ServerEvent_MessageCreated{
+			MessageCreated: &packetspb.MessageEvent{
+				ContentMode: packetspb.MessageContentMode_MESSAGE_CONTENT_MODE_DM_PAIRWISE_SIGNAL_V1,
+				EncryptedDmPayload: &packetspb.EncryptedDMMessagePayload{
+					Recipients: []*packetspb.EncryptedDMRecipientPayload{
+						{
+							RecipientDeviceId: uuid.NewString(),
+							SessionMessage:    []byte("ciphertext"),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	srv.sendDirectEnvelope([]string{principal.UserID.String()}, &packetspb.Envelope{
+		ProtocolVersion: protocolVersion,
+		Payload: &packetspb.Envelope_ServerEvent{
+			ServerEvent: evt,
+		},
+	})
+
+	select {
+	case msg := <-outboundCh:
+		delivered := msg.env.GetServerEvent()
+		require.NotNil(t, delivered)
+		assert.Empty(t, delivered.GetMessageCreated().GetEncryptedDmPayload().GetRecipients())
+		assert.Len(t, evt.GetMessageCreated().GetEncryptedDmPayload().GetRecipients(), 1)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for direct encrypted message event")
+	}
+}
+
 func TestEventFanout_DMHistoryClearedScopedByConversationMembership(t *testing.T) {
 	bus := events.NewBus(zap.NewNop())
 	srv := newTestServer(bus)

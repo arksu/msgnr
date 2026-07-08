@@ -203,14 +203,27 @@
             @click="openConversation(dm.id)"
           >
             <template #icon>
-              <UserAvatar
-                :user-id="dm.userId"
-                :display-name="dm.displayName"
-                :avatar-url="dm.avatarUrl"
-                :custom-status="null"
-                size="sm"
-                :presence="dm.presence"
-              />
+              <span class="relative inline-flex">
+                <UserAvatar
+                  :user-id="dm.userId"
+                  :display-name="dm.displayName"
+                  :avatar-url="dm.avatarUrl"
+                  :custom-status="null"
+                  size="sm"
+                  :presence="dm.presence"
+                />
+                <span
+                  v-if="isEncryptedDirectMessage(dm)"
+                  class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-sidebar-bg bg-sidebar-hover text-sidebar-text"
+                  aria-label="Encrypted DM"
+                  title="Encrypted DM"
+                >
+                  <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 11V8a5 5 0 0110 0v3" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 11h12v9H6z" />
+                  </svg>
+                </span>
+              </span>
             </template>
             <span class="inline-flex min-w-0 items-center gap-1.5">
               <span
@@ -222,6 +235,18 @@
                 {{ activeStatus(dm.customStatus)?.emoji }}
               </span>
               <span class="min-w-0 truncate">{{ dm.displayName }}</span>
+              <svg
+                v-if="isEncryptedDirectMessage(dm)"
+                class="h-3.5 w-3.5 shrink-0 text-sidebar-textMuted"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                aria-label="Encrypted DM"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7 11V8a5 5 0 0110 0v3" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 11h12v9H6z" />
+              </svg>
               <CallPresenceIcon
                 v-if="hasUserInCall(dm.userId)"
                 class="shrink-0"
@@ -250,6 +275,15 @@
                     @update:model-value="(level) => { chatStore.setNotificationLevel(dm.id, level); closeConversationMenus() }"
                   />
                   <div class="border-t border-white/10 p-1">
+                    <button
+                      v-if="!isEncryptedDirectMessage(dm)"
+                      :data-testid="`conversation-start-e2ee-dm-${dm.id}`"
+                      class="w-full text-left px-2 py-1 rounded text-xs text-sidebar-text hover:bg-sidebar-hover disabled:opacity-50"
+                      :disabled="isStartingE2EConversation(dm.id)"
+                      @click.stop="startE2ESessionFromSidebar(dm.id)"
+                    >
+                      Start E2E session
+                    </button>
                     <button
                       :data-testid="`conversation-clear-history-dm-${dm.id}`"
                       class="w-full text-left px-2 py-1 rounded text-xs text-red-300 hover:bg-sidebar-hover disabled:opacity-50"
@@ -511,7 +545,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useSessionOrchestrator } from '@/composables/useSessionOrchestrator'
-import { createOrOpenDm, joinChannels, leaveConversation, listAvailableChannels, listDmCandidates } from '@/services/http/chatApi'
+import { createOrOpenDm, createOrOpenEncryptedDm, joinChannels, leaveConversation, listAvailableChannels, listDmCandidates } from '@/services/http/chatApi'
+import type { DirectMessageItem } from '@/services/http/chatApi'
 import { loadManualPresencePreference, saveManualPresencePreference } from '@/services/storage/manualPresenceStorage'
 import SidebarItem from './SidebarItem.vue'
 import NotificationLevelSelector from './NotificationLevelSelector.vue'
@@ -549,7 +584,33 @@ const manualPresence = ref<'online' | 'away'>(loadManualPresencePreference() ?? 
 const openConversationMenuKey = ref('')
 const leavingConversationKey = ref('')
 const clearingConversationKey = ref('')
+const startingE2EConversationKey = ref('')
 const conversationActionError = ref('')
+
+type SidebarDirectMessage = typeof chatStore.directMessages[number] & { encryption_mode?: string }
+
+function dmEncryptionMode(dm: SidebarDirectMessage): string {
+  return dm.encryptionMode ?? dm.encryption_mode ?? 'none'
+}
+
+function isEncryptedDirectMessage(dm: SidebarDirectMessage): boolean {
+  return dmEncryptionMode(dm) === 'dm_pairwise_signal_v1'
+}
+
+function directMessageFromDto(dm: DirectMessageItem): typeof chatStore.directMessages[number] {
+  const customStatus = userCustomStatusFromDto(dm.custom_status)
+  return {
+    id: dm.conversation_id,
+    userId: dm.user_id,
+    displayName: dm.display_name || dm.email,
+    avatarUrl: dm.avatar_url,
+    ...(customStatus ? { customStatus } : {}),
+    presence: 'offline',
+    encryptionMode: dm.encryption_mode === 'dm_pairwise_signal_v1' ? 'dm_pairwise_signal_v1' : 'none',
+    unread: 0,
+    notificationLevel: NotificationLevel.ALL,
+  }
+}
 
 const isAdmin = computed(() => {
   const role = authStore.effectiveRole ?? chatStore.workspace?.selfRole
@@ -683,6 +744,10 @@ function isClearingConversation(kind: 'channel' | 'dm', conversationId: string) 
   return clearingConversationKey.value === conversationMenuKey(kind, conversationId)
 }
 
+function isStartingE2EConversation(conversationId: string) {
+  return startingE2EConversationKey.value === conversationMenuKey('dm', conversationId)
+}
+
 function toggleConversationMenu(kind: 'channel' | 'dm', conversationId: string) {
   const key = conversationMenuKey(kind, conversationId)
   openConversationMenuKey.value = openConversationMenuKey.value === key ? '' : key
@@ -728,6 +793,24 @@ async function clearDMHistoryFromSidebar(conversationId: string) {
   } finally {
     if (clearingConversationKey.value === key) {
       clearingConversationKey.value = ''
+    }
+  }
+}
+
+async function startE2ESessionFromSidebar(conversationId: string) {
+  const key = conversationMenuKey('dm', conversationId)
+  startingE2EConversationKey.value = key
+  conversationActionError.value = ''
+  try {
+    const dm = await createOrOpenEncryptedDm(conversationId)
+    chatStore.openDirectMessage(directMessageFromDto(dm))
+    dmsOpen.value = true
+    openConversationMenuKey.value = ''
+  } catch (err) {
+    conversationActionError.value = err instanceof Error ? err.message : 'Failed to start E2E session'
+  } finally {
+    if (startingE2EConversationKey.value === key) {
+      startingE2EConversationKey.value = ''
     }
   }
 }
@@ -859,17 +942,7 @@ async function selectDmCandidate(userId: string) {
   dmPickerError.value = ''
   try {
     const dm = await createOrOpenDm(userId)
-    const customStatus = userCustomStatusFromDto(dm.custom_status)
-    chatStore.openDirectMessage({
-      id: dm.conversation_id,
-      userId: dm.user_id,
-      displayName: dm.display_name || dm.email,
-      avatarUrl: dm.avatar_url,
-      ...(customStatus ? { customStatus } : {}),
-      presence: 'offline',
-      unread: 0,
-      notificationLevel: NotificationLevel.ALL,
-    })
+    chatStore.openDirectMessage(directMessageFromDto(dm))
     dmsOpen.value = true
     closeDmPicker()
   } catch (err) {

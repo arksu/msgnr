@@ -60,6 +60,7 @@ type DirectMessage struct {
 	CustomStatus   *userstatus.Status
 	Kind           string
 	Visibility     string
+	EncryptionMode string
 }
 
 // CreateDMResult is returned by CreateOrOpenDirectMessage.
@@ -106,6 +107,17 @@ type ConversationMessage struct {
 	MyReactions         []string
 	Attachments         []MessageAttachment
 	IsSaved             bool
+	ContentMode         string
+	SenderDeviceID      uuid.UUID
+	EncryptedDMPayloads []EncryptedDMRecipientPayload
+}
+
+type EncryptedDMRecipientPayload struct {
+	RecipientDeviceID uuid.UUID
+	SenderDeviceID    uuid.UUID
+	Algorithm         string
+	SessionMessage    []byte
+	MetadataAAD       []byte
 }
 
 type ForwardedMessageInfo struct {
@@ -287,6 +299,9 @@ type SendMessageParams struct {
 	ForwardedFrom       *ForwardedMessageInfo
 	SuppressMentions    bool
 	AttachmentCopies    []MessageAttachment
+	ContentMode         string
+	SenderDeviceID      uuid.UUID
+	EncryptedDMPayloads []EncryptedDMRecipientPayload
 }
 
 // SendMessageResult is the output of SendMessage.

@@ -2,7 +2,9 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import {
   CallStatus,
+  ConversationEncryptionMode,
   ConversationType,
+  MessageContentMode,
   NotificationLevel,
   NotificationType,
   PresenceStatus,
@@ -55,6 +57,7 @@ import type {
   SavedMessageItem as HttpSavedMessageItem,
   UnreadFeedItem as HttpUnreadFeedItem,
 } from '@/services/http/chatApi'
+import { decryptDMMessage, localEncryptedDMDeviceId } from '@/services/e2ee/dmE2ee'
 import type { MessageEntity as ProtoMessageEntity } from '@/shared/proto/packets_pb'
 import { getOrCreateClientInstanceId } from '@/services/storage/clientInstanceStorage'
 import { generateId } from '@/services/id'
@@ -99,6 +102,7 @@ export interface DirectMessage {
   avatarUrl?: string
   customStatus?: UserCustomStatus | null
   presence: 'online' | 'away' | 'offline'
+  encryptionMode?: 'none' | 'dm_pairwise_signal_v1'
   unread: number
   hasUnreadThreadReplies?: boolean
   lastMessageSeq?: bigint
@@ -110,6 +114,7 @@ export interface ActiveConversation {
   title: string
   kind: 'channel' | 'dm'
   visibility: 'public' | 'private' | 'dm'
+  encryptionMode?: 'none' | 'dm_pairwise_signal_v1'
   unread: number
 }
 
@@ -167,6 +172,15 @@ export interface Message {
   myReactions: string[]
   attachments?: MessageAttachment[]
   isSaved?: boolean
+  contentMode?: 'plaintext' | 'dm_pairwise_signal_v1'
+  senderDeviceId?: string
+  encryptedDMPayloads?: Array<{
+    recipient_device_id: string
+    sender_device_id: string
+    algorithm: string
+    session_message: string
+    metadata_aad: string
+  }>
   clientMsgId?: string
   /** @deprecated Use sendStatus instead. Kept temporarily for migration. */
   pending?: boolean
@@ -361,6 +375,19 @@ function forwardedMessageFromProto(evt: ProtoMessageEvent): ForwardedMessage | u
     conversationTitle: evt.forwardedFromConversationTitle.trim() ? decodeNotificationText(evt.forwardedFromConversationTitle) : undefined,
     threadTitle: evt.forwardedFromThreadTitle.trim() ? decodeNotificationText(evt.forwardedFromThreadTitle) : undefined,
   }
+}
+
+function encryptionModeFromSummary(summary: ConversationSummary): DirectMessage['encryptionMode'] {
+  switch (summary.encryptionMode) {
+    case ConversationEncryptionMode.DM_PAIRWISE_SIGNAL_V1:
+      return 'dm_pairwise_signal_v1'
+    default:
+      return 'none'
+  }
+}
+
+function contentModeFromProto(mode: MessageContentMode): Message['contentMode'] {
+  return mode === MessageContentMode.DM_PAIRWISE_SIGNAL_V1 ? 'dm_pairwise_signal_v1' : 'plaintext'
 }
 
 function mentionedUserIdsFromEntities(entities: MessageEntity[]): string[] {
@@ -565,6 +592,7 @@ export const useChatStore = defineStore('chat', () => {
       title: dm.displayName,
       kind: 'dm',
       visibility: 'dm',
+      encryptionMode: dm.encryptionMode ?? 'none',
       unread: dm.unread,
     }
   })
@@ -591,12 +619,19 @@ export const useChatStore = defineStore('chat', () => {
       title: dm.displayName,
       kind: 'dm',
       visibility: 'dm',
+      encryptionMode: dm.encryptionMode ?? 'none',
       unread: dm.unread,
     }
   }
 
   function getMessagesForConversation(conversationId: string): Message[] {
     return messages.value[conversationId] ?? []
+  }
+
+  function encryptedDMHistoryDeviceId(conversationId: string): string | undefined {
+    const dm = directMessages.value.find(item => item.id === conversationId)
+    if (dm?.encryptionMode !== 'dm_pairwise_signal_v1') return undefined
+    return localEncryptedDMDeviceId()
   }
 
   function getTypingForConversation(conversationId: string): TypingState[] {
@@ -1431,6 +1466,21 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function failSendByClientMsgId(clientMsgId: string, failReason: string) {
+    for (const [conversationId, list] of Object.entries(messages.value)) {
+      const msg = list.find(item => item.clientMsgId === clientMsgId && item.sendStatus === 'sending')
+      if (!msg) continue
+      updateSendStatus(conversationId, clientMsgId, 'failed', failReason)
+      return
+    }
+    for (const [rootMessageId, list] of Object.entries(threadMessages.value)) {
+      const msg = list.find(item => item.clientMsgId === clientMsgId && item.sendStatus === 'sending')
+      if (!msg) continue
+      updateThreadSendStatus(rootMessageId, clientMsgId, 'failed', failReason)
+      return
+    }
+  }
+
   function retryMessage(channelId: string, clientMsgId: string) {
     const list = messages.value[channelId]
     if (!list) return
@@ -2029,6 +2079,7 @@ export const useChatStore = defineStore('chat', () => {
           avatarUrl: resolveAvatarUrl(dmUserId),
           customStatus: resolveUserCustomStatus(dmUserId),
           presence: resolveConversationPresence(summary.presence, dmUserId),
+          encryptionMode: encryptionModeFromSummary(summary),
           unread,
           hasUnreadThreadReplies,
           lastMessageSeq: summary.lastMessageSeq,
@@ -2174,7 +2225,10 @@ export const useChatStore = defineStore('chat', () => {
       beforeChannelSeq: typeof beforeChannelSeq === 'bigint' ? beforeChannelSeq.toString() : undefined,
     })
     try {
-      const page = await listConversationMessages(conversationId, beforeChannelSeq)
+      const e2eeDeviceId = encryptedDMHistoryDeviceId(conversationId)
+      const page = e2eeDeviceId
+        ? await listConversationMessages(conversationId, beforeChannelSeq, e2eeDeviceId)
+        : await listConversationMessages(conversationId, beforeChannelSeq)
       const requestMs = Math.round((performance.now() - requestStartedAt) * 100) / 100
       logConversationPerf('history:request:done', {
         conversationId,
@@ -2238,7 +2292,10 @@ export const useChatStore = defineStore('chat', () => {
   ): Promise<'loaded' | 'not_found' | 'forbidden' | 'error'> {
     if (!conversationId || !messageId) return 'error'
     try {
-      const page = await getMessageContext(conversationId, messageId)
+      const e2eeDeviceId = encryptedDMHistoryDeviceId(conversationId)
+      const page = e2eeDeviceId
+        ? await getMessageContext(conversationId, messageId, e2eeDeviceId)
+        : await getMessageContext(conversationId, messageId)
       applyConversationHistory(conversationId, page.messages)
       return 'loaded'
     } catch (err) {
@@ -2495,6 +2552,11 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function handleProtocolError(err: { requestId: string; message: string }) {
+    if (!err.requestId) return
+    failSendByClientMsgId(err.requestId, err.message || 'Message rejected')
+  }
+
   function handleSubscribeThreadResponse(resp: SubscribeThreadResponse) {
     const root = resp.threadRootMessageId
     clearThreadReplayResyncTimer(root)
@@ -2528,6 +2590,7 @@ export const useChatStore = defineStore('chat', () => {
     ws.onPresenceEvent(handlePresenceEvent)
     ws.onTypingEvent(handleTypingEvent)
     ws.onSetNotificationLevelResponse(handleSetNotificationLevelResponse)
+    ws.onProtocolError(handleProtocolError)
   }
 
   function addMessage(msg: Message) {
@@ -2782,6 +2845,7 @@ export const useChatStore = defineStore('chat', () => {
         displayName: summary.title,
         avatarUrl: resolveAvatarUrl(dmUserId),
         presence: resolveConversationPresence(summary.presence, dmUserId),
+        encryptionMode: encryptionModeFromSummary(summary),
         unread,
         hasUnreadThreadReplies,
         lastMessageSeq: summary.lastMessageSeq,
@@ -3151,6 +3215,14 @@ export const useChatStore = defineStore('chat', () => {
     } else {
       directMessages.value.splice(idx, 1, dm)
     }
+    void cacheConversations(channels.value, directMessages.value)
+  }
+
+  function markDirectMessageEncrypted(conversationId: string) {
+    const dm = directMessages.value.find(item => item.id === conversationId)
+    if (!dm) return
+    dm.encryptionMode = 'dm_pairwise_signal_v1'
+    void cacheConversations(channels.value, directMessages.value)
   }
 
   function openDirectMessage(dm: DirectMessage) {
@@ -3225,6 +3297,7 @@ export const useChatStore = defineStore('chat', () => {
       const rootId = evt.threadRootMessageId
       const alreadyPresentInThread = (threadMessages.value[rootId] ?? []).some(item => item.id === evt.messageId)
       _upsertThreadMessage(rootId, msg)
+      decryptAndApplyMessage(msg, evt.encryptedDmPayload?.recipients)
       const known = threadSummaries.value[rootId]
       const nextLastThreadSeq = known?.lastThreadSeq && known.lastThreadSeq > evt.threadSeq
         ? known.lastThreadSeq
@@ -3257,6 +3330,7 @@ export const useChatStore = defineStore('chat', () => {
     if (alreadyPresent) return
 
     messages.value[channelId].push(msg)
+    decryptAndApplyMessage(msg, evt.encryptedDmPayload?.recipients)
     // Write-through to IndexedDB (fire-and-forget)
     void cacheSingleMessage(msg)
     const channel = channels.value.find(item => item.id === channelId)
@@ -3511,13 +3585,14 @@ export const useChatStore = defineStore('chat', () => {
     if (!userNames.value[evt.senderId]) {
       void ensureUserDirectory().then(() => refreshSenderLabels(evt.senderId))
     }
+    const contentMode = contentModeFromProto(evt.contentMode)
     return {
       id: evt.messageId,
       channelId,
       senderId: evt.senderId,
       senderName: resolveDisplayName(evt.senderId),
       senderAvatarUrl: resolveAvatarUrl(evt.senderId),
-      body: evt.body,
+      body: contentMode === 'dm_pairwise_signal_v1' ? 'Decrypting encrypted message...' : evt.body,
       forwardedFrom: forwardedMessageFromProto(evt),
       entities: normalizeMessageEntities(evt.entities),
       channelSeq: evt.channelSeq,
@@ -3543,8 +3618,24 @@ export const useChatStore = defineStore('chat', () => {
         mimeType: item.mimeType,
       })),
       isSaved: false,
+      contentMode,
+      senderDeviceId: evt.senderDeviceId || undefined,
       serverConfirmed: Boolean(evt.threadRootMessageId) || undefined,
     }
+  }
+
+  function decryptAndApplyMessage(message: Message, payloads: Parameters<typeof decryptDMMessage>[0]) {
+    if (message.contentMode !== 'dm_pairwise_signal_v1') return
+    void decryptDMMessage(payloads).then(body => {
+      if (body === null) return
+      const apply = (candidate: Message) => {
+        if (candidate.id === message.id) candidate.body = body
+      }
+      for (const candidate of messages.value[message.channelId] ?? []) apply(candidate)
+      for (const rootId of Object.keys(threadMessages.value)) {
+        for (const candidate of threadMessages.value[rootId] ?? []) apply(candidate)
+      }
+    }).catch(() => {})
   }
 
   function applyConversationHistory(conversationId: string, history: ConversationMessageItem[]) {
@@ -3558,13 +3649,14 @@ export const useChatStore = defineStore('chat', () => {
         void ensureUserDirectory().then(() => refreshSenderLabels(item.sender_id))
       }
       const prev = byId.get(item.id)
-      byId.set(item.id, {
+      const contentMode = item.content_mode === 'dm_pairwise_signal_v1' ? 'dm_pairwise_signal_v1' : 'plaintext'
+      const nextMessage: Message = {
         id: item.id,
         channelId: item.conversation_id,
         senderId: item.sender_id,
         senderName: item.sender_name || resolveDisplayName(item.sender_id),
         senderAvatarUrl: resolveAvatarUrl(item.sender_id),
-        body: item.body,
+        body: contentMode === 'dm_pairwise_signal_v1' ? 'Decrypting encrypted message...' : item.body,
         forwardedFrom: normalizeForwardedMessage(item.forwarded_from),
         entities: normalizeMessageEntities(item.entities),
         channelSeq: BigInt(item.channel_seq),
@@ -3583,7 +3675,12 @@ export const useChatStore = defineStore('chat', () => {
           mimeType: attachment.mime_type,
         })),
         isSaved: item.is_saved ?? prev?.isSaved ?? false,
-      })
+        contentMode,
+        senderDeviceId: item.sender_device_id || undefined,
+        encryptedDMPayloads: item.encrypted_dm_payloads,
+      }
+      byId.set(item.id, nextMessage)
+      decryptAndApplyMessage(nextMessage, item.encrypted_dm_payloads)
 
       const threadReplyCount = Math.max(0, Math.floor(Number(item.thread_reply_count ?? 0)))
       const known = threadSummaries.value[item.id]
@@ -3763,6 +3860,7 @@ export const useChatStore = defineStore('chat', () => {
     markUnreadFeedItemRead,
     loadOlderConversationHistory,
     openDirectMessage,
+    markDirectMessageEncrypted,
     clearDMConversationHistory,
     removeConversationLocal,
     onClientFocus,

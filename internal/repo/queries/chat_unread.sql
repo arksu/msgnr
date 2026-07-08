@@ -61,7 +61,10 @@ SELECT m.id::text AS message_id,
        END)::text AS conversation_title,
        m.sender_id::text AS sender_id,
        COALESCE(NULLIF(sender.display_name, ''), sender.email)::text AS sender_name,
-       m.body,
+       CASE
+         WHEN m.content_mode = 'dm_pairwise_signal_v1' THEN 'Encrypted message'
+         ELSE m.body
+       END::text AS body,
        m.created_at
 FROM channel_members cm_self
 JOIN channels c

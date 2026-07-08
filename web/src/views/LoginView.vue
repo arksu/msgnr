@@ -33,18 +33,14 @@
           </div>
 
           <div class="mb-4">
-            <label class="block text-sm font-medium text-app-secondaryText mb-1.5">Email</label>
+            <label class="block text-sm font-medium text-app-secondaryText mb-1.5">Login</label>
             <input
               v-model="form.email"
-              type="email"
-              autocomplete="email"
-              placeholder="you@example.com"
-              required
+              type="text"
+              autocomplete="username"
+              placeholder="Login"
               class="w-full bg-sidebar-bg border border-chat-border rounded-lg px-3 py-2.5 text-app-text placeholder-gray-600 text-sm outline-none focus:border-accent transition-colors"
-              :class="errors.email ? 'border-red-500' : ''"
-              @blur="validateEmail"
             />
-            <p v-if="errors.email" class="text-red-400 text-xs mt-1">{{ errors.email }}</p>
           </div>
 
           <div class="mb-5">
@@ -129,7 +125,7 @@ const form = reactive({
   password: '',
 })
 const showPassword = ref(false)
-const errors = reactive({ backendUrl: '', email: '', password: '' })
+const errors = reactive({ backendUrl: '', password: '' })
 
 function validateBackendUrl() {
   if (!isDesktopLogin) return true
@@ -147,12 +143,6 @@ function validateBackendUrl() {
   return true
 }
 
-function validateEmail() {
-  if (!form.email) { errors.email = 'Email is required'; return false }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) { errors.email = 'Enter a valid email'; return false }
-  errors.email = ''; return true
-}
-
 function validatePassword() {
   if (!form.password) { errors.password = 'Password is required'; return false }
   errors.password = ''; return true
@@ -160,9 +150,8 @@ function validatePassword() {
 
 async function handleSubmit() {
   const b = validateBackendUrl()
-  const e = validateEmail()
   const p = validatePassword()
-  if (!b || !e || !p) return
+  if (!b || !p) return
   try {
     if (isDesktopLogin) {
       setBackendBaseUrl(form.backendUrl)

@@ -17,6 +17,13 @@ import (
 	"msgnr/internal/userstatus"
 )
 
+const (
+	ConversationEncryptionNone             = "none"
+	ConversationEncryptionDMPairwiseSignal = "dm_pairwise_signal_v1"
+	MessageContentPlaintext                = "plaintext"
+	MessageContentDMPairwiseSignal         = "dm_pairwise_signal_v1"
+)
+
 // ListDMCandidates returns active users except the requester.
 func (s *Service) ListDMCandidates(ctx context.Context, requesterID uuid.UUID) ([]DMCandidate, error) {
 	rows, err := s.q.ListDMCandidates(ctx, requesterID)
@@ -487,7 +494,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 	}
 
 	if requesterID == targetUserID {
-		existing, restoredRows, foundExisting, err := s.findAndRestoreExistingDirectMessage(ctx, requesterID, targetUserID)
+		existing, restoredRows, foundExisting, err := s.findAndRestoreExistingDirectMessage(ctx, requesterID, targetUserID, ConversationEncryptionNone)
 		if err != nil {
 			return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage restore existing self dm: %w", err)
 		}
@@ -504,7 +511,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 				if err != nil {
 					return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage lookup self requester: %w", err)
 				}
-				result.DirectDeliveries = s.buildDMConversationUpsertedDeliveries(existing.ConversationID, self, self)
+				result.DirectDeliveries = s.buildDMConversationUpsertedDeliveries(existing.ConversationID, self, self, existing.EncryptionMode)
 			}
 			return result, nil
 		}
@@ -514,7 +521,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 			return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage lookup self requester: %w", err)
 		}
 
-		conversationID, err := s.createDMTx(ctx, requesterID, []uuid.UUID{requesterID})
+		conversationID, err := s.createDMTx(ctx, requesterID, []uuid.UUID{requesterID}, ConversationEncryptionNone, uuid.Nil)
 		if err != nil {
 			return CreateDMResult{}, err
 		}
@@ -528,12 +535,13 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 			CustomStatus:   self.CustomStatus,
 			Kind:           "dm",
 			Visibility:     "dm",
+			EncryptionMode: ConversationEncryptionNone,
 		}
-		deliveries := s.buildDMConversationUpsertedDeliveries(conversationID, self, self)
+		deliveries := s.buildDMConversationUpsertedDeliveries(conversationID, self, self, ConversationEncryptionNone)
 		return CreateDMResult{DM: dm, DirectDeliveries: deliveries}, nil
 	}
 
-	existing, restoredRows, foundExisting, err := s.findAndRestoreExistingDirectMessage(ctx, requesterID, targetUserID)
+	existing, restoredRows, foundExisting, err := s.findAndRestoreExistingDirectMessage(ctx, requesterID, targetUserID, ConversationEncryptionNone)
 	if err != nil {
 		return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage restore existing: %w", err)
 	}
@@ -550,7 +558,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 			if err != nil {
 				return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage lookup requester: %w", err)
 			}
-			result.DirectDeliveries = s.buildDMConversationUpsertedDeliveries(existing.ConversationID, requester, target)
+			result.DirectDeliveries = s.buildDMConversationUpsertedDeliveries(existing.ConversationID, requester, target, existing.EncryptionMode)
 		}
 		return result, nil
 	}
@@ -561,7 +569,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 		return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenDirectMessage lookup requester: %w", err)
 	}
 
-	conversationID, err := s.createDMTx(ctx, requesterID, []uuid.UUID{requesterID, targetUserID})
+	conversationID, err := s.createDMTx(ctx, requesterID, []uuid.UUID{requesterID, targetUserID}, ConversationEncryptionNone, uuid.Nil)
 	if err != nil {
 		return CreateDMResult{}, err
 	}
@@ -575,8 +583,106 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 		CustomStatus:   target.CustomStatus,
 		Kind:           "dm",
 		Visibility:     "dm",
+		EncryptionMode: ConversationEncryptionNone,
 	}
-	deliveries := s.buildDMConversationUpsertedDeliveries(conversationID, requester, target)
+	deliveries := s.buildDMConversationUpsertedDeliveries(conversationID, requester, target, ConversationEncryptionNone)
+	return CreateDMResult{DM: dm, DirectDeliveries: deliveries}, nil
+}
+
+// CreateOrOpenEncryptedDirectMessage creates or opens the encrypted sibling of
+// an existing plaintext DM. It never mutates the plaintext DM.
+func (s *Service) CreateOrOpenEncryptedDirectMessage(ctx context.Context, requesterID, sourceConversationID uuid.UUID) (CreateDMResult, error) {
+	if sourceConversationID == uuid.Nil {
+		return CreateDMResult{}, ErrInvalidDMTarget
+	}
+
+	var targetUserID uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(dm_peer.user_id, $2::uuid)
+		  FROM channels c
+		  JOIN channel_members cm_self
+		    ON cm_self.channel_id = c.id
+		   AND cm_self.user_id = $2
+		   AND cm_self.is_archived = false
+		  LEFT JOIN LATERAL (
+		    SELECT cm_other.user_id
+		      FROM channel_members cm_other
+		     WHERE cm_other.channel_id = c.id
+		       AND cm_other.user_id <> $2
+		       AND cm_other.is_archived = false
+		     ORDER BY cm_other.created_at ASC
+		     LIMIT 1
+		  ) dm_peer ON true
+		 WHERE c.id = $1
+		   AND c.kind = 'dm'
+		   AND c.visibility = 'dm'
+		   AND c.encryption_mode = 'none'
+		   AND c.hidden = false
+		   AND c.is_archived = false`,
+		sourceConversationID,
+		requesterID,
+	).Scan(&targetUserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return CreateDMResult{}, ErrNotMember
+		}
+		return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenEncryptedDirectMessage source dm: %w", err)
+	}
+
+	target, err := s.lookupActiveDMUser(ctx, targetUserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CreateDMResult{}, ErrBlockedDMTarget
+		}
+		return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenEncryptedDirectMessage lookup target: %w", err)
+	}
+	requester, err := s.lookupActiveDMUser(ctx, requesterID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CreateDMResult{}, ErrBlockedDMTarget
+		}
+		return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenEncryptedDirectMessage lookup requester: %w", err)
+	}
+
+	existing, restoredRows, foundExisting, err := s.findAndRestoreExistingDirectMessage(ctx, requesterID, targetUserID, ConversationEncryptionDMPairwiseSignal)
+	if err != nil {
+		return CreateDMResult{}, fmt.Errorf("chat.CreateOrOpenEncryptedDirectMessage restore existing: %w", err)
+	}
+	if foundExisting {
+		existing.UserID = target.UserID
+		existing.DisplayName = target.DisplayName
+		existing.Email = target.Email
+		existing.AvatarURL = target.AvatarURL
+		existing.CustomStatus = target.CustomStatus
+
+		result := CreateDMResult{DM: existing}
+		if restoredRows > 0 {
+			result.DirectDeliveries = s.buildDMConversationUpsertedDeliveries(existing.ConversationID, requester, target, existing.EncryptionMode)
+		}
+		return result, nil
+	}
+
+	participants := []uuid.UUID{requesterID, targetUserID}
+	if requesterID == targetUserID {
+		participants = []uuid.UUID{requesterID}
+	}
+	conversationID, err := s.createDMTx(ctx, requesterID, participants, ConversationEncryptionDMPairwiseSignal, sourceConversationID)
+	if err != nil {
+		return CreateDMResult{}, err
+	}
+
+	dm := DirectMessage{
+		ConversationID: conversationID,
+		UserID:         target.UserID,
+		DisplayName:    target.DisplayName,
+		Email:          target.Email,
+		AvatarURL:      target.AvatarURL,
+		CustomStatus:   target.CustomStatus,
+		Kind:           "dm",
+		Visibility:     "dm",
+		EncryptionMode: ConversationEncryptionDMPairwiseSignal,
+	}
+	deliveries := s.buildDMConversationUpsertedDeliveries(conversationID, requester, target, ConversationEncryptionDMPairwiseSignal)
 	return CreateDMResult{DM: dm, DirectDeliveries: deliveries}, nil
 }
 
@@ -586,7 +692,7 @@ func (s *Service) CreateOrOpenDirectMessage(ctx context.Context, requesterID, ta
 // requesterID; duplicates are de-duplicated so the caller can safely pass the
 // self-DM pair [requesterID, requesterID] without violating the primary key on
 // channel_members.
-func (s *Service) createDMTx(ctx context.Context, creatorID uuid.UUID, participantIDs []uuid.UUID) (uuid.UUID, error) {
+func (s *Service) createDMTx(ctx context.Context, creatorID uuid.UUID, participantIDs []uuid.UUID, encryptionMode string, startedFromChannelID uuid.UUID) (uuid.UUID, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("chat.createDMTx begin tx: %w", err)
@@ -594,11 +700,17 @@ func (s *Service) createDMTx(ctx context.Context, creatorID uuid.UUID, participa
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var conversationID uuid.UUID
+	var startedFrom any
+	if startedFromChannelID != uuid.Nil {
+		startedFrom = startedFromChannelID
+	}
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO channels (kind, visibility, name, created_by)
-		VALUES ('dm', 'dm', '', $1)
+		INSERT INTO channels (kind, visibility, name, created_by, encryption_mode, encrypted_started_from_channel_id)
+		VALUES ('dm', 'dm', '', $1, $2, $3)
 		RETURNING id`,
 		creatorID,
+		encryptionMode,
+		startedFrom,
 	).Scan(&conversationID); err != nil {
 		return uuid.Nil, fmt.Errorf("chat.createDMTx insert channel: %w", err)
 	}
@@ -695,6 +807,15 @@ func mapPresenceStatus(raw string) packetspb.PresenceStatus {
 	}
 }
 
+func mapConversationEncryptionMode(raw string) packetspb.ConversationEncryptionMode {
+	switch raw {
+	case ConversationEncryptionDMPairwiseSignal:
+		return packetspb.ConversationEncryptionMode_CONVERSATION_ENCRYPTION_MODE_DM_PAIRWISE_SIGNAL_V1
+	default:
+		return packetspb.ConversationEncryptionMode_CONVERSATION_ENCRYPTION_MODE_NONE
+	}
+}
+
 func (s *Service) lookupActiveDMUser(ctx context.Context, userID uuid.UUID) (DMCandidate, error) {
 	row, err := s.q.LookupActiveDMUser(ctx, userID)
 	if err != nil {
@@ -721,6 +842,7 @@ func (s *Service) lookupActiveDMUser(ctx context.Context, userID uuid.UUID) (DMC
 func (s *Service) findAndRestoreExistingDirectMessage(
 	ctx context.Context,
 	requesterID, targetUserID uuid.UUID,
+	encryptionMode string,
 ) (DirectMessage, int64, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -731,13 +853,14 @@ func (s *Service) findAndRestoreExistingDirectMessage(
 	var dm DirectMessage
 	if requesterID == targetUserID {
 		err = tx.QueryRow(ctx, `
-			SELECT c.id, c.kind, c.visibility
+			SELECT c.id, c.kind, c.visibility, c.encryption_mode
 			  FROM channels c
 			  JOIN channel_members cm
 			    ON cm.channel_id = c.id
 			   AND cm.user_id = $1
 			 WHERE c.kind = 'dm'
 			   AND c.visibility = 'dm'
+			   AND c.encryption_mode = $2
 			   AND (
 				SELECT COUNT(*)
 				  FROM channel_members cm2
@@ -745,10 +868,11 @@ func (s *Service) findAndRestoreExistingDirectMessage(
 			   ) = 1
 			 LIMIT 1`,
 			requesterID,
-		).Scan(&dm.ConversationID, &dm.Kind, &dm.Visibility)
+			encryptionMode,
+		).Scan(&dm.ConversationID, &dm.Kind, &dm.Visibility, &dm.EncryptionMode)
 	} else {
 		err = tx.QueryRow(ctx, `
-			SELECT c.id, c.kind, c.visibility
+			SELECT c.id, c.kind, c.visibility, c.encryption_mode
 			  FROM channels c
 			  JOIN channel_members cm1
 			    ON cm1.channel_id = c.id
@@ -758,14 +882,15 @@ func (s *Service) findAndRestoreExistingDirectMessage(
 			   AND cm2.user_id = $2
 			 WHERE c.kind = 'dm'
 			   AND c.visibility = 'dm'
+			   AND c.encryption_mode = $3
 			   AND (
 			   	SELECT COUNT(*)
 			   	  FROM channel_members cm
 			   	 WHERE cm.channel_id = c.id
 			   ) = 2
 			 LIMIT 1`,
-			requesterID, targetUserID,
-		).Scan(&dm.ConversationID, &dm.Kind, &dm.Visibility)
+			requesterID, targetUserID, encryptionMode,
+		).Scan(&dm.ConversationID, &dm.Kind, &dm.Visibility, &dm.EncryptionMode)
 	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -803,6 +928,7 @@ func (s *Service) findAndRestoreExistingDirectMessage(
 func (s *Service) buildDMConversationUpsertedDeliveries(
 	conversationID uuid.UUID,
 	requester, target DMCandidate,
+	encryptionMode string,
 ) []DirectDelivery {
 	now := timestamppb.Now()
 	memberCount := int32(2)
@@ -822,6 +948,7 @@ func (s *Service) buildDMConversationUpsertedDeliveries(
 			LastActivityAt:   now,
 			MemberCount:      memberCount,
 			Presence:         mapPresenceStatus(peerPresence),
+			EncryptionMode:   mapConversationEncryptionMode(encryptionMode),
 		}
 		evt := &packetspb.ServerEvent{
 			EventType:      packetspb.EventType_EVENT_TYPE_CONVERSATION_UPSERTED,

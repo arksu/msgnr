@@ -198,6 +198,56 @@ describe('chatStore phase 6 flows', () => {
     expect(ws.setLiveSynced).toHaveBeenCalled()
   })
 
+  it('preserves and resubscribes the visible pinned thread across bootstrap', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSubscribeThread = vi.fn().mockReturnValue(true)
+    ws.setLiveSynced = vi.fn(() => {
+      ws.state = 'LIVE_SYNCED'
+    })
+    ws.sendAck = vi.fn()
+    chatApiMocks.listConversationMessages.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+    }
+    chat.activeThreadConversationId = 'channel-1'
+    chat.activeThreadRootId = 'root-1'
+
+    chat.handleBootstrapResponse(create(BootstrapResponseSchema, {
+      snapshotSeq: 8n,
+      userRole: 2,
+      workspace: {
+        workspaceId: 'workspace-1',
+        workspaceName: 'Acme',
+        selfUser: create(UserSummarySchema, { userId: 'user-1', displayName: 'Ada', avatarUrl: '' }),
+        selfRole: 3,
+      },
+      conversations: [create(ConversationSummarySchema, {
+        conversationId: 'channel-1',
+        conversationType: 2,
+        title: 'general',
+        notificationLevel: NotificationLevel.ALL,
+      })],
+      unread: [],
+      activeCalls: [],
+      pendingInvites: [],
+      notifications: [],
+      hasMore: false,
+      bootstrapSessionId: 'session-thread-recovery',
+      pageIndex: 0,
+      pageSizeEffective: 1,
+      estimatedTotalConversations: 1,
+      presence: [],
+    }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(chat.activeThreadConversationId).toBe('channel-1')
+    expect(chat.activeThreadRootId).toBe('root-1')
+    expect(chat.getThreadRoot('channel-1', 'root-1')?.id).toBe('root-1')
+    expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
   it('hydrates workspace user call presence from bootstrap page 0', () => {
     const chat = useChatStore()
     const ws = useWsStore()
@@ -2524,6 +2574,128 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.threadSummaries['root-1'].replyCount).toBe(10)
     expect(chat.threadSummaries['root-1'].lastThreadSeq).toBe(10n)
     expect(chat.threadMessages['root-1'].every(message => message.serverConfirmed === true)).toBe(true)
+  })
+
+  it('retries a dropped active-thread subscription when realtime sync becomes live', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSubscribeThread = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true)
+    ws.setLiveSynced = vi.fn(() => {
+      ws.state = 'LIVE_SYNCED'
+    })
+    chatApiMocks.listConversationMessages.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
+    chat.messages = {
+      'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+    }
+    chat.threadSummaries = {
+      'root-1': { replyCount: 7, lastThreadSeq: 7n },
+    }
+
+    chat.openThread(chat.messages['channel-1'][0])
+
+    expect(ws.sendSubscribeThread).toHaveBeenCalledTimes(1)
+    expect(chat.threadReplayStatus('root-1')).toBe('loading')
+
+    chat.handleSyncSinceResponse(create(SyncSinceResponseSchema, {
+      syncCursor: 0n,
+      needFullBootstrap: false,
+      events: [],
+    }))
+
+    await vi.waitFor(() => {
+      expect(ws.sendSubscribeThread).toHaveBeenCalledTimes(2)
+    })
+    expect(ws.sendSubscribeThread).toHaveBeenLastCalledWith('channel-1', 'root-1', 0n)
+  })
+
+  it('retries one incomplete thread replay from zero and then exposes an error', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.sendSubscribeThread = vi.fn().mockReturnValue(true)
+      chat.messages = {
+        'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+      }
+      chat.threadSummaries = {
+        'root-1': { replyCount: 7, lastThreadSeq: 7n },
+      }
+      chat.openThread(chat.messages['channel-1'][0])
+      vi.mocked(ws.sendSubscribeThread).mockClear()
+
+      const incompleteResponse = create(SubscribeThreadResponseSchema, {
+        conversationId: 'channel-1',
+        threadRootMessageId: 'root-1',
+        currentThreadSeq: 7n,
+        replyCount: 7,
+        replay: [],
+      })
+      chat.handleSubscribeThreadResponse(incompleteResponse)
+
+      expect(chat.threadReplayStatus('root-1')).toBe('loading')
+      vi.advanceTimersByTime(200)
+      expect(ws.sendSubscribeThread).toHaveBeenCalledTimes(1)
+      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+
+      vi.mocked(ws.sendSubscribeThread).mockClear()
+      chat.handleSubscribeThreadResponse(incompleteResponse)
+      vi.advanceTimersByTime(200)
+
+      expect(ws.sendSubscribeThread).not.toHaveBeenCalled()
+      expect(chat.threadReplayStatus('root-1')).toBe('error')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps replay responses isolated while switching between pinned threads', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendSubscribeThread = vi.fn().mockReturnValue(true)
+    chat.messages = {
+      'channel-1': [
+        buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n }),
+        buildMessage({ id: 'root-2', channelId: 'channel-1', threadSeq: 0n }),
+      ],
+    }
+
+    chat.activateThreadWorkspace('channel-1', 'root-1')
+    chat.activateThreadWorkspace('channel-1', 'root-2')
+    chat.handleSubscribeThreadResponse(create(SubscribeThreadResponseSchema, {
+      conversationId: 'channel-1',
+      threadRootMessageId: 'root-2',
+      currentThreadSeq: 1n,
+      replyCount: 1,
+      replay: [create(MessageEventSchema, {
+        conversationId: 'channel-1',
+        messageId: 'reply-2',
+        senderId: 'user-2',
+        body: 'reply 2',
+        threadRootMessageId: 'root-2',
+        threadSeq: 1n,
+      })],
+    }))
+    chat.handleSubscribeThreadResponse(create(SubscribeThreadResponseSchema, {
+      conversationId: 'channel-1',
+      threadRootMessageId: 'root-1',
+      currentThreadSeq: 1n,
+      replyCount: 1,
+      replay: [create(MessageEventSchema, {
+        conversationId: 'channel-1',
+        messageId: 'reply-1',
+        senderId: 'user-2',
+        body: 'reply 1',
+        threadRootMessageId: 'root-1',
+        threadSeq: 1n,
+      })],
+    }))
+
+    expect(chat.activeThreadRootId).toBe('root-2')
+    expect(chat.threadMessages['root-1'].map(message => message.id)).toEqual(['reply-1'])
+    expect(chat.threadMessages['root-2'].map(message => message.id)).toEqual(['reply-2'])
   })
 
   it('includes the current self avatar on optimistic thread replies immediately', () => {

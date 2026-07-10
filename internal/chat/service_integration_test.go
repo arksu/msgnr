@@ -2586,7 +2586,7 @@ func TestIntegration_SendMessage_EmitsWorkspaceEvent(t *testing.T) {
 	}
 }
 
-func TestIntegration_UpdateReadCursor_ResolvesMentionNotifications(t *testing.T) {
+func TestIntegration_UpdateReadCursor_ResolvesRootMentionsAndPreservesThreadNotifications(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 
@@ -2633,24 +2633,61 @@ func TestIntegration_UpdateReadCursor_ResolvesMentionNotifications(t *testing.T)
 	readCounterDeliveries := filterDirectDeliveriesByType(msg.DirectDeliveries, packetspb.EventType_EVENT_TYPE_READ_COUNTER_UPDATED)
 	require.Len(t, readCounterDeliveries, 2)
 
+	threadRoot, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:   channelID,
+		SenderID:    mentionedUserID,
+		ClientMsgID: uuid.New().String(),
+		Body:        "thread root",
+	})
+	require.NoError(t, err)
+
+	threadReply, err := svc.SendMessage(ctx, chat.SendMessageParams{
+		ChannelID:           channelID,
+		SenderID:            authorID,
+		ClientMsgID:         uuid.New().String(),
+		Body:                "thread @Mentioned",
+		ThreadRootMessageID: threadRoot.MessageID,
+		Entities: []chat.MessageEntity{
+			{
+				Kind:     chat.MessageEntityKindUser,
+				TargetID: mentionedUserID,
+				Label:    "@Mentioned",
+				Href:     "",
+				Start:    7,
+				End:      17,
+			},
+		},
+	})
+	require.NoError(t, err)
+	threadNotificationDeliveries := filterDirectDeliveriesByType(threadReply.DirectDeliveries, packetspb.EventType_EVENT_TYPE_NOTIFICATION_ADDED)
+	require.Len(t, threadNotificationDeliveries, 2)
+	for _, delivery := range threadNotificationDeliveries {
+		assert.Equal(t, mentionedUserID.String(), delivery.UserID)
+		notification := delivery.Event.GetNotificationAdded().GetNotification()
+		require.NotNil(t, notification)
+		assert.Equal(t, threadReply.MessageID.String(), notification.GetMessageId())
+		assert.Equal(t, threadRoot.MessageID.String(), notification.GetThreadRootMessageId())
+	}
+
 	var unresolvedBefore int
 	err = pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND resolved_at IS NULL`,
 		mentionedUserID,
 	).Scan(&unresolvedBefore)
 	require.NoError(t, err)
-	require.Equal(t, 1, unresolvedBefore)
+	require.Equal(t, 3, unresolvedBefore)
 
 	ack, err := svc.UpdateReadCursor(ctx, chat.UpdateReadCursorParams{
 		ChannelID:   channelID,
 		UserID:      mentionedUserID,
-		LastReadSeq: msg.ChannelSeq,
+		LastReadSeq: threadReply.ChannelSeq,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, channelID, ack.ChannelID)
-	assert.Equal(t, msg.ChannelSeq, ack.LastReadSeq)
+	assert.Equal(t, threadReply.ChannelSeq, ack.LastReadSeq)
 	assert.Equal(t, int32(0), ack.Counter.UnreadMessages)
 	assert.Equal(t, int32(0), ack.Counter.UnreadMentions)
+	assert.True(t, ack.Counter.HasUnreadThreadReplies)
 	require.Len(t, ack.DirectDeliveries, 2)
 
 	var unresolvedAfter int
@@ -2659,7 +2696,29 @@ func TestIntegration_UpdateReadCursor_ResolvesMentionNotifications(t *testing.T)
 		mentionedUserID,
 	).Scan(&unresolvedAfter)
 	require.NoError(t, err)
-	assert.Equal(t, 0, unresolvedAfter)
+	assert.Equal(t, 2, unresolvedAfter)
+
+	var unresolvedRootNotifications int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM notifications
+		  WHERE user_id = $1
+		    AND resolved_at IS NULL
+		    AND thread_root_message_id IS NULL`,
+		mentionedUserID,
+	).Scan(&unresolvedRootNotifications)
+	require.NoError(t, err)
+	assert.Equal(t, 0, unresolvedRootNotifications)
+
+	var unresolvedThreadNotifications int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM notifications
+		  WHERE user_id = $1
+		    AND resolved_at IS NULL
+		    AND thread_root_message_id = $2`,
+		mentionedUserID, threadRoot.MessageID,
+	).Scan(&unresolvedThreadNotifications)
+	require.NoError(t, err)
+	assert.Equal(t, 2, unresolvedThreadNotifications)
 
 	var resolvedEvents int
 	err = pool.QueryRow(ctx,

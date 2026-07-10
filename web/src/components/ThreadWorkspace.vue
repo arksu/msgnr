@@ -44,7 +44,26 @@
           </div>
         </div>
 
-        <div v-else class="px-4 pb-4 text-center text-xs text-gray-500">
+        <div
+          v-if="replyCount > replies.length && replayStatus === 'error'"
+          class="flex flex-col items-center gap-2 px-4 pb-4 text-center text-xs text-app-muted"
+        >
+          <span>Replies could not be loaded.</span>
+          <button
+            type="button"
+            data-testid="thread-replay-retry"
+            class="rounded border border-chat-border px-2 py-1 text-app-secondaryText transition-colors hover:bg-chat-msgHover hover:text-app-text"
+            @click="retryReplay"
+          >
+            Retry
+          </button>
+        </div>
+
+        <div v-else-if="replyCount > replies.length" class="px-4 pb-4 text-center text-xs text-app-muted">
+          Loading replies...
+        </div>
+
+        <div v-else-if="replies.length === 0" class="px-4 pb-4 text-center text-xs text-app-muted">
           Be the first to reply
         </div>
       </template>
@@ -102,6 +121,7 @@ const threadDraftScope = computed<ChatDraftScope>(() => ({
 const replyCount = computed(() => (
   chatStore.threadSummaries[props.rootMessageId]?.replyCount ?? replies.value.length
 ))
+const replayStatus = computed(() => chatStore.threadReplayStatus(props.rootMessageId))
 const typingLabel = computed(() => {
   // Current typing presence is conversation-scoped, not thread-scoped.
   const entries = chatStore.getTypingForConversation(props.conversationId)
@@ -217,6 +237,10 @@ function handleSend(payload: { body: string; entities: NonNullable<Message['enti
   chatStore.sendThreadReplyToRoot(props.conversationId, props.rootMessageId, payload.body, payload.attachmentIds, payload.attachments, payload.entities)
   stopTypingPresence(true)
   void nextTick(() => scrollToBottom())
+}
+
+function retryReplay() {
+  chatStore.retryThreadReplay(props.conversationId, props.rootMessageId)
 }
 
 watch(() => [props.conversationId, props.rootMessageId] as const, async ([conversationId, rootMessageId]) => {

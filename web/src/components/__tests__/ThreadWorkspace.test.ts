@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
-import { NotificationLevel } from '@/shared/proto/packets_pb'
+import { create } from '@bufbuild/protobuf'
+import { NotificationLevel, SubscribeThreadResponseSchema } from '@/shared/proto/packets_pb'
 import ThreadWorkspace from '@/components/ThreadWorkspace.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -303,6 +304,70 @@ describe('ThreadWorkspace', () => {
 
     expect(chat.activeThreadConversationId).toBe('channel-1')
     expect(chat.activeThreadRootId).toBe('root-2')
+  })
+
+  it('shows replay loading and retry states when replies are missing', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+    ws.sendSubscribeThread = vi.fn().mockReturnValue(true)
+    chat.ensureConversationHistory = vi.fn().mockResolvedValue(undefined)
+    chat.loadMessageContext = vi.fn().mockResolvedValue(undefined)
+    chat.messages = {
+      'channel-1': [{
+        id: 'root-1',
+        channelId: 'channel-1',
+        senderId: 'user-1',
+        senderName: 'Ada',
+        body: 'root',
+        channelSeq: 1n,
+        threadSeq: 0n,
+        mentionedUserIds: [],
+        mentionEveryone: false,
+        createdAt: '2026-03-06T00:00:00Z',
+        reactions: [],
+        myReactions: [],
+      }],
+    }
+    chat.threadSummaries = {
+      'root-1': { replyCount: 7, lastThreadSeq: 7n },
+    }
+
+    const wrapper = mount(ThreadWorkspace, {
+      props: {
+        conversationId: 'channel-1',
+        rootMessageId: 'root-1',
+      },
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: true,
+        },
+      },
+    })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Loading replies...')
+    expect(wrapper.text()).not.toContain('Be the first to reply')
+
+    const incompleteResponse = create(SubscribeThreadResponseSchema, {
+      conversationId: 'channel-1',
+      threadRootMessageId: 'root-1',
+      currentThreadSeq: 7n,
+      replyCount: 7,
+      replay: [],
+    })
+    chat.handleSubscribeThreadResponse(incompleteResponse)
+    chat.handleSubscribeThreadResponse(incompleteResponse)
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Replies could not be loaded.')
+    const retry = wrapper.get('[data-testid="thread-replay-retry"]')
+    await retry.trigger('click')
+
+    expect(ws.sendSubscribeThread).toHaveBeenLastCalledWith('channel-1', 'root-1', 0n)
+    wrapper.unmount()
   })
 
   it('requests inline edit for the latest editable own thread reply', async () => {

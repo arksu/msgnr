@@ -344,6 +344,18 @@ describe('wsStore state machine', () => {
     }))
   })
 
+  it('reports whether a thread subscription reached the websocket', () => {
+    const store = useWsStore()
+    store.connect('/ws')
+
+    expect(store.sendSubscribeThread('channel-1', 'root-1', 0n)).toBe(true)
+    expect(decodePayloadType(mockSocket.sent[mockSocket.sent.length - 1])).toBe('subscribeThreadRequest')
+
+    mockSocket.readyState = MockWebSocket.CLOSED
+
+    expect(store.sendSubscribeThread('channel-1', 'root-1', 0n)).toBe(false)
+  })
+
   it('AUTH_SENT -> AUTH_COMPLETE on authResponse ok=true', () => {
     const store = useWsStore()
     store.connect('/ws')

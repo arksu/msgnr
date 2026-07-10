@@ -540,6 +540,7 @@ export const useChatStore = defineStore('chat', () => {
   const conversationInitialLoadingById = ref<Record<string, boolean>>({})
   const threadMessages = ref<Record<string, Message[]>>({})
   const threadReplayVersionByRoot = ref<Record<string, number>>({})
+  const threadReplayStatusByRoot = ref<Record<string, 'idle' | 'loading' | 'error'>>({})
   const threadSummaries = ref<Record<string, ThreadSummary>>({})
   const activeThreadRootId = ref('')
   const activeThreadConversationId = ref('')
@@ -566,6 +567,7 @@ export const useChatStore = defineStore('chat', () => {
   /** Tracks active send timeouts by clientMsgId. Cleared on ACK or discard. */
   const sendTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
   const threadReplayResyncTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const incompleteThreadReplayResponses = new Map<string, number>()
   const pendingThreadReadResolutions = new Map<string, Promise<void>>()
   const toast = ref<ToastState | null>(null)
   const lastAppliedEventSeq = ref<bigint>(loadLastAppliedEventSeq())
@@ -752,7 +754,23 @@ export const useChatStore = defineStore('chat', () => {
     return highestConfirmedThreadSeq(rootId)
   }
 
-  function requestThreadReplayRecovery(rootId: string, conversationId: string) {
+  function threadReplayStatus(rootId: string): 'idle' | 'loading' | 'error' {
+    return threadReplayStatusByRoot.value[rootId] ?? 'idle'
+  }
+
+  function setThreadReplayStatus(rootId: string, status: 'idle' | 'loading' | 'error') {
+    if (!rootId) return
+    threadReplayStatusByRoot.value[rootId] = status
+  }
+
+  function subscribeThreadReplay(conversationId: string, rootId: string, fromStart = false): boolean {
+    if (!conversationId || !rootId) return false
+    setThreadReplayStatus(rootId, 'loading')
+    const cursor = fromStart ? 0n : threadReplayCursor(rootId)
+    return useWsStore().sendSubscribeThread(conversationId, rootId, cursor)
+  }
+
+  function requestThreadReplayRecovery(rootId: string, conversationId: string, fromStart = false) {
     if (!rootId || !conversationId) return
     clearThreadReplayResyncTimer(rootId)
     threadReplayResyncTimers.set(rootId, setTimeout(() => {
@@ -761,7 +779,7 @@ export const useChatStore = defineStore('chat', () => {
       if (activeThreadRootId.value !== rootId || activeThreadConversationId.value !== conversationId) return
       const ws = useWsStore()
       if (ws.state !== 'LIVE_SYNCED') return
-      ws.sendSubscribeThread(conversationId, rootId, threadReplayCursor(rootId))
+      subscribeThreadReplay(conversationId, rootId, fromStart)
     }, 150))
   }
 
@@ -769,7 +787,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!isThreadPanelOpen.value) return
     if (activeThreadRootId.value !== rootId || activeThreadConversationId.value !== conversationId) return
     if (force) {
-      requestThreadReplayRecovery(rootId, conversationId)
+      requestThreadReplayRecovery(rootId, conversationId, true)
       return
     }
     const summary = threadSummaries.value[rootId]
@@ -1069,7 +1087,31 @@ export const useChatStore = defineStore('chat', () => {
   function markVisibleThreadRead(conversationId: string, threadRootMessageId: string, lastReadSeq = rootReadSeq(conversationId, threadRootMessageId)) {
     if (!conversationId || !threadRootMessageId) return
     void markThreadUnreadAsRead(conversationId, threadRootMessageId, lastReadSeq)
-    useWsStore().sendSubscribeThread(conversationId, threadRootMessageId, threadReplayCursor(threadRootMessageId))
+    subscribeThreadReplay(conversationId, threadRootMessageId)
+  }
+
+  function retryThreadReplay(conversationId: string, threadRootMessageId: string) {
+    if (!isActiveThreadWorkspace(conversationId, threadRootMessageId)) return
+    incompleteThreadReplayResponses.delete(threadRootMessageId)
+    clearThreadReplayResyncTimer(threadRootMessageId)
+    subscribeThreadReplay(conversationId, threadRootMessageId, true)
+  }
+
+  function recoverActiveThreadAfterRealtimeSync() {
+    const conversationId = activeThreadConversationId.value
+    const rootMessageId = activeThreadRootId.value
+    if (!conversationId || !rootMessageId) return
+    incompleteThreadReplayResponses.delete(rootMessageId)
+    setThreadReplayStatus(rootMessageId, 'loading')
+    void (async () => {
+      await ensureConversationHistory(conversationId)
+      if (!isActiveThreadWorkspace(conversationId, rootMessageId)) return
+      if (!getThreadRoot(conversationId, rootMessageId)) {
+        await loadMessageContext(conversationId, rootMessageId)
+      }
+      if (!isActiveThreadWorkspace(conversationId, rootMessageId)) return
+      markVisibleThreadRead(conversationId, rootMessageId)
+    })()
   }
 
   function scrubActiveThreadUnreadFeed() {
@@ -1351,6 +1393,7 @@ export const useChatStore = defineStore('chat', () => {
       unreadFeedRefreshTimer = null
     }
     pendingThreadReadResolutions.clear()
+    incompleteThreadReplayResponses.clear()
 
     channels.value = []
     directMessages.value = []
@@ -1368,6 +1411,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value = {}
     threadMessages.value = {}
     threadReplayVersionByRoot.value = {}
+    threadReplayStatusByRoot.value = {}
     threadSummaries.value = {}
     conversationInitialLoadingById.value = {}
     activeThreadRootId.value = ''
@@ -1593,6 +1637,7 @@ export const useChatStore = defineStore('chat', () => {
     activeThreadConversationId.value = conversationId
     activeThreadRootId.value = rootMessageId
     if (!threadMessages.value[rootMessageId]) threadMessages.value[rootMessageId] = []
+    incompleteThreadReplayResponses.delete(rootMessageId)
     // Only server-confirmed replies advance the replay cursor. ACK-only
     // optimistic replies stay visible but must not suppress a later backfill.
     // If the confirmed cache is smaller than the known reply total, reopen
@@ -1935,6 +1980,7 @@ export const useChatStore = defineStore('chat', () => {
     const ws = useWsStore()
     ws.setLiveSynced()
     drainBufferedEvents()
+    recoverActiveThreadAfterRealtimeSync()
   }
 
   /** Max conversations whose messages are pre-loaded from cache on startup. */
@@ -2138,18 +2184,39 @@ export const useChatStore = defineStore('chat', () => {
     const preservedMessages = preservedConversationId
       ? messages.value[preservedConversationId]
       : undefined
+    // PinnedDialogsHost keeps the visible ThreadWorkspace mounted during bootstrap.
+    // Preserve its identity/root so realtime recovery can resubscribe after caches reset.
+    const preservedActiveThreadRootId = activeThreadRootId.value
+    const preservedActiveThreadConversationId = activeThreadConversationId.value
+    const preservedActiveThreadRoot = getThreadRoot(
+      preservedActiveThreadConversationId,
+      preservedActiveThreadRootId,
+    )
     messages.value = {}
     if (preservedConversationId && preservedMessages?.length) {
       messages.value[preservedConversationId] = preservedMessages
+    }
+    if (preservedActiveThreadRoot && preservedActiveThreadConversationId) {
+      const preservedConversationMessages = messages.value[preservedActiveThreadConversationId] ?? []
+      if (!preservedConversationMessages.some(message => message.id === preservedActiveThreadRoot.id)) {
+        messages.value[preservedActiveThreadConversationId] = [
+          ...preservedConversationMessages,
+          preservedActiveThreadRoot,
+        ]
+      }
     }
     conversationHistoryState.clear()
     conversationInitialLoadingById.value = {}
     historyLoadTokenByConversation.clear()
     threadMessages.value = {}
     threadReplayVersionByRoot.value = {}
+    threadReplayStatusByRoot.value = preservedActiveThreadRootId
+      ? { [preservedActiveThreadRootId]: 'loading' }
+      : {}
+    incompleteThreadReplayResponses.clear()
     threadSummaries.value = loadThreadSummariesForUser(stage.workspace?.selfUserId ?? '')
-    activeThreadRootId.value = ''
-    activeThreadConversationId.value = ''
+    activeThreadRootId.value = preservedActiveThreadRootId
+    activeThreadConversationId.value = preservedActiveThreadConversationId
     bootstrapped.value = true
     seenEventIds = new Set()
 
@@ -2437,6 +2504,7 @@ export const useChatStore = defineStore('chat', () => {
       scheduleAckFlush()
       ws.setLiveSynced()
       drainBufferedEvents()
+      recoverActiveThreadAfterRealtimeSync()
       _reloadActiveChannelHistory()
       return
     }
@@ -2454,6 +2522,7 @@ export const useChatStore = defineStore('chat', () => {
 
     ws.setLiveSynced()
     drainBufferedEvents()
+    recoverActiveThreadAfterRealtimeSync()
     _reloadActiveChannelHistory()
   }
 
@@ -2575,6 +2644,21 @@ export const useChatStore = defineStore('chat', () => {
       lastReplyUserId: threadSummaries.value[root]?.lastReplyUserId,
     })
     bumpThreadReplayVersion(root)
+    if (confirmedThreadReplyCount(root) >= Math.max(0, Math.floor(Number(resp.replyCount)))) {
+      incompleteThreadReplayResponses.delete(root)
+      setThreadReplayStatus(root, 'idle')
+      return
+    }
+
+    const incompleteResponses = (incompleteThreadReplayResponses.get(root) ?? 0) + 1
+    incompleteThreadReplayResponses.set(root, incompleteResponses)
+    if (!isActiveThreadWorkspace(resp.conversationId, root)) return
+    if (incompleteResponses === 1) {
+      setThreadReplayStatus(root, 'loading')
+      requestThreadReplayRecovery(root, resp.conversationId, true)
+      return
+    }
+    setThreadReplayStatus(root, 'error')
   }
 
   function registerWsHandlers() {
@@ -3143,7 +3227,9 @@ export const useChatStore = defineStore('chat', () => {
       if (rootIds.has(rootId) || replies.some(reply => reply.channelId === conversationId)) {
         delete threadMessages.value[rootId]
         delete threadReplayVersionByRoot.value[rootId]
+        delete threadReplayStatusByRoot.value[rootId]
         delete threadSummaries.value[rootId]
+        incompleteThreadReplayResponses.delete(rootId)
       }
     }
 
@@ -3525,6 +3611,10 @@ export const useChatStore = defineStore('chat', () => {
       const nextThreadSummaries = { ...threadSummaries.value }
       delete nextThreadSummaries[evt.messageId]
       threadSummaries.value = nextThreadSummaries
+      const nextThreadReplayStatuses = { ...threadReplayStatusByRoot.value }
+      delete nextThreadReplayStatuses[evt.messageId]
+      threadReplayStatusByRoot.value = nextThreadReplayStatuses
+      incompleteThreadReplayResponses.delete(evt.messageId)
       persistThreadSummaries()
 
     }
@@ -3824,6 +3914,8 @@ export const useChatStore = defineStore('chat', () => {
     activateThreadWorkspace,
     deactivateThreadWorkspace,
     markVisibleThreadRead,
+    threadReplayStatus,
+    retryThreadReplay,
     sendThreadReply,
     sendMessageToConversation,
     sendThreadReplyToRoot,

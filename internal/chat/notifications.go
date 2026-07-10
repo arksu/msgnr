@@ -405,6 +405,7 @@ func (s *Service) resolveConversationNotificationsTx(ctx context.Context, tx pgx
 		 WHERE user_id = $1
 		   AND channel_id = $2
 		   AND resolved_at IS NULL
+		   AND thread_root_message_id IS NULL
 		   AND type = ANY($3::text[])
 		RETURNING id`,
 		userID, channelID, resolvableNotificationTypes,
@@ -507,8 +508,9 @@ const (
 )
 
 // resolvableNotificationTypes enumerates notification types that UpdateReadCursor
-// and ResolveNotification may mark resolved. Centralized to keep the two SQL
-// statements in sync.
+// and ResolveNotification may mark resolved. UpdateReadCursor additionally limits
+// its scope to root-conversation notifications so opening a conversation cannot
+// resolve notifications for threads that are not visible.
 var resolvableNotificationTypes = []string{"mention", "thread_reply"}
 
 func (s *Service) ResolveNotification(ctx context.Context, p ResolveNotificationParams) (ResolveNotificationResult, error) {

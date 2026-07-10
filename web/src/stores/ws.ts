@@ -658,8 +658,8 @@ export const useWsStore = defineStore('ws', () => {
     }))
   }
 
-  function sendSubscribeThread(conversationId: string, threadRootMessageId: string, lastThreadSeq: bigint = 0n) {
-    sendEnvelope(create(EnvelopeSchema, {
+  function sendSubscribeThread(conversationId: string, threadRootMessageId: string, lastThreadSeq: bigint = 0n): boolean {
+    return sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
       traceId: generateId(),
       protocolVersion: PROTOCOL_VERSION,

@@ -28,7 +28,7 @@
 
     <div
       v-show="tab === 'rendered'"
-      class="min-h-0 flex-1 overflow-y-auto rounded border border-chat-border bg-chat-input space-y-2"
+      class="min-h-0 flex-1 overflow-y-auto space-y-2"
       data-testid="task-description-rendered"
     >
       <AttachmentMarkdownContent

@@ -352,6 +352,131 @@ describe('TaskDescriptionRichEditor', () => {
     expect(wrapper.find('[data-testid="task-description-table-delete-table"]').exists()).toBe(true)
   })
 
+  it('renders accessible edge controls for editable tables', async () => {
+    const { wrapper } = await mountTableEditor()
+
+    const addColumn = wrapper.get('[data-testid="task-description-table-edge-add-column"]')
+    const addRow = wrapper.get('[data-testid="task-description-table-edge-add-row"]')
+    expect(addColumn.attributes('aria-label')).toBe('Add table column')
+    expect(addRow.attributes('aria-label')).toBe('Add table row')
+    expect(addColumn.attributes('contenteditable')).toBe('false')
+    expect(addRow.attributes('contenteditable')).toBe('false')
+    expect(addColumn.attributes('disabled')).toBeUndefined()
+    expect(addRow.attributes('disabled')).toBeUndefined()
+  })
+
+  it('keeps table controls outside the internal horizontal scroll viewport', async () => {
+    const { wrapper } = await mountTableEditor()
+
+    const tableWrapper = wrapper.get('.task-table-wrapper')
+    const scrollViewport = wrapper.get('[data-testid="task-description-table-scroll"]')
+    const table = wrapper.get('[data-testid="task-description-table-scroll"] > table')
+    const addColumn = wrapper.get('[data-testid="task-description-table-edge-add-column"]')
+    const addRow = wrapper.get('[data-testid="task-description-table-edge-add-row"]')
+
+    expect(scrollViewport.element.contains(table.element)).toBe(true)
+    expect(scrollViewport.element.contains(addColumn.element)).toBe(false)
+    expect(scrollViewport.element.contains(addRow.element)).toBe(false)
+    expect(tableWrapper.element.contains(addColumn.element)).toBe(true)
+    expect(tableWrapper.element.contains(addRow.element)).toBe(true)
+  })
+
+  it('appends a column from the table edge control', async () => {
+    const { wrapper } = await mountTableEditor()
+
+    await clickToolbarButton(wrapper, 'task-description-table-edge-add-column')
+
+    expect(latestMarkdown(wrapper)).toContain('| H1 | H2 | H3 |  |')
+    expect(latestMarkdown(wrapper)).toContain('| A1 | B1 | C1 |  |')
+  })
+
+  it('appends a row from the table edge control', async () => {
+    const { wrapper } = await mountTableEditor()
+
+    await clickToolbarButton(wrapper, 'task-description-table-edge-add-row')
+
+    const rows = latestMarkdown(wrapper).split('\n')
+    expect(rows[rows.length - 1]).toBe('|  |  |  |')
+  })
+
+  it('deletes a hovered column from its header actions menu', async () => {
+    const { wrapper } = await mountTableEditor()
+    const header = wrapper.get('[data-testid="task-description-table-scroll"] th:nth-child(2)')
+
+    await header.trigger('mousemove', { clientX: 0 })
+    await nextTick()
+
+    const actions = wrapper.get('[data-testid="task-description-table-column-actions"]')
+    expect(actions.attributes('aria-label')).toBe('Column actions')
+    await actions.trigger('mousedown')
+    await actions.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const deleteAction = wrapper.get('[data-testid="task-description-table-delete-column-action"]')
+    expect(deleteAction.text()).toBe('Delete column')
+    await deleteAction.trigger('mousedown')
+    await deleteAction.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(latestMarkdown(wrapper)).toContain('| H1 | H3 |')
+    expect(latestMarkdown(wrapper)).toContain('| A1 | C1 |')
+    expect(latestMarkdown(wrapper)).not.toContain('B1')
+  })
+
+  it('resizes an adjacent column pair without changing the table width', async () => {
+    const { wrapper, editor } = await mountTableEditor()
+    const cells = wrapper.findAll('[data-testid="task-description-table-scroll"] tr:first-child > *')
+    const widths = [120, 120, 120]
+    cells.forEach((cell, index) => {
+      const left = widths.slice(0, index).reduce((sum, width) => sum + width, 0)
+      const width = widths[index] ?? 0
+      vi.spyOn(cell.element, 'getBoundingClientRect').mockReturnValue({
+        x: left,
+        y: 0,
+        top: 0,
+        right: left + width,
+        bottom: 32,
+        left,
+        width,
+        height: 32,
+        toJSON: () => ({}),
+      })
+    })
+
+    const firstHeader = cells[0]!
+    firstHeader.element.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true,
+      button: 0,
+      clientX: 120,
+      clientY: 12,
+    }))
+    document.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true,
+      button: 0,
+      clientX: 160,
+      clientY: 12,
+    }))
+    document.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      button: 0,
+      clientX: 160,
+      clientY: 12,
+    }))
+    await flushPromises()
+    await nextTick()
+
+    const table = editor.getJSON().content?.find(node => node.type === 'table') as {
+      content?: Array<{ content?: Array<{ attrs?: { colwidth?: number[] } }> }>
+    } | undefined
+    const firstRow = table?.content?.[0]?.content ?? []
+    expect(firstRow[0]?.attrs?.colwidth).toEqual([160])
+    expect(firstRow[1]?.attrs?.colwidth).toEqual([80])
+    expect(firstRow[2]?.attrs?.colwidth).toEqual([120])
+    expect(document.body.classList.contains('task-table-is-resizing')).toBe(false)
+  })
+
   it('disables table structure controls when TipTap reports commands cannot run', async () => {
     const { wrapper, editor } = await mountTableEditor()
     vi.spyOn(editor, 'can').mockReturnValue({

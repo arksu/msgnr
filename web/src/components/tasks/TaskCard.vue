@@ -382,7 +382,7 @@
         />
         <AttachmentMarkdownContent
           v-else-if="descriptionDraft"
-          class="rounded bg-chat-input p-3 pointer-events-none select-none opacity-70"
+          class="pointer-events-none select-none opacity-70"
           :markdown="descriptionDraft"
         />
         <p v-else class="text-sm text-gray-500 italic">No description</p>

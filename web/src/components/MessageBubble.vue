@@ -808,10 +808,10 @@ function relativeTime(isoString: string): string {
 
 const bodyTextClass = computed(() => {
   switch (props.message.sendStatus) {
-    case 'sending': return 'text-gray-100 opacity-90'
-    case 'queued': return 'text-gray-100 opacity-80'
+    case 'sending': return 'text-gray-300 opacity-90'
+    case 'queued': return 'text-gray-300 opacity-80'
     case 'failed': return 'text-gray-300 opacity-75'
-    default: return props.message.pending ? 'text-gray-400' : 'text-gray-100'
+    default: return props.message.pending ? 'text-gray-400' : 'text-gray-300'
   }
 })
 

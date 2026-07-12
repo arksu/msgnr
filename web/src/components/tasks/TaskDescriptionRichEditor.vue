@@ -304,6 +304,7 @@ import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 import { CodeBlockHighlightExtension } from '@/editor/codeBlockHighlight'
 import { FenceOnEnterExtension } from '@/editor/richTextShortcuts'
+import { TASK_TABLE_CELL_MIN_WIDTH, TaskTableNodeViewExtension } from '@/editor/taskTableView'
 import { useChatStore } from '@/stores/chat'
 import { NotificationLevel } from '@/shared/proto/packets_pb'
 
@@ -795,8 +796,10 @@ const extensions = computed(() => {
       },
     }),
     AttachmentImage,
+    TaskTableNodeViewExtension,
     Table.configure({
-      resizable: true,
+      cellMinWidth: TASK_TABLE_CELL_MIN_WIDTH,
+      resizable: false,
     }),
     TableRow,
     TableHeader,
@@ -1284,7 +1287,182 @@ defineExpose<{
 }
 
 .task-description-editor-content :deep(.ProseMirror) {
-  @apply min-h-[140px] bg-chat-bg px-3 py-2 text-sm leading-relaxed text-gray-100;
+  @apply min-h-[140px] text-base leading-relaxed text-gray-300 outline-none;
+}
+
+.task-description-editor-content :deep(.task-table-wrapper) {
+  position: relative;
+  display: grid;
+  grid-template-areas: "viewport";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, auto);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 16px 0;
+}
+
+.task-description-editor-content :deep(.task-table-wrapper--editable) {
+  grid-template-areas:
+    "viewport column"
+    "row spacer";
+  grid-template-columns: minmax(0, 1fr) 20px;
+  grid-template-rows: minmax(0, auto) 20px;
+}
+
+.task-description-editor-content :deep(.task-table-scroll) {
+  grid-area: viewport;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+}
+
+.task-description-editor-content :deep(.task-table-scroll > table) {
+  margin: 0;
+  max-width: none;
+}
+
+.task-description-editor-content :deep(.task-table-add) {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: rgb(var(--color-bg-tertiary));
+  color: rgb(var(--color-text-muted));
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.task-description-editor-content :deep(.task-table-wrapper:hover .task-table-add),
+.task-description-editor-content :deep(.task-table-wrapper:focus-within .task-table-add),
+.task-description-editor-content :deep(.task-table-add:focus-visible) {
+  opacity: 1;
+}
+
+.task-description-editor-content :deep(.task-table-add:hover),
+.task-description-editor-content :deep(.task-table-add:focus-visible) {
+  outline: 0;
+  background: rgb(var(--color-accent) / 0.16);
+  color: rgb(var(--color-accent));
+}
+
+.task-description-editor-content :deep(.task-table-add:disabled) {
+  display: none;
+}
+
+.task-description-editor-content :deep(.task-table-add--column) {
+  grid-area: column;
+  width: 20px;
+  min-height: 0;
+}
+
+.task-description-editor-content :deep(.task-table-add--row) {
+  grid-area: row;
+  width: 100%;
+  height: 20px;
+}
+
+.task-description-editor-content :deep(.task-table-column-actions) {
+  position: absolute;
+  z-index: 10;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgb(var(--color-divider) / 0.8);
+  border-radius: 5px;
+  background: rgb(var(--color-bg-tertiary));
+  color: rgb(var(--color-text-secondary));
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.22);
+}
+
+.task-description-editor-content :deep(.task-table-column-actions[hidden]),
+.task-description-editor-content :deep(.task-table-column-menu[hidden]) {
+  display: none !important;
+}
+
+.task-description-editor-content :deep(.task-table-column-actions:hover),
+.task-description-editor-content :deep(.task-table-column-actions:focus-visible) {
+  outline: 0;
+  border-color: rgb(var(--color-accent) / 0.7);
+  background: rgb(var(--color-accent) / 0.14);
+  color: rgb(var(--color-accent));
+}
+
+.task-description-editor-content :deep(.task-table-column-menu) {
+  position: absolute;
+  z-index: 20;
+  min-width: 164px;
+  padding: 4px;
+  border: 1px solid rgb(var(--color-divider));
+  border-radius: 7px;
+  background: rgb(var(--color-bg-secondary));
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.3);
+}
+
+.task-description-editor-content :deep(.task-table-column-menu-item) {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: rgb(var(--color-text-secondary));
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-description-editor-content :deep(.task-table-column-menu-item:hover),
+.task-description-editor-content :deep(.task-table-column-menu-item:focus-visible) {
+  outline: 0;
+  background: rgb(var(--color-accent) / 0.13);
+}
+
+.task-description-editor-content :deep(.task-table-column-menu-item--danger:hover),
+.task-description-editor-content :deep(.task-table-column-menu-item--danger:focus-visible) {
+  background: rgb(248 113 113 / 0.13);
+  color: rgb(248 113 113);
+}
+
+.task-description-editor-content :deep(.task-table-column-menu-item:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.task-description-editor-content :deep(th),
+.task-description-editor-content :deep(td) {
+  position: relative;
+}
+
+.task-description-editor-content :deep(.task-table-resize-edge-hover::after),
+.task-description-editor-content :deep(.task-table-resize-edge-active::after) {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  bottom: -1px;
+  z-index: 5;
+  width: 2px;
+  background: rgb(var(--color-accent));
+  pointer-events: none;
+}
+
+:global(body.task-table-is-resizing),
+:global(body.task-table-is-resizing *) {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .task-description-editor-content :deep(.attachment-editor-inline-image) {

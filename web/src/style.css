@@ -8,33 +8,34 @@
 :root {
     /* FOUC guard: these defaults mirror the dark preset in services/theme/themes.ts. */
     color-scheme: dark;
-    --color-bg-primary: 26 29 33;
-    --color-bg-secondary: 25 23 29;
-    --color-bg-tertiary: 34 37 41;
-    --color-surface: 26 29 33;
-    --color-surface-hover: 30 33 38;
-    --color-input: 34 37 41;
-    --color-divider: 46 50 57;
-    --color-text-primary: 248 250 252;
-    --color-text-secondary: 203 213 225;
-    --color-text-muted: 148 163 184;
+    --color-bg-primary: 13 17 24;
+    --color-bg-secondary: 10 13 20;
+    --color-bg-tertiary: 24 30 41;
+    --color-surface: 13 17 24;
+    --color-surface-hover: 20 26 36;
+    --color-input: 18 23 32;
+    --color-divider: 48 58 76;
+    --color-text-primary: 237 242 250;
+    --color-text-secondary: 191 203 221;
+    --color-text-muted: 134 150 173;
     --color-text-on-accent: 255 255 255;
-    --color-accent: 17 100 163;
-    --color-accent-hover: 14 83 140;
-    --color-selection-bg: 17 100 163;
+    --color-accent: 59 130 246;
+    --color-accent-hover: 96 165 250;
+    --color-selection-bg: 37 99 235;
     --color-selection-text: 255 255 255;
-    --color-selection-border: 59 130 246;
-    --color-task-id: 201 148 68;
-    --color-task-id-bg: 42 36 24;
-    --color-status-green: 34 197 94;
-    --color-status-red: 239 68 68;
-    --color-status-amber: 245 158 11;
-    --color-sidebar-bg: 25 23 29;
-    --color-sidebar-hover: 39 36 44;
-    --color-sidebar-text: 216 211 220;
-    --color-sidebar-text-muted: 155 141 155;
-    --color-sidebar-heading: 123 108 123;
+    --color-selection-border: 96 165 250;
+    --color-task-id: 224 168 84;
+    --color-task-id-bg: 46 39 24;
+    --color-status-green: 52 211 153;
+    --color-status-red: 248 113 113;
+    --color-status-amber: 251 191 36;
+    --color-sidebar-bg: 10 13 20;
+    --color-sidebar-hover: 24 30 41;
+    --color-sidebar-text: 205 214 228;
+    --color-sidebar-text-muted: 130 145 168;
+    --color-sidebar-heading: 96 110 134;
     --color-sidebar-unread-badge: 255 190 190;
+    --color-inline-code-text: 96 165 250;
 }
 
 html,

@@ -277,6 +277,20 @@ describe('TaskDescriptionEditor', () => {
     expect(input.classes()).not.toContain('text-white')
   })
 
+  it('renders task content without an input-like description shell', () => {
+    const wrapper = mount(TaskDescriptionEditor, {
+      props: {
+        modelValue: 'Description text',
+      },
+    })
+
+    const rendered = wrapper.get('[data-testid="task-description-rendered"]')
+    expect(rendered.classes()).not.toContain('border')
+    expect(rendered.classes()).not.toContain('border-chat-border')
+    expect(rendered.classes()).not.toContain('rounded')
+    expect(rendered.classes()).not.toContain('bg-chat-input')
+  })
+
   it('uploads pasted images through the create-task staging callback', async () => {
     const uploadStaged = vi.fn(async () => [{
       id: 'staged-1',

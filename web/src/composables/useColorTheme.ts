@@ -33,6 +33,7 @@ export const cssThemeTokenNames: Record<ColorThemeTokenName, string> = {
   sidebarTextMuted: 'sidebar-text-muted',
   sidebarHeading: 'sidebar-heading',
   sidebarUnreadBadge: 'sidebar-unread-badge',
+  inlineCodeText: 'inline-code-text',
 }
 
 export function applyColorTheme(theme: ColorTheme): void {

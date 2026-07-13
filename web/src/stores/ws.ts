@@ -418,6 +418,35 @@ export const useWsStore = defineStore('ws', () => {
     state.value = 'DISCONNECTED'
   }
 
+  /**
+   * The browser can keep an OPEN WebSocket after the upstream path has died.
+   * Drop that local transport and notify the session orchestrator immediately,
+   * rather than waiting for a close event that may never arrive on its own.
+   */
+  function invalidateTransport(reason = 'WebSocket transport was unresponsive'): boolean {
+    const activeSocket = socket
+    if (!activeSocket || activeSocket.readyState !== WS_OPEN || state.value === 'DISCONNECTED') {
+      return false
+    }
+
+    stopPresenceHeartbeat()
+    rejectPendingRequests(new Error(reason))
+    lastError.value = reason
+    lastErrorKind.value = 'TRANSPORT'
+    state.value = 'DISCONNECTED'
+
+    // Detach before close so its eventual close event cannot report the same
+    // transport drop twice. The orchestrator callback below owns recovery.
+    socket = null
+    try {
+      activeSocket.close()
+    } catch {
+      // The transport is already considered lost; recovery still proceeds.
+    }
+    onTransportDropCallback?.()
+    return true
+  }
+
   function resetRuntimeState() {
     stopPresenceHeartbeat()
     rejectPendingRequests(new Error('WebSocket reset'))
@@ -1195,6 +1224,7 @@ export const useWsStore = defineStore('ws', () => {
     lastCloseCode,
     connect,
     disconnect,
+    invalidateTransport,
     resetRuntimeState,
     sendAuth,
     sendMessage,

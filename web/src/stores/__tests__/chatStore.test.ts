@@ -2651,6 +2651,106 @@ describe('chatStore phase 6 flows', () => {
     }
   })
 
+  it('invalidates a live transport when a focused pinned-thread replay receives no response', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.sendSubscribeThread = vi.fn().mockReturnValue(true)
+      ws.invalidateTransport = vi.fn().mockReturnValue(true)
+      chat.setClientActive(false)
+      chat.messages = {
+        'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+      }
+      chat.threadSummaries = {
+        'root-1': { replyCount: 7, lastThreadSeq: 7n },
+      }
+
+      chat.activateThreadWorkspace('channel-1', 'root-1')
+      vi.mocked(ws.sendSubscribeThread).mockClear()
+
+      chat.setClientActive(true)
+      chat.onClientFocus()
+
+      expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+      expect(chat.threadReplayStatus('root-1')).toBe('loading')
+
+      vi.advanceTimersByTime(15_000)
+
+      expect(ws.invalidateTransport).toHaveBeenCalledTimes(1)
+      expect(ws.invalidateTransport).toHaveBeenCalledWith('Thread replay did not receive a response')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the pinned-thread replay watchdog when a response arrives', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.sendSubscribeThread = vi.fn().mockReturnValue(true)
+      ws.invalidateTransport = vi.fn().mockReturnValue(true)
+      chat.messages = {
+        'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+      }
+      chat.threadSummaries = {
+        'root-1': { replyCount: 1, lastThreadSeq: 1n },
+      }
+
+      chat.activateThreadWorkspace('channel-1', 'root-1')
+      chat.handleSubscribeThreadResponse(create(SubscribeThreadResponseSchema, {
+        conversationId: 'channel-1',
+        threadRootMessageId: 'root-1',
+        currentThreadSeq: 1n,
+        replyCount: 1,
+        replay: [create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'reply-1',
+          senderId: 'user-2',
+          body: 'reply',
+          channelSeq: 11n,
+          threadRootMessageId: 'root-1',
+          threadSeq: 1n,
+        })],
+      }))
+
+      vi.advanceTimersByTime(15_000)
+
+      expect(ws.invalidateTransport).not.toHaveBeenCalled()
+      expect(chat.threadReplayStatus('root-1')).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the pinned-thread replay watchdog when the thread closes', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.sendSubscribeThread = vi.fn().mockReturnValue(true)
+      ws.invalidateTransport = vi.fn().mockReturnValue(true)
+      chat.messages = {
+        'channel-1': [buildMessage({ id: 'root-1', channelId: 'channel-1', threadSeq: 0n })],
+      }
+      chat.threadSummaries = {
+        'root-1': { replyCount: 7, lastThreadSeq: 7n },
+      }
+
+      chat.activateThreadWorkspace('channel-1', 'root-1')
+      chat.closeThread()
+      vi.advanceTimersByTime(15_000)
+
+      expect(ws.invalidateTransport).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps replay responses isolated while switching between pinned threads', () => {
     const chat = useChatStore()
     const ws = useWsStore()

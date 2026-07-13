@@ -567,6 +567,7 @@ export const useChatStore = defineStore('chat', () => {
   /** Tracks active send timeouts by clientMsgId. Cleared on ACK or discard. */
   const sendTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
   const threadReplayResyncTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const threadReplayResponseWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
   const incompleteThreadReplayResponses = new Map<string, number>()
   const pendingThreadReadResolutions = new Map<string, Promise<void>>()
   const toast = ref<ToastState | null>(null)
@@ -727,6 +728,37 @@ export const useChatStore = defineStore('chat', () => {
     threadReplayResyncTimers.clear()
   }
 
+  const THREAD_REPLAY_RESPONSE_TIMEOUT_MS = 15_000
+
+  function clearThreadReplayResponseWatchdog(rootId: string) {
+    const timeout = threadReplayResponseWatchdogs.get(rootId)
+    if (!timeout) return
+    clearTimeout(timeout)
+    threadReplayResponseWatchdogs.delete(rootId)
+  }
+
+  function clearAllThreadReplayResponseWatchdogs() {
+    for (const timeout of threadReplayResponseWatchdogs.values()) {
+      clearTimeout(timeout)
+    }
+    threadReplayResponseWatchdogs.clear()
+  }
+
+  function armThreadReplayResponseWatchdog(conversationId: string, rootId: string) {
+    clearThreadReplayResponseWatchdog(rootId)
+    const timeout = setTimeout(() => {
+      if (threadReplayResponseWatchdogs.get(rootId) !== timeout) return
+      threadReplayResponseWatchdogs.delete(rootId)
+      if (!isClientTabActive()) return
+      if (!isActiveThreadWorkspace(conversationId, rootId)) return
+
+      const ws = useWsStore()
+      if (ws.state !== 'LIVE_SYNCED') return
+      ws.invalidateTransport('Thread replay did not receive a response')
+    }, THREAD_REPLAY_RESPONSE_TIMEOUT_MS)
+    threadReplayResponseWatchdogs.set(rootId, timeout)
+  }
+
   function highestConfirmedThreadSeq(rootId: string): bigint {
     const list = threadMessages.value[rootId] ?? []
     return list.reduce((max, message) => {
@@ -765,9 +797,14 @@ export const useChatStore = defineStore('chat', () => {
 
   function subscribeThreadReplay(conversationId: string, rootId: string, fromStart = false): boolean {
     if (!conversationId || !rootId) return false
+    clearThreadReplayResponseWatchdog(rootId)
     setThreadReplayStatus(rootId, 'loading')
     const cursor = fromStart ? 0n : threadReplayCursor(rootId)
-    return useWsStore().sendSubscribeThread(conversationId, rootId, cursor)
+    const sent = useWsStore().sendSubscribeThread(conversationId, rootId, cursor)
+    if (sent && isActiveThreadWorkspace(conversationId, rootId)) {
+      armThreadReplayResponseWatchdog(conversationId, rootId)
+    }
+    return sent
   }
 
   function requestThreadReplayRecovery(rootId: string, conversationId: string, fromStart = false) {
@@ -1379,6 +1416,7 @@ export const useChatStore = defineStore('chat', () => {
     clearPendingNotificationLevelChange()
     clearAllSendTimeouts()
     clearAllThreadReplayResyncTimers()
+    clearAllThreadReplayResponseWatchdogs()
 
     if (ackTimer) {
       clearTimeout(ackTimer)
@@ -1632,6 +1670,7 @@ export const useChatStore = defineStore('chat', () => {
       && (activeThreadRootId.value !== rootMessageId || activeThreadConversationId.value !== conversationId)
     if (switchingThread) {
       clearThreadReplayResyncTimer(activeThreadRootId.value)
+      clearThreadReplayResponseWatchdog(activeThreadRootId.value)
       focusedThreadMessageId.value = ''
     }
     activeThreadConversationId.value = conversationId
@@ -1652,6 +1691,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function closeThread() {
     clearThreadReplayResyncTimer(activeThreadRootId.value)
+    clearThreadReplayResponseWatchdog(activeThreadRootId.value)
     activeThreadRootId.value = ''
     activeThreadConversationId.value = ''
     focusedThreadMessageId.value = ''
@@ -2095,6 +2135,7 @@ export const useChatStore = defineStore('chat', () => {
     // Bootstrap is the authoritative snapshot — clear any pending optimistic state.
     clearPendingNotificationLevelChange()
     clearAllSendTimeouts()
+    clearAllThreadReplayResponseWatchdogs()
 
     const unreadByConversation = stage.unread
     const nextChannels: Channel[] = []
@@ -2629,6 +2670,7 @@ export const useChatStore = defineStore('chat', () => {
   function handleSubscribeThreadResponse(resp: SubscribeThreadResponse) {
     const root = resp.threadRootMessageId
     clearThreadReplayResyncTimer(root)
+    clearThreadReplayResponseWatchdog(root)
     if (!threadMessages.value[root]) threadMessages.value[root] = []
     for (const evt of resp.replay) {
       _upsertThreadMessage(root, {
@@ -3604,6 +3646,7 @@ export const useChatStore = defineStore('chat', () => {
     const shouldClearRootThread = removedRoot || activeThreadRootId.value === evt.messageId
     if (shouldClearRootThread) {
       clearThreadReplayResyncTimer(evt.messageId)
+      clearThreadReplayResponseWatchdog(evt.messageId)
       const nextThreadMessages = { ...threadMessages.value }
       delete nextThreadMessages[evt.messageId]
       threadMessages.value = nextThreadMessages

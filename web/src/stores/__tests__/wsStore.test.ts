@@ -356,6 +356,24 @@ describe('wsStore state machine', () => {
     expect(store.sendSubscribeThread('channel-1', 'root-1', 0n)).toBe(false)
   })
 
+  it('invalidates an unresponsive transport and reports one reconnectable drop', () => {
+    const store = useWsStore()
+    const onDrop = vi.fn()
+    store.onTransportDrop(onDrop)
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    store.state = 'LIVE_SYNCED'
+
+    expect(store.invalidateTransport('Thread replay did not receive a response')).toBe(true)
+    expect(store.state).toBe('DISCONNECTED')
+    expect(store.lastErrorKind).toBe('TRANSPORT')
+    expect(store.lastError).toBe('Thread replay did not receive a response')
+    expect(onDrop).toHaveBeenCalledTimes(1)
+
+    expect(store.invalidateTransport()).toBe(false)
+    expect(onDrop).toHaveBeenCalledTimes(1)
+  })
+
   it('AUTH_SENT -> AUTH_COMPLETE on authResponse ok=true', () => {
     const store = useWsStore()
     store.connect('/ws')

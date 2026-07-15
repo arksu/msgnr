@@ -60,6 +60,18 @@ const avatarCacheMocks = vi.hoisted(() => ({
   invalidateUserAvatar: vi.fn(),
 }))
 
+const offlineQueueMocks = vi.hoisted(() => ({
+  enqueue: vi.fn(),
+  claimInFlight: vi.fn(),
+  releaseInFlight: vi.fn(),
+  releaseAllInFlight: vi.fn(),
+  remove: vi.fn(),
+  clear: vi.fn(),
+  flush: vi.fn(),
+  loadPersisted: vi.fn(),
+  queue: { value: [] as unknown[] },
+}))
+
 vi.mock('@/services/http/chatApi', () => ({
   listConversationMessages: chatApiMocks.listConversationMessages,
   listDmCandidates: chatApiMocks.listDmCandidates,
@@ -76,6 +88,10 @@ vi.mock('@/services/http/chatApi', () => ({
 
 vi.mock('@/services/avatar/avatarCache', () => ({
   invalidateUserAvatar: avatarCacheMocks.invalidateUserAvatar,
+}))
+
+vi.mock('@/composables/useOfflineQueue', () => ({
+  useOfflineQueue: () => offlineQueueMocks,
 }))
 
 function buildMessage(overrides: Partial<Message> = {}): Message {
@@ -130,6 +146,18 @@ describe('chatStore phase 6 flows', () => {
     chatApiMocks.getMessageContext.mockReset()
     chatApiMocks.resolveUnreadFeedNotification.mockReset()
     avatarCacheMocks.invalidateUserAvatar.mockReset()
+    offlineQueueMocks.enqueue.mockReset()
+    offlineQueueMocks.claimInFlight.mockReset()
+    offlineQueueMocks.releaseInFlight.mockReset()
+    offlineQueueMocks.releaseAllInFlight.mockReset()
+    offlineQueueMocks.remove.mockReset()
+    offlineQueueMocks.clear.mockReset()
+    offlineQueueMocks.flush.mockReset()
+    offlineQueueMocks.loadPersisted.mockReset()
+    offlineQueueMocks.enqueue.mockResolvedValue(true)
+    offlineQueueMocks.claimInFlight.mockReturnValue(true)
+    offlineQueueMocks.loadPersisted.mockResolvedValue([])
+    offlineQueueMocks.queue.value = []
     chatApiMocks.listDmCandidates.mockResolvedValue([])
     chatApiMocks.listUnreadFeed.mockResolvedValue({ total_count: 0, items: [] })
     chatApiMocks.listSavedMessages.mockResolvedValue({ total_count: 0, items: [] })
@@ -198,6 +226,51 @@ describe('chatStore phase 6 flows', () => {
     expect(ws.setLiveSynced).toHaveBeenCalled()
   })
 
+  it('hydrates durable root and thread sends even without a conversation cache', async () => {
+    const chat = useChatStore()
+    offlineQueueMocks.loadPersisted.mockResolvedValue([
+      {
+        conversationId: 'channel-not-cached',
+        body: 'queued root',
+        clientMsgId: 'queued-root',
+        attachmentIds: ['attachment-root'],
+        attachments: [{ id: 'attachment-root', fileName: 'root.txt', fileSize: 9, mimeType: 'text/plain' }],
+      },
+      {
+        conversationId: 'channel-not-cached',
+        body: 'queued reply',
+        clientMsgId: 'queued-thread',
+        threadRootMessageId: 'root-not-cached',
+        attachmentIds: ['attachment-thread'],
+        attachments: [{ id: 'attachment-thread', fileName: 'reply.txt', fileSize: 7, mimeType: 'text/plain' }],
+      },
+    ])
+
+    await expect(chat.loadCachedState()).resolves.toBe(true)
+
+    expect(chat.messages['channel-not-cached']).toEqual([expect.objectContaining({
+      clientMsgId: 'queued-root',
+      sendStatus: 'queued',
+      attachments: [{ id: 'attachment-root', fileName: 'root.txt', fileSize: 9, mimeType: 'text/plain' }],
+    })])
+    expect(chat.threadMessages['root-not-cached']).toEqual([expect.objectContaining({
+      clientMsgId: 'queued-thread',
+      sendStatus: 'queued',
+      threadRootMessageId: 'root-not-cached',
+      attachments: [{ id: 'attachment-thread', fileName: 'reply.txt', fileSize: 7, mimeType: 'text/plain' }],
+    })])
+  })
+
+  it('flushes durable sends when handlers register after realtime is already live', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.state = 'LIVE_SYNCED'
+
+    chat.registerWsHandlers()
+
+    expect(offlineQueueMocks.flush).toHaveBeenCalledWith(ws, expect.any(Function))
+  })
+
   it('preserves and resubscribes the visible pinned thread across bootstrap', async () => {
     const chat = useChatStore()
     const ws = useWsStore()
@@ -246,6 +319,76 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.activeThreadRootId).toBe('root-1')
     expect(chat.getThreadRoot('channel-1', 'root-1')?.id).toBe('root-1')
     expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
+  it('preserves in-flight delivery state during a healthy bootstrap without replaying it', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.setLiveSynced = vi.fn()
+      ws.sendAck = vi.fn()
+      chat.messages = {
+        'channel-1': [
+          buildMessage({
+            id: 'client-main',
+            channelId: 'channel-1',
+            clientMsgId: 'client-main',
+            sendStatus: 'sending',
+          }),
+          buildMessage({
+            id: 'client-encrypted',
+            channelId: 'channel-1',
+            clientMsgId: 'client-encrypted',
+            contentMode: 'dm_pairwise_signal_v1',
+            sendStatus: 'sending',
+          }),
+        ],
+      }
+      chat.threadMessages = {
+        'root-1': [buildMessage({
+          id: 'client-thread',
+          channelId: 'channel-1',
+          clientMsgId: 'client-thread',
+          threadRootMessageId: 'root-1',
+          sendStatus: 'sending',
+        })],
+      }
+
+      chat.handleBootstrapResponse(create(BootstrapResponseSchema, {
+        snapshotSeq: 8n,
+        userRole: 2,
+        workspace: {
+          workspaceId: 'workspace-1',
+          workspaceName: 'Acme',
+          selfUser: create(UserSummarySchema, { userId: 'user-1', displayName: 'Ada', avatarUrl: '' }),
+          selfRole: 3,
+        },
+        conversations: [create(ConversationSummarySchema, {
+          conversationId: 'channel-1',
+          conversationType: 2,
+          title: 'general',
+          notificationLevel: NotificationLevel.ALL,
+        })],
+        unread: [],
+        activeCalls: [],
+        pendingInvites: [],
+        notifications: [],
+        hasMore: false,
+        bootstrapSessionId: 'session-healthy-bootstrap',
+        pageIndex: 0,
+        pageSizeEffective: 1,
+        estimatedTotalConversations: 1,
+        presence: [],
+      }))
+
+      expect(chat.messages['channel-1'].find(message => message.clientMsgId === 'client-main')?.sendStatus).toBe('sending')
+      expect(chat.messages['channel-1'].find(message => message.clientMsgId === 'client-encrypted')?.sendStatus).toBe('sending')
+      expect(chat.threadMessages['root-1'][0].sendStatus).toBe('sending')
+      expect(offlineQueueMocks.enqueue).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('hydrates workspace user call presence from bootstrap page 0', () => {
@@ -2798,7 +2941,7 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.threadMessages['root-2'].map(message => message.id)).toEqual(['reply-2'])
   })
 
-  it('includes the current self avatar on optimistic thread replies immediately', () => {
+  it('includes the current self avatar on optimistic thread replies immediately', async () => {
     const chat = useChatStore()
     const ws = useWsStore()
     const auth = useAuthStore()
@@ -2829,9 +2972,11 @@ describe('chatStore phase 6 flows', () => {
     }))
 
     chat.sendThreadReply('reply body')
+    await Promise.resolve()
+    await Promise.resolve()
 
     expect(chat.threadMessages['root-1'][0].senderAvatarUrl).toBe('/api/public/avatars/avatars/user-1/self.png')
-    expect(chat.threadMessages['root-1'][0].sendStatus).toBe('failed')
+    expect(chat.threadMessages['root-1'][0].sendStatus).toBe('queued')
   })
 
   it('hydrates thread replay reactions and myReactions', () => {
@@ -3451,7 +3596,118 @@ describe('chatStore phase 6 flows', () => {
 
     expect(chat.threadMessages['root-1'][0].id).toBe('reply-4-server')
     expect(chat.threadMessages['root-1'][0].serverConfirmed).toBe(false)
+    expect(offlineQueueMocks.remove).toHaveBeenCalledWith('client-1')
     expect(ws.sendSubscribeThread).toHaveBeenCalledWith('channel-1', 'root-1', 0n)
+  })
+
+  it('queues every in-flight plaintext send and invalidates the stale transport after an ACK timeout', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.state = 'LIVE_SYNCED'
+      ws.invalidateTransport = vi.fn().mockReturnValue(true)
+      chat.messages = {
+        'channel-1': [
+          buildMessage({
+            id: 'client-main',
+            channelId: 'channel-1',
+            clientMsgId: 'client-main',
+            sendStatus: 'sending',
+            attachments: [{ id: 'attachment-1', fileName: 'notes.txt', fileSize: 12, mimeType: 'text/plain' }],
+            entities: [{ kind: 'user', targetId: 'user-3', label: '@Eve', href: '', start: 0, end: 4 }],
+          }),
+          buildMessage({
+            id: 'client-encrypted',
+            channelId: 'channel-1',
+            clientMsgId: 'client-encrypted',
+            sendStatus: 'sending',
+            contentMode: 'dm_pairwise_signal_v1',
+          }),
+        ],
+      }
+      chat.threadMessages = {
+        'root-1': [buildMessage({
+          id: 'client-thread',
+          channelId: 'channel-1',
+          clientMsgId: 'client-thread',
+          sendStatus: 'sending',
+          threadRootMessageId: 'root-1',
+          attachments: [{ id: 'attachment-2', fileName: 'reply.txt', fileSize: 7, mimeType: 'text/plain' }],
+        })],
+      }
+
+      chat.startSendTimeout('channel-1', 'client-main', false)
+      vi.advanceTimersByTime(15_000)
+
+      expect(chat.messages['channel-1'][0].sendStatus).toBe('queued')
+      expect(chat.threadMessages['root-1'][0].sendStatus).toBe('queued')
+      expect(chat.messages['channel-1'][1].sendStatus).toBe('failed')
+      expect(offlineQueueMocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        clientMsgId: 'client-main',
+        attachmentIds: ['attachment-1'],
+        entities: [{ kind: 'user', targetId: 'user-3', label: '@Eve', href: '', start: 0, end: 4 }],
+      }))
+      expect(offlineQueueMocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        clientMsgId: 'client-thread',
+        threadRootMessageId: 'root-1',
+        attachmentIds: ['attachment-2'],
+      }))
+      expect(offlineQueueMocks.enqueue).not.toHaveBeenCalledWith(expect.objectContaining({ clientMsgId: 'client-encrypted' }))
+      expect(ws.invalidateTransport).toHaveBeenCalledWith('Message delivery did not receive an acknowledgement')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('queues a normal send when the socket closes between the live-state check and write', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    const auth = useAuthStore()
+    auth.user = {
+      id: 'user-1',
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      avatarUrl: '',
+      role: 'member',
+      customStatus: null,
+    }
+    ws.state = 'LIVE_SYNCED'
+    ws.sendMessage = vi.fn(() => false)
+    ws.invalidateTransport = vi.fn().mockReturnValue(true)
+
+    chat.sendMessageToConversation('channel-1', 'send after reconnect')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const message = chat.messages['channel-1'][0]
+    expect(message.sendStatus).toBe('queued')
+    expect(offlineQueueMocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'channel-1',
+      body: 'send after reconnect',
+      clientMsgId: message.clientMsgId,
+    }))
+    expect(ws.invalidateTransport).toHaveBeenCalledWith('Message could not be sent')
+  })
+
+  it('keeps one conversation bubble when an ACK follows an already-applied server event', () => {
+    const chat = useChatStore()
+    chat.messages = {
+      'channel-1': [
+        buildMessage({ id: 'client-1', channelId: 'channel-1', clientMsgId: 'client-1', sendStatus: 'sending' }),
+        buildMessage({ id: 'server-1', channelId: 'channel-1' }),
+      ],
+    }
+
+    chat.reconcileMessage('channel-1', 'client-1', create(SendMessageAckSchema, {
+      conversationId: 'channel-1',
+      messageId: 'server-1',
+      channelSeq: 2n,
+      clientMsgId: 'client-1',
+    }))
+
+    expect(chat.messages['channel-1']).toHaveLength(1)
+    expect(chat.messages['channel-1'][0].id).toBe('server-1')
   })
 
   it('re-subscribes the active thread when summary advances beyond confirmed replies', () => {

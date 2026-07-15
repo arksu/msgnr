@@ -112,6 +112,7 @@ enum FeatureCapability {
   FEATURE_CAPABILITY_CALL_INVITES = 7;
   FEATURE_CAPABILITY_INVITE_ACTIONS = 8;
   FEATURE_CAPABILITY_PRESENCE_HEARTBEAT = 9;
+  FEATURE_CAPABILITY_TRANSPORT_HEARTBEAT = 10;
 }
 
 enum TaskDescriptionCollabMessageKind {
@@ -214,6 +215,8 @@ message Envelope {
     ListConversationMembersResponse list_conversation_members_response = 71;
     ListActiveCallMembersRequest list_active_call_members_request = 72;
     ListActiveCallMembersResponse list_active_call_members_response = 73;
+    TransportHeartbeatRequest transport_heartbeat_request = 74;
+    TransportHeartbeatAck transport_heartbeat_ack = 75;
   }
 }
 
@@ -421,6 +424,12 @@ message SetPresenceRequest {
 }
 
 message PresenceHeartbeatRequest {}
+
+// A correlated request/ack pair used solely to verify that both WebSocket
+// directions remain usable. Unlike PresenceHeartbeatRequest, it has no
+// presence side effect.
+message TransportHeartbeatRequest {}
+message TransportHeartbeatAck {}
 
 // Updates only this websocket session's foreground/background state.
 // Used by push gating so users can receive push when all connected chat

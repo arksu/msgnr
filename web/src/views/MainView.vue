@@ -1811,35 +1811,18 @@ watch(
 
 // Load channels once WS auth is complete (real data) and also on mount if
 // already authenticated (page refresh scenario)
-watch(() => wsStore.state, async (state) => {
-  if (state === 'AUTH_COMPLETE') {
-    reportClientWindowActivity(isChatWindowActive())
-    chatStore.startRealtimeFlow()
-    applyManualPresencePreference()
-    // Flush any messages that were composed while disconnected.
-    // Notify the chat store of status transitions (queued → sending / failed)
-    // and start send timeouts for each flushed message.
-    // Re-validate push subscription if user had push enabled before.
-    if (!isDesktopRuntime && pushSupported && loadPushEndpoint()) {
-      checkPushSubscription().then(() => {
-        // If the browser subscription was invalidated (SW update, etc.),
-        // re-subscribe transparently — permission was already granted.
-        if (!loadPushEndpoint()) {
-          subscribePush().catch(() => {})
-        }
-      })
-    }
-    offlineQueue.flush(wsStore, (conversationId, clientMsgId, status, threadRootMessageId, failReason) => {
-      if (threadRootMessageId) {
-        chatStore.updateThreadSendStatus(threadRootMessageId, clientMsgId, status, failReason)
-        if (status === 'sending') {
-          chatStore.startSendTimeout(conversationId, clientMsgId, true, threadRootMessageId)
-        }
-      } else {
-        chatStore.updateSendStatus(conversationId, clientMsgId, status, failReason)
-        if (status === 'sending') {
-          chatStore.startSendTimeout(conversationId, clientMsgId, false)
-        }
+watch(() => wsStore.state, (state) => {
+  if (state !== 'AUTH_COMPLETE') return
+  reportClientWindowActivity(isChatWindowActive())
+  chatStore.startRealtimeFlow()
+  applyManualPresencePreference()
+  // Re-validate push subscription if user had push enabled before.
+  if (!isDesktopRuntime && pushSupported && loadPushEndpoint()) {
+    checkPushSubscription().then(() => {
+      // If the browser subscription was invalidated (SW update, etc.),
+      // re-subscribe transparently — permission was already granted.
+      if (!loadPushEndpoint()) {
+        subscribePush().catch(() => {})
       }
     })
   }

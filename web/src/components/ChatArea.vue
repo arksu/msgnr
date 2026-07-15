@@ -353,7 +353,7 @@ import MessageInput from './MessageInput.vue'
 import MembersPanel from './MembersPanel.vue'
 import UserAvatar from './UserAvatar.vue'
 import BusyCallConfirmDialog from './BusyCallConfirmDialog.vue'
-import { useOfflineQueue } from '@/composables/useOfflineQueue'
+import { OUTBOUND_PERSISTENCE_FAILURE_REASON, useOfflineQueue } from '@/composables/useOfflineQueue'
 import { userCustomStatusFromProto, type UserCustomStatus } from '@/types/userStatus'
 import { encryptDMMessage, ensureEncryptedDMDevice } from '@/services/e2ee/dmE2ee'
 
@@ -812,7 +812,7 @@ async function handleSend(
   let encrypted: Awaited<ReturnType<typeof encryptDMMessage>> | undefined
   if (isEncryptedDMConversation.value) {
     if (payload.attachmentIds.length > 0 || payload.entities.length > 0) return
-    if (wsStore.state === 'DISCONNECTED' || wsStore.state === 'CONNECTING') return
+    if (wsStore.state !== 'LIVE_SYNCED') return
     try {
       encrypted = await encryptDMMessage(channelId, clientMsgId, messageBody)
     } catch (err) {
@@ -821,11 +821,11 @@ async function handleSend(
     }
   }
   const now = new Date().toISOString()
-  const isOffline = wsStore.state === 'DISCONNECTED' || wsStore.state === 'CONNECTING'
+  const isOffline = wsStore.state !== 'LIVE_SYNCED'
   scheduleStableBottomStick('send')
 
   // Optimistic message — shown immediately regardless of connection state
-  chatStore.addOptimisticMessage({
+  const optimisticMessage: Message = {
     id: clientMsgId,
     channelId,
     senderId,
@@ -850,25 +850,56 @@ async function handleSend(
     })),
     clientMsgId,
     sendStatus: isOffline ? 'queued' : 'sending',
-  })
+  }
+  chatStore.addOptimisticMessage(optimisticMessage)
 
-  if (isOffline) {
-    // Queue for delivery after reconnect
-    offlineQueue.enqueue({ conversationId: channelId, body: messageBody, entities: payload.entities, clientMsgId })
-  } else {
-    const sent = encrypted
-      ? wsStore.sendMessage(channelId, '', clientMsgId, undefined, [], [], {
-          senderDeviceId: encrypted.senderDeviceId,
-          recipients: encrypted.envelopes,
-        })
-      : payload.entities.length > 0
-      ? wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds, payload.entities)
-      : wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds)
-    if (!sent) {
+  // Plaintext sends are persisted before their first write, not only after a
+  // disconnect. The record is removed when its correlated ACK arrives.
+  if (!encrypted) {
+    const persisted = await offlineQueue.enqueue({
+      conversationId: channelId,
+      body: messageBody,
+      entities: payload.entities,
+      clientMsgId,
+      attachmentIds: payload.attachmentIds,
+      attachments: payload.attachments.map(attachment => ({ ...attachment })),
+    })
+    if (!persisted) {
+      chatStore.updateSendStatus(channelId, clientMsgId, 'failed', OUTBOUND_PERSISTENCE_FAILURE_REASON)
+      return
+    }
+  }
+
+  if (wsStore.state !== 'LIVE_SYNCED') {
+    if (encrypted) {
       chatStore.updateSendStatus(channelId, clientMsgId, 'failed', 'Connection lost')
     } else {
-      chatStore.startSendTimeout(channelId, clientMsgId, false)
+      chatStore.updateSendStatus(channelId, clientMsgId, 'queued')
     }
+    return
+  }
+
+  if (!encrypted) {
+    // A concurrent queue flush can win the race after the durable commit.
+    // Exactly one path may write this client message ID for the live session.
+    if (!offlineQueue.claimInFlight(clientMsgId)) return
+    chatStore.updateSendStatus(channelId, clientMsgId, 'sending')
+  }
+
+  const sent = encrypted
+    ? wsStore.sendMessage(channelId, '', clientMsgId, undefined, [], [], {
+        senderDeviceId: encrypted.senderDeviceId,
+        recipients: encrypted.envelopes,
+      })
+    : payload.entities.length > 0
+    ? wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds, payload.entities)
+    : wsStore.sendMessage(channelId, messageBody, clientMsgId, undefined, payload.attachmentIds)
+  if (!sent) {
+    if (!encrypted) offlineQueue.releaseInFlight(clientMsgId)
+    chatStore.requeueInFlightPlaintextMessages()
+    wsStore.invalidateTransport('Message could not be sent')
+  } else {
+    chatStore.startSendTimeout(channelId, clientMsgId, false)
   }
 }
 

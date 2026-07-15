@@ -6,6 +6,7 @@ import {
   EncryptedDMMessagePayloadSchema,
   EncryptedDMRecipientPayloadSchema,
   EnvelopeSchema,
+  TransportHeartbeatRequestSchema,
   ListActiveCallMembersRequestSchema,
   ListConversationMembersRequestSchema,
   type Envelope,
@@ -100,6 +101,7 @@ const PROTOCOL_VERSION = 1
 const WS_OPEN = 1   // WebSocket.OPEN
 const WS_CLOSED = 3 // WebSocket.CLOSED
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000
+const TRANSPORT_HEARTBEAT_INTERVAL_MS = 30_000
 const REQUEST_TIMEOUT_MS = 15_000
 
 const REQUESTED_CAPABILITIES: FeatureCapability[] = Object.values(FeatureCapability)
@@ -178,6 +180,9 @@ export const useWsStore = defineStore('ws', () => {
   const protocolErrorHandlers = new Set<ProtocolErrorHandler>()
   const pendingRequests = new Map<string, PendingRequest>()
   let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null
+  let transportHeartbeatTimer: ReturnType<typeof setInterval> | null = null
+  let transportHeartbeatGeneration = 0
+  let transportHeartbeatInFlight = false
 
   function serverSupportsPresenceHeartbeat(): boolean {
     return serverHello.value?.case === 'serverHello'
@@ -198,10 +203,38 @@ export const useWsStore = defineStore('ws', () => {
       )
   }
 
+  function serverSupportsTransportHeartbeat(): boolean {
+    return serverHello.value?.case === 'serverHello'
+      && serverHello.value.value.acceptedCapabilities.includes(FeatureCapability.TRANSPORT_HEARTBEAT)
+  }
+
+  function canRunTransportHeartbeat(): boolean {
+    return serverSupportsTransportHeartbeat()
+      && authResult.value !== null
+      && socket !== null
+      && socket.readyState === WS_OPEN
+      && (
+        state.value === 'AUTH_COMPLETE'
+        || state.value === 'BOOTSTRAPPING'
+        || state.value === 'LIVE_SYNCED'
+        || state.value === 'RECOVERING_GAP'
+        || state.value === 'STALE_REBOOTSTRAP'
+      )
+  }
+
   function stopPresenceHeartbeat() {
     if (presenceHeartbeatTimer) {
       clearInterval(presenceHeartbeatTimer)
       presenceHeartbeatTimer = null
+    }
+  }
+
+  function stopTransportHeartbeat() {
+    transportHeartbeatGeneration += 1
+    transportHeartbeatInFlight = false
+    if (transportHeartbeatTimer) {
+      clearInterval(transportHeartbeatTimer)
+      transportHeartbeatTimer = null
     }
   }
 
@@ -226,6 +259,43 @@ export const useWsStore = defineStore('ws', () => {
       }
       sendPresenceHeartbeat()
     }, PRESENCE_HEARTBEAT_INTERVAL_MS)
+  }
+
+  function isTransportHeartbeatTimeout(error: unknown): boolean {
+    return error instanceof Error
+      && error.message.startsWith('Request transportHeartbeatAck timed out:')
+  }
+
+  function sendTransportHeartbeat() {
+    if (!canRunTransportHeartbeat() || transportHeartbeatInFlight) return
+
+    const expectedSocket = socket
+    const generation = transportHeartbeatGeneration
+    transportHeartbeatInFlight = true
+    void requestEnvelope({
+      case: 'transportHeartbeatRequest',
+      value: create(TransportHeartbeatRequestSchema),
+    }, 'transportHeartbeatAck').catch((error: unknown) => {
+      if (generation !== transportHeartbeatGeneration || socket !== expectedSocket) return
+      if (!isTransportHeartbeatTimeout(error)) return
+      invalidateTransport('Transport heartbeat timed out')
+    }).finally(() => {
+      if (generation === transportHeartbeatGeneration && socket === expectedSocket) {
+        transportHeartbeatInFlight = false
+      }
+    })
+  }
+
+  function startTransportHeartbeat() {
+    if (!canRunTransportHeartbeat() || transportHeartbeatTimer) return
+    sendTransportHeartbeat()
+    transportHeartbeatTimer = setInterval(() => {
+      if (!canRunTransportHeartbeat()) {
+        stopTransportHeartbeat()
+        return
+      }
+      sendTransportHeartbeat()
+    }, TRANSPORT_HEARTBEAT_INTERVAL_MS)
   }
 
   function onAuthFail(cb: (kind: WsErrorKind) => void) {
@@ -330,6 +400,7 @@ export const useWsStore = defineStore('ws', () => {
 
   function connect(url: string) {
     stopPresenceHeartbeat()
+    stopTransportHeartbeat()
     if (socket && socket.readyState !== WS_CLOSED) {
       rejectPendingRequests(new Error('WebSocket reconnecting'))
       console.log('[ws:connect] closing old socket, suppressTransportDrop=true, readyState=', socket.readyState)
@@ -374,6 +445,7 @@ export const useWsStore = defineStore('ws', () => {
     wsConn.onerror = () => {
       if (socket !== wsConn) { console.log('[ws:onerror] stale socket, ignored'); return }
       stopPresenceHeartbeat()
+      stopTransportHeartbeat()
       console.log('[ws:onerror] transport error, suppress=', suppressTransportDrop)
       lastError.value = 'WebSocket transport error'
       lastErrorKind.value = 'TRANSPORT'
@@ -385,6 +457,7 @@ export const useWsStore = defineStore('ws', () => {
     wsConn.onclose = (ev: CloseEvent) => {
       if (socket !== wsConn) { console.log('[ws:onclose] stale socket, ignored. code=', ev?.code); return }
       stopPresenceHeartbeat()
+      stopTransportHeartbeat()
       // Use socketHadOpened rather than state.value !== 'DISCONNECTED': onerror
       // sets state = 'DISCONNECTED' before onclose fires, which would wrongly
       // suppress the transport-drop callback for error-induced disconnects.
@@ -408,6 +481,7 @@ export const useWsStore = defineStore('ws', () => {
 
   function disconnect(reason: 'logout' | 'transport' = 'transport') {
     stopPresenceHeartbeat()
+    stopTransportHeartbeat()
     rejectPendingRequests(new Error('WebSocket disconnected'))
     // Suppress transport-drop callback for intentional disconnects (logout)
     if (reason === 'logout') {
@@ -419,17 +493,19 @@ export const useWsStore = defineStore('ws', () => {
   }
 
   /**
-   * The browser can keep an OPEN WebSocket after the upstream path has died.
-   * Drop that local transport and notify the session orchestrator immediately,
-   * rather than waiting for a close event that may never arrive on its own.
+   * The browser can keep an OPEN WebSocket after the upstream path has died,
+   * or close it between a state check and a send. Drop that local transport
+   * and notify the session orchestrator immediately rather than waiting for a
+   * close event that may never arrive on its own.
    */
   function invalidateTransport(reason = 'WebSocket transport was unresponsive'): boolean {
     const activeSocket = socket
-    if (!activeSocket || activeSocket.readyState !== WS_OPEN || state.value === 'DISCONNECTED') {
+    if (!activeSocket || state.value === 'DISCONNECTED') {
       return false
     }
 
     stopPresenceHeartbeat()
+    stopTransportHeartbeat()
     rejectPendingRequests(new Error(reason))
     lastError.value = reason
     lastErrorKind.value = 'TRANSPORT'
@@ -438,10 +514,12 @@ export const useWsStore = defineStore('ws', () => {
     // Detach before close so its eventual close event cannot report the same
     // transport drop twice. The orchestrator callback below owns recovery.
     socket = null
-    try {
-      activeSocket.close()
-    } catch {
-      // The transport is already considered lost; recovery still proceeds.
+    if (activeSocket.readyState === WS_OPEN) {
+      try {
+        activeSocket.close()
+      } catch {
+        // The transport is already considered lost; recovery still proceeds.
+      }
     }
     onTransportDropCallback?.()
     return true
@@ -449,6 +527,7 @@ export const useWsStore = defineStore('ws', () => {
 
   function resetRuntimeState() {
     stopPresenceHeartbeat()
+    stopTransportHeartbeat()
     rejectPendingRequests(new Error('WebSocket reset'))
     suppressTransportDrop = true
     try {
@@ -1082,6 +1161,7 @@ export const useWsStore = defineStore('ws', () => {
           }
           state.value = 'AUTH_COMPLETE'
           startPresenceHeartbeat()
+          startTransportHeartbeat()
         } else {
           stopPresenceHeartbeat()
           lastError.value = 'AuthResponse: ok=false'

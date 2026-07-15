@@ -68,6 +68,18 @@ function makeAuthResponseEnvelope(ok: boolean): ArrayBuffer {
   return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
 }
 
+function makeTransportHeartbeatAckEnvelope(requestId: string): ArrayBuffer {
+  const env = create(EnvelopeSchema, {
+    requestId,
+    protocolVersion: 1,
+    payload: {
+      case: 'transportHeartbeatAck',
+      value: {},
+    },
+  })
+  return toBinary(EnvelopeSchema, env).buffer as ArrayBuffer
+}
+
 function makeErrorEnvelope(code: ErrorCode, message: string, requestId = '3'): ArrayBuffer {
   const env = create(EnvelopeSchema, {
     requestId,
@@ -403,7 +415,7 @@ describe('wsStore state machine', () => {
     expect(mockSocket.sent).toHaveLength(sentBeforeHeartbeat + 1)
     expect(decodePayloadType(mockSocket.sent[mockSocket.sent.length - 1])).toBe('presenceHeartbeatRequest')
 
-    store.disconnect()
+    store.disconnect('logout')
     const sentBeforeDisconnectAdvance = mockSocket.sent.length
     vi.advanceTimersByTime(60_000)
     expect(mockSocket.sent).toHaveLength(sentBeforeDisconnectAdvance)
@@ -417,6 +429,83 @@ describe('wsStore state machine', () => {
     const sentBeforeResetAdvance = mockSocket.sent.length
     vi.advanceTimersByTime(60_000)
     expect(mockSocket.sent).toHaveLength(sentBeforeResetAdvance)
+  })
+
+  it('probes negotiated transport heartbeat capability and accepts a correlated ACK', async () => {
+    vi.useFakeTimers()
+    const store = useWsStore()
+    const onDrop = vi.fn()
+    store.onTransportDrop(onDrop)
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeServerHelloEnvelope([FeatureCapability.TRANSPORT_HEARTBEAT]))
+    store.sendAuth('my-access-token')
+    mockSocket.simulateMessage(makeAuthResponseEnvelope(true))
+
+    const heartbeat = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
+    expect(heartbeat.payload.case).toBe('transportHeartbeatRequest')
+
+    mockSocket.simulateMessage(makeTransportHeartbeatAckEnvelope(heartbeat.requestId))
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(14_999)
+
+    expect(onDrop).not.toHaveBeenCalled()
+    expect(store.state).toBe('AUTH_COMPLETE')
+  })
+
+  it('invalidates a locally-open transport when its heartbeat ACK is missing despite inbound traffic', async () => {
+    vi.useFakeTimers()
+    const store = useWsStore()
+    const onDrop = vi.fn()
+    store.onTransportDrop(onDrop)
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeServerHelloEnvelope([FeatureCapability.TRANSPORT_HEARTBEAT]))
+    store.sendAuth('my-access-token')
+    mockSocket.simulateMessage(makeAuthResponseEnvelope(true))
+    mockSocket.simulateMessage(makePresenceEventEnvelope())
+
+    await vi.advanceTimersByTimeAsync(15_000)
+
+    expect(store.state).toBe('DISCONNECTED')
+    expect(store.lastErrorKind).toBe('TRANSPORT')
+    expect(store.lastError).toBe('Transport heartbeat timed out')
+    expect(onDrop).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start a transport heartbeat when the server does not negotiate it', async () => {
+    vi.useFakeTimers()
+    const store = useWsStore()
+    const onDrop = vi.fn()
+    store.onTransportDrop(onDrop)
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeServerHelloEnvelope())
+    store.sendAuth('my-access-token')
+    mockSocket.simulateMessage(makeAuthResponseEnvelope(true))
+
+    await vi.advanceTimersByTimeAsync(45_000)
+
+    expect(mockSocket.sent.some(packet => decodePayloadType(packet) === 'transportHeartbeatRequest')).toBe(false)
+    expect(onDrop).not.toHaveBeenCalled()
+  })
+
+  it('cancels a pending transport heartbeat when the connection closes', async () => {
+    vi.useFakeTimers()
+    const store = useWsStore()
+    const onDrop = vi.fn()
+    store.onTransportDrop(onDrop)
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeServerHelloEnvelope([FeatureCapability.TRANSPORT_HEARTBEAT]))
+    store.sendAuth('my-access-token')
+    mockSocket.simulateMessage(makeAuthResponseEnvelope(true))
+
+    store.disconnect('logout')
+    await vi.advanceTimersByTimeAsync(15_000)
+
+    expect(onDrop).not.toHaveBeenCalled()
+    expect(store.state).toBe('DISCONNECTED')
   })
 
   it('logs incoming packets in a readable format', () => {

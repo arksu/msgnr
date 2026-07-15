@@ -28,6 +28,7 @@ const mockAuthStore = vi.hoisted(() => ({
 
 const mockChatStore = vi.hoisted(() => ({
   loadCachedState: vi.fn<() => Promise<boolean>>(),
+  requeueInFlightPlaintextMessages: vi.fn<() => void>(),
   cachedBootstrap: false,
   setCachedBootstrap: vi.fn<(value: boolean) => void>(),
 }))
@@ -85,6 +86,7 @@ describe('useSessionOrchestrator', () => {
     mockAuthStore.hydrateUserFromCache.mockResolvedValue()
     mockAuthStore.loadPersistedRefreshToken.mockReturnValue('refresh-token')
     mockChatStore.loadCachedState.mockResolvedValue(false)
+    mockChatStore.requeueInFlightPlaintextMessages.mockReset()
     mockChatStore.cachedBootstrap = false
     mockChatStore.setCachedBootstrap.mockImplementation((value: boolean) => {
       mockChatStore.cachedBootstrap = value
@@ -148,6 +150,7 @@ describe('useSessionOrchestrator', () => {
     mockWsStore.state = 'DISCONNECTED'
     mockState.transportDropHandler?.()
     expect(orchestrator.isReconnecting.value).toBe(true)
+    expect(mockChatStore.requeueInFlightPlaintextMessages).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(5_500)
 

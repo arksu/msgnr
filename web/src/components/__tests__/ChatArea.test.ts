@@ -9,6 +9,14 @@ import { useChatStore, type Message } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
 import { useWsStore } from '@/stores/ws'
+import { useOfflineQueue } from '@/composables/useOfflineQueue'
+
+const cacheMocks = vi.hoisted(() => ({
+  enqueueOutbound: vi.fn(),
+  loadOutboundQueue: vi.fn(),
+  removeOutbound: vi.fn(),
+  clearOutboundQueue: vi.fn(),
+}))
 
 vi.mock('@/services/http/chatApi', () => ({
   listMessageReactionUsers: vi.fn(),
@@ -17,8 +25,12 @@ vi.mock('@/services/http/chatApi', () => ({
   unsaveMessage: vi.fn(),
 }))
 
+vi.mock('@/services/db/cache', () => cacheMocks)
+
 async function flushAll() {
-  await Promise.resolve()
+  for (let i = 0; i < 5; i++) {
+    await Promise.resolve()
+  }
   await nextTick()
 }
 
@@ -60,6 +72,8 @@ describe('ChatArea', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    cacheMocks.enqueueOutbound.mockResolvedValue(true)
+    useOfflineQueue().clear()
     resizeObserverCallbacks = []
     class TestResizeObserver {
       constructor(private readonly callback: ResizeObserverCallback) {
@@ -114,6 +128,10 @@ describe('ChatArea', () => {
     wsStore.state = 'LIVE_SYNCED'
     wsStore.sendMessage = vi.fn()
     chatStore.addOptimisticMessage = vi.fn()
+    let commitOutbound: ((persisted: boolean) => void) | undefined
+    cacheMocks.enqueueOutbound.mockReturnValue(new Promise<boolean>(resolve => {
+      commitOutbound = resolve
+    }))
 
     const wrapper = mount(ChatArea, {
       global: {
@@ -127,6 +145,12 @@ describe('ChatArea', () => {
     })
 
     await wrapper.get('[data-testid="emit-send"]').trigger('click')
+    await vi.waitFor(() => expect(cacheMocks.enqueueOutbound).toHaveBeenCalledTimes(1))
+
+    expect(wsStore.sendMessage).not.toHaveBeenCalled()
+    expect(commitOutbound).toBeTypeOf('function')
+    commitOutbound!(true)
+    await vi.waitFor(() => expect(wsStore.sendMessage).toHaveBeenCalledTimes(1))
 
     expect(chatStore.addOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
       channelId: 'channel-1',
@@ -186,6 +210,7 @@ describe('ChatArea', () => {
     })
 
     await wrapper.get('[data-testid="emit-send"]').trigger('click')
+    await flushAll()
 
     expect(markEncrypted).not.toHaveBeenCalled()
     expect(chatStore.addOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
@@ -378,6 +403,7 @@ describe('ChatArea', () => {
     })
 
     await wrapper.get('[data-testid="emit-send"]').trigger('click')
+    await flushAll()
 
     expect(chatStore.addOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
       channelId: 'channel-1',
@@ -570,7 +596,7 @@ describe('ChatArea', () => {
     el.scrollTop = 100
 
     await wrapper.get('[data-testid="emit-send"]').trigger('click')
-    await nextTick()
+    await flushAll()
 
     expect(el.scrollTop).toBe(2000)
     expect(wsStore.sendMessage).toHaveBeenCalledWith('channel-1', expect.any(String), expect.any(String), undefined, [])

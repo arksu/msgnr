@@ -18,6 +18,7 @@ import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
 import { usePinnedDialogsStore } from '@/stores/pinnedDialogs'
+import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import { isUuidTaskRouteValue, taskSlugFromPublicId } from '@/services/taskRoute'
 import { COLOR_THEME_STORAGE_KEY } from '@/services/storage/colorThemeStorage'
 import { storage } from '@/services/storage/storageAdapter'
@@ -359,6 +360,7 @@ let serviceWorkerContainerMock: ReturnType<typeof createServiceWorkerContainerMo
 describe('MainView server unavailable state', () => {
   beforeEach(() => {
     storage.clear()
+    useOfflineQueue().clear()
     pinia = createPinia()
     setActivePinia(pinia)
     serviceWorkerContainerMock = createServiceWorkerContainerMock()
@@ -451,6 +453,29 @@ describe('MainView server unavailable state', () => {
     await wrapper.get('[data-testid="connection-banner-retry"]').trigger('click')
     await nextTick()
 
+    expect(orchestratorMocks.reconnectNow).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows normal transport recovery and its durable queue count', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    orchestratorMocks.isReconnecting = ref(true)
+    orchestratorMocks.reconnectAttempt = ref(2)
+    useOfflineQueue().enqueue({
+      conversationId: 'channel-1',
+      body: 'send after reconnect',
+      clientMsgId: 'queued-message-1',
+    })
+
+    const wrapper = mountAtRoute(router)
+
+    expect(wrapper.text()).toContain('Disconnected - reconnecting')
+    expect(wrapper.text()).toContain('(attempt 2)')
+    expect(wrapper.text()).toContain('1 message queued')
+
+    await wrapper.get('[data-testid="connection-banner-retry"]').trigger('click')
     expect(orchestratorMocks.reconnectNow).toHaveBeenCalledTimes(1)
   })
 

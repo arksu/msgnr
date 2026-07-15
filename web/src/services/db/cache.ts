@@ -349,13 +349,15 @@ export async function deleteDraft(conversationId: string): Promise<void> {
 
 export async function enqueueOutbound(
   action: Omit<QueuedOutboundAction, 'id' | 'createdAt'>,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await db.outboundQueue.add({
       ...action,
       attachmentIds: action.attachmentIds ? toPlainStringArray(action.attachmentIds) : undefined,
+      attachments: action.attachments?.map(attachment => ({ ...attachment })),
       createdAt: new Date().toISOString(),
     })
+    return true
   } catch (error) {
     logDataCloneError('enqueueOutbound', error, {
       conversationId: action.conversationId,
@@ -363,7 +365,7 @@ export async function enqueueOutbound(
       hasAttachmentIds: Array.isArray(action.attachmentIds),
       attachmentCount: action.attachmentIds?.length ?? 0,
     })
-    // Non-fatal
+    return false
   }
 }
 

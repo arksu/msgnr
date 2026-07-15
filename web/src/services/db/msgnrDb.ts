@@ -103,6 +103,12 @@ export interface QueuedOutboundAction {
   clientMsgId: string
   threadRootMessageId?: string
   attachmentIds?: string[]
+  attachments?: Array<{
+    id: string
+    fileName: string
+    fileSize: number
+    mimeType: string
+  }>
   createdAt: string
 }
 

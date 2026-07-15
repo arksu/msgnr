@@ -91,6 +91,7 @@ var supportedCapabilities = map[packetspb.FeatureCapability]struct{}{
 	packetspb.FeatureCapability_FEATURE_CAPABILITY_CALL_INVITES:         {},
 	packetspb.FeatureCapability_FEATURE_CAPABILITY_INVITE_ACTIONS:       {},
 	packetspb.FeatureCapability_FEATURE_CAPABILITY_PRESENCE_HEARTBEAT:   {},
+	packetspb.FeatureCapability_FEATURE_CAPABILITY_TRANSPORT_HEARTBEAT:  {},
 }
 
 // outboundMsg is an item placed on the per-session outbound queue.
@@ -2427,6 +2428,20 @@ func (s *Server) handleDomainPayload(
 		if changed {
 			s.broadcastPresence(ctx, principal.UserID, snapshot)
 		}
+
+	case *packetspb.Envelope_TransportHeartbeatRequest:
+		if p.TransportHeartbeatRequest == nil {
+			badReq("transport_heartbeat_request: missing payload")
+			return
+		}
+		enqueue(&packetspb.Envelope{
+			RequestId:       reqID,
+			TraceId:         traceID,
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_TransportHeartbeatAck{
+				TransportHeartbeatAck: &packetspb.TransportHeartbeatAck{},
+			},
+		})
 
 	case *packetspb.Envelope_SetClientWindowActivityRequest:
 		req := p.SetClientWindowActivityRequest

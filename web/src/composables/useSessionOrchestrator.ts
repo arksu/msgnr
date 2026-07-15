@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useWsStore, type WsErrorKind } from '@/stores/ws'
+import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import { resolveWsUrl } from '@/services/runtime/backendEndpoint'
 
 const RECONNECT_INTERVAL_MS = 5_000
@@ -291,6 +292,10 @@ export function useSessionOrchestrator() {
   function _attachTransportDropHandler() {
     ws.onTransportDrop(() => {
       console.log('[orchestrator:onTransportDrop] fired, reconnectStopped=', reconnectStopped, 'isReconnecting=', isReconnecting.value)
+      // Capture messages before reconnect/bootstrap can clear their optimistic
+      // overlays. The queue keeps the original client IDs for idempotent replay.
+      useOfflineQueue().releaseAllInFlight()
+      useChatStore().requeueInFlightPlaintextMessages()
       if (reconnectStopped) return
       if (_stopReconnectIfWsAlreadyHealthy()) return
       // If a reconnect loop is already running (timer scheduled or attempt in
@@ -338,6 +343,9 @@ export function useSessionOrchestrator() {
     let elapsed = 0
 
     ws.setPendingAuthToken(accessToken)
+    // A reconnect is a new delivery epoch. Every unacknowledged normal message
+    // remains durable and may be safely replayed with its original client ID.
+    useOfflineQueue().releaseAllInFlight()
     ws.connect(resolveWsUrl())
     let timer: ReturnType<typeof setInterval> | null = null
 
@@ -480,10 +488,9 @@ export function useSessionOrchestrator() {
     const chatStore = useChatStore()
     chatStore.resetRuntimeState()
 
-    const [{ useCallStore }, { useTasksStore }, { useOfflineQueue }] = await Promise.all([
+    const [{ useCallStore }, { useTasksStore }] = await Promise.all([
       import('@/stores/call'),
       import('@/stores/tasks'),
-      import('@/composables/useOfflineQueue'),
     ])
 
     await useCallStore().resetRuntimeState()

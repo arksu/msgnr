@@ -14,6 +14,12 @@ export interface PendingOutboundMessage {
   clientMsgId: string
   threadRootMessageId?: string
   attachmentIds?: string[]
+  attachments?: Array<{
+    id: string
+    fileName: string
+    fileSize: number
+    mimeType: string
+  }>
 }
 
 /**
@@ -23,7 +29,7 @@ export interface PendingOutboundMessage {
 export type FlushStatusCallback = (
   conversationId: string,
   clientMsgId: string,
-  status: 'sending' | 'failed',
+  status: 'sending' | 'queued' | 'failed',
   threadRootMessageId?: string,
   failReason?: string,
 ) => void
@@ -31,40 +37,96 @@ export type FlushStatusCallback = (
 // Singleton queue shared across all composable calls
 const queue = ref<PendingOutboundMessage[]>([])
 let hydrated = false
+// Records remain durable until SendMessageAck. This guard prevents a second
+// flush from replaying a record that is still in flight on this connection.
+const inFlightClientMsgIds = new Set<string>()
+const durableClientMsgIds = new Set<string>()
+const persistenceByClientMsgId = new Map<string, Promise<boolean>>()
+
+export const OUTBOUND_PERSISTENCE_FAILURE_REASON = 'Message could not be saved for reliable delivery'
 
 export function useOfflineQueue() {
-  function enqueue(msg: PendingOutboundMessage) {
-    // Avoid duplicates (e.g. if component re-mounts and re-submits)
-    if (queue.value.some((m) => m.clientMsgId === msg.clientMsgId)) return
-    queue.value = [...queue.value, msg]
-    // Persist to IndexedDB (fire-and-forget)
-    void enqueueOutbound({
+  function queuedMessage(clientMsgId: string): PendingOutboundMessage | undefined {
+    return queue.value.find(message => message.clientMsgId === clientMsgId)
+  }
+
+  function persist(msg: PendingOutboundMessage): Promise<boolean> {
+    if (durableClientMsgIds.has(msg.clientMsgId)) return Promise.resolve(true)
+
+    const inProgress = persistenceByClientMsgId.get(msg.clientMsgId)
+    if (inProgress) return inProgress
+
+    const pending = enqueueOutbound({
       conversationId: msg.conversationId,
       body: msg.body,
       entities: msg.entities,
       clientMsgId: msg.clientMsgId,
       threadRootMessageId: msg.threadRootMessageId,
       attachmentIds: msg.attachmentIds,
+      attachments: msg.attachments,
     })
+      .then(async persisted => {
+        if (!persisted) return false
+        // A user may discard or clear a message while IndexedDB is committing.
+        // Do not leave a record behind that could resurrect the discarded send.
+        if (!queuedMessage(msg.clientMsgId)) {
+          await removeOutbound(msg.clientMsgId)
+          return false
+        }
+        durableClientMsgIds.add(msg.clientMsgId)
+        return true
+      })
+      .catch(() => false)
+      .finally(() => {
+        persistenceByClientMsgId.delete(msg.clientMsgId)
+      })
+    persistenceByClientMsgId.set(msg.clientMsgId, pending)
+    return pending
+  }
+
+  /**
+   * Add a message to the replay queue and wait for IndexedDB to commit it.
+   * Callers must await this before issuing the first socket write.
+   */
+  function enqueue(msg: PendingOutboundMessage): Promise<boolean> {
+    // Avoid duplicates (e.g. if a reconnect requeues an existing send).
+    const existing = queuedMessage(msg.clientMsgId)
+    if (existing) return persist(existing)
+    queue.value = [...queue.value, msg]
+    return persist(msg)
   }
 
   /**
    * Flush all queued messages over the (now-live) WS connection.
-   * Called after successful reconnect + AUTH_COMPLETE.
+   * Called after successful reconnect + LIVE_SYNCED.
    *
-   * Each message is removed from IndexedDB individually after sending.
-   * If the socket closes mid-flush, remaining messages stay queued.
+   * Records remain in IndexedDB until SendMessageAck. A new connection
+   * releases the in-flight guard and safely replays original client IDs.
    *
    * @param ws - The WS store instance for sending messages.
    * @param onStatusChange - Optional callback to notify the chat store of
-   *   send-status transitions (queued → sending, or queued → failed).
+   *   send-status transitions (queued → sending, or back to queued).
    */
-   function flush(ws: ReturnType<typeof useWsStore>, onStatusChange?: FlushStatusCallback) {
-    const pending = [...queue.value]
-    const remaining: PendingOutboundMessage[] = []
+  async function flush(ws: ReturnType<typeof useWsStore>, onStatusChange?: FlushStatusCallback) {
+    if (ws.state !== 'LIVE_SYNCED') return
+    const pending = queue.value.filter(msg => !inFlightClientMsgIds.has(msg.clientMsgId))
 
-    for (let i = 0; i < pending.length; i++) {
-      const msg = pending[i]
+    for (const msg of pending) {
+      const persisted = await enqueue(msg)
+      if (!persisted) {
+        if (queuedMessage(msg.clientMsgId)) {
+          onStatusChange?.(msg.conversationId, msg.clientMsgId, 'failed', msg.threadRootMessageId, OUTBOUND_PERSISTENCE_FAILURE_REASON)
+        }
+        continue
+      }
+      if (ws.state !== 'LIVE_SYNCED') {
+        if (queuedMessage(msg.clientMsgId)) {
+          onStatusChange?.(msg.conversationId, msg.clientMsgId, 'queued', msg.threadRootMessageId)
+        }
+        break
+      }
+      if (!claimInFlight(msg.clientMsgId)) continue
+
       // Notify store: queued → sending
       onStatusChange?.(msg.conversationId, msg.clientMsgId, 'sending', msg.threadRootMessageId)
 
@@ -78,23 +140,38 @@ export function useOfflineQueue() {
       )
 
       if (sent) {
-        // Successfully sent — remove from IndexedDB
-        void removeOutbound(msg.clientMsgId)
+        continue
       } else {
-        // Socket closed mid-flush — mark this message failed and keep
-        // it plus all subsequent messages in the queue.
-        onStatusChange?.(msg.conversationId, msg.clientMsgId, 'failed', msg.threadRootMessageId, 'Connection lost')
-        remaining.push(...pending.slice(i))
+        // Keep the record queued. The transport-drop path will reconnect and
+        // release it for another idempotent attempt.
+        releaseInFlight(msg.clientMsgId)
+        onStatusChange?.(msg.conversationId, msg.clientMsgId, 'queued', msg.threadRootMessageId)
         break
       }
     }
+  }
 
-    // Update in-memory queue to only contain un-sent messages
-    queue.value = remaining
+  /** Claim a durable record for one socket write in this delivery epoch. */
+  function claimInFlight(clientMsgId: string): boolean {
+    if (inFlightClientMsgIds.has(clientMsgId)) return false
+    inFlightClientMsgIds.add(clientMsgId)
+    return true
+  }
+
+  /** Allow a single unacknowledged record to replay on the next live session. */
+  function releaseInFlight(clientMsgId: string) {
+    inFlightClientMsgIds.delete(clientMsgId)
+  }
+
+  /** A new transport is a new delivery epoch; replay all unresolved records. */
+  function releaseAllInFlight() {
+    inFlightClientMsgIds.clear()
   }
 
   /** Remove a specific message from the queue (e.g. if user deletes the optimistic bubble) */
   function remove(clientMsgId: string) {
+    inFlightClientMsgIds.delete(clientMsgId)
+    durableClientMsgIds.delete(clientMsgId)
     queue.value = queue.value.filter((m) => m.clientMsgId !== clientMsgId)
     // Remove from IndexedDB (fire-and-forget)
     void removeOutbound(clientMsgId)
@@ -102,6 +179,8 @@ export function useOfflineQueue() {
 
   /** Clear everything — called on logout */
   function clear() {
+    inFlightClientMsgIds.clear()
+    durableClientMsgIds.clear()
     queue.value = []
     void clearOutboundQueue()
   }
@@ -124,9 +203,11 @@ export function useOfflineQueue() {
         clientMsgId: item.clientMsgId,
         threadRootMessageId: item.threadRootMessageId,
         attachmentIds: item.attachmentIds,
+        attachments: item.attachments,
       }))
       // Merge with any already-in-memory items (avoid duplicates)
       for (const msg of loaded) {
+        durableClientMsgIds.add(msg.clientMsgId)
         if (!queue.value.some(m => m.clientMsgId === msg.clientMsgId)) {
           queue.value = [...queue.value, msg]
         }
@@ -137,5 +218,15 @@ export function useOfflineQueue() {
     }
   }
 
-  return { queue, enqueue, flush, remove, clear, loadPersisted }
+  return {
+    queue,
+    enqueue,
+    flush,
+    claimInFlight,
+    releaseInFlight,
+    releaseAllInFlight,
+    remove,
+    clear,
+    loadPersisted,
+  }
 }

@@ -20,6 +20,7 @@ import (
 	"msgnr/internal/chat"
 	"msgnr/internal/config"
 	"msgnr/internal/database"
+	"msgnr/internal/dayoffs"
 	"msgnr/internal/documents"
 	"msgnr/internal/events"
 	"msgnr/internal/integrations"
@@ -200,6 +201,8 @@ func main() {
 	documentsSvc.SetHistoryLimit(cfg.DocumentHistoryLimit)
 	documentsHandler := documents.NewHandler(documentsSvc, authSvc, log, cfg.AttachmentMaxSizeMB)
 	wsServer.SetDocumentsService(documentsSvc)
+	dayoffsSvc := dayoffs.NewService(db.Pool)
+	dayoffsHandler := dayoffs.NewHandler(dayoffsSvc, authSvc, log)
 	integrationsSvc := integrations.NewService(db.Pool, tasksSvc, documentsSvc, log)
 	integrationsHandler := integrations.NewHandler(integrationsSvc, log)
 
@@ -215,6 +218,7 @@ func main() {
 	adminHandler.RegisterRoutes(mux)
 	tasksHandler.RegisterRoutes(mux)
 	documentsHandler.RegisterRoutes(mux)
+	dayoffsHandler.RegisterRoutes(mux)
 	integrationsHandler.RegisterRoutes(mux)
 	pushHandler.RegisterRoutes(mux)
 

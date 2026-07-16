@@ -82,6 +82,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/dayoffs',
+      name: 'dayoffs',
+      component: () => import('@/views/MainView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/admin',
       name: 'admin',
       component: () => import('@/views/AdminView.vue'),

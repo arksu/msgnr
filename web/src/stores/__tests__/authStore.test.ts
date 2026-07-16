@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAuthStore } from '@/stores/auth'
+import { useDayoffsStore } from '@/stores/dayoffs'
 import * as authApi from '@/services/http/authApi'
 import * as tokenStorage from '@/services/storage/tokenStorage'
 import { saveLastAppliedEventSeq, loadLastAppliedEventSeq } from '@/services/storage/syncStateStorage'
@@ -362,6 +363,29 @@ describe('authStore.refresh', () => {
 })
 
 describe('authStore.logout', () => {
+  it('clears the in-memory Dayoffs calendar with the session', () => {
+    const dayoffsStore = useDayoffsStore()
+    dayoffsStore.employees = [{ id: 'other-user', displayName: 'Other User', avatarUrl: '' }]
+    dayoffsStore.records = [{
+      id: 'dayoff-1',
+      userId: 'other-user',
+      type: 'vacation',
+      startDate: '2026-07-20',
+      endDate: '2026-07-21',
+      note: '',
+      createdAt: '2026-07-01T00:00:00Z',
+      updatedAt: '2026-07-01T00:00:00Z',
+    }]
+    dayoffsStore.selectedEmployeeId = 'other-user'
+
+    const store = useAuthStore()
+    store.clearSession()
+
+    expect(dayoffsStore.employees).toEqual([])
+    expect(dayoffsStore.records).toEqual([])
+    expect(dayoffsStore.selectedEmployeeId).toBeNull()
+  })
+
   it('clears state and storage, calls server revoke', async () => {
     tokenStorage.setRefreshToken('some-token')
     tokenStorage.setAccessToken('some-access')

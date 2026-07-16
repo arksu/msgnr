@@ -50,4 +50,4 @@ test-events:
 
 # Run Testcontainers-based integration tests (requires Docker)
 test-integration:
-	go test -tags=integration ./internal/events/... -v -count=1 -timeout=120s
+	go test -tags=integration ./internal/events/... ./internal/dayoffs/... -v -count=1 -timeout=120s

@@ -86,6 +86,17 @@ type ChannelMember struct {
 	CreatedAt         time.Time `json:"created_at"`
 }
 
+type Dayoff struct {
+	ID        uuid.UUID `json:"id"`
+	UserID    uuid.UUID `json:"user_id"`
+	LeaveType string    `json:"leave_type"`
+	StartDate time.Time `json:"start_date"`
+	EndDate   time.Time `json:"end_date"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type DeviceOneTimePrekey struct {
 	DeviceID     uuid.UUID    `json:"device_id"`
 	PrekeyID     int          `json:"prekey_id"`

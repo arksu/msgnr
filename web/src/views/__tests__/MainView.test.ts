@@ -311,6 +311,7 @@ function createMainRouter() {
       { path: '/documents/teamspaces/:teamspaceId', name: 'documents-teamspace', component: MainView },
       { path: '/documents/search', name: 'documents-search', component: MainView },
       { path: '/documents/:documentId', name: 'documents-card', component: MainView },
+      { path: '/dayoffs', name: 'dayoffs', component: MainView },
       { path: '/login', name: 'login', component: { template: '<div>login</div>' } },
     ],
   })
@@ -1002,6 +1003,21 @@ describe('MainView server unavailable state', () => {
     expect(router.currentRoute.value.name).toBe('documents-teamspaces')
     expect(wrapper.find('[data-testid="documents-mode"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="documents-sidebar"]').exists()).toBe(true)
+  })
+
+  it('opens the Dayoffs route when the Dayoffs rail button is clicked', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+
+    await wrapper.get('[data-testid="mode-dayoffs"]').trigger('click')
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('dayoffs')
+    expect(wrapper.find('[data-testid="dayoffs-mode"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="mode-dayoffs"]').classes()).toContain('bg-sidebar-active')
   })
 
   it('reopens the active mode sidebar without changing the current sub-route', async () => {

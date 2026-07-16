@@ -84,6 +84,26 @@
           Documents
         </span>
       </div>
+      <div class="group relative">
+        <button
+          type="button"
+          class="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+          :class="appMode === 'dayoffs' ? 'bg-sidebar-active text-white' : 'text-sidebar-textMuted hover:bg-sidebar-hover hover:text-sidebar-text'"
+          title="Dayoffs"
+          aria-label="Dayoffs"
+          data-testid="mode-dayoffs"
+          @click="goToDayoffsMode"
+        >
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="5" width="18" height="16" rx="2" />
+            <path d="M7 3v4M17 3v4M3 10h18" />
+            <path d="m8 15 2 2 5-5" />
+          </svg>
+        </button>
+        <span class="pointer-events-none absolute left-12 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-chat-border bg-chat-header px-2 py-1 text-xs text-gray-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+          Dayoffs
+        </span>
+      </div>
     </aside>
     <ResizableSidebar
       v-if="appMode === 'chat' && !sidebarCollapsed"
@@ -125,7 +145,7 @@
           @back="backToList"
         />
       </template>
-      <template v-else>
+      <template v-else-if="appMode === 'documents'">
         <DocumentsShell
           :sidebar-collapsed="sidebarCollapsed"
           :selected-teamspace-id="documentsSelectedTeamspaceId"
@@ -141,6 +161,7 @@
           @open-parent="openDocument"
         />
       </template>
+      <DayoffsShell v-else />
     </main>
     <PinnedDialogsHost />
     <MessageSearchDialog
@@ -652,12 +673,24 @@ function createDocumentsShellStub() {
   })
 }
 
+function createDayoffsShellStub() {
+  return defineComponent({
+    name: 'DayoffsShellStub',
+    setup() {
+      return () => h('section', { 'data-testid': 'dayoffs-mode' }, 'Dayoffs')
+    },
+  })
+}
+
 const TaskTrackerShell = import.meta.env.MODE === 'test'
   ? createTaskTrackerShellStub()
   : defineAsyncComponent(() => import('@/components/tasks/TaskTrackerShell.vue'))
 const DocumentsShell = import.meta.env.MODE === 'test'
   ? createDocumentsShellStub()
   : defineAsyncComponent(() => import('@/components/documents/DocumentsShell.vue'))
+const DayoffsShell = import.meta.env.MODE === 'test'
+  ? createDayoffsShellStub()
+  : defineAsyncComponent(() => import('@/components/dayoffs/DayoffsShell.vue'))
 import { useCallStore } from '@/stores/call'
 
 const route = useRoute()
@@ -758,14 +791,16 @@ const isDocumentsRoute = computed(() => (
   || route.name === 'documents-search'
   || route.name === 'documents-card'
 ))
+const isDayoffsRoute = computed(() => route.name === 'dayoffs')
 const taskTrackerBaseRouteName = computed<'tasks-list' | 'tasks-kanban'>(() => {
   if (route.name === 'tasks-list') return 'tasks-list'
   if (route.name === 'tasks-kanban') return 'tasks-kanban'
   return lastTaskTrackerNonCardRoute.value
 })
-const appMode = computed<'chat' | 'task-tracker' | 'documents'>(() => {
+const appMode = computed<'chat' | 'task-tracker' | 'documents' | 'dayoffs'>(() => {
   if (isTaskTrackerRoute.value) return 'task-tracker'
   if (isDocumentsRoute.value) return 'documents'
+  if (isDayoffsRoute.value) return 'dayoffs'
   return 'chat'
 })
 const taskTrackerViewMode = computed<'list' | 'kanban' | 'card'>(() => {
@@ -1067,6 +1102,12 @@ async function goToDocumentsMode() {
     return
   }
   await router.push({ name: 'documents-teamspaces' })
+}
+
+async function goToDayoffsMode() {
+  if (isDayoffsRoute.value) return
+  setSidebarCollapsed(false)
+  await router.push({ name: 'dayoffs' })
 }
 
 async function openTaskListRoute() {

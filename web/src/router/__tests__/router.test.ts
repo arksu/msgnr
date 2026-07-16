@@ -58,6 +58,12 @@ describe('router auth guard', () => {
     expect(router.currentRoute.value.name).toBe('login')
   })
 
+  it('redirects unauthenticated user from /dayoffs to login', async () => {
+    const { default: router } = await import('@/router')
+    await router.push('/dayoffs')
+    expect(router.currentRoute.value.name).toBe('login')
+  })
+
   it('allows authenticated user to open task and document routes', async () => {
     const { default: router } = await import('@/router')
     const auth = useAuthStore()
@@ -87,6 +93,9 @@ describe('router auth guard', () => {
     await router.push('/documents/document-1')
     expect(router.currentRoute.value.name).toBe('documents-card')
     expect(router.currentRoute.value.params.documentId).toBe('document-1')
+
+    await router.push('/dayoffs')
+    expect(router.currentRoute.value.name).toBe('dayoffs')
   })
 
   it('keeps main route when restore fails but auth store stays authenticated (server unavailable)', async () => {

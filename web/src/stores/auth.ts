@@ -37,6 +37,7 @@ import { clearCollapsedDocumentsNodeIds } from '@/services/storage/documentsNode
 import { clearAllChatDrafts } from '@/services/storage/chatDraftStorage'
 import { cacheUserProfile, loadCachedUserProfile, clearAllData as clearIndexedDb } from '@/services/db/cache'
 import { clearAllPersistedClientDataPreservingBackendUrl } from '@/services/storage/hardReset'
+import { useDayoffsStore } from '@/stores/dayoffs'
 import { isUserCustomStatusActive, userCustomStatusFromDto, userCustomStatusFromStored, type UserCustomStatus } from '@/types/userStatus'
 
 export type AuthState =
@@ -378,6 +379,10 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clearSession(): void {
+    // Dayoffs is a shared calendar and is never persisted locally. Clear it
+    // synchronously at the auth boundary so switching accounts/workspaces
+    // cannot briefly render the prior session's employee data.
+    useDayoffsStore().reset()
     accessToken.value = null
     user.value = null
     saveUser(null)

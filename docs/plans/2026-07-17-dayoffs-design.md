@@ -45,7 +45,7 @@ secondary panel provides the employee selector; the main panel contains month
 navigation and a horizontally scrollable employee-by-day grid.  Selecting an
 employee filters the grid to that person and reveals their record list.
 
-Saturday and Monday are the fixed weekend days for this release.  They are
+Saturday and Sunday are the fixed weekend days for this release.  They are
 rendered as inactive cells and leave bars do not occupy them.  A shared
 frontend calendar constant is the only definition of this rule so its meaning
 does not drift across the grid and any client-side date helpers.  No leave-day
@@ -104,7 +104,7 @@ integration is required because this feature has no live-update requirement.
    month timeline, record list, and record dialog.  Use existing semantic theme
    tokens, accessible icon labels, Escape/backdrop dialog closing, clear empty
    and error states, and test IDs for interaction tests.
-7. Put Saturday/Monday in a single exported calendar constant and add unit
+7. Put Saturday/Sunday in a single exported calendar constant and add unit
    tests for weekend rendering, month boundaries, and inclusive range layout.
    Add component tests for member versus admin controls and form feedback.
 8. Run the targeted Go and Vitest suites, then the full frontend build.  Add a
@@ -118,7 +118,7 @@ integration is required because this feature has no live-update requirement.
   becomes active.
 - The current-month team calendar can be browsed and narrowed to one employee.
 - Vacation, Sick Leave, and Personal Day ranges are distinguishable and never
-  draw across Saturday or Monday cells.
+  draw across Saturday or Sunday cells.
 - Members cannot alter another person's record through either the UI or a
   forged HTTP request.
 - Admins and owners can alter any person's record.

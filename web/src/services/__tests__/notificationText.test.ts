@@ -22,6 +22,11 @@ describe('decodeNotificationText', () => {
     expect(decodeNotificationText(String.raw`Line 1\\nLine 2\\/done \\u263A`)).toBe('Line 1\nLine 2/done \u263A')
   })
 
+  it('decodes generated Markdown escapes in notification text', () => {
+    expect(decodeNotificationText(String.raw`d\_trades\_done\_amount = 2, current\_limit\_reached = TRUE\.`))
+      .toBe('d_trades_done_amount = 2, current_limit_reached = TRUE.')
+  })
+
   it('preserves unknown escape sequences', () => {
     expect(decodeNotificationText(String.raw`Keep \q and \z visible`)).toBe(String.raw`Keep \q and \z visible`)
     expect(decodeNotificationText(String.raw`Bad unicode \u12xz stays`)).toBe(String.raw`Bad unicode \u12xz stays`)

@@ -8,6 +8,10 @@ const SIMPLE_NOTIFICATION_ESCAPES: Record<string, string> = {
   t: '\t',
 }
 
+// These were emitted by the task Markdown serializer before ordinary text
+// escaping was removed. Decode them for display in notifications.
+const MARKDOWN_NOTIFICATION_ESCAPES = new Set('`*_{}[]()#+-.!>|')
+
 interface DecodedEscape {
   value: string
   length: number
@@ -30,12 +34,21 @@ function decodeEscapeAt(input: string, slashIndex: number, slashCount: 1 | 2): D
   }
 
   const value = SIMPLE_NOTIFICATION_ESCAPES[token]
-  if (value === undefined) return null
-
-  return {
-    value,
-    length: slashCount + 1,
+  if (value !== undefined) {
+    return {
+      value,
+      length: slashCount + 1,
+    }
   }
+
+  if (MARKDOWN_NOTIFICATION_ESCAPES.has(token)) {
+    return {
+      value: token,
+      length: slashCount + 1,
+    }
+  }
+
+  return null
 }
 
 export function decodeNotificationText(input: string | undefined | null): string {

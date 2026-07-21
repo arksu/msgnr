@@ -3760,9 +3760,9 @@ func (*PresenceHeartbeatRequest) Descriptor() ([]byte, []int) {
 	return file_api_proto_packets_proto_rawDescGZIP(), []int{23}
 }
 
-// A correlated request/ack pair used solely to verify that both WebSocket
-// directions remain usable. Unlike PresenceHeartbeatRequest, it has no
-// presence side effect.
+// A correlated request/ack pair used to verify that both WebSocket directions
+// remain usable. A successful request also renews the connection's presence
+// lease.
 type TransportHeartbeatRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields

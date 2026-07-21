@@ -300,7 +300,7 @@
             <button
               v-if="attachmentUrl(attachment)"
               data-testid="message-video-thumbnail"
-              class="block max-h-[min(42vh,260px)] max-w-[min(76vw,420px)] overflow-hidden rounded-lg border border-chat-border/70 bg-black/50 shadow-sm transition-colors hover:border-white/20 sm:max-w-[min(46vw,520px)] cursor-pointer"
+              class="relative block max-h-[min(42vh,260px)] max-w-[min(76vw,420px)] overflow-hidden rounded-lg border border-chat-border/70 bg-black/50 shadow-sm transition-colors hover:border-white/20 sm:max-w-[min(46vw,520px)] cursor-pointer"
               @click="openMediaPreview(attachment)"
             >
               <video
@@ -309,6 +309,17 @@
                 preload="metadata"
                 :src="attachmentUrl(attachment)"
               />
+              <span
+                data-testid="message-video-play-overlay"
+                aria-hidden="true"
+                class="pointer-events-none absolute inset-0 flex items-center justify-center"
+              >
+                <span class="flex h-12 w-12 items-center justify-center rounded-full border border-white/25 bg-black/55 text-white shadow-lg">
+                  <svg class="ml-0.5 h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M8 5.14v13.72a1 1 0 0 0 1.51.86l10.8-6.86a1 1 0 0 0 0-1.72L9.51 4.28A1 1 0 0 0 8 5.14Z" />
+                  </svg>
+                </span>
+              </span>
             </button>
             <p v-else class="rounded-md border border-chat-border bg-chat-input/70 p-2 text-[11px] text-gray-500">
               {{ loadingAttachmentIds.has(attachment.id) ? 'Loading video...' : 'Preview unavailable' }}

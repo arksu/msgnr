@@ -1020,6 +1020,28 @@ describe('MainView server unavailable state', () => {
     expect(wrapper.get('[data-testid="mode-dayoffs"]').classes()).toContain('bg-sidebar-active')
   })
 
+  it('toggles the Dayoffs sidebar from the collapse button', async () => {
+    const router = createMainRouter()
+    router.push('/dayoffs')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="dayoffs-sidebar"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="mode-collapse"]').trigger('click')
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="dayoffs-sidebar"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="mode-collapse"]').attributes('aria-label')).toBe('Expand sidebar')
+
+    await wrapper.get('[data-testid="mode-collapse"]').trigger('click')
+    await flushUi()
+
+    expect(wrapper.find('[data-testid="dayoffs-sidebar"]').exists()).toBe(true)
+  })
+
   it('reopens the active mode sidebar without changing the current sub-route', async () => {
     const router = createMainRouter()
     router.push('/tasks/kanban')

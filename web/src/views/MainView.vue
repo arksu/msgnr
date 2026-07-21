@@ -161,7 +161,7 @@
           @open-parent="openDocument"
         />
       </template>
-      <DayoffsShell v-else />
+      <DayoffsShell v-else :sidebar-collapsed="sidebarCollapsed" />
     </main>
     <PinnedDialogsHost />
     <MessageSearchDialog
@@ -676,8 +676,17 @@ function createDocumentsShellStub() {
 function createDayoffsShellStub() {
   return defineComponent({
     name: 'DayoffsShellStub',
-    setup() {
-      return () => h('section', { 'data-testid': 'dayoffs-mode' }, 'Dayoffs')
+    props: {
+      sidebarCollapsed: {
+        type: Boolean,
+        default: false,
+      },
+    },
+    setup(props) {
+      return () => h('section', { 'data-testid': 'dayoffs-mode' }, [
+        !props.sidebarCollapsed ? h('aside', { 'data-testid': 'dayoffs-sidebar' }) : null,
+        'Dayoffs',
+      ])
     },
   })
 }

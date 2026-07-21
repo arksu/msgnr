@@ -453,6 +453,30 @@ describe('wsStore state machine', () => {
     expect(store.state).toBe('AUTH_COMPLETE')
   })
 
+  it('uses the correlated transport heartbeat instead of the legacy presence heartbeat when both are supported', async () => {
+    vi.useFakeTimers()
+    const store = useWsStore()
+    store.connect('/ws')
+    mockSocket.simulateOpen()
+    mockSocket.simulateMessage(makeServerHelloEnvelope([
+      FeatureCapability.PRESENCE_HEARTBEAT,
+      FeatureCapability.TRANSPORT_HEARTBEAT,
+    ]))
+    store.sendAuth('my-access-token')
+    mockSocket.simulateMessage(makeAuthResponseEnvelope(true))
+
+    const firstHeartbeat = fromBinary(EnvelopeSchema, mockSocket.sent[mockSocket.sent.length - 1])
+    expect(firstHeartbeat.payload.case).toBe('transportHeartbeatRequest')
+    mockSocket.simulateMessage(makeTransportHeartbeatAckEnvelope(firstHeartbeat.requestId))
+    await Promise.resolve()
+
+    const sentBeforeInterval = mockSocket.sent.length
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(mockSocket.sent).toHaveLength(sentBeforeInterval + 1)
+    expect(decodePayloadType(mockSocket.sent[mockSocket.sent.length - 1])).toBe('transportHeartbeatRequest')
+  })
+
   it('invalidates a locally-open transport when its heartbeat ACK is missing despite inbound traffic', async () => {
     vi.useFakeTimers()
     const store = useWsStore()

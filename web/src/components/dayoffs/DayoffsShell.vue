@@ -1,6 +1,6 @@
 <template>
   <section class="flex h-full min-h-0 min-w-0 bg-app-bg" data-testid="dayoffs-mode" aria-label="Dayoffs calendar">
-    <aside class="flex w-60 shrink-0 flex-col border-r border-chat-border bg-sidebar-bg max-sm:w-52">
+    <aside v-if="!sidebarCollapsed" class="flex w-60 shrink-0 flex-col border-r border-chat-border bg-sidebar-bg max-sm:w-52" data-testid="dayoffs-sidebar">
       <div class="border-b border-chat-border px-4 py-4">
         <h1 class="text-base font-semibold text-app-text">Dayoffs</h1>
         <p class="mt-0.5 text-xs text-app-muted">Team availability calendar</p>
@@ -167,6 +167,12 @@ import DayoffsRecordList from './DayoffsRecordList.vue'
 import DayoffsTimeline from './DayoffsTimeline.vue'
 import { monthLabel } from './calendar'
 import { DAYOFF_TYPE_OPTIONS } from './dayoffPresentation'
+
+const props = withDefaults(defineProps<{
+  sidebarCollapsed?: boolean
+}>(), {
+  sidebarCollapsed: false,
+})
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()

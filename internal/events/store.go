@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -9,6 +10,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"msgnr/internal/metrics"
 )
+
+const workspacePresenceChannel = "workspace_presence"
+
+// PresenceNotification is an ephemeral, cross-instance snapshot. It is kept
+// out of workspace_events because presence is not part of ordered sync replay.
+type PresenceNotification struct {
+	UserID            string    `json:"user_id"`
+	EffectivePresence int32     `json:"effective_presence"`
+	LastActiveAt      time.Time `json:"last_active_at"`
+}
 
 // Store provides append-only access to workspace_events.
 type Store struct {
@@ -92,6 +103,19 @@ func (s *Store) NotifyEventTx(ctx context.Context, tx pgx.Tx, eventSeq int64) er
 		return fmt.Errorf("NotifyEventTx: %w", err)
 	}
 	metrics.EventNotifyTotal.WithLabelValues("success").Inc()
+	return nil
+}
+
+// NotifyPresence broadcasts a changed presence snapshot to every backend
+// instance listening on the shared Postgres database.
+func (s *Store) NotifyPresence(ctx context.Context, update PresenceNotification) error {
+	payload, err := json.Marshal(update)
+	if err != nil {
+		return fmt.Errorf("NotifyPresence marshal: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, `SELECT pg_notify('workspace_presence', $1)`, string(payload)); err != nil {
+		return fmt.Errorf("NotifyPresence: %w", err)
+	}
 	return nil
 }
 

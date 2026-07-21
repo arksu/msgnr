@@ -159,6 +159,37 @@ func TestFanout_OverflowClosesConn(t *testing.T) {
 	assert.Error(t, err, "expected connection closed after overflow")
 }
 
+func TestDirectEnvelope_PresenceOverflowForcesReconnect(t *testing.T) {
+	srv := newTestServer(nil)
+	userID := uuid.NewString()
+	outboundCh := make(chan outboundMsg, 1)
+	outboundCh <- outboundMsg{env: &packetspb.Envelope{}}
+
+	disconnectReasons := make(chan string, 1)
+	state := newSessionState(nil, true, func(reason string) {
+		disconnectReasons <- reason
+	})
+	unregister := srv.registerUserSession(userID, outboundCh, state)
+	defer unregister()
+
+	srv.sendDirectEnvelope([]string{userID}, &packetspb.Envelope{
+		ProtocolVersion: protocolVersion,
+		Payload: &packetspb.Envelope_PresenceEvent{
+			PresenceEvent: &packetspb.PresenceEvent{
+				UserId:            uuid.NewString(),
+				EffectivePresence: packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE,
+			},
+		},
+	})
+
+	select {
+	case reason := <-disconnectReasons:
+		assert.Equal(t, "direct_overflow", reason)
+	case <-time.After(2 * time.Second):
+		t.Fatal("presence overflow did not force reconnect")
+	}
+}
+
 func TestFanout_StopCompletesBeforeQueueClose(t *testing.T) {
 	bus := events.NewBus(zap.NewNop())
 	srv := newTestServer(bus)

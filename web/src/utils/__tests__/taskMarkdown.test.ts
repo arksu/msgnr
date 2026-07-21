@@ -56,6 +56,25 @@ describe('task markdown helpers', () => {
     expect(markdown).toContain('- [x] Second item')
   })
 
+  it('preserves ordinary punctuation in task description text', () => {
+    const markdown = tiptapJsonToMarkdown({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'text',
+              text: 'd_trades_done_amount = 2, current_limit_reached = TRUE.',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(markdown).toBe('d_trades_done_amount = 2, current_limit_reached = TRUE.')
+  })
+
   it('renders escaped br tokens inside markdown tables as line breaks', () => {
     const html = renderTaskMarkdownToHtml('| A |\n| --- |\n| one<br>two |')
 

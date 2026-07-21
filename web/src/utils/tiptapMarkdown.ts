@@ -4,12 +4,6 @@ interface MarkdownSerializeOptions {
   hardBreakStyle?: 'markdown' | 'newline'
 }
 
-function escapeMarkdownText(input: string): string {
-  return input
-    .replace(/\\/g, '\\\\')
-    .replace(/([`*_{}\[\]()#+\-.!>|])/g, '\\$1')
-}
-
 function extractText(node: JSONContent | null | undefined): string {
   if (!node) return ''
   if (node.type === 'text') return node.text ?? ''
@@ -25,7 +19,7 @@ function applyMarks(text: string, marks: JSONContent['marks']): string {
     return `\`${escaped}\``
   }
 
-  let out = escapeMarkdownText(text)
+  let out = text
 
   if (safeMarks.some(mark => mark.type === 'bold')) {
     out = `**${out}**`

@@ -235,6 +235,7 @@ type Server struct {
 	documentsSvc          *documents.Service
 	syncSvc               *syncsvc.Service
 	bus                   *events.Bus
+	eventStore            *events.Store
 	authorizeEvent        func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool
 	log                   *zap.Logger
 	sessionMu             sync.RWMutex
@@ -261,6 +262,7 @@ func NewServer(db *database.DB, cfg *config.Config, authSvc *auth.Service, boots
 		chatSvc:      chatSvc,
 		syncSvc:      syncSvc,
 		bus:          bus,
+		eventStore:   events.NewStore(db.Pool),
 		authorizeEvent: func(ctx context.Context, principal auth.Principal, evt *packetspb.ServerEvent) bool {
 			return authSvc.CanReceiveEvent(ctx, principal, evt)
 		},
@@ -365,14 +367,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		helloComplete            bool
-		authComplete             bool
-		principal                auth.Principal
-		unsubscribe              func()
-		fanoutDone               <-chan struct{}
-		unregisterSession        func()
-		presenceConnectionID     = uuid.New()
-		presenceHeartbeatCapable bool
+		helloComplete               bool
+		authComplete                bool
+		principal                   auth.Principal
+		unsubscribe                 func()
+		fanoutDone                  <-chan struct{}
+		unregisterSession           func()
+		presenceConnectionID        = uuid.New()
+		presenceLeaseRefreshCapable bool
 	)
 
 	defer func() {
@@ -451,7 +453,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 
 			accepted := negotiateCapabilities(clientHelloPayload.ClientHello.GetCapabilities())
-			presenceHeartbeatCapable = hasCapability(accepted, packetspb.FeatureCapability_FEATURE_CAPABILITY_PRESENCE_HEARTBEAT)
+			presenceLeaseRefreshCapable = hasCapability(accepted, packetspb.FeatureCapability_FEATURE_CAPABILITY_PRESENCE_HEARTBEAT) ||
+				hasCapability(accepted, packetspb.FeatureCapability_FEATURE_CAPABILITY_TRANSPORT_HEARTBEAT)
 			serverHello := &packetspb.ServerHello{
 				Server:          "msgnr",
 				ProtocolVersion: protocolVersion,
@@ -568,7 +571,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				unsubscribe, fanoutDone = s.startEventFanout(conn, principal, outboundCh, outboundQueueMax, state)
 			}
 			presenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := s.touchPresenceLease(presenceCtx, presenceConnectionID, principal.UserID, principal.SessionID, presenceHeartbeatCapable); err != nil {
+			if err := s.touchPresenceLease(presenceCtx, presenceConnectionID, principal.UserID, principal.SessionID, presenceLeaseRefreshCapable); err != nil {
 				s.log.Error("ws auth: failed to touch presence lease", zap.Error(err))
 			} else if snapshot, changed, err := s.recomputePresence(presenceCtx, principal.UserID); err != nil {
 				s.log.Error("ws auth: failed to recompute presence", zap.Error(err))
@@ -580,7 +583,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// State 3: Authenticated — domain payload dispatch.
-		s.handleDomainPayload(r.Context(), &env, principal, presenceConnectionID, presenceHeartbeatCapable, outboundCh, enqueue)
+		s.handleDomainPayload(r.Context(), &env, principal, presenceConnectionID, presenceLeaseRefreshCapable, outboundCh, enqueue)
 	}
 }
 
@@ -1540,6 +1543,41 @@ func (s *Server) expireStalePresenceLeases(ctx context.Context) error {
 }
 
 func (s *Server) broadcastPresence(ctx context.Context, userID uuid.UUID, snapshot presenceSnapshot) {
+	s.broadcastPresenceLocal(ctx, userID, snapshot)
+	if s.eventStore == nil {
+		return
+	}
+	if err := s.eventStore.NotifyPresence(ctx, events.PresenceNotification{
+		UserID:            userID.String(),
+		EffectivePresence: int32(snapshot.status),
+		LastActiveAt:      snapshot.lastActiveAt.UTC(),
+	}); err != nil {
+		s.log.Warn("ws: failed to notify cross-instance presence update", zap.String("user_id", userID.String()), zap.Error(err))
+	}
+}
+
+// HandlePresenceNotification forwards an update emitted by another backend to
+// sessions connected to this process. It deliberately does not notify again.
+func (s *Server) HandlePresenceNotification(update events.PresenceNotification) {
+	userID, err := uuid.Parse(update.UserID)
+	if err != nil {
+		s.log.Warn("ws: ignored presence update with invalid user id", zap.String("user_id", update.UserID), zap.Error(err))
+		return
+	}
+	status := packetspb.PresenceStatus(update.EffectivePresence)
+	if status != packetspb.PresenceStatus_PRESENCE_STATUS_ONLINE &&
+		status != packetspb.PresenceStatus_PRESENCE_STATUS_AWAY &&
+		status != packetspb.PresenceStatus_PRESENCE_STATUS_OFFLINE {
+		s.log.Warn("ws: ignored presence update with invalid status", zap.Int32("status", update.EffectivePresence))
+		return
+	}
+	s.broadcastPresenceLocal(context.Background(), userID, presenceSnapshot{
+		status:       status,
+		lastActiveAt: update.LastActiveAt,
+	})
+}
+
+func (s *Server) broadcastPresenceLocal(ctx context.Context, userID uuid.UUID, snapshot presenceSnapshot) {
 	recipients, err := s.sharedUserIDs(ctx, userID)
 	if err != nil {
 		s.log.Error("ws: sharedUserIDs presence error", zap.Error(err))
@@ -1560,6 +1598,64 @@ func (s *Server) broadcastPresence(ctx context.Context, userID uuid.UUID, snapsh
 		},
 	}
 	s.sendDirectEnvelope(recipients, env)
+}
+
+func (s *Server) sendDirectMessagePresenceSnapshot(ctx context.Context, userID uuid.UUID, enqueue func(*packetspb.Envelope) bool) {
+	if s == nil || s.db == nil || s.db.Pool == nil {
+		return
+	}
+	rows, err := s.db.Pool.Query(ctx, `
+		SELECT DISTINCT up.user_id, up.status, up.last_active_at
+		  FROM channel_members cm_self
+		  JOIN channels c ON c.id = cm_self.channel_id AND c.kind = 'dm'
+		  JOIN channel_members cm_other
+		    ON cm_other.channel_id = cm_self.channel_id
+		   AND cm_other.is_archived = false
+		   AND cm_other.user_id <> cm_self.user_id
+		  JOIN user_presence up ON up.user_id = cm_other.user_id
+		 WHERE cm_self.user_id = $1
+		   AND cm_self.is_archived = false`, userID)
+	if err != nil {
+		s.log.Warn("ws: failed to load DM presence snapshot", zap.String("user_id", userID.String()), zap.Error(err))
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var peerID uuid.UUID
+		var status string
+		var lastActiveAt time.Time
+		if err := rows.Scan(&peerID, &status, &lastActiveAt); err != nil {
+			s.log.Warn("ws: failed to scan DM presence snapshot", zap.Error(err))
+			return
+		}
+		if !enqueue(presenceEnvelope(peerID, presenceSnapshot{
+			status:       mapPresenceStatus(status),
+			lastActiveAt: lastActiveAt,
+		})) {
+			return
+		}
+	}
+	if err := rows.Err(); err != nil {
+		s.log.Warn("ws: failed to load DM presence snapshot", zap.String("user_id", userID.String()), zap.Error(err))
+	}
+}
+
+func presenceEnvelope(userID uuid.UUID, snapshot presenceSnapshot) *packetspb.Envelope {
+	var lastActiveAt *timestamppb.Timestamp
+	if !snapshot.lastActiveAt.IsZero() {
+		lastActiveAt = timestamppb.New(snapshot.lastActiveAt.UTC())
+	}
+	return &packetspb.Envelope{
+		ProtocolVersion: protocolVersion,
+		Payload: &packetspb.Envelope_PresenceEvent{
+			PresenceEvent: &packetspb.PresenceEvent{
+				UserId:            userID.String(),
+				EffectivePresence: snapshot.status,
+				LastActiveAt:      lastActiveAt,
+			},
+		},
+	}
 }
 
 func (s *Server) handleTypingRequest(ctx context.Context, principal auth.Principal, req *packetspb.TypingRequest, badReq func(string), forbidden func(string)) {
@@ -1708,7 +1804,7 @@ func (s *Server) handleDomainPayload(
 	env *packetspb.Envelope,
 	principal auth.Principal,
 	presenceConnectionID uuid.UUID,
-	presenceHeartbeatCapable bool,
+	presenceLeaseRefreshCapable bool,
 	outboundCh chan outboundMsg,
 	enqueue func(*packetspb.Envelope) bool,
 ) {
@@ -2414,7 +2510,7 @@ func (s *Server) handleDomainPayload(
 			badReq("presence_heartbeat_request: missing payload")
 			return
 		}
-		if err := s.touchPresenceLease(ctx, presenceConnectionID, principal.UserID, principal.SessionID, presenceHeartbeatCapable); err != nil {
+		if err := s.touchPresenceLease(ctx, presenceConnectionID, principal.UserID, principal.SessionID, presenceLeaseRefreshCapable); err != nil {
 			s.log.Error("ws: PresenceHeartbeat error", zap.Error(err))
 			badReq("presence_heartbeat_request: internal error")
 			return
@@ -2434,6 +2530,23 @@ func (s *Server) handleDomainPayload(
 			badReq("transport_heartbeat_request: missing payload")
 			return
 		}
+		// A correlated acknowledgement proves that the client and server can
+		// exchange data in both directions, so it is also the authoritative
+		// refresh for this connection's presence lease.
+		if err := s.touchPresenceLease(ctx, presenceConnectionID, principal.UserID, principal.SessionID, presenceLeaseRefreshCapable); err != nil {
+			s.log.Error("ws: TransportHeartbeat presence refresh error", zap.Error(err))
+			badReq("transport_heartbeat_request: internal error")
+			return
+		}
+		snapshot, changed, err := s.recomputePresence(ctx, principal.UserID)
+		if err != nil {
+			s.log.Error("ws: TransportHeartbeat presence recompute error", zap.Error(err))
+			badReq("transport_heartbeat_request: internal error")
+			return
+		}
+		if changed {
+			s.broadcastPresence(ctx, principal.UserID, snapshot)
+		}
 		enqueue(&packetspb.Envelope{
 			RequestId:       reqID,
 			TraceId:         traceID,
@@ -2442,6 +2555,7 @@ func (s *Server) handleDomainPayload(
 				TransportHeartbeatAck: &packetspb.TransportHeartbeatAck{},
 			},
 		})
+		s.sendDirectMessagePresenceSnapshot(ctx, principal.UserID, enqueue)
 
 	case *packetspb.Envelope_SetClientWindowActivityRequest:
 		req := p.SetClientWindowActivityRequest

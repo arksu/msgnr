@@ -190,7 +190,11 @@ export const useWsStore = defineStore('ws', () => {
   }
 
   function canRunPresenceHeartbeat(): boolean {
+    // Transport heartbeats are correlated and also refresh the presence lease.
+    // Use the legacy one-way heartbeat only with servers that do not negotiate
+    // the transport capability.
     return serverSupportsPresenceHeartbeat()
+      && !serverSupportsTransportHeartbeat()
       && authResult.value !== null
       && socket !== null
       && socket.readyState === WS_OPEN

@@ -42,7 +42,7 @@ const response = {
   ],
 }
 
-async function mountShell(role: 'member' | 'admin' = 'member') {
+async function mountShell(role: 'member' | 'admin' = 'member', sidebarCollapsed = false) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const authStore = useAuthStore()
@@ -58,6 +58,7 @@ async function mountShell(role: 'member' | 'admin' = 'member') {
 
   const wrapper = mount(DayoffsShell, {
     attachTo: document.body,
+    props: { sidebarCollapsed },
     global: { plugins: [pinia] },
   })
   await flushPromises()
@@ -137,6 +138,13 @@ describe('DayoffsShell', () => {
     await wrapper.get('[data-testid="dayoffs-employee-user-1"]').trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="dayoffs-add-selected"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('hides the employee panel when the modes rail is collapsed', async () => {
+    const wrapper = await mountShell('member', true)
+
+    expect(wrapper.find('[data-testid="dayoffs-sidebar"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

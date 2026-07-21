@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -26,10 +27,17 @@ type ListenerConfig struct {
 // Listener opens a dedicated Postgres connection, issues LISTEN workspace_events,
 // and publishes every committed event to the Bus.
 type Listener struct {
-	cfg   ListenerConfig
-	store *Store
-	bus   *Bus
-	log   *zap.Logger
+	cfg             ListenerConfig
+	store           *Store
+	bus             *Bus
+	log             *zap.Logger
+	presenceHandler func(PresenceNotification)
+}
+
+// SetPresenceHandler configures delivery of ephemeral cross-instance presence
+// updates. It must be called before Run.
+func (l *Listener) SetPresenceHandler(handler func(PresenceNotification)) {
+	l.presenceHandler = handler
 }
 
 // NewListener creates a Listener. Call Run to start the goroutine.
@@ -90,6 +98,9 @@ func (l *Listener) runOnce(ctx context.Context, lastDelivered *int64) error {
 	if _, err := conn.Exec(ctx, "LISTEN workspace_events"); err != nil {
 		return fmt.Errorf("LISTEN: %w", err)
 	}
+	if _, err := conn.Exec(ctx, "LISTEN workspace_presence"); err != nil {
+		return fmt.Errorf("LISTEN presence: %w", err)
+	}
 
 	l.log.Info("listener: connected and listening",
 		zap.Int64("last_delivered_seq", *lastDelivered),
@@ -107,6 +118,19 @@ func (l *Listener) runOnce(ctx context.Context, lastDelivered *int64) error {
 				return nil
 			}
 			return fmt.Errorf("WaitForNotification: %w", err)
+		}
+
+		if notification.Channel == workspacePresenceChannel {
+			if err := l.handlePresenceNotification(notification.Payload); err != nil {
+				metrics.EventListenerNotificationsTotal.WithLabelValues("presence_parse_error").Inc()
+				l.log.Warn("listener: invalid presence notification", zap.String("payload", notification.Payload), zap.Error(err))
+			} else {
+				metrics.EventListenerNotificationsTotal.WithLabelValues("presence_ok").Inc()
+			}
+			continue
+		}
+		if notification.Channel != "workspace_events" {
+			continue
 		}
 
 		seq, err := parseNotificationPayload(notification.Payload)
@@ -148,6 +172,21 @@ func (l *Listener) runOnce(ctx context.Context, lastDelivered *int64) error {
 			zap.String("event_id", stored.EventID),
 		)
 	}
+}
+
+func (l *Listener) handlePresenceNotification(payload string) error {
+	if l.presenceHandler == nil {
+		return nil
+	}
+	var update PresenceNotification
+	if err := json.Unmarshal([]byte(payload), &update); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+	if update.UserID == "" {
+		return fmt.Errorf("missing user_id")
+	}
+	l.presenceHandler(update)
+	return nil
 }
 
 // catchUp fetches all events after *lastDelivered and publishes them to the

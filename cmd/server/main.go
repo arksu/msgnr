@@ -70,13 +70,6 @@ func main() {
 	}
 	eventListener := events.NewListener(listenerCfg, eventStore, eventBus, log)
 
-	listenerCtx, listenerCancel := context.WithCancel(context.Background())
-	listenerStopped := make(chan struct{})
-	go func() {
-		defer close(listenerStopped)
-		eventListener.Run(listenerCtx)
-	}()
-
 	chatSvc := chat.NewService(db.Pool, eventStore)
 	chatSvc.SetLogger(log)
 	chatHandler := chat.NewHandler(chatSvc, authSvc, cfg)
@@ -88,6 +81,13 @@ func main() {
 	syncSvc := syncsvc.NewService(db.Pool, cfg, eventStore, authSvc.CanReceiveEvent)
 
 	wsServer := ws.NewServer(db, cfg, authSvc, bootstrapSvc, callSvc, chatSvc, syncSvc, eventBus)
+	eventListener.SetPresenceHandler(wsServer.HandlePresenceNotification)
+	listenerCtx, listenerCancel := context.WithCancel(context.Background())
+	listenerStopped := make(chan struct{})
+	go func() {
+		defer close(listenerStopped)
+		eventListener.Run(listenerCtx)
+	}()
 	chatHandler.SetNotifier(wsServer)
 
 	// Push notifications (Web Push / VAPID)

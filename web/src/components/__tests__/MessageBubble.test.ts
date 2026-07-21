@@ -914,6 +914,10 @@ describe('MessageBubble reactions', () => {
     expect(thumbnailVideo.classes()).toContain('object-contain')
     expect(thumbnailVideo.attributes('controls')).toBeUndefined()
 
+    const playOverlay = wrapper.get('[data-testid="message-video-play-overlay"]')
+    expect(playOverlay.attributes('aria-hidden')).toBe('true')
+    expect(playOverlay.classes()).toContain('pointer-events-none')
+
     await thumbnailButton.trigger('click')
     await flushAll()
 

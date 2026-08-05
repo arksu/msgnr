@@ -74,6 +74,14 @@
       <div class="flex items-center gap-2 shrink-0">
         <button
           type="button"
+          data-testid="task-copy-url"
+          class="btn-secondary text-xs"
+          @click="copyTaskUrl"
+        >
+          Copy task URL
+        </button>
+        <button
+          type="button"
           data-testid="task-export-pdf"
           class="btn-secondary text-xs"
           :disabled="exportingPdf"
@@ -663,6 +671,7 @@ import { useTaskDescriptionCollab, type TaskDescriptionCollabUser } from '@/comp
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
 import { getPlatformOrNull, initPlatform } from '@/platform'
 import { exportTaskToPdfBlob } from '@/services/taskPdfExport'
+import { taskSlugFromPublicId } from '@/services/taskRoute'
 import {
   clearSubtaskCreateDraft,
   loadSubtaskCreateDraft,
@@ -1104,6 +1113,18 @@ function exportTitleValue(): string {
     return draft
   }
   return task.value.title
+}
+
+async function copyTaskUrl() {
+  if (!task.value) return
+
+  const url = `${window.location.protocol}//${window.location.host}/tasks/${taskSlugFromPublicId(task.value.public_id)}`
+  try {
+    await navigator.clipboard.writeText(url)
+    chatStore.showToast('Task URL copied.')
+  } catch {
+    chatStore.showToast('Failed to copy task URL.')
+  }
 }
 
 async function exportTaskPdf() {

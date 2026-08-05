@@ -14,6 +14,7 @@ const platformMocks = vi.hoisted(() => ({
   initPlatform: vi.fn(),
   exportTaskToPdfBlob: vi.fn(),
 }))
+const clipboardWriteText = vi.fn()
 
 const selectedTask: Task = {
   id: 'task-1',
@@ -172,6 +173,7 @@ vi.mock('@/composables/useTaskDescriptionCollab', () => ({
     subscribeError: ref(''),
     serverMarkdown: ref<string | null>(null),
     allowLocalDraftSeed: ref(true),
+    hasRemotePeers: ref(false),
   }),
 }))
 
@@ -198,6 +200,10 @@ describe('TaskCard', () => {
   beforeEach(() => {
     storage.clear()
     vi.clearAllMocks()
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: clipboardWriteText },
+      configurable: true,
+    })
     const platform = {
       files: {
         saveBlob: vi.fn(async () => ({ saved: true })),
@@ -460,6 +466,7 @@ describe('TaskCard', () => {
     expect(loadSubtaskCreateDraft()).toEqual({
       title: 'Draft subtask',
       description: 'Draft subtask description',
+      stagedAttachments: [],
     })
   })
 
@@ -484,6 +491,7 @@ describe('TaskCard', () => {
     expect(loadSubtaskCreateDraft()).toEqual({
       title: '',
       description: '',
+      stagedAttachments: [],
     })
   })
 
@@ -508,6 +516,7 @@ describe('TaskCard', () => {
     expect(loadSubtaskCreateDraft()).toEqual({
       title: '',
       description: '',
+      stagedAttachments: [],
     })
   })
 
@@ -531,6 +540,7 @@ describe('TaskCard', () => {
     expect(loadSubtaskCreateDraft()).toEqual({
       title: 'Retry subtask',
       description: 'Retry subtask description',
+      stagedAttachments: [],
     })
   })
 
@@ -906,5 +916,17 @@ describe('TaskCard', () => {
       suggestedName: 'TASK-1.pdf',
       mimeType: 'application/pdf',
     }))
+  })
+
+  it('copies the canonical task URL using the current browser host', async () => {
+    const wrapper = mountTaskCard()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-copy-url"]').trigger('click')
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(
+      `${window.location.protocol}//${window.location.host}/tasks/task-1`,
+    )
+    expect(chatStoreMock.showToast).toHaveBeenCalledWith('Task URL copied.')
   })
 })

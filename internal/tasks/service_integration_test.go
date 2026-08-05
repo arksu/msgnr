@@ -1230,6 +1230,85 @@ func TestIntegration_Task_UpdateDescriptionOnly(t *testing.T) {
 	assert.Nil(t, cleared.Description)
 }
 
+func TestIntegration_TaskChangeHistoryRecordsCreationAndAllEditableFieldPaths(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	creator := seedUserProfile(t, ctx, pool, "history-creator@example.com", "History Creator", "/creator.png")
+	editor := seedUserProfile(t, ctx, pool, "history-editor@example.com", "History Editor", "/editor.png")
+	tpl := seedTemplate(t, ctx, svc, "HIS", creator)
+	open := seedStatus(t, ctx, svc, creator)
+	inProgress, err := svc.CreateStatus(ctx, tasks.CreateStatusParams{
+		Code: "in_progress", Name: "In progress", SortOrder: 2, ActorID: creator,
+	})
+	require.NoError(t, err)
+	priority, err := svc.CreateField(ctx, tasks.CreateFieldParams{
+		TemplateID: tpl.ID, Code: "priority", Name: "Priority", Type: "text", SortOrder: 1,
+	})
+	require.NoError(t, err)
+
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID,
+		Title:      "Original title",
+		StatusID:   open.ID,
+		ActorID:    creator,
+		FieldValues: []tasks.FieldValueInput{{
+			FieldDefinitionID: priority.ID,
+			ValueText:         strPtr("low"),
+		}},
+	})
+	require.NoError(t, err)
+
+	updatedTitle, err := svc.UpdateTaskTitle(ctx, created.ID, tasks.UpdateTaskTitleParams{
+		Title: "Updated title", IfUnmodifiedSince: created.UpdatedAt, ActorID: editor,
+	})
+	require.NoError(t, err)
+	_, _, err = svc.UpdateTaskStatus(ctx, created.ID, tasks.UpdateTaskStatusParams{StatusID: inProgress.ID, ActorID: editor})
+	require.NoError(t, err)
+	description := "# Updated\n\nCollaborative checkpoint"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{Description: &description, ActorID: editor})
+	require.NoError(t, err)
+	_, err = svc.UpdateTaskFieldValue(ctx, created.ID, priority.ID, tasks.UpdateTaskFieldValueParams{
+		ValueText: strPtr("high"), ActorID: editor,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Updated title", updatedTitle.Title)
+
+	page, err := svc.ListTaskChangeHistory(ctx, created.ID, "", 50)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 5)
+	assert.Empty(t, page.NextCursor)
+
+	byKey := make(map[string]tasks.TaskChangeHistoryItem, len(page.Items))
+	for _, item := range page.Items {
+		byKey[item.FieldKey] = item
+	}
+	createdEntry := byKey["task"]
+	assert.Equal(t, "created", createdEntry.ChangeKind)
+	assert.Equal(t, creator, createdEntry.Actor.ID)
+	assert.Equal(t, "History Creator", createdEntry.Actor.DisplayName)
+	assert.Equal(t, "title", byKey["title"].FieldKey)
+	assert.Equal(t, "status", byKey["status"].FieldKey)
+	assert.Equal(t, "description", byKey["description"].FieldKey)
+	assert.Equal(t, "Priority", byKey["field:"+priority.ID.String()].FieldName)
+	assert.Equal(t, editor, byKey["description"].Actor.ID)
+
+	var beforeTitle, afterTitle string
+	require.NoError(t, json.Unmarshal(byKey["title"].BeforeValue, &beforeTitle))
+	require.NoError(t, json.Unmarshal(byKey["title"].AfterValue, &afterTitle))
+	assert.Equal(t, "Original title", beforeTitle)
+	assert.Equal(t, "Updated title", afterTitle)
+
+	firstPage, err := svc.ListTaskChangeHistory(ctx, created.ID, "", 2)
+	require.NoError(t, err)
+	require.Len(t, firstPage.Items, 2)
+	require.NotEmpty(t, firstPage.NextCursor)
+	secondPage, err := svc.ListTaskChangeHistory(ctx, created.ID, firstPage.NextCursor, 2)
+	require.NoError(t, err)
+	require.NotEmpty(t, secondPage.Items)
+	assert.NotEqual(t, firstPage.Items[1].ID, secondPage.Items[0].ID)
+}
+
 func TestIntegration_Task_UpdateDescriptionOnly_NoopKeepsAuditAndHistoryStable(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
@@ -3950,7 +4029,7 @@ func TestIntegration_Attachment_UploadListDelete(t *testing.T) {
 	assert.Equal(t, content, got)
 
 	// Delete.
-	err = svc.DeleteAttachment(ctx, task.ID, row.ID)
+	err = svc.DeleteAttachment(ctx, task.ID, row.ID, actor)
 	require.NoError(t, err)
 
 	// List is now empty.
@@ -3961,6 +4040,62 @@ func TestIntegration_Attachment_UploadListDelete(t *testing.T) {
 	// Download after delete returns not found.
 	_, _, _, _, err = svc.DownloadAttachment(ctx, task.ID, row.ID)
 	require.ErrorIs(t, err, tasks.ErrNotFound)
+}
+
+func TestIntegration_AttachmentHistory_GroupsAddedFilesAndRecordsRemoval(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	minioClient := testdb.NewMinio(t)
+	svc := tasks.NewService(pool, minioClient)
+	creator := seedUser(t, ctx, pool)
+	remover := seedUser(t, ctx, pool)
+	tpl := seedTemplate(t, ctx, svc, "AHI", creator)
+	status := seedStatus(t, ctx, svc, creator)
+	task := seedTask(t, ctx, svc, tpl.ID, status.ID, creator, "Attachment history")
+
+	result, err := svc.UploadAttachments(ctx, tasks.UploadAttachmentsParams{
+		TaskID:  task.ID,
+		ActorID: creator,
+		Attachments: []tasks.UploadAttachmentBatchItem{
+			{FileName: "first.txt", MimeType: "text/plain", Size: 5, Body: bytes.NewReader([]byte("first"))},
+			{FileName: "second.pdf", MimeType: "application/pdf", Size: 6, Body: bytes.NewReader([]byte("second"))},
+			{FileName: "too-large.bin", MimeType: "application/octet-stream", Size: 2 * 1024 * 1024, Body: bytes.NewReader(make([]byte, 2*1024*1024))},
+		},
+	}, 1)
+	require.NoError(t, err)
+	require.Len(t, result.Attachments, 2)
+	require.Len(t, result.Errors, 1)
+	assert.Equal(t, "too-large.bin", result.Errors[0].FileName)
+
+	require.NoError(t, svc.DeleteAttachment(ctx, task.ID, result.Attachments[0].ID, remover))
+
+	history, err := svc.ListTaskChangeHistory(ctx, task.ID, "", 50)
+	require.NoError(t, err)
+	require.Len(t, history.Items, 3)
+	byType := make(map[string]tasks.TaskChangeHistoryItem, len(history.Items))
+	for _, item := range history.Items {
+		byType[item.FieldType] = item
+	}
+
+	added := byType["attachments_added"]
+	assert.Equal(t, creator, added.Actor.ID)
+	assert.Equal(t, "Attachments", added.FieldName)
+	var addedFiles []tasks.TaskHistoryAttachment
+	require.NoError(t, json.Unmarshal(added.AfterValue, &addedFiles))
+	require.Len(t, addedFiles, 2)
+	assert.Equal(t, "first.txt", addedFiles[0].FileName)
+	assert.Equal(t, "second.pdf", addedFiles[1].FileName)
+
+	removed := byType["attachments_removed"]
+	assert.Equal(t, remover, removed.Actor.ID)
+	var removedFiles []tasks.TaskHistoryAttachment
+	require.NoError(t, json.Unmarshal(removed.BeforeValue, &removedFiles))
+	require.Equal(t, []tasks.TaskHistoryAttachment{{
+		ID:       result.Attachments[0].ID,
+		FileName: "first.txt",
+		FileSize: 5,
+		MimeType: "text/plain",
+	}}, removedFiles)
 }
 
 func TestIntegration_TaskStagedAttachment_UploadCreateListDownload(t *testing.T) {
@@ -4011,6 +4146,16 @@ func TestIntegration_TaskStagedAttachment_UploadCreateListDownload(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, attachments, 1)
 	assert.Equal(t, staged.ID, attachments[0].ID)
+
+	history, err := svc.ListTaskChangeHistory(ctx, created.ID, "", 50)
+	require.NoError(t, err)
+	require.Len(t, history.Items, 1)
+	assert.Equal(t, "created", history.Items[0].ChangeKind)
+	var createdValue tasks.TaskHistoryCreatedValue
+	require.NoError(t, json.Unmarshal(history.Items[0].AfterValue, &createdValue))
+	require.Equal(t, []tasks.TaskHistoryAttachment{{
+		ID: staged.ID, FileName: "photo.png", FileSize: int64(len(content)), MimeType: "image/png",
+	}}, createdValue.Attachments)
 
 	body, _, _, fileName, err = svc.DownloadAttachment(ctx, created.ID, staged.ID)
 	require.NoError(t, err)
@@ -4188,7 +4333,7 @@ func TestIntegration_Attachment_DeleteUnknownReturnsNotFound(t *testing.T) {
 	status := seedStatus(t, ctx, svc, actor)
 	task := seedTask(t, ctx, svc, tpl.ID, status.ID, actor, "No attachment")
 
-	err := svc.DeleteAttachment(ctx, task.ID, uuid.New())
+	err := svc.DeleteAttachment(ctx, task.ID, uuid.New(), actor)
 	require.ErrorIs(t, err, tasks.ErrNotFound)
 }
 
@@ -4215,6 +4360,6 @@ func TestIntegration_Attachment_WrongTaskIDReturnsNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	// Attempting to access the attachment via task2's ID should return not found.
-	err = svc.DeleteAttachment(ctx, task2.ID, row.ID)
+	err = svc.DeleteAttachment(ctx, task2.ID, row.ID, actor)
 	require.ErrorIs(t, err, tasks.ErrNotFound)
 }

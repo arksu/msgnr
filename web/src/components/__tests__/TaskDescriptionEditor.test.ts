@@ -5,13 +5,13 @@ import * as Y from 'yjs'
 import { createPinia, setActivePinia } from 'pinia'
 import TaskDescriptionEditor from '@/components/tasks/TaskDescriptionEditor.vue'
 import TaskDescriptionRichEditor from '@/components/tasks/TaskDescriptionRichEditor.vue'
-import { fetchOwnedAttachmentBlob, uploadOwnedAttachment } from '@/services/http/attachmentOwnersApi'
+import { fetchOwnedAttachmentBlob, uploadOwnedAttachments } from '@/services/http/attachmentOwnersApi'
 import { createOrOpenDm } from '@/services/http/chatApi'
 import { tasksFetchStagedAttachmentBlob, tasksListTasks, tasksListUsers } from '@/services/http/tasksApi'
 import { resetDescriptionMentionCacheForTests } from '@/utils/descriptionMentions'
 
 vi.mock('@/services/http/attachmentOwnersApi', () => ({
-  uploadOwnedAttachment: vi.fn(),
+  uploadOwnedAttachments: vi.fn(),
   fetchOwnedAttachmentBlob: vi.fn(),
 }))
 
@@ -138,17 +138,18 @@ describe('TaskDescriptionEditor', () => {
   })
 
   it('uploads dropped files from the markdown tab and inserts tokens at the cursor', async () => {
-    vi.mocked(uploadOwnedAttachment)
-      .mockResolvedValueOnce({
+    vi.mocked(uploadOwnedAttachments).mockResolvedValue({
+      attachments: [{
         id: 'att-file',
         file_name: 'Spec.pdf',
         mime_type: 'application/pdf',
-      })
-      .mockResolvedValueOnce({
+      }, {
         id: 'att-image',
         file_name: 'Photo.png',
         mime_type: 'image/png',
-      })
+      }],
+      errors: [],
+    })
 
     const wrapper = mount(TaskDescriptionEditor, {
       props: {
@@ -179,30 +180,14 @@ describe('TaskDescriptionEditor', () => {
     expect(String(latest)).toMatch(/\[Spec\.pdf\].*!\[Photo\.png\]/s)
   })
 
-  it('uploads multiple files in parallel and preserves result order', async () => {
-    type UploadedAttachmentStub = {
-      id: string
-      file_name: string
-      mime_type: string
-    }
-
-    let firstResolverAssigned = false
-    let secondResolverAssigned = false
-    let resolveFirst: (value: UploadedAttachmentStub) => void = () => {
-      throw new Error('first resolver was not assigned')
-    }
-    let resolveSecond: (value: UploadedAttachmentStub) => void = () => {
-      throw new Error('second resolver was not assigned')
-    }
-    vi.mocked(uploadOwnedAttachment)
-      .mockImplementationOnce(() => new Promise<UploadedAttachmentStub>((resolve) => {
-        firstResolverAssigned = true
-        resolveFirst = resolve
-      }))
-      .mockImplementationOnce(() => new Promise<UploadedAttachmentStub>((resolve) => {
-        secondResolverAssigned = true
-        resolveSecond = resolve
-      }))
+  it('uploads one grouped selection and preserves the server result order', async () => {
+    vi.mocked(uploadOwnedAttachments).mockResolvedValue({
+      attachments: [
+        { id: 'att-file', file_name: 'Spec.pdf', mime_type: 'application/pdf' },
+        { id: 'att-image', file_name: 'Photo.png', mime_type: 'image/png' },
+      ],
+      errors: [],
+    })
 
     const wrapper = mount(TaskDescriptionEditor, {
       props: {
@@ -214,7 +199,7 @@ describe('TaskDescriptionEditor', () => {
     })
 
     const input = wrapper.get('[data-testid="task-description-markdown-input"]')
-    const pastePromise = input.trigger('paste', {
+    await input.trigger('paste', {
       clipboardData: {
         files: [
           new File(['pdf'], 'Spec.pdf', { type: 'application/pdf' }),
@@ -222,18 +207,9 @@ describe('TaskDescriptionEditor', () => {
         ],
       },
     })
-    await Promise.resolve()
-
-    expect(uploadOwnedAttachment).toHaveBeenNthCalledWith(1, 'task', 'task-1', expect.any(File))
-    expect(uploadOwnedAttachment).toHaveBeenNthCalledWith(2, 'task', 'task-1', expect.any(File))
-
-    expect(secondResolverAssigned).toBe(true)
-    expect(firstResolverAssigned).toBe(true)
-
-    resolveSecond({ id: 'att-image', file_name: 'Photo.png', mime_type: 'image/png' })
-    resolveFirst({ id: 'att-file', file_name: 'Spec.pdf', mime_type: 'application/pdf' })
-    await pastePromise
     await flushPromises()
+
+    expect(uploadOwnedAttachments).toHaveBeenCalledWith('task', 'task-1', [expect.any(File), expect.any(File)])
 
     const updates = wrapper.emitted('update:modelValue') ?? []
     const latest = updates[updates.length - 1]?.[0] as string
@@ -256,7 +232,7 @@ describe('TaskDescriptionEditor', () => {
     })
     await flushPromises()
 
-    expect(uploadOwnedAttachment).not.toHaveBeenCalled()
+    expect(uploadOwnedAttachments).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="task-description-attachment-note"]').text()).toContain('available after save')
   })
 
@@ -318,7 +294,7 @@ describe('TaskDescriptionEditor', () => {
     const latest = updates[updates.length - 1]?.[0] as string
     expect(uploadStaged).toHaveBeenCalledWith([expect.any(File)])
     expect(latest).toContain('![Photo.png](msgnr-staged-attachment://task/staged-1)')
-    expect(uploadOwnedAttachment).not.toHaveBeenCalled()
+    expect(uploadOwnedAttachments).not.toHaveBeenCalled()
   })
 
   it('syncs markdown-tab edits into the collab-backed rendered editor', async () => {

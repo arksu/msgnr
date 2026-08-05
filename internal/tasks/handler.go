@@ -30,6 +30,8 @@ type Handler struct {
 	groupPortionMaxLimit     int
 }
 
+const maxTaskAttachmentBatchFiles = 50
+
 // TaskStatusChangeNotifier broadcasts task status transitions to live clients.
 type TaskStatusChangeNotifier interface {
 	SendTaskStatusChanged(taskID, publicID, fromStatusID, toStatusID, updatedBy string, updatedAt time.Time)
@@ -814,6 +816,7 @@ func (h *Handler) tasksStatusRouter(w http.ResponseWriter, r *http.Request, _ au
 // GET /api/tasks/:id
 // PATCH /api/tasks/:id
 // PATCH /api/tasks/:id/title
+// GET /api/tasks/:id/history
 // GET /api/tasks/:id/description/history
 // PATCH /api/tasks/:id/description
 // PATCH /api/tasks/:id/status
@@ -871,6 +874,17 @@ func (h *Handler) tasksItem(w http.ResponseWriter, r *http.Request, p auth.Princ
 			return
 		}
 		h.taskDescriptionHistoryItem(w, r, p, id)
+		return
+	}
+
+	// Route /api/tasks/:id/history
+	if rawID, ok := strings.CutSuffix(rest, "/history"); ok {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid id"))
+			return
+		}
+		h.taskChangeHistoryItem(w, r, p, id)
 		return
 	}
 
@@ -1045,6 +1059,21 @@ func (h *Handler) taskDescriptionHistoryItem(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// GET /api/tasks/:id/history
+func (h *Handler) taskChangeHistoryItem(w http.ResponseWriter, r *http.Request, _ auth.Principal, id uuid.UUID) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	limit := clampInt(queryInt(r.URL.Query().Get("limit"), 50), 1, 100)
+	resp, err := h.svc.ListTaskChangeHistory(r.Context(), id, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // PATCH /api/tasks/:id/description
 func (h *Handler) taskDescriptionItem(w http.ResponseWriter, r *http.Request, p auth.Principal, id uuid.UUID) {
 	if r.Method != http.MethodPatch {
@@ -1201,8 +1230,9 @@ func (h *Handler) subtasksCollection(w http.ResponseWriter, r *http.Request, p a
 
 // taskAttachmentsRouter dispatches attachment sub-routes for a given task.
 //
-//	suffix == ""             → GET (list) or POST (upload)
-//	suffix == "/:aid"        → DELETE
+//	suffix == ""                 → GET (list) or POST (single upload)
+//	suffix == "/batch"           → POST (grouped upload)
+//	suffix == "/:aid"            → DELETE
 //	suffix == "/:aid/download" → GET (proxy download)
 func (h *Handler) taskAttachmentsRouter(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID uuid.UUID, suffix string) {
 	// Strip leading slash.
@@ -1226,6 +1256,14 @@ func (h *Handler) taskAttachmentsRouter(w http.ResponseWriter, r *http.Request, 
 		default:
 			methodNotAllowed(w)
 		}
+		return
+	}
+	if suffix == "batch" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		h.taskAttachmentBatchUpload(w, r, p, taskID)
 		return
 	}
 
@@ -1252,7 +1290,7 @@ func (h *Handler) taskAttachmentsRouter(w http.ResponseWriter, r *http.Request, 
 		methodNotAllowed(w)
 		return
 	}
-	if err := h.svc.DeleteAttachment(r.Context(), taskID, attachID); err != nil {
+	if err := h.svc.DeleteAttachment(r.Context(), taskID, attachID, p.UserID); err != nil {
 		h.serviceError(w, err)
 		return
 	}
@@ -1383,6 +1421,95 @@ func (h *Handler) taskAttachmentUpload(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	writeJSON(w, http.StatusCreated, row)
+}
+
+type multipartTaskAttachmentFile struct {
+	file     multipart.File
+	header   *multipart.FileHeader
+	mimeType string
+}
+
+// taskAttachmentBatchUpload accepts all files selected in one picker or drop
+// action. It returns per-file failures while the successful files produce one
+// grouped history entry.
+func (h *Handler) taskAttachmentBatchUpload(w http.ResponseWriter, r *http.Request, p auth.Principal, taskID uuid.UUID) {
+	files, err := parseMultipartTaskAttachmentFiles(w, r, h.maxAttachSizeMB)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
+		return
+	}
+	defer func() {
+		for _, item := range files {
+			_ = item.file.Close()
+		}
+	}()
+
+	maxBytes := int64(h.maxAttachSizeMB) * 1024 * 1024
+	items := make([]UploadAttachmentBatchItem, 0, len(files))
+	for _, item := range files {
+		counter := &countingReader{r: io.LimitReader(item.file, maxBytes+1)}
+		items = append(items, UploadAttachmentBatchItem{
+			FileName: item.header.Filename,
+			MimeType: item.mimeType,
+			Size:     -1,
+			Body:     counter,
+			Counter:  counter,
+		})
+	}
+
+	result, err := h.svc.UploadAttachments(r.Context(), UploadAttachmentsParams{
+		TaskID:      taskID,
+		ActorID:     p.UserID,
+		Attachments: items,
+	}, h.maxAttachSizeMB)
+	if err != nil {
+		h.serviceError(w, err)
+		return
+	}
+	if len(result.Attachments) > 0 {
+		writeJSON(w, http.StatusCreated, result)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func parseMultipartTaskAttachmentFiles(
+	w http.ResponseWriter,
+	r *http.Request,
+	maxAttachSizeMB int,
+) ([]multipartTaskAttachmentFile, error) {
+	maxBytes := int64(maxAttachSizeMB) * 1024 * 1024
+	formLimit := int64(maxTaskAttachmentBatchFiles)*(maxBytes+2*1024*1024) + 2*1024*1024
+	r.Body = http.MaxBytesReader(w, r.Body, formLimit)
+	if err := r.ParseMultipartForm(formLimit); err != nil {
+		return nil, fmt.Errorf("failed to parse multipart form: %w", err)
+	}
+	headers := r.MultipartForm.File["files"]
+	if len(headers) == 0 {
+		return nil, errors.New("missing 'files' field in form")
+	}
+	if len(headers) > maxTaskAttachmentBatchFiles {
+		return nil, fmt.Errorf("too many attachments (maximum %d)", maxTaskAttachmentBatchFiles)
+	}
+
+	files := make([]multipartTaskAttachmentFile, 0, len(headers))
+	for _, header := range headers {
+		file, err := header.Open()
+		if err != nil {
+			for _, opened := range files {
+				_ = opened.file.Close()
+			}
+			return nil, fmt.Errorf("open attachment: %w", err)
+		}
+		mimeType := header.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		files = append(files, multipartTaskAttachmentFile{
+			file: file, header: header, mimeType: mimeType,
+		})
+	}
+	return files, nil
 }
 
 // countingReader wraps an io.Reader and tracks how many bytes have been read.

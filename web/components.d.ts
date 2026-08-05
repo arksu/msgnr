@@ -50,6 +50,7 @@ declare module 'vue' {
     StatusesTab: typeof import('./src/components/admin/StatusesTab.vue')['default']
     TaskAttachments: typeof import('./src/components/tasks/TaskAttachments.vue')['default']
     TaskCard: typeof import('./src/components/tasks/TaskCard.vue')['default']
+    TaskChangeHistory: typeof import('./src/components/tasks/TaskChangeHistory.vue')['default']
     TaskComments: typeof import('./src/components/tasks/TaskComments.vue')['default']
     TaskCreateDialog: typeof import('./src/components/tasks/TaskCreateDialog.vue')['default']
     TaskDescriptionEditor: typeof import('./src/components/tasks/TaskDescriptionEditor.vue')['default']

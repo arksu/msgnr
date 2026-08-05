@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -286,6 +287,54 @@ type TaskDescriptionHistoryItem struct {
 	Editor      TaskDescriptionHistoryEditor `json:"editor"`
 }
 
+// TaskHistoryActor is the current public presentation of the user who made a
+// task change. Historical identity is stored by ID; avatar/name/status remain
+// consistent with the rest of the task UI.
+type TaskHistoryActor struct {
+	ID           uuid.UUID        `json:"id"`
+	DisplayName  string           `json:"display_name"`
+	AvatarURL    string           `json:"avatar_url"`
+	CustomStatus *userstatus.Body `json:"custom_status"`
+}
+
+// TaskChangeHistoryItem is one immutable task creation or field-change entry.
+// BeforeValue and AfterValue contain JSON scalars or arrays appropriate to
+// FieldType. Description values are Markdown strings.
+type TaskChangeHistoryItem struct {
+	ID          uuid.UUID        `json:"id"`
+	ChangeKind  string           `json:"change_kind"`
+	FieldKey    string           `json:"field_key"`
+	FieldName   string           `json:"field_name"`
+	FieldType   string           `json:"field_type"`
+	BeforeValue json.RawMessage  `json:"before_value"`
+	AfterValue  json.RawMessage  `json:"after_value"`
+	CreatedAt   time.Time        `json:"created_at"`
+	Actor       TaskHistoryActor `json:"actor"`
+}
+
+// TaskChangeHistoryPage is a cursor-paginated newest-first page.
+type TaskChangeHistoryPage struct {
+	Items      []TaskChangeHistoryItem `json:"items"`
+	NextCursor string                  `json:"next_cursor,omitempty"`
+}
+
+// TaskHistoryAttachment is immutable file metadata captured in task history.
+// It intentionally has no storage key: history must remain readable without
+// making a removed attachment downloadable.
+type TaskHistoryAttachment struct {
+	ID       uuid.UUID `json:"id"`
+	FileName string    `json:"file_name"`
+	FileSize int64     `json:"file_size"`
+	MimeType string    `json:"mime_type"`
+}
+
+// TaskHistoryCreatedValue carries details that belong to the initial task
+// creation event. Staged attachments are represented here rather than as
+// separate add events because they did not exist on an already-created task.
+type TaskHistoryCreatedValue struct {
+	Attachments []TaskHistoryAttachment `json:"attachments"`
+}
+
 // =========================================================
 // Attachment + Comment domain types (Phase 6)
 // =========================================================
@@ -370,6 +419,38 @@ type UploadAttachmentParams struct {
 	// when the true size is unknown upfront (the service will use ByteCounter).
 	Size int64
 	Body io.Reader
+}
+
+// UploadAttachmentBatchItem is one file in a grouped task attachment upload.
+// Counter is optional for known sizes, and required when Size is -1.
+type UploadAttachmentBatchItem struct {
+	FileName string
+	MimeType string
+	Size     int64
+	Body     io.Reader
+	Counter  ByteCounter
+}
+
+// UploadAttachmentsParams holds the shared task and actor data for one picker
+// or drop action. Successful items get one grouped history entry.
+type UploadAttachmentsParams struct {
+	TaskID      uuid.UUID
+	ActorID     uuid.UUID
+	Attachments []UploadAttachmentBatchItem
+}
+
+// AttachmentUploadError is a per-file failure returned by a batch upload.
+// It is intentionally user-safe and never contains object-store details.
+type AttachmentUploadError struct {
+	FileName string `json:"file_name"`
+	Message  string `json:"message"`
+}
+
+// AttachmentUploadResult reports successful task attachments alongside any
+// independently failed files from the same picker or drop action.
+type AttachmentUploadResult struct {
+	Attachments []AttachmentRow         `json:"attachments"`
+	Errors      []AttachmentUploadError `json:"errors"`
 }
 
 // UploadTaskStagedAttachmentParams carries inputs for pre-create image uploads.
@@ -1883,6 +1964,23 @@ func scanTaskStagedAttachment(scanner interface {
 	return row, err
 }
 
+func scanTaskAttachment(scanner interface {
+	Scan(dest ...any) error
+}) (AttachmentRow, error) {
+	var row AttachmentRow
+	err := scanner.Scan(
+		&row.ID,
+		&row.TaskID,
+		&row.FileName,
+		&row.FileSize,
+		&row.MimeType,
+		&row.StorageKey,
+		&row.UploadedBy,
+		&row.CreatedAt,
+	)
+	return row, err
+}
+
 // =========================================================
 // Tasks — Phase 3
 // =========================================================
@@ -1935,6 +2033,7 @@ func (s *Service) CreateTask(ctx context.Context, p CreateTaskParams) (TaskRespo
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	createdHistoryAttachments := make([]TaskHistoryAttachment, 0, len(stagedAttachmentIDs))
 	if len(stagedAttachmentIDs) > 0 {
 		rows, err := tx.Query(ctx,
 			`SELECT id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
@@ -1967,6 +2066,7 @@ func (s *Service) CreateTask(ctx context.Context, p CreateTaskParams) (TaskRespo
 			if !strings.HasPrefix(locked[id].MimeType, "image/") {
 				return TaskResponse{}, fmt.Errorf("%w: only image staged attachments are supported", ErrBadRequest)
 			}
+			createdHistoryAttachments = append(createdHistoryAttachments, taskHistoryAttachmentFromStaged(locked[id]))
 		}
 	}
 
@@ -2013,6 +2113,13 @@ func (s *Service) CreateTask(ctx context.Context, p CreateTaskParams) (TaskRespo
 
 	fieldValues, err := upsertFieldValuesInTx(ctx, tx, taskRow.ID, p.FieldValues)
 	if err != nil {
+		return TaskResponse{}, err
+	}
+	if err := recordTaskChangeInTx(
+		ctx, tx, taskRow.ID, p.ActorID,
+		"created", "task", "Task", "created", nil,
+		TaskHistoryCreatedValue{Attachments: createdHistoryAttachments},
+	); err != nil {
 		return TaskResponse{}, err
 	}
 
@@ -2448,8 +2555,10 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 		return TaskResponse{}, err
 	}
 	fieldTypes := make(map[uuid.UUID]string, len(defs))
+	fieldDefs := make(map[uuid.UUID]queries.TaskFieldDefinition, len(defs))
 	for _, def := range defs {
 		fieldTypes[def.ID] = def.Type
+		fieldDefs[def.ID] = def
 	}
 	for i, fv := range p.FieldValues {
 		p.FieldValues[i] = normalizeFieldValueInputForType(fieldTypes[fv.FieldDefinitionID], fv)
@@ -2464,6 +2573,17 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 		existing.StatusID == p.StatusID &&
 		taskFieldInputsEqual(existingFieldValues, p.FieldValues, fieldTypes) {
 		return s.GetTask(ctx, id)
+	}
+	var beforeStatus, afterStatus any
+	if existing.StatusID != p.StatusID {
+		beforeStatus, err = s.taskHistoryStatusValue(ctx, existing.StatusID)
+		if err != nil {
+			return TaskResponse{}, err
+		}
+		afterStatus, err = s.taskHistoryStatusValue(ctx, p.StatusID)
+		if err != nil {
+			return TaskResponse{}, err
+		}
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -2485,7 +2605,7 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 		return TaskResponse{}, mapTaskWriteError(err)
 	}
 
-	_, err = upsertFieldValuesInTx(ctx, tx, taskRow.ID, p.FieldValues)
+	updatedFieldValues, err := upsertFieldValuesInTx(ctx, tx, taskRow.ID, p.FieldValues)
 	if err != nil {
 		return TaskResponse{}, err
 	}
@@ -2498,6 +2618,64 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 		taskRow.ID, keepIDs,
 	); err != nil {
 		return TaskResponse{}, fmt.Errorf("tasks: delete stale field values: %w", err)
+	}
+
+	beforeTask := mapTask(existing)
+	if existing.Title != taskRow.Title {
+		if err := recordTaskChangeInTx(
+			ctx, tx, taskRow.ID, p.ActorID,
+			"field", "title", "Title", "text", existing.Title, taskRow.Title,
+		); err != nil {
+			return TaskResponse{}, err
+		}
+	}
+	if !nullStringsEqual(existing.Description, nullString(taskRow.Description)) {
+		if err := recordTaskChangeInTx(
+			ctx, tx, taskRow.ID, p.ActorID,
+			"field", "description", "Description", "markdown", beforeTask.Description, taskRow.Description,
+		); err != nil {
+			return TaskResponse{}, err
+		}
+	}
+	if existing.StatusID != taskRow.StatusID {
+		if err := recordTaskChangeInTx(
+			ctx, tx, taskRow.ID, p.ActorID,
+			"field", "status", "Status", "status", beforeStatus, afterStatus,
+		); err != nil {
+			return TaskResponse{}, err
+		}
+	}
+
+	beforeFields := make(map[uuid.UUID]FieldValueRow, len(existingFieldValues))
+	for _, value := range existingFieldValues {
+		beforeFields[value.FieldDefinitionID] = mapFieldValue(value)
+	}
+	afterFields := make(map[uuid.UUID]FieldValueRow, len(updatedFieldValues))
+	for _, value := range updatedFieldValues {
+		afterFields[value.FieldDefinitionID] = value
+	}
+	for fieldID, def := range fieldDefs {
+		beforeValue, hadBefore := beforeFields[fieldID]
+		afterValue, hasAfter := afterFields[fieldID]
+		var beforePtr, afterPtr *FieldValueRow
+		if hadBefore {
+			beforePtr = &beforeValue
+		}
+		if hasAfter {
+			afterPtr = &afterValue
+		}
+		beforeHistoryValue := taskHistoryFieldValue(def.Type, beforePtr)
+		afterHistoryValue := taskHistoryFieldValue(def.Type, afterPtr)
+		if taskHistoryValuesEqual(beforeHistoryValue, afterHistoryValue) {
+			continue
+		}
+		if err := recordTaskChangeInTx(
+			ctx, tx, taskRow.ID, p.ActorID,
+			"field", "field:"+fieldID.String(), def.Name, def.Type,
+			beforeHistoryValue, afterHistoryValue,
+		); err != nil {
+			return TaskResponse{}, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -2526,7 +2704,13 @@ func (s *Service) UpdateTaskTitle(ctx context.Context, id uuid.UUID, p UpdateTas
 		return s.GetTask(ctx, id)
 	}
 
-	taskRow, err := scanTask(s.pool.QueryRow(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TaskResponse{}, fmt.Errorf("tasks: begin update task title tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	taskRow, err := scanTask(tx.QueryRow(ctx,
 		`UPDATE task
 		 SET title = $2, updated_by = $3, updated_at = now()
 		 WHERE id = $1 AND updated_at = $4
@@ -2546,6 +2730,15 @@ func (s *Service) UpdateTaskTitle(ctx context.Context, id uuid.UUID, p UpdateTas
 		}
 		return TaskResponse{}, mapTaskWriteError(err)
 	}
+	if err := recordTaskChangeInTx(
+		ctx, tx, taskRow.ID, p.ActorID,
+		"field", "title", "Title", "text", current.Title, taskRow.Title,
+	); err != nil {
+		return TaskResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return TaskResponse{}, fmt.Errorf("tasks: commit update task title tx: %w", err)
+	}
 	return s.GetTask(ctx, taskRow.ID)
 }
 
@@ -2560,6 +2753,7 @@ func (s *Service) UpdateTaskDescription(ctx context.Context, id uuid.UUID, p Upd
 	if nullStringsEqual(current.Description, normalizeTaskDescriptionNullString(p.Description)) {
 		return s.GetTask(ctx, id)
 	}
+	beforeTask := mapTask(current)
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -2581,6 +2775,12 @@ func (s *Service) UpdateTaskDescription(ctx context.Context, id uuid.UUID, p Upd
 		return TaskResponse{}, mapTaskWriteError(err)
 	}
 	if err := s.maybeCreateTaskDescriptionSnapshotInTx(ctx, tx, taskRow, p.ActorID, p.ForceSnapshot); err != nil {
+		return TaskResponse{}, err
+	}
+	if err := recordTaskChangeInTx(
+		ctx, tx, taskRow.ID, p.ActorID,
+		"field", "description", "Description", "markdown", beforeTask.Description, taskRow.Description,
+	); err != nil {
 		return TaskResponse{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -2732,6 +2932,212 @@ func (s *Service) maybeCreateTaskDescriptionSnapshotInTx(
 	return nil
 }
 
+type taskHistoryCursor struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        uuid.UUID `json:"id"`
+}
+
+func encodeTaskHistoryCursor(createdAt time.Time, id uuid.UUID) (string, error) {
+	raw, err := json.Marshal(taskHistoryCursor{CreatedAt: createdAt, ID: id})
+	if err != nil {
+		return "", fmt.Errorf("tasks: encode history cursor: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func decodeTaskHistoryCursor(raw string) (*taskHistoryCursor, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid history cursor", ErrBadRequest)
+	}
+	var cursor taskHistoryCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || cursor.ID == uuid.Nil {
+		return nil, fmt.Errorf("%w: invalid history cursor", ErrBadRequest)
+	}
+	return &cursor, nil
+}
+
+func taskHistoryJSON(value any) (json.RawMessage, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: encode history value: %w", err)
+	}
+	return raw, nil
+}
+
+func recordTaskChangeInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	taskID, actorID uuid.UUID,
+	changeKind, fieldKey, fieldName, fieldType string,
+	before, after any,
+) error {
+	beforeJSON, err := taskHistoryJSON(before)
+	if err != nil {
+		return err
+	}
+	afterJSON, err := taskHistoryJSON(after)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO task_change_history
+		    (task_id, actor_id, change_kind, field_key, field_name, field_type, before_value, after_value)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)`,
+		taskID, actorID, changeKind, fieldKey, fieldName, fieldType,
+		string(beforeJSON), string(afterJSON),
+	); err != nil {
+		return fmt.Errorf("tasks: insert task history: %w", err)
+	}
+	return nil
+}
+
+func taskHistoryFieldValue(fieldType string, value *FieldValueRow) any {
+	if value == nil {
+		return nil
+	}
+	switch fieldType {
+	case "text", "enum":
+		if value.ValueText == nil {
+			return nil
+		}
+		return *value.ValueText
+	case "number":
+		if value.ValueNumber == nil {
+			return nil
+		}
+		return *value.ValueNumber
+	case "date":
+		if value.ValueDate == nil {
+			return nil
+		}
+		return *value.ValueDate
+	case "datetime":
+		if value.ValueDatetime == nil {
+			return nil
+		}
+		return value.ValueDatetime.UTC().Format(time.RFC3339Nano)
+	case "user":
+		if value.ValueUserID == nil {
+			return nil
+		}
+		return value.ValueUserID.String()
+	case "users", "multi_enum":
+		if len(value.ValueJSON) == 0 {
+			return nil
+		}
+		var decoded any
+		if err := json.Unmarshal(value.ValueJSON, &decoded); err != nil {
+			return string(value.ValueJSON)
+		}
+		return decoded
+	default:
+		return nil
+	}
+}
+
+func taskHistoryValuesEqual(left, right any) bool {
+	leftJSON, leftErr := taskHistoryJSON(left)
+	rightJSON, rightErr := taskHistoryJSON(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
+}
+
+func (s *Service) taskHistoryStatusValue(ctx context.Context, id uuid.UUID) (any, error) {
+	status, err := s.q.TaskStatusGet(ctx, id)
+	if err != nil {
+		return nil, mapNotFound(err, "status")
+	}
+	return map[string]string{
+		"id":   status.ID.String(),
+		"name": status.Name,
+	}, nil
+}
+
+// ListTaskChangeHistory returns a newest-first page of full task history.
+func (s *Service) ListTaskChangeHistory(
+	ctx context.Context,
+	taskID uuid.UUID,
+	cursorRaw string,
+	limit int,
+) (TaskChangeHistoryPage, error) {
+	if _, err := s.q.TaskGet(ctx, taskID); err != nil {
+		return TaskChangeHistoryPage{}, mapNotFound(err, "task")
+	}
+	cursor, err := decodeTaskHistoryCursor(cursorRaw)
+	if err != nil {
+		return TaskChangeHistoryPage{}, err
+	}
+	if limit < 1 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	args := []any{taskID, limit + 1}
+	where := "h.task_id = $1"
+	if cursor != nil {
+		args = []any{taskID, cursor.CreatedAt, cursor.ID, limit + 1}
+		where += " AND (h.created_at, h.id) < ($2, $3)"
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT h.id, h.change_kind, h.field_key, h.field_name, h.field_type,
+		        h.before_value, h.after_value, h.created_at,
+		        u.id, u.display_name, u.avatar_url,
+		        u.custom_status_text, u.custom_status_emoji, u.custom_status_expires_at
+		   FROM task_change_history h
+		   JOIN users u ON u.id = h.actor_id
+		  WHERE `+where+`
+		  ORDER BY h.created_at DESC, h.id DESC
+		  LIMIT $`+fmt.Sprint(len(args)),
+		args...,
+	)
+	if err != nil {
+		return TaskChangeHistoryPage{}, fmt.Errorf("tasks: list task history: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]TaskChangeHistoryItem, 0, limit+1)
+	now := time.Now().UTC()
+	for rows.Next() {
+		var (
+			item                                TaskChangeHistoryItem
+			customStatusText, customStatusEmoji string
+			customStatusExpiresAt               sql.NullTime
+		)
+		if err := rows.Scan(
+			&item.ID, &item.ChangeKind, &item.FieldKey, &item.FieldName, &item.FieldType,
+			&item.BeforeValue, &item.AfterValue, &item.CreatedAt,
+			&item.Actor.ID, &item.Actor.DisplayName, &item.Actor.AvatarURL,
+			&customStatusText, &customStatusEmoji, &customStatusExpiresAt,
+		); err != nil {
+			return TaskChangeHistoryPage{}, fmt.Errorf("tasks: scan task history: %w", err)
+		}
+		item.Actor.CustomStatus = userstatus.ToBody(userstatus.ActiveFromNullTime(
+			customStatusText, customStatusEmoji, customStatusExpiresAt, now,
+		))
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return TaskChangeHistoryPage{}, fmt.Errorf("tasks: iterate task history: %w", err)
+	}
+
+	page := TaskChangeHistoryPage{Items: items}
+	if len(items) > limit {
+		last := items[limit-1]
+		next, err := encodeTaskHistoryCursor(last.CreatedAt, last.ID)
+		if err != nil {
+			return TaskChangeHistoryPage{}, err
+		}
+		page.Items = items[:limit]
+		page.NextCursor = next
+	}
+	return page, nil
+}
+
 // UpdateTaskStatusParams carries inputs for a status-only task update.
 type UpdateTaskStatusParams struct {
 	StatusID uuid.UUID
@@ -2750,8 +3156,22 @@ func (s *Service) UpdateTaskStatus(ctx context.Context, id uuid.UUID, p UpdateTa
 		resp, err := s.GetTask(ctx, id)
 		return resp, previousStatusID, err
 	}
+	beforeStatus, err := s.taskHistoryStatusValue(ctx, before.StatusID)
+	if err != nil {
+		return TaskResponse{}, uuid.UUID{}, err
+	}
+	afterStatus, err := s.taskHistoryStatusValue(ctx, p.StatusID)
+	if err != nil {
+		return TaskResponse{}, uuid.UUID{}, err
+	}
 
-	taskRow, err := scanTask(s.pool.QueryRow(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TaskResponse{}, uuid.UUID{}, fmt.Errorf("tasks: begin update task status tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	taskRow, err := scanTask(tx.QueryRow(ctx,
 		`UPDATE task
 		 SET status_id = $2, updated_by = $3, updated_at = now()
 		 WHERE id = $1
@@ -2760,6 +3180,15 @@ func (s *Service) UpdateTaskStatus(ctx context.Context, id uuid.UUID, p UpdateTa
 	))
 	if err != nil {
 		return TaskResponse{}, uuid.UUID{}, mapTaskWriteError(err)
+	}
+	if err := recordTaskChangeInTx(
+		ctx, tx, taskRow.ID, p.ActorID,
+		"field", "status", "Status", "status", beforeStatus, afterStatus,
+	); err != nil {
+		return TaskResponse{}, uuid.UUID{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return TaskResponse{}, uuid.UUID{}, fmt.Errorf("tasks: commit update task status tx: %w", err)
 	}
 
 	resp, err := s.GetTask(ctx, taskRow.ID)
@@ -2830,6 +3259,22 @@ func (s *Service) UpdateTaskFieldValue(
 	})
 	if err != nil {
 		return FieldValueRow{}, err
+	}
+	var beforeValue *FieldValueRow
+	if found {
+		mapped := mapFieldValue(existingFieldValue)
+		beforeValue = &mapped
+	}
+	beforeHistoryValue := taskHistoryFieldValue(def.Type, beforeValue)
+	afterHistoryValue := taskHistoryFieldValue(def.Type, &fv)
+	if !taskHistoryValuesEqual(beforeHistoryValue, afterHistoryValue) {
+		if err := recordTaskChangeInTx(
+			ctx, tx, taskID, p.ActorID,
+			"field", "field:"+fieldDefinitionID.String(), def.Name, def.Type,
+			beforeHistoryValue, afterHistoryValue,
+		); err != nil {
+			return FieldValueRow{}, err
+		}
 	}
 
 	if _, err := tx.Exec(ctx,
@@ -4197,73 +4642,170 @@ func (s *Service) CleanupExpiredTaskStagedAttachments(ctx context.Context, ttl t
 	return deleted, nil
 }
 
-// UploadAttachment stores a file in object storage and records its metadata in
-// the database. counter must be non-nil when p.Size == -1; the actual byte
-// count is read from counter after streaming to detect over-limit uploads.
+// UploadAttachment stores one file and records a one-file added history entry.
+// It remains the compatibility API for callers that do not upload a picker
+// selection as a batch.
 func (s *Service) UploadAttachment(ctx context.Context, p UploadAttachmentParams, maxSizeMB int, counter ByteCounter) (*AttachmentRow, error) {
-	store, err := s.requireStore()
+	result, err := s.UploadAttachments(ctx, UploadAttachmentsParams{
+		TaskID:  p.TaskID,
+		ActorID: p.ActorID,
+		Attachments: []UploadAttachmentBatchItem{{
+			FileName: p.FileName,
+			MimeType: p.MimeType,
+			Size:     p.Size,
+			Body:     p.Body,
+			Counter:  counter,
+		}},
+	}, maxSizeMB)
 	if err != nil {
 		return nil, err
 	}
+	if len(result.Attachments) == 1 {
+		return &result.Attachments[0], nil
+	}
+	if len(result.Errors) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrBadRequest, result.Errors[0].Message)
+	}
+	return nil, fmt.Errorf("tasks: attachment upload produced no result")
+}
 
+// UploadAttachments stores a group of attachments from one picker or drop
+// action. Each invalid file is isolated, while all successful records and one
+// immutable "Attachments added" history entry commit in a single transaction.
+func (s *Service) UploadAttachments(
+	ctx context.Context,
+	p UploadAttachmentsParams,
+	maxSizeMB int,
+) (AttachmentUploadResult, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return AttachmentUploadResult{}, err
+	}
+	if len(p.Attachments) == 0 {
+		return AttachmentUploadResult{}, fmt.Errorf("%w: at least one attachment is required", ErrBadRequest)
+	}
+	if _, err := s.q.TaskGet(ctx, p.TaskID); err != nil {
+		return AttachmentUploadResult{}, mapNotFound(err, "task")
+	}
+
+	result := AttachmentUploadResult{
+		Attachments: make([]AttachmentRow, 0, len(p.Attachments)),
+		Errors:      make([]AttachmentUploadError, 0),
+	}
+	for _, item := range p.Attachments {
+		row, uploadErr := s.uploadAttachmentObject(ctx, store, p.TaskID, p.ActorID, item, maxSizeMB)
+		if uploadErr != nil {
+			result.Errors = append(result.Errors, AttachmentUploadError{
+				FileName: item.FileName,
+				Message:  attachmentUploadErrorMessage(uploadErr),
+			})
+			continue
+		}
+		result.Attachments = append(result.Attachments, row)
+	}
+	if len(result.Attachments) == 0 {
+		return result, nil
+	}
+
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		for _, row := range result.Attachments {
+			s.deleteObjectBestEffort(ctx, store, row.StorageKey)
+		}
+	}()
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return AttachmentUploadResult{}, fmt.Errorf("tasks: begin attachment upload tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var lockedTaskID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM task WHERE id = $1 FOR KEY SHARE`, p.TaskID).Scan(&lockedTaskID); err != nil {
+		return AttachmentUploadResult{}, mapNotFound(err, "task")
+	}
+	for index := range result.Attachments {
+		row := &result.Attachments[index]
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO task_attachment
+			    (id, task_id, file_name, file_size, mime_type, storage_key, uploaded_by)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 RETURNING created_at`,
+			row.ID, row.TaskID, row.FileName, row.FileSize, row.MimeType, row.StorageKey, row.UploadedBy,
+		).Scan(&row.CreatedAt); err != nil {
+			return AttachmentUploadResult{}, fmt.Errorf("tasks: create attachment record: %w", err)
+		}
+	}
+	if err := recordTaskChangeInTx(
+		ctx, tx, p.TaskID, p.ActorID,
+		"field", "attachments", "Attachments", "attachments_added", nil,
+		taskHistoryAttachments(result.Attachments),
+	); err != nil {
+		return AttachmentUploadResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AttachmentUploadResult{}, fmt.Errorf("tasks: commit attachment upload tx: %w", err)
+	}
+	committed = true
+	return result, nil
+}
+
+func (s *Service) uploadAttachmentObject(
+	ctx context.Context,
+	store Storage,
+	taskID, actorID uuid.UUID,
+	p UploadAttachmentBatchItem,
+	maxSizeMB int,
+) (AttachmentRow, error) {
 	if strings.TrimSpace(p.FileName) == "" {
-		return nil, fmt.Errorf("%w: file_name is required", ErrBadRequest)
+		return AttachmentRow{}, fmt.Errorf("%w: file_name is required", ErrBadRequest)
+	}
+	if p.MimeType == "" {
+		p.MimeType = "application/octet-stream"
 	}
 	maxBytes := int64(maxSizeMB) * 1024 * 1024
-
-	// When size is known upfront (e.g. tests passing a real value) do an early
-	// rejection before touching storage.
 	if p.Size >= 0 && p.Size > maxBytes {
-		return nil, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
+		return AttachmentRow{}, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
 	}
 
-	// Verify task exists.
-	if _, err := s.q.TaskGet(ctx, p.TaskID); err != nil {
-		return nil, mapNotFound(err, "task")
-	}
-
-	// Allocate the attachment ID before uploading so we can use it in the
-	// storage key, making the key fully deterministic.
-	attachID := uuid.New()
-
-	// Sanitise the file name for use in the storage key (keep the original
-	// display name in the DB; only the key needs to be safe for object stores).
-	safeFileName := sanitiseFileName(p.FileName)
-	storageKey := fmt.Sprintf("tasks/%s/%s/%s", p.TaskID, attachID, safeFileName)
-
+	attachmentID := uuid.New()
+	storageKey := fmt.Sprintf("tasks/%s/%s/%s", taskID, attachmentID, sanitiseFileName(p.FileName))
 	if err := store.PutObject(ctx, storageKey, p.Body, p.Size, p.MimeType); err != nil {
-		return nil, fmt.Errorf("tasks: upload attachment: %w", err)
+		return AttachmentRow{}, fmt.Errorf("tasks: upload attachment: %w", err)
 	}
 
-	// When streaming (Size == -1), verify the actual byte count now that
-	// PutObject has drained the reader.
 	actualSize := p.Size
-	if counter != nil {
-		actualSize = counter.BytesRead()
+	if p.Counter != nil {
+		actualSize = p.Counter.BytesRead()
 	}
 	if actualSize > maxBytes {
-		// Over the limit: delete the orphaned object and reject.
 		s.deleteObjectBestEffort(ctx, store, storageKey)
-		return nil, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
+		return AttachmentRow{}, fmt.Errorf("%w: file exceeds maximum allowed size of %d MB", ErrBadRequest, maxSizeMB)
+	}
+	if actualSize < 0 {
+		s.deleteObjectBestEffort(ctx, store, storageKey)
+		return AttachmentRow{}, fmt.Errorf("%w: file size is required", ErrBadRequest)
 	}
 
-	row, err := s.q.TaskAttachmentCreate(ctx, queries.TaskAttachmentCreateParams{
-		ID:         attachID,
-		TaskID:     p.TaskID,
+	return AttachmentRow{
+		ID:         attachmentID,
+		TaskID:     taskID,
 		FileName:   p.FileName,
 		FileSize:   actualSize,
 		MimeType:   p.MimeType,
 		StorageKey: storageKey,
-		UploadedBy: p.ActorID,
-	})
-	if err != nil {
-		// Best-effort cleanup of the orphaned object.
-		s.deleteObjectBestEffort(ctx, store, storageKey)
-		return nil, fmt.Errorf("tasks: create attachment record: %w", err)
-	}
+		UploadedBy: actorID,
+	}, nil
+}
 
-	out := mapAttachment(row)
-	return &out, nil
+func attachmentUploadErrorMessage(err error) string {
+	if errors.Is(err, ErrBadRequest) {
+		return strings.TrimPrefix(err.Error(), ErrBadRequest.Error()+": ")
+	}
+	return "Upload failed"
 }
 
 // ListAttachments returns all attachments for a task in upload order.
@@ -4305,8 +4847,9 @@ func (s *Service) DownloadAttachment(ctx context.Context, taskID, attachmentID u
 	return body, size, mimeType, row.FileName, nil
 }
 
-// DeleteAttachment removes an attachment from the database and then from object
-// storage.
+// DeleteAttachment removes an attachment and records its immutable metadata in
+// the same transaction. Object storage is cleaned up only after the metadata
+// and audit event have committed.
 //
 // Ordering rationale: the DB row is deleted first. If the subsequent storage
 // delete fails the object becomes an orphan (storage garbage), but the record
@@ -4315,13 +4858,25 @@ func (s *Service) DownloadAttachment(ctx context.Context, taskID, attachmentID u
 // record that points to a missing object — far worse, because every download
 // attempt would then surface a storage error. The storage orphan path is
 // self-contained and can be cleaned up by a background sweep if needed.
-func (s *Service) DeleteAttachment(ctx context.Context, taskID, attachmentID uuid.UUID) error {
+func (s *Service) DeleteAttachment(ctx context.Context, taskID, attachmentID, actorID uuid.UUID) error {
 	store, err := s.requireStore()
 	if err != nil {
 		return err
 	}
 
-	row, err := s.q.TaskAttachmentGet(ctx, attachmentID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("tasks: begin attachment delete tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	row, err := scanTaskAttachment(tx.QueryRow(ctx,
+		`SELECT id, task_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+		   FROM task_attachment
+		  WHERE id = $1
+		  FOR UPDATE`,
+		attachmentID,
+	))
 	if err != nil {
 		return mapNotFound(err, "attachment")
 	}
@@ -4330,11 +4885,21 @@ func (s *Service) DeleteAttachment(ctx context.Context, taskID, attachmentID uui
 	}
 
 	// Delete the DB record first.
-	if _, err = s.q.TaskAttachmentDelete(ctx, queries.TaskAttachmentDeleteParams{
-		ID:     attachmentID,
-		TaskID: taskID,
-	}); err != nil {
+	if _, err = tx.Exec(ctx,
+		`DELETE FROM task_attachment WHERE id = $1 AND task_id = $2`,
+		attachmentID, taskID,
+	); err != nil {
 		return fmt.Errorf("tasks: delete attachment record: %w", err)
+	}
+	if err := recordTaskChangeInTx(
+		ctx, tx, taskID, actorID,
+		"field", "attachments", "Attachments", "attachments_removed",
+		taskHistoryAttachments([]AttachmentRow{row}), nil,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("tasks: commit attachment delete tx: %w", err)
 	}
 
 	// Best-effort storage deletion. An orphaned object is a storage concern,
@@ -5182,6 +5747,32 @@ func mapAttachment(r queries.TaskAttachment) AttachmentRow {
 		UploadedBy: r.UploadedBy,
 		CreatedAt:  r.CreatedAt,
 	}
+}
+
+func taskHistoryAttachment(row AttachmentRow) TaskHistoryAttachment {
+	return TaskHistoryAttachment{
+		ID:       row.ID,
+		FileName: row.FileName,
+		FileSize: row.FileSize,
+		MimeType: row.MimeType,
+	}
+}
+
+func taskHistoryAttachmentFromStaged(row StagedAttachmentRow) TaskHistoryAttachment {
+	return TaskHistoryAttachment{
+		ID:       row.ID,
+		FileName: row.FileName,
+		FileSize: row.FileSize,
+		MimeType: row.MimeType,
+	}
+}
+
+func taskHistoryAttachments(rows []AttachmentRow) []TaskHistoryAttachment {
+	items := make([]TaskHistoryAttachment, len(rows))
+	for index, row := range rows {
+		items[index] = taskHistoryAttachment(row)
+	}
+	return items
 }
 
 func mapTaskStagedAttachment(r queries.TaskStagedAttachment) StagedAttachmentRow {

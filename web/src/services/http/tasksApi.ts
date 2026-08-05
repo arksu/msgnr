@@ -505,6 +505,30 @@ export interface TaskDescriptionHistoryItem {
   editor: TaskDescriptionHistoryEditor
 }
 
+export interface TaskHistoryActor {
+  id: string
+  display_name: string
+  avatar_url: string
+  custom_status?: UserCustomStatusDto | null
+}
+
+export interface TaskChangeHistoryItem {
+  id: string
+  change_kind: 'created' | 'field'
+  field_key: string
+  field_name: string
+  field_type: string
+  before_value: unknown
+  after_value: unknown
+  created_at: string
+  actor: TaskHistoryActor
+}
+
+export interface TaskChangeHistoryPage {
+  items: TaskChangeHistoryItem[]
+  next_cursor?: string
+}
+
 export interface UpdateTaskFieldValuePayload {
   value_text?: string | null
   value_number?: string | null
@@ -574,6 +598,16 @@ export async function tasksUpdateTaskDescription(id: string, payload: UpdateTask
 export async function tasksListTaskDescriptionHistory(id: string): Promise<TaskDescriptionHistoryItem[]> {
   try {
     const { data } = await http.get<TaskDescriptionHistoryItem[]>(`/api/tasks/${id}/description/history`)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function tasksListTaskChangeHistory(
+  id: string,
+  params?: { cursor?: string; limit?: number },
+): Promise<TaskChangeHistoryPage> {
+  try {
+    const { data } = await http.get<TaskChangeHistoryPage>(`/api/tasks/${id}/history`, { params })
     return data
   } catch (e) { handleError(e) }
 }
@@ -798,6 +832,16 @@ export interface TaskAttachment {
   created_at: string
 }
 
+export interface TaskAttachmentUploadError {
+  file_name: string
+  message: string
+}
+
+export interface TaskAttachmentUploadResult {
+  attachments: TaskAttachment[]
+  errors: TaskAttachmentUploadError[]
+}
+
 export interface TaskStagedAttachment {
   id: string
   file_name: string
@@ -849,6 +893,23 @@ export async function tasksUploadAttachment(taskId: string, file: File): Promise
     form.append('file', file, file.name)
     const { data } = await http.post<TaskAttachment>(
       `/api/tasks/${taskId}/attachments`,
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+    return data
+  } catch (e) { handleError(e) }
+}
+
+/** Upload all files selected in one task-attachment action as one audit event. */
+export async function tasksUploadAttachments(
+  taskId: string,
+  files: File[],
+): Promise<TaskAttachmentUploadResult> {
+  try {
+    const form = new FormData()
+    for (const file of files) form.append('files', file, file.name)
+    const { data } = await http.post<TaskAttachmentUploadResult>(
+      `/api/tasks/${taskId}/attachments/batch`,
       form,
       { headers: { 'Content-Type': 'multipart/form-data' } },
     )

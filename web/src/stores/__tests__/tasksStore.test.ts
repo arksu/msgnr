@@ -35,6 +35,7 @@ vi.mock('@/services/http/tasksApi', () => ({
   tasksUpdateTaskStatus: vi.fn(),
   tasksUpdateTaskDescription: vi.fn(),
   tasksListTaskDescriptionHistory: vi.fn(async () => []),
+  tasksListTaskChangeHistory: vi.fn(async () => ({ items: [] })),
   tasksUpdateTaskFieldValue: vi.fn(),
   tasksCreateSubtask: vi.fn(),
   tasksListTasks: vi.fn(async () => ({ groups: [], grand_total: 0 })),

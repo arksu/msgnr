@@ -948,6 +948,31 @@ CREATE TABLE IF NOT EXISTS task_description_history (
 CREATE INDEX IF NOT EXISTS idx_task_description_history_public_created
     ON task_description_history (public_id, created_at DESC);
 
+-- Append-only, field-level task history. Values are JSON so a historical row
+-- remains readable even when a task field evolves after the change.
+CREATE TABLE IF NOT EXISTS task_change_history (
+    id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id      uuid        NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+    actor_id     uuid        NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    change_kind  varchar(32) NOT NULL,
+    field_key    varchar(128) NOT NULL,
+    field_name   varchar(255) NOT NULL,
+    field_type   varchar(64) NOT NULL,
+    before_value jsonb       NOT NULL DEFAULT 'null'::jsonb,
+    after_value  jsonb       NOT NULL DEFAULT 'null'::jsonb,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT chk_task_change_history_kind
+        CHECK (change_kind IN ('created', 'field')),
+    CONSTRAINT chk_task_change_history_field_key_nonempty
+        CHECK (btrim(field_key) <> ''),
+    CONSTRAINT chk_task_change_history_field_name_nonempty
+        CHECK (btrim(field_name) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_change_history_task_created
+    ON task_change_history (task_id, created_at DESC, id DESC);
+
 -- Atomically allocate the next sequence number for a template and set public_id.
 -- Also blocks inserts against a soft-deleted template.
 CREATE OR REPLACE FUNCTION assign_task_public_id()

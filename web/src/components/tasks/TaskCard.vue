@@ -98,7 +98,7 @@
     </div>
 
     <!-- Body -->
-    <div class="flex-1 overflow-y-auto px-6 py-4 space-y-5">
+    <div ref="taskBodyRef" class="flex-1 overflow-y-auto px-6 py-4 space-y-5">
 
       <!-- Status row -->
       <div class="flex items-center gap-6 flex-wrap">
@@ -359,18 +359,7 @@
       <!-- Description -->
       <div class="border-t border-chat-border pt-4">
         <div class="field-label flex items-center justify-between gap-2">
-          <div class="flex items-center gap-2">
-            <span>Description</span>
-            <button
-              type="button"
-              data-testid="task-description-history-toggle"
-              class="rounded border border-chat-border px-2 py-0.5 text-[11px] normal-case tracking-normal text-gray-300 hover:text-white hover:border-accent/50 transition-colors"
-              title="Description history"
-              @click="openDescriptionHistoryModal"
-            >
-              History
-            </button>
-          </div>
+          <span>Description</span>
           <span v-if="descriptionSaving" class="text-[11px] text-gray-500 normal-case tracking-normal">Saving...</span>
         </div>
         <TaskDescriptionEditor
@@ -405,11 +394,6 @@
       <!-- Attachments -->
       <div class="border-t border-chat-border pt-4">
         <TaskAttachments :task-id="task.id" />
-      </div>
-
-      <!-- Comments -->
-      <div class="border-t border-chat-border pt-4">
-        <TaskComments :task-id="task.id" />
       </div>
 
       <!-- Meta -->
@@ -451,6 +435,13 @@
           </div>
         </div>
       </div>
+
+      <!-- Comments -->
+      <div class="border-t border-chat-border pt-4">
+        <TaskComments :task-id="task.id" />
+      </div>
+
+      <TaskChangeHistory :task-id="task.id" :scroll-root="taskBodyRef" />
     </div>
   </div>
 
@@ -687,6 +678,7 @@ import TaskDescriptionEditor from './TaskDescriptionEditor.vue'
 import TaskFieldInput from './TaskFieldInput.vue'
 import TaskAttachments from './TaskAttachments.vue'
 import TaskComments from './TaskComments.vue'
+import TaskChangeHistory from './TaskChangeHistory.vue'
 import UserAvatar from '../UserAvatar.vue'
 import {
   formatUserCustomStatusTitle,
@@ -732,6 +724,7 @@ const descriptionRestoreError = ref('')
 const descriptionEditorRenderKey = ref(0)
 const descriptionForceLocalSyncToken = ref(0)
 const exportingPdf = ref(false)
+const taskBodyRef = ref<HTMLElement | null>(null)
 let descriptionDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionMaxFlushTimer: ReturnType<typeof setTimeout> | null = null
 let descriptionRetryTimer: ReturnType<typeof setTimeout> | null = null

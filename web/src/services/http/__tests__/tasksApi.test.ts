@@ -122,6 +122,31 @@ describe('tasksApi task list queries', () => {
     expect(getMock).toHaveBeenCalledWith('/api/tasks/task-1/description/history')
   })
 
+  it('requests task change history with cursor pagination', async () => {
+    getMock.mockResolvedValueOnce({ data: { items: [], next_cursor: 'next' } })
+    const { tasksListTaskChangeHistory } = await import('@/services/http/tasksApi')
+
+    await tasksListTaskChangeHistory('task-1', { cursor: 'cursor-1', limit: 50 })
+
+    expect(getMock).toHaveBeenCalledWith('/api/tasks/task-1/history', {
+      params: { cursor: 'cursor-1', limit: 50 },
+    })
+  })
+
+  it('uploads one task picker selection through the grouped attachment endpoint', async () => {
+    postMock.mockResolvedValueOnce({ data: { attachments: [], errors: [] } })
+    const { tasksUploadAttachments } = await import('@/services/http/tasksApi')
+    const first = new File(['one'], 'one.txt', { type: 'text/plain' })
+    const second = new File(['two'], 'two.txt', { type: 'text/plain' })
+
+    await tasksUploadAttachments('task-1', [first, second])
+
+    const [url, form, config] = postMock.mock.calls[0]
+    expect(url).toBe('/api/tasks/task-1/attachments/batch')
+    expect([...((form as FormData).getAll('files'))].map(file => (file as File).name)).toEqual(['one.txt', 'two.txt'])
+    expect(config).toEqual({ headers: { 'Content-Type': 'multipart/form-data' } })
+  })
+
   it('forwards force_snapshot for PATCH /api/tasks/:id/description', async () => {
     patchMock.mockResolvedValueOnce({ data: { id: 'task-1', description: 'x', updated_at: '2026-01-01T00:00:00Z' } })
     const { tasksUpdateTaskDescription } = await import('@/services/http/tasksApi')

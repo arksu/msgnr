@@ -333,6 +333,19 @@ type TaskAttachment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type TaskChangeHistory struct {
+	ID          uuid.UUID       `json:"id"`
+	TaskID      uuid.UUID       `json:"task_id"`
+	ActorID     uuid.UUID       `json:"actor_id"`
+	ChangeKind  string          `json:"change_kind"`
+	FieldKey    string          `json:"field_key"`
+	FieldName   string          `json:"field_name"`
+	FieldType   string          `json:"field_type"`
+	BeforeValue json.RawMessage `json:"before_value"`
+	AfterValue  json.RawMessage `json:"after_value"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
 type TaskComment struct {
 	ID                  uuid.UUID     `json:"id"`
 	TaskID              uuid.UUID     `json:"task_id"`

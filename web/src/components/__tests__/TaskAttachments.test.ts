@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import TaskAttachments from '@/components/tasks/TaskAttachments.vue'
-import { tasksListAttachments, tasksUploadAttachment } from '@/services/http/tasksApi'
+import { tasksListAttachments, tasksUploadAttachments } from '@/services/http/tasksApi'
 
 vi.mock('@/services/http/tasksApi', () => ({
   tasksListAttachments: vi.fn(),
   tasksUploadAttachment: vi.fn(),
+  tasksUploadAttachments: vi.fn(),
   tasksDeleteAttachment: vi.fn(),
   tasksDownloadAttachment: vi.fn(),
 }))
@@ -24,14 +25,17 @@ describe('TaskAttachments', () => {
 
   it('uploads files dropped on the attachment area', async () => {
     const file = new File(['png'], 'photo.png', { type: 'image/png' })
-    vi.mocked(tasksUploadAttachment).mockResolvedValue({
-      id: 'att-1',
-      task_id: 'task-1',
-      file_name: 'photo.png',
-      file_size: 3,
-      mime_type: 'image/png',
-      uploaded_by: 'user-1',
-      created_at: '2026-03-11T00:00:00Z',
+    vi.mocked(tasksUploadAttachments).mockResolvedValue({
+      attachments: [{
+        id: 'att-1',
+        task_id: 'task-1',
+        file_name: 'photo.png',
+        file_size: 3,
+        mime_type: 'image/png',
+        uploaded_by: 'user-1',
+        created_at: '2026-03-11T00:00:00Z',
+      }],
+      errors: [],
     })
 
     const wrapper = mount(TaskAttachments, {
@@ -47,7 +51,7 @@ describe('TaskAttachments', () => {
     })
     await wrapper.vm.$nextTick()
 
-    expect(tasksUploadAttachment).toHaveBeenCalledWith('task-1', file)
+    expect(tasksUploadAttachments).toHaveBeenCalledWith('task-1', [file])
     expect(wrapper.text()).toContain('photo.png')
   })
 
@@ -65,6 +69,6 @@ describe('TaskAttachments', () => {
       },
     })
 
-    expect(tasksUploadAttachment).not.toHaveBeenCalled()
+    expect(tasksUploadAttachments).not.toHaveBeenCalled()
   })
 })

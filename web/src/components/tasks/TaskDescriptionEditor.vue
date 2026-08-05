@@ -89,7 +89,7 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch }
 import type { Doc as YDoc } from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
 import AttachmentMarkdownContent from '@/components/AttachmentMarkdownContent.vue'
-import { uploadOwnedAttachment, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
+import { uploadOwnedAttachments, type OwnedAttachmentUpload } from '@/services/http/attachmentOwnersApi'
 import {
   buildAttachmentMarkdown,
   buildTaskStagedAttachmentMarkdown,
@@ -262,9 +262,14 @@ async function uploadAttachments(files: File[]): Promise<OwnedAttachmentUpload[]
 
   setAttachmentNotice(`Uploading ${files.length === 1 ? 'attachment' : `${files.length} attachments`}...`)
   try {
-    const uploaded = await Promise.all(files.map(file => uploadOwnedAttachment(ownerKind, ownerId, file)))
-    clearAttachmentNotice()
-    return uploaded
+    const result = await uploadOwnedAttachments(ownerKind, ownerId, files)
+    if (result.errors.length) {
+      const names = result.errors.map(error => error.file_name).filter(Boolean).join(', ')
+      setAttachmentNotice(`${names || 'Some attachments'} failed to upload.`, true)
+    } else {
+      clearAttachmentNotice()
+    }
+    return result.attachments.length ? result.attachments : null
   } catch (error) {
     setAttachmentNotice(error instanceof Error ? error.message : 'Attachment upload failed', true)
     return null

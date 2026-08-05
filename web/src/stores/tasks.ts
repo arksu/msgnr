@@ -17,6 +17,7 @@ import {
   tasksUpdateTaskStatus,
   tasksUpdateTaskDescription,
   tasksListTaskDescriptionHistory,
+  tasksListTaskChangeHistory,
   tasksUpdateTaskFieldValue,
   tasksCreateSubtask,
   tasksListTasks,
@@ -36,6 +37,7 @@ import {
   type TaskGroupedItem,
   type TaskGroupedStatusBucket,
   type TaskDescriptionHistoryItem,
+  type TaskChangeHistoryPage,
   type SortOrder,
   type CreateTaskPayload,
   type UpdateTaskPayload,
@@ -539,6 +541,13 @@ export const useTasksStore = defineStore('tasks', () => {
     return tasksListTaskDescriptionHistory(id)
   }
 
+  async function listTaskChangeHistory(
+    id: string,
+    params?: { cursor?: string; limit?: number },
+  ): Promise<TaskChangeHistoryPage> {
+    return tasksListTaskChangeHistory(id, params)
+  }
+
   async function updateTaskFieldValue(
     taskId: string,
     fieldId: string,
@@ -890,6 +899,7 @@ export const useTasksStore = defineStore('tasks', () => {
     updateTaskStatus,
     updateTaskDescription,
     listTaskDescriptionHistory,
+    listTaskChangeHistory,
     updateTaskFieldValue,
     createSubtask,
     clearSelectedTask,

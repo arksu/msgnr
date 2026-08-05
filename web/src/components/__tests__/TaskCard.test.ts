@@ -2,7 +2,7 @@ import { reactive, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskCard from '@/components/tasks/TaskCard.vue'
-import type { Task, TaskDescriptionHistoryItem } from '@/services/http/tasksApi'
+import type { Task } from '@/services/http/tasksApi'
 import {
   loadSubtaskCreateDraft,
   saveSubtaskCreateDraft,
@@ -129,7 +129,7 @@ const tasksStoreMock = reactive({
   updateTaskTitle: vi.fn(async () => selectedTask),
   updateTaskStatus: vi.fn(async () => selectedTask),
   updateTaskDescription: vi.fn(async () => selectedTask),
-  listTaskDescriptionHistory: vi.fn(async (): Promise<TaskDescriptionHistoryItem[]> => []),
+  listTaskChangeHistory: vi.fn(async () => ({ items: [] })),
   updateTaskFieldValue: vi.fn(async () => ({})),
   createSubtask: vi.fn(async () => ({})),
   selectTask: vi.fn(async () => {}),
@@ -214,7 +214,6 @@ describe('TaskCard', () => {
     platformMocks.exportTaskToPdfBlob.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }))
     tasksStoreMock.activeTemplates = [...baseTemplates]
     tasksStoreMock.activeStatuses = [...baseStatuses]
-    tasksStoreMock.listTaskDescriptionHistory = vi.fn(async (): Promise<TaskDescriptionHistoryItem[]> => [])
     tasksStoreMock.createSubtask.mockImplementation(async () => ({}))
     tasksStoreMock.selectedTask = {
       ...selectedTask,
@@ -780,107 +779,23 @@ describe('TaskCard', () => {
     expect(wrapper.text()).toMatch(/3\/10\/2026|2026-03-10/)
   })
 
-  it('opens history modal, updates preview on item click, and applies with force snapshot', async () => {
-    tasksStoreMock.listTaskDescriptionHistory = vi.fn(async () => [
-      {
-        public_id: 'TASK-1',
-        title: 'Newest title',
-        description: '## Newest\n\nKeep line\n\nAdded line',
-        edited_by: 'u-2',
-        created_at: '2026-03-11T10:00:00Z',
-        editor: {
-          id: 'u-2',
-          display_name: 'Editor User',
-          avatar_url: '',
-        },
-      },
-      {
-        public_id: 'TASK-1',
-        title: 'Older title',
-        description: '## Older\n\nKeep line',
-        edited_by: 'u-3',
-        created_at: '2026-03-10T10:00:00Z',
-        editor: {
-          id: 'u-3',
-          display_name: 'Another User',
-          avatar_url: '',
-        },
-      },
-      {
-        public_id: 'TASK-1',
-        title: 'Seed title',
-        description: 'Seed only',
-        edited_by: 'u-1',
-        created_at: '2026-03-09T10:00:00Z',
-        editor: {
-          id: 'u-1',
-          display_name: 'Creator User',
-          avatar_url: '',
-        },
-      },
-    ])
-
+  it('removes the legacy description history modal control', async () => {
     const wrapper = mount(TaskCard, {
       props: { templateFilter: null },
-      attachTo: document.body,
       global: {
         stubs: {
           TaskFieldInput: true,
           UserAvatar: true,
           TaskAttachments: true,
           TaskComments: true,
-          TaskDescriptionEditor: {
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-            template: '<textarea data-testid="description-stub" :value="modelValue" />',
-          },
+          TaskDescriptionEditor: true,
         },
       },
     })
     await flushPromises()
 
-    await wrapper.get('[data-testid="task-description-history-toggle"]').trigger('click')
-    await flushPromises()
-    expect(tasksStoreMock.listTaskDescriptionHistory).toHaveBeenCalledWith('task-1')
-    expect(document.body.querySelector('[data-testid="task-description-restore-modal"] > div')?.className).toContain('w-[90vw]')
-    expect(document.body.querySelector('[data-testid="task-description-restore-modal"] > div')?.className).toContain('h-[90vh]')
-    expect(document.body.querySelector('[data-testid="task-description-history-title-before"]')?.textContent).toContain('Older title')
-    expect(document.body.querySelector('[data-testid="task-description-history-title-after"]')?.textContent).toContain('Newest title')
-    expect(document.body.querySelector('[data-testid="task-description-history-diff-tab-rendered"]')).not.toBeNull()
-    expect(document.body.querySelector('[data-testid="task-description-history-diff-tab-markdown"]')).not.toBeNull()
-    expect(document.body.querySelector('[data-testid="task-description-history-rendered-before"]')?.textContent).toContain('Older')
-    expect(document.body.querySelector('[data-testid="task-description-history-rendered-after"]')?.textContent).toContain('Added line')
-    expect(document.body.querySelector('[data-testid="task-history-diff-added"]')?.textContent).toContain('Newest')
-    expect(document.body.querySelector('[data-testid="task-history-diff-removed"]')?.textContent).toContain('Older')
-
-    ;(document.body.querySelector('[data-testid="task-description-history-diff-tab-markdown"]') as HTMLButtonElement).click()
-    await flushPromises()
-    expect(document.body.querySelector('[data-testid="task-description-history-markdown-diff"]')?.textContent).toContain('Added line')
-    expect(Array.from(document.body.querySelectorAll('[data-testid="task-history-diff-added"]')).some(el => el.textContent?.includes('Added line'))).toBe(true)
-    expect(Array.from(document.body.querySelectorAll('[data-testid="task-history-diff-removed"]')).some(el => el.textContent?.includes('Older'))).toBe(true)
-
-    const historyItems = document.body.querySelectorAll('[data-testid="task-description-history-item"]')
-    expect(historyItems.length).toBe(3)
-    ;(historyItems[1] as HTMLButtonElement).click()
-    await flushPromises()
-    expect(document.body.querySelector('[data-testid="task-description-history-title-before"]')?.textContent).toContain('Seed title')
-    expect(document.body.querySelector('[data-testid="task-description-history-title-after"]')?.textContent).toContain('Older title')
-
-    ;(historyItems[2] as HTMLButtonElement).click()
-    await flushPromises()
-    expect(document.body.querySelector('[data-testid="task-description-history-title-before"]')?.textContent).toContain('No previous title')
-    expect(document.body.querySelector('[data-testid="task-description-history-rendered-after"]')?.textContent).toContain('Seed only')
-    ;(document.body.querySelector('[data-testid="task-description-history-diff-tab-markdown"]') as HTMLButtonElement).click()
-    await flushPromises()
-    expect(document.body.querySelector('[data-testid="task-description-history-markdown-diff"]')?.textContent).toBe('Seed only')
-
-    const applyButton = document.body.querySelector('[data-testid="task-description-restore-apply"]') as HTMLButtonElement | null
-    expect(applyButton).not.toBeNull()
-    applyButton?.click()
-    await flushPromises()
-
-    expect(tasksStoreMock.updateTaskDescription).toHaveBeenCalledWith('task-1', 'Seed only', { forceSnapshot: true })
-    wrapper.unmount()
+    expect(wrapper.find('[data-testid="task-description-history-toggle"]').exists()).toBe(false)
+    expect(document.body.querySelector('[data-testid="task-description-restore-modal"]')).toBeNull()
   })
 
   it('exports the current task to PDF and saves it through the platform adapter', async () => {

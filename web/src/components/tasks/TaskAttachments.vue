@@ -388,7 +388,7 @@
 import { ref, reactive, onMounted, onUnmounted, watch, nextTick, defineComponent, h } from 'vue'
 import {
   tasksListAttachments,
-  tasksUploadAttachment,
+  tasksUploadAttachments,
   tasksDeleteAttachment,
   tasksDownloadAttachment,
   type TaskAttachment,
@@ -785,23 +785,20 @@ async function uploadFiles(files: File[]) {
   uploading.value = true
   uploadErrors.value = []
   uploadProgress.value = { done: 0, total: files.length }
-  const results = await Promise.allSettled(
-    files.map(file => tasksUploadAttachment(props.taskId, file).then(row => ({ row, file }))),
-  )
-  for (const result of results) {
-    uploadProgress.value.done++
-    if (result.status === 'fulfilled') {
-      attachments.value = [...attachments.value, result.value.row]
-    } else {
-      const msg = result.reason instanceof Error ? result.reason.message : 'Upload failed'
-      uploadErrors.value.push({ name: '(unknown)', message: msg })
-    }
+  try {
+    const result = await tasksUploadAttachments(props.taskId, files)
+    attachments.value = [...attachments.value, ...result.attachments]
+    uploadErrors.value = result.errors.map(error => ({
+      name: error.file_name || '(unknown)',
+      message: error.message || 'Upload failed',
+    }))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Upload failed'
+    uploadErrors.value = files.map(file => ({ name: file.name, message }))
+  } finally {
+    uploadProgress.value.done = files.length
+    uploading.value = false
   }
-  let errorIdx = 0
-  for (let i = 0; i < results.length; i++) {
-    if (results[i].status === 'rejected') { uploadErrors.value[errorIdx].name = files[i].name; errorIdx++ }
-  }
-  uploading.value = false
 }
 
 function isFileDragEvent(event: DragEvent): boolean {

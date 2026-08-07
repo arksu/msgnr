@@ -175,7 +175,21 @@
                         : 'text-app-secondaryText'"
                   >
                     <span class="w-7 shrink-0 select-none px-2 text-right opacity-70">{{ unifiedPrefix(line.kind) }}</span>
-                    <span class="pr-3">{{ line.value || ' ' }}</span>
+                    <span class="pr-3">
+                      <template v-if="line.segments">
+                        <span
+                          v-for="(segment, segmentIndex) in line.segments"
+                          :key="`${segment.kind}:${segmentIndex}:${segment.value}`"
+                          :class="unifiedSegmentClass(segment.kind)"
+                          :data-testid="segment.kind === 'removed'
+                            ? 'task-change-history-diff-word-removed'
+                            : segment.kind === 'added'
+                              ? 'task-change-history-diff-word-added'
+                              : undefined"
+                        >{{ segment.value }}</span>
+                      </template>
+                      <template v-else>{{ line.value || ' ' }}</template>
+                    </span>
                   </div>
                 </div>
 
@@ -235,8 +249,10 @@ import { userCustomStatusFromDto } from '@/types/userStatus'
 import {
   diffTaskChangeMarkdown,
   inlineTaskChangeDiff,
+  unifiedTaskChangeDiff,
   type TaskChangeDiffKind,
   type TaskChangeDiffLine,
+  type TaskChangeDiffSegmentKind,
 } from '@/utils/taskChangeHistoryDiff'
 
 const PAGE_SIZE = 50
@@ -269,10 +285,11 @@ const descriptionDiffLines = computed(() => {
   if (!item) return []
   return diffTaskChangeMarkdown(markdownValue(item.before_value), markdownValue(item.after_value))
 })
+const unifiedDescriptionDiffLines = computed(() => unifiedTaskChangeDiff(descriptionDiffLines.value))
 const visibleDescriptionDiffLines = computed(() =>
   diffExpanded.value || descriptionDiffLines.value.length <= COLLAPSE_LINE_COUNT
-    ? descriptionDiffLines.value
-    : descriptionDiffLines.value.slice(0, COLLAPSE_LINE_COUNT),
+    ? unifiedDescriptionDiffLines.value
+    : unifiedDescriptionDiffLines.value.slice(0, COLLAPSE_LINE_COUNT),
 )
 const inlineDescriptionDiffLines = computed(() => inlineTaskChangeDiff(descriptionDiffLines.value))
 const visibleInlineDescriptionDiffLines = computed(() =>
@@ -462,6 +479,12 @@ function unifiedPrefix(kind: TaskChangeDiffKind): string {
   if (kind === 'added') return '+'
   if (kind === 'removed') return '−'
   return ' '
+}
+
+function unifiedSegmentClass(kind: TaskChangeDiffSegmentKind): string {
+  if (kind === 'removed') return 'rounded-sm bg-red-400/35 text-red-50'
+  if (kind === 'added') return 'rounded-sm bg-emerald-400/35 text-emerald-50'
+  return ''
 }
 
 function inlineLineClass(line: TaskChangeDiffLine | null, side: 'before' | 'after'): string {

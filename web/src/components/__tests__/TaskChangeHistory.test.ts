@@ -123,6 +123,28 @@ describe('TaskChangeHistory', () => {
     expect(wrapper.get('[data-testid="task-change-history-diff-inline-body"]')).toBeTruthy()
   })
 
+  it('emphasizes changed words within paired unified diff lines', async () => {
+    listTaskChangeHistory.mockResolvedValue({
+      items: [{
+        id: 'description-word-diff', change_kind: 'field', field_key: 'description', field_name: 'Description', field_type: 'markdown',
+        before_value: 'Ship Backend today', after_value: 'Ship Frontend today', created_at: '2026-08-05T10:20:00Z',
+        actor: { id: 'u-1', display_name: 'Alice', avatar_url: '/alice.png' },
+      }],
+    })
+    const wrapper = mount(TaskChangeHistory, {
+      props: { taskId: 'task-1', scrollRoot: null },
+      global: { stubs: { UserAvatar: true } },
+    })
+    await flushPromises()
+    IntersectionObserverMock.instances[IntersectionObserverMock.instances.length - 1]
+      .trigger(wrapper.get('[data-testid="task-change-history"]').element)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-change-history-diff-description-word-diff"]').trigger('click')
+    expect(wrapper.get('[data-testid="task-change-history-diff-word-removed"]').text()).toBe('Backend')
+    expect(wrapper.get('[data-testid="task-change-history-diff-word-added"]').text()).toBe('Frontend')
+  })
+
   it('renders grouped attachment actions and staged creation attachments', async () => {
     const files = [
       { id: 'attachment-1', file_name: 'brief.pdf', file_size: 214, mime_type: 'application/pdf' },

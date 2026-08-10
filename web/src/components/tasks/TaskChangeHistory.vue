@@ -164,33 +164,42 @@
                   data-testid="task-change-history-diff-unified-body"
                   class="overflow-x-auto rounded border border-chat-border bg-chat-header font-mono text-xs leading-5"
                 >
-                  <div
-                    v-for="(line, index) in visibleDescriptionDiffLines"
-                    :key="`${line.kind}:${index}:${line.value}`"
-                    class="flex min-w-max whitespace-pre"
-                    :class="line.kind === 'removed'
-                      ? 'bg-red-500/10 text-red-200'
-                      : line.kind === 'added'
-                        ? 'bg-emerald-500/10 text-emerald-200'
-                        : 'text-app-secondaryText'"
-                  >
-                    <span class="w-7 shrink-0 select-none px-2 text-right opacity-70">{{ unifiedPrefix(line.kind) }}</span>
-                    <span class="pr-3">
-                      <template v-if="line.segments">
-                        <span
-                          v-for="(segment, segmentIndex) in line.segments"
-                          :key="`${segment.kind}:${segmentIndex}:${segment.value}`"
-                          :class="unifiedSegmentClass(segment.kind)"
-                          :data-testid="segment.kind === 'removed'
-                            ? 'task-change-history-diff-word-removed'
-                            : segment.kind === 'added'
-                              ? 'task-change-history-diff-word-added'
-                              : undefined"
-                        >{{ segment.value }}</span>
-                      </template>
-                      <template v-else>{{ line.value || ' ' }}</template>
-                    </span>
-                  </div>
+                  <template v-for="(entry, index) in visibleDescriptionDiffLines" :key="`unified:${index}`">
+                    <div
+                      v-if="entry.kind === 'hidden'"
+                      class="flex min-w-max border-y border-chat-border bg-chat-input/80 text-app-muted"
+                      data-testid="task-change-history-diff-hidden-lines"
+                    >
+                      <span class="w-7 shrink-0 select-none px-2 text-right opacity-70">⋮</span>
+                      <span class="pr-3">{{ entry.count }} lines hidden</span>
+                    </div>
+                    <div
+                      v-else
+                      class="flex min-w-max whitespace-pre"
+                      :class="entry.line.kind === 'removed'
+                        ? 'bg-red-500/10 text-red-200'
+                        : entry.line.kind === 'added'
+                          ? 'bg-emerald-500/10 text-emerald-200'
+                          : 'text-app-secondaryText'"
+                    >
+                      <span class="w-7 shrink-0 select-none px-2 text-right opacity-70">{{ unifiedPrefix(entry.line.kind) }}</span>
+                      <span class="pr-3">
+                        <template v-if="entry.line.segments">
+                          <span
+                            v-for="(segment, segmentIndex) in entry.line.segments"
+                            :key="`${segment.kind}:${segmentIndex}:${segment.value}`"
+                            :class="unifiedSegmentClass(segment.kind)"
+                            :data-testid="segment.kind === 'removed'
+                              ? 'task-change-history-diff-word-removed'
+                              : segment.kind === 'added'
+                                ? 'task-change-history-diff-word-added'
+                                : undefined"
+                          >{{ segment.value }}</span>
+                        </template>
+                        <template v-else>{{ entry.line.value || ' ' }}</template>
+                      </span>
+                    </div>
+                  </template>
                 </div>
 
                 <div
@@ -201,15 +210,22 @@
                   <div class="grid min-w-[720px] grid-cols-2 divide-x divide-chat-border">
                     <div class="bg-red-500/5 px-3 py-1 text-[10px] uppercase tracking-wide text-red-200">Before</div>
                     <div class="bg-emerald-500/5 px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-200">After</div>
-                    <template v-for="(line, index) in visibleInlineDescriptionDiffLines" :key="`inline:${index}`">
+                    <template v-for="(entry, index) in visibleInlineDescriptionDiffLines" :key="`inline:${index}`">
                       <div
-                        class="min-h-5 whitespace-pre-wrap px-3"
-                        :class="inlineLineClass(line.before, 'before')"
-                      >{{ line.before?.value || ' ' }}</div>
-                      <div
-                        class="min-h-5 whitespace-pre-wrap px-3"
-                        :class="inlineLineClass(line.after, 'after')"
-                      >{{ line.after?.value || ' ' }}</div>
+                        v-if="entry.kind === 'hidden'"
+                        class="col-span-2 border-y border-chat-border bg-chat-input/80 px-3 text-app-muted"
+                        data-testid="task-change-history-diff-hidden-rows"
+                      >⋮ {{ entry.count }} diff rows hidden</div>
+                      <template v-else>
+                        <div
+                          class="min-h-5 whitespace-pre-wrap px-3"
+                          :class="inlineLineClass(entry.line.before, 'before')"
+                        >{{ entry.line.before?.value || ' ' }}</div>
+                        <div
+                          class="min-h-5 whitespace-pre-wrap px-3"
+                          :class="inlineLineClass(entry.line.after, 'after')"
+                        >{{ entry.line.after?.value || ' ' }}</div>
+                      </template>
                     </template>
                   </div>
                 </div>
@@ -257,6 +273,11 @@ import {
 
 const PAGE_SIZE = 50
 const COLLAPSE_LINE_COUNT = 30
+const COLLAPSE_HEAD_LINE_COUNT = COLLAPSE_LINE_COUNT / 2
+
+type CollapsedDiffEntry<T> =
+  | { kind: 'line'; line: T }
+  | { kind: 'hidden'; count: number }
 
 const props = defineProps<{
   taskId: string
@@ -287,16 +308,23 @@ const descriptionDiffLines = computed(() => {
 })
 const unifiedDescriptionDiffLines = computed(() => unifiedTaskChangeDiff(descriptionDiffLines.value))
 const visibleDescriptionDiffLines = computed(() =>
-  diffExpanded.value || descriptionDiffLines.value.length <= COLLAPSE_LINE_COUNT
-    ? unifiedDescriptionDiffLines.value
-    : unifiedDescriptionDiffLines.value.slice(0, COLLAPSE_LINE_COUNT),
+  collapseDiffLines(unifiedDescriptionDiffLines.value, diffExpanded.value),
 )
 const inlineDescriptionDiffLines = computed(() => inlineTaskChangeDiff(descriptionDiffLines.value))
 const visibleInlineDescriptionDiffLines = computed(() =>
-  diffExpanded.value || inlineDescriptionDiffLines.value.length <= COLLAPSE_LINE_COUNT
-    ? inlineDescriptionDiffLines.value
-    : inlineDescriptionDiffLines.value.slice(0, COLLAPSE_LINE_COUNT),
+  collapseDiffLines(inlineDescriptionDiffLines.value, diffExpanded.value),
 )
+
+function collapseDiffLines<T>(lines: T[], expanded: boolean): CollapsedDiffEntry<T>[] {
+  if (expanded || lines.length <= COLLAPSE_LINE_COUNT) {
+    return lines.map(line => ({ kind: 'line', line }))
+  }
+  return [
+    ...lines.slice(0, COLLAPSE_HEAD_LINE_COUNT).map(line => ({ kind: 'line' as const, line })),
+    { kind: 'hidden' as const, count: lines.length - COLLAPSE_LINE_COUNT },
+    ...lines.slice(-COLLAPSE_HEAD_LINE_COUNT).map(line => ({ kind: 'line' as const, line })),
+  ]
+}
 
 function resetHistory() {
   historyItems.value = []

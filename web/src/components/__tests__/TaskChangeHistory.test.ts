@@ -114,13 +114,22 @@ describe('TaskChangeHistory', () => {
     await flushPromises()
 
     await wrapper.get('[data-testid="task-change-history-diff-description-1"]').trigger('click')
-    expect(wrapper.get('[data-testid="task-change-history-diff-unified-body"]')).toBeTruthy()
+    const unifiedBody = wrapper.get('[data-testid="task-change-history-diff-unified-body"]')
+    expect(unifiedBody).toBeTruthy()
     expect(wrapper.get('[data-testid="task-change-history-diff-collapse"]').text()).toBe('Expand (70 lines)')
+    expect(wrapper.get('[data-testid="task-change-history-diff-hidden-lines"]').text()).toBe('⋮40 lines hidden')
+    expect(unifiedBody.text()).toContain('new 35')
+
+    await wrapper.get('[data-testid="task-change-history-diff-inline"]').trigger('click')
+    const inlineBody = wrapper.get('[data-testid="task-change-history-diff-inline-body"]')
+    expect(inlineBody).toBeTruthy()
+    expect(wrapper.get('[data-testid="task-change-history-diff-hidden-rows"]').text()).toBe('⋮ 5 diff rows hidden')
+    expect(inlineBody.text()).toContain('old 35')
+    expect(inlineBody.text()).toContain('new 35')
 
     await wrapper.get('[data-testid="task-change-history-diff-collapse"]').trigger('click')
     expect(wrapper.get('[data-testid="task-change-history-diff-collapse"]').text()).toBe('Collapse')
-    await wrapper.get('[data-testid="task-change-history-diff-inline"]').trigger('click')
-    expect(wrapper.get('[data-testid="task-change-history-diff-inline-body"]')).toBeTruthy()
+    expect(wrapper.find('[data-testid="task-change-history-diff-hidden-rows"]').exists()).toBe(false)
   })
 
   it('emphasizes changed words within paired unified diff lines', async () => {

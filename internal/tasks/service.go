@@ -65,6 +65,7 @@ const prefixMaxLen = 32
 const maxCommentAttachments = 10
 const defaultTaskDescriptionHistoryLimit = 20
 const defaultEnumTaskLookupLimit = 200
+const taskDescriptionHistoryDebounce = 10 * time.Second
 
 var (
 	rePrefixValid             = regexp.MustCompile(`^[A-Z]+$`)
@@ -2630,9 +2631,9 @@ func (s *Service) UpdateTask(ctx context.Context, id uuid.UUID, p UpdateTaskPara
 		}
 	}
 	if !nullStringsEqual(existing.Description, nullString(taskRow.Description)) {
-		if err := recordTaskChangeInTx(
+		if err := recordTaskDescriptionChangeInTx(
 			ctx, tx, taskRow.ID, p.ActorID,
-			"field", "description", "Description", "markdown", beforeTask.Description, taskRow.Description,
+			beforeTask.Description, taskRow.Description,
 		); err != nil {
 			return TaskResponse{}, err
 		}
@@ -2777,9 +2778,9 @@ func (s *Service) UpdateTaskDescription(ctx context.Context, id uuid.UUID, p Upd
 	if err := s.maybeCreateTaskDescriptionSnapshotInTx(ctx, tx, taskRow, p.ActorID, p.ForceSnapshot); err != nil {
 		return TaskResponse{}, err
 	}
-	if err := recordTaskChangeInTx(
+	if err := recordTaskDescriptionChangeInTx(
 		ctx, tx, taskRow.ID, p.ActorID,
-		"field", "description", "Description", "markdown", beforeTask.Description, taskRow.Description,
+		beforeTask.Description, taskRow.Description,
 	); err != nil {
 		return TaskResponse{}, err
 	}
@@ -2995,6 +2996,55 @@ func recordTaskChangeInTx(
 	return nil
 }
 
+// recordTaskDescriptionChangeInTx coalesces rapid saves from the same editor
+// into one provisional history item. The newest description change is locked
+// before it is inspected, so another editor's intervening change is never
+// overwritten or merged into a different editor's entry.
+func recordTaskDescriptionChangeInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	taskID, actorID uuid.UUID,
+	before, after any,
+) error {
+	var (
+		latestID       uuid.UUID
+		latestForActor bool
+	)
+	err := tx.QueryRow(ctx,
+		`SELECT id,
+		        actor_id = $2 AND created_at > now() - INTERVAL '10 seconds'
+		   FROM task_change_history
+		  WHERE task_id = $1 AND field_key = 'description'
+		  ORDER BY created_at DESC, id DESC
+		  LIMIT 1
+		  FOR UPDATE`,
+		taskID, actorID,
+	).Scan(&latestID, &latestForActor)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("tasks: get pending description history: %w", err)
+	}
+	if err == nil && latestForActor {
+		afterJSON, err := taskHistoryJSON(after)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE task_change_history
+			    SET after_value = $2::jsonb, created_at = now()
+			  WHERE id = $1`,
+			latestID, string(afterJSON),
+		); err != nil {
+			return fmt.Errorf("tasks: update pending description history: %w", err)
+		}
+		return nil
+	}
+
+	return recordTaskChangeInTx(
+		ctx, tx, taskID, actorID,
+		"field", "description", "Description", "markdown", before, after,
+	)
+}
+
 func taskHistoryFieldValue(fieldType string, value *FieldValueRow) any {
 	if value == nil {
 		return nil
@@ -3078,7 +3128,7 @@ func (s *Service) ListTaskChangeHistory(
 	}
 
 	args := []any{taskID, limit + 1}
-	where := "h.task_id = $1"
+	where := "h.task_id = $1 AND (h.field_key <> 'description' OR h.created_at <= now() - INTERVAL '10 seconds')"
 	if cursor != nil {
 		args = []any{taskID, cursor.CreatedAt, cursor.ID, limit + 1}
 		where += " AND (h.created_at, h.id) < ($2, $3)"

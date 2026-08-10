@@ -1268,6 +1268,13 @@ func TestIntegration_TaskChangeHistoryRecordsCreationAndAllEditableFieldPaths(t 
 	description := "# Updated\n\nCollaborative checkpoint"
 	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{Description: &description, ActorID: editor})
 	require.NoError(t, err)
+	_, err = pool.Exec(ctx,
+		`UPDATE task_change_history
+		    SET created_at = now() - INTERVAL '11 seconds'
+		  WHERE task_id = $1 AND field_key = 'description'`,
+		created.ID,
+	)
+	require.NoError(t, err)
 	_, err = svc.UpdateTaskFieldValue(ctx, created.ID, priority.ID, tasks.UpdateTaskFieldValueParams{
 		ValueText: strPtr("high"), ActorID: editor,
 	})
@@ -1307,6 +1314,108 @@ func TestIntegration_TaskChangeHistoryRecordsCreationAndAllEditableFieldPaths(t 
 	require.NoError(t, err)
 	require.NotEmpty(t, secondPage.Items)
 	assert.NotEqual(t, firstPage.Items[1].ID, secondPage.Items[0].ID)
+}
+
+func TestIntegration_TaskChangeHistoryDebouncesDescriptionEdits(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := tasks.NewService(pool, nil)
+	actorA := seedUserProfile(t, ctx, pool, "description-history-a@example.com", "Description A", "/a.png")
+	actorB := seedUserProfile(t, ctx, pool, "description-history-b@example.com", "Description B", "/b.png")
+	tpl := seedTemplate(t, ctx, svc, "DHB", actorA)
+	status := seedStatus(t, ctx, svc, actorA)
+	created, err := svc.CreateTask(ctx, tasks.CreateTaskParams{
+		TemplateID: tpl.ID, Title: "description debounce", StatusID: status.ID, ActorID: actorA,
+	})
+	require.NoError(t, err)
+
+	first := "first edit"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &first, ActorID: actorA,
+	})
+	require.NoError(t, err)
+	pendingPage, err := svc.ListTaskChangeHistory(ctx, created.ID, "", 50)
+	require.NoError(t, err)
+	require.Len(t, pendingPage.Items, 1)
+	assert.Equal(t, "task", pendingPage.Items[0].FieldKey)
+
+	second := "second edit"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &second, ActorID: actorA,
+	})
+	require.NoError(t, err)
+
+	var (
+		firstBefore json.RawMessage
+		firstAfter  json.RawMessage
+		count       int
+	)
+	err = pool.QueryRow(ctx,
+		`SELECT before_value, after_value,
+		        COUNT(*) OVER ()
+		   FROM task_change_history
+		  WHERE task_id = $1 AND field_key = 'description'`,
+		created.ID,
+	).Scan(&firstBefore, &firstAfter, &count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.JSONEq(t, "null", string(firstBefore))
+	assert.JSONEq(t, `"second edit"`, string(firstAfter))
+
+	_, err = pool.Exec(ctx,
+		`UPDATE task_change_history
+		    SET created_at = now() - INTERVAL '11 seconds'
+		  WHERE task_id = $1 AND field_key = 'description'`,
+		created.ID,
+	)
+	require.NoError(t, err)
+	visiblePage, err := svc.ListTaskChangeHistory(ctx, created.ID, "", 50)
+	require.NoError(t, err)
+	require.Len(t, visiblePage.Items, 2)
+
+	third := "third edit"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &third, ActorID: actorA,
+	})
+	require.NoError(t, err)
+	fourth := "fourth edit"
+	_, err = svc.UpdateTaskDescription(ctx, created.ID, tasks.UpdateTaskDescriptionParams{
+		Description: &fourth, ActorID: actorB,
+	})
+	require.NoError(t, err)
+
+	rows, err := pool.Query(ctx,
+		`SELECT actor_id, before_value, after_value
+		   FROM task_change_history
+		  WHERE task_id = $1 AND field_key = 'description'
+		  ORDER BY created_at ASC, id ASC`,
+		created.ID,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	type descriptionHistoryRow struct {
+		actorID uuid.UUID
+		before  json.RawMessage
+		after   json.RawMessage
+	}
+	var historyRows []descriptionHistoryRow
+	for rows.Next() {
+		var row descriptionHistoryRow
+		require.NoError(t, rows.Scan(&row.actorID, &row.before, &row.after))
+		historyRows = append(historyRows, row)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, historyRows, 3)
+	assert.Equal(t, actorA, historyRows[0].actorID)
+	assert.JSONEq(t, "null", string(historyRows[0].before))
+	assert.JSONEq(t, `"second edit"`, string(historyRows[0].after))
+	assert.Equal(t, actorA, historyRows[1].actorID)
+	assert.JSONEq(t, `"second edit"`, string(historyRows[1].before))
+	assert.JSONEq(t, `"third edit"`, string(historyRows[1].after))
+	assert.Equal(t, actorB, historyRows[2].actorID)
+	assert.JSONEq(t, `"third edit"`, string(historyRows[2].before))
+	assert.JSONEq(t, `"fourth edit"`, string(historyRows[2].after))
 }
 
 func TestIntegration_Task_UpdateDescriptionOnly_NoopKeepsAuditAndHistoryStable(t *testing.T) {

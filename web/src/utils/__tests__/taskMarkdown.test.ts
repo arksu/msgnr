@@ -75,6 +75,63 @@ describe('task markdown helpers', () => {
     expect(markdown).toBe('d_trades_done_amount = 2, current_limit_reached = TRUE.')
   })
 
+  it('removes generated Markdown punctuation escapes from collaborative text before saving', () => {
+    const markdown = tiptapJsonToMarkdown({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{
+          type: 'text',
+          text: String.raw`Ready\. \(in progress\)\.\.\. \- done`,
+        }],
+      }],
+    })
+
+    expect(markdown).toBe('Ready. (in progress)... - done')
+  })
+
+  it('keeps literal and unknown backslash sequences in ordinary text', () => {
+    const input = String.raw`C:\folder \q \\server \\.`
+    const markdown = tiptapJsonToMarkdown({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text: input }],
+      }],
+    })
+
+    expect(markdown).toBe(input)
+  })
+
+  it('stabilizes legacy punctuation escapes across repeated collaborative saves', () => {
+    const serializeText = (text: string) => tiptapJsonToMarkdown({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text }],
+      }],
+    })
+
+    const once = serializeText(String.raw`\\\.`)
+    const twice = serializeText(once)
+
+    expect(once).toBe(String.raw`\\.`)
+    expect(twice).toBe(once)
+  })
+
+  it('keeps Markdown escapes inside code marks', () => {
+    const code = String.raw`keep \. \(`
+    const markdown = tiptapJsonToMarkdown({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text: code, marks: [{ type: 'code' }] }],
+      }],
+    })
+
+    expect(markdown).toBe(`\`${code}\``)
+  })
+
   it('renders escaped br tokens inside markdown tables as line breaks', () => {
     const html = renderTaskMarkdownToHtml('| A |\n| --- |\n| one<br>two |')
 

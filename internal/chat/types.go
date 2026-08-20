@@ -215,15 +215,19 @@ type messageUserReactionRow struct {
 }
 
 type MessageAttachment struct {
-	ID             uuid.UUID `json:"id"`
-	ConversationID uuid.UUID `json:"conversation_id"`
-	MessageID      uuid.UUID `json:"message_id"`
-	FileName       string    `json:"file_name"`
-	FileSize       int64     `json:"file_size"`
-	MimeType       string    `json:"mime_type"`
-	StorageKey     string    `json:"-"`
-	UploadedBy     uuid.UUID `json:"uploaded_by"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID                  uuid.UUID `json:"id"`
+	ConversationID      uuid.UUID `json:"conversation_id"`
+	MessageID           uuid.UUID `json:"message_id"`
+	FileName            string    `json:"file_name"`
+	FileSize            int64     `json:"file_size"`
+	MimeType            string    `json:"mime_type"`
+	StorageKey          string    `json:"-"`
+	ThumbnailStorageKey string    `json:"-"`
+	ThumbnailMimeType   string    `json:"thumbnail_mime_type,omitempty"`
+	ThumbnailFileSize   int64     `json:"thumbnail_file_size,omitempty"`
+	ThumbnailVersion    int16     `json:"thumbnail_version,omitempty"`
+	UploadedBy          uuid.UUID `json:"uploaded_by"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 type MessageEntityKind string

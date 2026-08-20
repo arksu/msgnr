@@ -780,11 +780,21 @@ function pinActiveConversation() {
   pinnedDialogsStore.ensureConversationPinned(conversationId)
 }
 
+type OutboundMessageAttachment = {
+  id: string
+  fileName: string
+  fileSize: number
+  mimeType: string
+  thumbnailMimeType?: string
+  thumbnailFileSize?: number
+  thumbnailVersion?: number
+}
+
 async function handleSend(
-  body: string | { body: string; entities: NonNullable<Message['entities']>; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> },
+  body: string | { body: string; entities: NonNullable<Message['entities']>; attachmentIds: string[]; attachments: OutboundMessageAttachment[] },
 ) {
   const payload = typeof body === 'string'
-    ? { body, entities: [] as NonNullable<Message['entities']>, attachmentIds: [], attachments: [] as Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> }
+    ? { body, entities: [] as NonNullable<Message['entities']>, attachmentIds: [], attachments: [] as OutboundMessageAttachment[] }
     : body
   const messageBody = payload.body
   const channelId = chatStore.activeChannelId
@@ -847,6 +857,9 @@ async function handleSend(
       fileName: att.fileName,
       fileSize: att.fileSize,
       mimeType: att.mimeType,
+      thumbnailMimeType: att.thumbnailMimeType,
+      thumbnailFileSize: att.thumbnailFileSize,
+      thumbnailVersion: att.thumbnailVersion,
     })),
     clientMsgId,
     sendStatus: isOffline ? 'queued' : 'sending',

@@ -37,12 +37,10 @@
       </button>
       <button
         type="button"
-        class="flex h-5 w-5 shrink-0 items-center justify-center rounded transition disabled:opacity-50"
+        class="hidden h-5 w-5 shrink-0 items-center justify-center rounded transition disabled:opacity-50 group-hover:flex group-focus-within:flex"
         :class="node.is_favorite
-          ? 'opacity-100 text-yellow-300 hover:bg-sidebar-hover hover:text-yellow-200'
-          : selectedDocumentId === node.id
-            ? 'opacity-100 text-sidebar-textMuted hover:bg-sidebar-hover hover:text-yellow-300'
-            : 'opacity-0 text-sidebar-textMuted hover:bg-sidebar-hover hover:text-yellow-300 group-hover:opacity-100 focus-visible:opacity-100'"
+          ? 'text-yellow-300 hover:bg-sidebar-hover hover:text-yellow-200'
+          : 'text-sidebar-textMuted hover:bg-sidebar-hover hover:text-yellow-300'"
         :data-testid="`documents-node-favorite-toggle-${node.id}`"
         :title="node.is_favorite ? 'Remove from favorites' : 'Add to favorites'"
         :aria-label="node.is_favorite ? 'Remove from favorites' : 'Add to favorites'"
@@ -75,7 +73,7 @@
       </button>
       <button
         type="button"
-        class="h-5 w-5 shrink-0 rounded text-sidebar-textMuted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-sidebar-hover hover:text-sidebar-text"
+        class="hidden h-5 w-5 shrink-0 items-center justify-center rounded text-sidebar-textMuted transition-opacity group-hover:flex group-focus-within:flex hover:bg-sidebar-hover hover:text-sidebar-text"
         :data-testid="`documents-node-add-${node.id}`"
         title="Add child document"
         @click.stop="$emit('addChild', node.id)"
@@ -85,7 +83,7 @@
       <button
         ref="menuButtonRef"
         type="button"
-        class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-sidebar-textMuted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-sidebar-hover hover:text-sidebar-text"
+        class="hidden h-5 w-5 shrink-0 items-center justify-center rounded text-sidebar-textMuted transition-opacity group-hover:flex group-focus-within:flex hover:bg-sidebar-hover hover:text-sidebar-text"
         :data-testid="`documents-node-menu-${node.id}`"
         title="Document actions"
         @click.stop="toggleMenu"

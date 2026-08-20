@@ -87,3 +87,12 @@ func TestListActiveCallMembers_InvalidConversationID(t *testing.T) {
 	require.Equal(t, 400, rec.Code)
 	assert.Contains(t, rec.Body.String(), "invalid conversation_id")
 }
+
+func TestMatchesETag(t *testing.T) {
+	const etag = `"chat-thumbnail-v1-attachment-42"`
+
+	assert.True(t, matchesETag(etag, etag))
+	assert.True(t, matchesETag(`"other", `+etag, etag))
+	assert.True(t, matchesETag("*", etag))
+	assert.False(t, matchesETag(`"other"`, etag))
+}

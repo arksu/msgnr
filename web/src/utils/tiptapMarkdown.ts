@@ -4,6 +4,38 @@ interface MarkdownSerializeOptions {
   hardBreakStyle?: 'markdown' | 'newline'
 }
 
+const markdownEscapablePunctuation = new Set('`*_{}[]()#+-.!>|')
+
+// Legacy clients escaped every Markdown punctuation character in ordinary text.
+// During collaborative editing that escaped text can still arrive in the shared
+// document, so remove exactly the generated escape before saving it again.
+// An even-length backslash run is left intact to preserve literal backslashes.
+function normalizeGeneratedMarkdownEscapes(input: string): string {
+  let out = ''
+  for (let index = 0; index < input.length;) {
+    if (input[index] !== '\\') {
+      out += input[index]
+      index += 1
+      continue
+    }
+
+    let nextIndex = index
+    while (input[nextIndex] === '\\') nextIndex += 1
+    const slashCount = nextIndex - index
+    const nextChar = input[nextIndex]
+    if (slashCount % 2 === 1 && nextChar && markdownEscapablePunctuation.has(nextChar)) {
+      out += '\\'.repeat(slashCount - 1)
+      out += nextChar
+      index = nextIndex + 1
+      continue
+    }
+
+    out += input.slice(index, nextIndex)
+    index = nextIndex
+  }
+  return out
+}
+
 function extractText(node: JSONContent | null | undefined): string {
   if (!node) return ''
   if (node.type === 'text') return node.text ?? ''
@@ -19,7 +51,7 @@ function applyMarks(text: string, marks: JSONContent['marks']): string {
     return `\`${escaped}\``
   }
 
-  let out = text
+  let out = normalizeGeneratedMarkdownEscapes(text)
 
   if (safeMarks.some(mark => mark.type === 'bold')) {
     out = `**${out}**`

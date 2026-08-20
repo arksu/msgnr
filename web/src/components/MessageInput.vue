@@ -52,6 +52,7 @@
         :submit-on-enter="true"
         :on-files="encrypted ? null : handleComposerFiles"
         @submit="submit"
+        @pending-task-url-paste-change="pendingTaskUrlPaste = $event"
         @empty-arrow-up="requestEditLastMessage"
         @resize="handleComposerResize"
       />
@@ -177,6 +178,9 @@ interface ComposerAttachment {
   fileName: string
   fileSize: number
   mimeType: string
+  thumbnailMimeType?: string
+  thumbnailFileSize?: number
+  thumbnailVersion?: number
 }
 
 interface ComposerSendPayload {
@@ -210,6 +214,7 @@ const emit = defineEmits<{
 
 const text = ref('')
 const entities = ref<MessageEntity[]>([])
+const pendingTaskUrlPaste = ref(false)
 const composerRef = ref<InstanceType<typeof RichTextComposer> | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const attachments = ref<ComposerAttachment[]>([])
@@ -250,7 +255,7 @@ const attachmentWarning = computed(() => {
 })
 
 const canSend = computed(() => {
-  if (props.disabled || uploading.value) return false
+  if (props.disabled || uploading.value || pendingTaskUrlPaste.value) return false
   if (!text.value.trim() && attachments.value.length === 0) return false
   if (attachments.value.length > 0 && props.online === false) return false
   return true
@@ -366,6 +371,13 @@ async function uploadFiles(files: File[]) {
         fileName: uploaded.file_name,
         fileSize: uploaded.file_size,
         mimeType: uploaded.mime_type,
+        thumbnailMimeType: uploaded.thumbnail_mime_type || undefined,
+        thumbnailFileSize: uploaded.thumbnail_file_size && uploaded.thumbnail_file_size > 0
+          ? uploaded.thumbnail_file_size
+          : undefined,
+        thumbnailVersion: uploaded.thumbnail_version && uploaded.thumbnail_version > 0
+          ? uploaded.thumbnail_version
+          : undefined,
       })
       uploadedBytes += fileBytes
       const overallTotal = Math.max(1, totalBytes || uploadedBytes || 1)

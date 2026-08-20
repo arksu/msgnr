@@ -158,6 +158,8 @@ func main() {
 	}
 	authSvc.ConfigureAvatars(storageClient, cfg.AvatarMaxSizeMB, eventStore)
 	chatSvc.ConfigureAttachments(storageClient, cfg.AttachmentMaxSizeMB)
+	adminSvc.SetLogger(log)
+	adminSvc.ConfigureMessageAttachmentStorage(storageClient)
 
 	tasksSvc := tasks.NewService(db.Pool, storageClient)
 	tasksSvc.SetDescriptionHistoryLimit(cfg.TaskDescriptionHistoryLimit)

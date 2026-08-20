@@ -145,6 +145,9 @@ export interface ChatMessageAttachmentItem {
   file_name: string
   file_size: number
   mime_type: string
+  thumbnail_mime_type?: string
+  thumbnail_file_size?: number
+  thumbnail_version?: number
 }
 
 export type MessageEntityKind = 'user' | 'task' | 'document'
@@ -539,6 +542,20 @@ export async function fetchMessageAttachmentBlob(messageId: string, attachmentId
   try {
     const { data } = await http.get(
       `/api/messages/${messageId}/attachments/${attachmentId}/download`,
+      { responseType: 'blob' },
+    )
+    return data as Blob
+  } catch (e) { handleError(e) }
+}
+
+export async function fetchMessageAttachmentThumbnailBlob(
+  messageId: string,
+  attachmentId: string,
+  thumbnailVersion: number,
+): Promise<Blob> {
+  try {
+    const { data } = await http.get(
+      `/api/messages/${messageId}/attachments/${attachmentId}/thumbnail/v${thumbnailVersion}`,
       { responseType: 'blob' },
     )
     return data as Blob

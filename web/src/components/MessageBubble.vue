@@ -212,6 +212,7 @@
           :disabled="editSaving"
           :submit-on-enter="true"
           @resize="handleEditComposerResize"
+          @pending-task-url-paste-change="editPendingTaskUrlPaste = $event"
           @submit="saveEdit"
         />
         <div class="mt-1.5 flex items-center justify-between gap-2">
@@ -266,7 +267,12 @@
           :key="attachment.id"
           :class="isInlinePreviewAttachment(attachment) ? '' : 'rounded-md border border-chat-border bg-chat-input/70 p-2'"
         >
-          <div v-if="isImageAttachment(attachment)" class="group/image relative w-fit">
+          <div
+            v-if="isImageAttachment(attachment)"
+            :ref="element => setImagePreviewTarget(attachment, element)"
+            :data-message-image-attachment-id="attachment.id"
+            class="group/image relative w-fit"
+          >
             <button
               data-testid="message-image-thumbnail"
               class="block max-h-[min(38vh,220px)] max-w-[min(72vw,280px)] overflow-hidden rounded-lg bg-chat-input/60 shadow-sm transition-colors hover:bg-chat-input/80 sm:max-w-[min(42vw,360px)] cursor-pointer"
@@ -280,7 +286,7 @@
                 class="max-h-[min(38vh,220px)] w-full object-contain"
               >
               <div v-else class="flex h-24 items-center justify-center text-xs text-gray-500">
-                {{ loadingAttachmentIds.has(attachment.id) ? 'Loading image...' : 'Preview unavailable' }}
+                {{ imagePreviewState(attachment) === 'failed' ? 'Preview unavailable' : 'Loading image...' }}
               </div>
             </button>
             <button
@@ -597,7 +603,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onBeforeUnmount, shallowRef, nextTick, type PropType } from 'vue'
+import { computed, ref, watch, onBeforeUnmount, onMounted, shallowRef, nextTick, type ComponentPublicInstance, type PropType } from 'vue'
 import type { Message, MessageAttachment } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useChatStore } from '@/stores/chat'
@@ -610,10 +616,17 @@ import { handleMarkdownLinkClick } from '@/utils/linkNavigation'
 import {
   createOrOpenDm,
   fetchMessageAttachmentBlob,
+  fetchMessageAttachmentThumbnailBlob,
   listMessageReactionUsers,
   editMessage as editMessageApi,
   deleteMessage as deleteMessageApi,
 } from '@/services/http/chatApi'
+import {
+  enqueueChatMediaRequest,
+  isChatMediaRequestCancelled,
+  type ChatMediaRequestPriority,
+  type QueuedChatMediaRequest,
+} from '@/services/chatMediaQueue'
 import UserAvatar from './UserAvatar.vue'
 import ForwardMessageDialog from './ForwardMessageDialog.vue'
 import { activeEmojiPickerId, createEmojiPickerInstanceId } from '@/stores/emojiPicker'
@@ -710,8 +723,32 @@ const REACTION_USERS_POPUP_WIDTH = 260
 const REACTION_USERS_POPUP_MAX_HEIGHT = 288
 const REACTION_USERS_POPUP_GAP = 8
 const attachmentUrls = ref<Record<string, string>>({})
+const originalImageUrls = ref<Record<string, string>>({})
 const loadingAttachmentIds = ref(new Set<string>())
-const mediaPreview = ref<{ open: boolean; kind: 'image' | 'video'; src: string; fileName: string }>({
+type ImagePreviewLoadState = 'idle' | 'loading' | 'loaded' | 'failed'
+
+interface PendingImageBlobLoad {
+  attachmentId: string
+  request: QueuedChatMediaRequest<Blob>
+  promise: Promise<Blob>
+}
+
+const imagePreviewStates = ref<Record<string, ImagePreviewLoadState>>({})
+const imagePreviewLoads = new Map<string, Promise<string>>()
+const originalImageLoads = new Map<string, Promise<string>>()
+const pendingImageBlobLoads = new Map<string, PendingImageBlobLoad>()
+const imagePreviewTargets = new Map<string, HTMLElement>()
+let imagePreviewObserver: IntersectionObserver | null = null
+let imagePreviewObserverStarted = false
+let mediaLifecycleActive = true
+
+const mediaPreview = ref<{
+  open: boolean
+  kind: 'image' | 'video'
+  src: string
+  fileName: string
+  attachmentId?: string
+}>({
   open: false,
   kind: 'image',
   src: '',
@@ -721,6 +758,7 @@ const isEditing = ref(false)
 const editBody = ref('')
 const editEntities = ref<NonNullable<Message['entities']>>([])
 const editSaving = ref(false)
+const editPendingTaskUrlPaste = ref(false)
 const editError = ref('')
 const editComposer = ref<InstanceType<typeof RichTextComposer> | null>(null)
 const editTagPickerOpen = ref(false)
@@ -796,6 +834,7 @@ const canModifyMessage = computed(() => isOwnMessage.value && isServerConfirmed.
 const canForwardMessage = computed(() => isServerConfirmed.value && !isEncryptedMessage.value)
 const canSaveEdit = computed(() =>
   !editSaving.value
+  && !editPendingTaskUrlPaste.value
   && (editBody.value.trim().length > 0 || messageAttachments.value.length > 0),
 )
 
@@ -918,23 +957,209 @@ function isInlinePreviewAttachment(attachment: MessageAttachment): boolean {
 }
 
 function attachmentUrl(attachment: MessageAttachment): string {
-  return attachmentUrls.value[attachment.id] ?? ''
+  return attachmentUrls.value[attachment.id] ?? originalImageUrls.value[attachment.id] ?? ''
 }
 
-function revokeAttachmentUrl(attachmentId: string) {
-  const url = attachmentUrls.value[attachmentId]
+function setAttachmentUrl(
+  urls: typeof attachmentUrls,
+  attachmentId: string,
+  blob: Blob,
+): string {
+  const url = URL.createObjectURL(blob)
+  if (!mediaLifecycleActive || !messageAttachments.value.some(item => item.id === attachmentId)) {
+    URL.revokeObjectURL(url)
+    return ''
+  }
+
+  const previous = urls.value[attachmentId]
+  if (previous && previous !== url) {
+    URL.revokeObjectURL(previous)
+  }
+  urls.value = {
+    ...urls.value,
+    [attachmentId]: url,
+  }
+  return url
+}
+
+function revokeAttachmentUrl(urls: typeof attachmentUrls, attachmentId: string) {
+  const url = urls.value[attachmentId]
   if (!url) return
   URL.revokeObjectURL(url)
-  delete attachmentUrls.value[attachmentId]
+  const { [attachmentId]: _removed, ...remaining } = urls.value
+  urls.value = remaining
 }
 
 function syncAttachmentUrls() {
   const currentIds = new Set(messageAttachments.value.map(item => item.id))
   for (const id of Object.keys(attachmentUrls.value)) {
     if (!currentIds.has(id)) {
-      revokeAttachmentUrl(id)
+      cancelImageLoads(id)
+      revokeAttachmentUrl(attachmentUrls, id)
     }
   }
+  for (const id of Object.keys(originalImageUrls.value)) {
+    if (!currentIds.has(id)) {
+      cancelImageLoads(id)
+      revokeAttachmentUrl(originalImageUrls, id)
+    }
+  }
+  for (const id of Object.keys(imagePreviewStates.value)) {
+    if (!currentIds.has(id)) {
+      cancelImageLoads(id)
+      const { [id]: _removed, ...remaining } = imagePreviewStates.value
+      imagePreviewStates.value = remaining
+    }
+  }
+  for (const id of [...imagePreviewTargets.keys()]) {
+    if (!currentIds.has(id)) {
+      cancelImageLoads(id)
+      imagePreviewTargets.delete(id)
+    }
+  }
+}
+
+function hasThumbnail(attachment: MessageAttachment): boolean {
+  return (attachment.thumbnailVersion ?? 0) > 0 && attachment.thumbnailMimeType?.startsWith('image/') === true
+}
+
+function imagePreviewState(attachment: MessageAttachment): ImagePreviewLoadState {
+  return imagePreviewStates.value[attachment.id] ?? 'idle'
+}
+
+function setImagePreviewState(attachmentId: string, state: ImagePreviewLoadState) {
+  imagePreviewStates.value = {
+    ...imagePreviewStates.value,
+    [attachmentId]: state,
+  }
+}
+
+function queueImageBlobLoad(
+  key: string,
+  attachmentId: string,
+  load: () => Promise<Blob>,
+  priority: ChatMediaRequestPriority,
+): Promise<Blob> {
+  const existing = pendingImageBlobLoads.get(key)
+  if (existing) return existing.promise
+
+  const request = enqueueChatMediaRequest(load, priority)
+  const pending: PendingImageBlobLoad = {
+    attachmentId,
+    request,
+    promise: request.promise.finally(() => {
+      if (pendingImageBlobLoads.get(key)?.request === request) {
+        pendingImageBlobLoads.delete(key)
+      }
+    }),
+  }
+  pendingImageBlobLoads.set(key, pending)
+  return pending.promise
+}
+
+function cancelImageLoads(attachmentId: string) {
+  for (const [key, pending] of pendingImageBlobLoads) {
+    if (pending.attachmentId !== attachmentId) continue
+    pending.request.cancel()
+    pendingImageBlobLoads.delete(key)
+  }
+  imagePreviewLoads.delete(attachmentId)
+  originalImageLoads.delete(attachmentId)
+}
+
+function updateOpenImagePreview(attachmentId: string, src: string) {
+  if (!src || !mediaPreview.value.open || mediaPreview.value.kind !== 'image' || mediaPreview.value.attachmentId !== attachmentId) {
+    return
+  }
+  mediaPreview.value = {
+    ...mediaPreview.value,
+    src,
+  }
+}
+
+async function ensureOriginalImageUrl(
+  attachment: MessageAttachment,
+  priority: ChatMediaRequestPriority,
+): Promise<string> {
+  const existing = originalImageUrls.value[attachment.id]
+  if (existing) return existing
+
+  const inFlight = originalImageLoads.get(attachment.id)
+  if (inFlight) return inFlight
+  if (props.message.sendStatus || props.message.pending || !mediaLifecycleActive) return ''
+
+  const load = queueImageBlobLoad(
+    `original:${props.message.id}:${attachment.id}`,
+    attachment.id,
+    () => fetchMessageAttachmentBlob(props.message.id, attachment.id),
+    priority,
+  )
+    .then(blob => setAttachmentUrl(originalImageUrls, attachment.id, blob))
+    .finally(() => {
+      originalImageLoads.delete(attachment.id)
+    })
+  originalImageLoads.set(attachment.id, load)
+  return load
+}
+
+async function ensureImagePreviewUrl(
+  attachment: MessageAttachment,
+  priority: ChatMediaRequestPriority = 'normal',
+): Promise<string> {
+  const existing = attachmentUrl(attachment)
+  if (existing) return existing
+
+  const inFlight = imagePreviewLoads.get(attachment.id)
+  if (inFlight) return inFlight
+  if (props.message.sendStatus || props.message.pending || !mediaLifecycleActive) return ''
+
+  setImagePreviewState(attachment.id, 'loading')
+  const load = (async () => {
+    if (!hasThumbnail(attachment)) {
+      return ensureOriginalImageUrl(attachment, priority)
+    }
+
+    try {
+      const blob = await queueImageBlobLoad(
+        `thumbnail:${props.message.id}:${attachment.id}:v${attachment.thumbnailVersion}`,
+        attachment.id,
+        () => fetchMessageAttachmentThumbnailBlob(props.message.id, attachment.id, attachment.thumbnailVersion!),
+        priority,
+      )
+      return setAttachmentUrl(attachmentUrls, attachment.id, blob)
+    } catch (error) {
+      if (isChatMediaRequestCancelled(error)) throw error
+      console.debug('[attachments] thumbnail preview load failed; falling back to original', {
+        messageId: props.message.id,
+        attachmentId: attachment.id,
+        error,
+      })
+      return ensureOriginalImageUrl(attachment, priority)
+    }
+  })()
+    .then(url => {
+      if (url) {
+        setImagePreviewState(attachment.id, 'loaded')
+        updateOpenImagePreview(attachment.id, url)
+      }
+      return url
+    })
+    .catch(error => {
+      if (!isChatMediaRequestCancelled(error)) {
+        console.debug('[attachments] image preview load failed', {
+          messageId: props.message.id,
+          attachmentId: attachment.id,
+          error,
+        })
+        setImagePreviewState(attachment.id, 'failed')
+      }
+      return ''
+    })
+    .finally(() => {
+      imagePreviewLoads.delete(attachment.id)
+    })
+  imagePreviewLoads.set(attachment.id, load)
+  return load
 }
 
 async function ensureAttachmentUrl(attachment: MessageAttachment) {
@@ -944,10 +1169,7 @@ async function ensureAttachmentUrl(attachment: MessageAttachment) {
   loadingAttachmentIds.value.add(attachment.id)
   try {
     const blob = await fetchMessageAttachmentBlob(props.message.id, attachment.id)
-    attachmentUrls.value = {
-      ...attachmentUrls.value,
-      [attachment.id]: URL.createObjectURL(blob),
-    }
+    setAttachmentUrl(attachmentUrls, attachment.id, blob)
   } catch (error) {
     console.debug('[attachments] preview load failed', { messageId: props.message.id, attachmentId: attachment.id, error })
   } finally {
@@ -957,8 +1179,82 @@ async function ensureAttachmentUrl(attachment: MessageAttachment) {
 
 function preloadAttachmentUrls() {
   for (const attachment of messageAttachments.value) {
-    if (isImageAttachment(attachment) || isVideoAttachment(attachment) || isAudioAttachment(attachment)) {
+    if (isVideoAttachment(attachment) || isAudioAttachment(attachment)) {
       void ensureAttachmentUrl(attachment)
+    }
+  }
+}
+
+function setImagePreviewTarget(attachment: MessageAttachment, element: Element | ComponentPublicInstance | null) {
+  const previous = imagePreviewTargets.get(attachment.id)
+  const target = element instanceof HTMLElement
+    ? element
+    : element && '$el' in element && element.$el instanceof HTMLElement
+      ? element.$el
+      : null
+  if (!target) {
+    if (previous) {
+      imagePreviewObserver?.unobserve(previous)
+      imagePreviewTargets.delete(attachment.id)
+    }
+    cancelImageLoads(attachment.id)
+    return
+  }
+
+  if (previous && previous !== target) {
+    imagePreviewObserver?.unobserve(previous)
+  }
+  imagePreviewTargets.set(attachment.id, target)
+  if (imagePreviewObserver) {
+    imagePreviewObserver.observe(target)
+  } else if (imagePreviewObserverStarted) {
+    void ensureImagePreviewUrl(attachment)
+  }
+}
+
+function startImagePreviewObserver() {
+  imagePreviewObserverStarted = true
+  if (typeof IntersectionObserver !== 'function') {
+    // Older webviews lack IntersectionObserver. Keep previews functional there,
+    // while current browsers defer the request until the preview is nearby.
+    for (const attachment of messageAttachments.value) {
+      if (isImageAttachment(attachment)) {
+        void ensureImagePreviewUrl(attachment)
+      }
+    }
+    return
+  }
+
+  imagePreviewObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      imagePreviewObserver?.unobserve(entry.target)
+      const attachmentId = entry.target.getAttribute('data-message-image-attachment-id')
+      const attachment = attachmentId
+        ? messageAttachments.value.find(item => item.id === attachmentId)
+        : undefined
+      if (attachment && isImageAttachment(attachment)) {
+        void ensureImagePreviewUrl(attachment)
+      }
+    }
+  }, {
+    rootMargin: '320px 0px',
+  })
+
+  for (const target of imagePreviewTargets.values()) {
+    imagePreviewObserver.observe(target)
+  }
+}
+
+function syncImagePreviewTargets() {
+  if (!imagePreviewObserverStarted) return
+  for (const attachment of messageAttachments.value) {
+    if (!isImageAttachment(attachment)) continue
+    const target = imagePreviewTargets.get(attachment.id)
+    if (target && imagePreviewObserver) {
+      imagePreviewObserver.observe(target)
+    } else if (!imagePreviewObserver) {
+      void ensureImagePreviewUrl(attachment)
     }
   }
 }
@@ -980,14 +1276,42 @@ async function downloadAttachment(attachment: MessageAttachment) {
 }
 
 function openMediaPreview(attachment: MessageAttachment) {
+  if (!isImageAttachment(attachment) && !isVideoAttachment(attachment)) return
+
+  if (isImageAttachment(attachment)) {
+    mediaPreview.value = {
+      open: true,
+      kind: 'image',
+      src: attachmentUrl(attachment),
+      fileName: attachment.fileName,
+      attachmentId: attachment.id,
+    }
+    void ensureImagePreviewUrl(attachment, 'high')
+      .then(async previewUrl => {
+        if (!previewUrl) return
+        updateOpenImagePreview(attachment.id, previewUrl)
+        const originalUrl = await ensureOriginalImageUrl(attachment, 'high')
+        updateOpenImagePreview(attachment.id, originalUrl)
+      })
+      .catch(error => {
+        if (isChatMediaRequestCancelled(error)) return
+        console.debug('[attachments] lightbox original load failed', {
+          messageId: props.message.id,
+          attachmentId: attachment.id,
+          error,
+        })
+      })
+    return
+  }
+
   const src = attachmentUrl(attachment)
   if (!src) return
-  if (!isImageAttachment(attachment) && !isVideoAttachment(attachment)) return
   mediaPreview.value = {
     open: true,
-    kind: isVideoAttachment(attachment) ? 'video' : 'image',
+    kind: 'video',
     src,
     fileName: attachment.fileName,
+    attachmentId: attachment.id,
   }
 }
 
@@ -997,6 +1321,7 @@ function closeMediaPreview() {
     kind: 'image',
     src: '',
     fileName: '',
+    attachmentId: undefined,
   }
 }
 
@@ -1169,6 +1494,7 @@ watch(() => props.message.id, () => {
   reactionCountsSnapshot.value = {}
   isEditing.value = false
   editBody.value = ''
+  editPendingTaskUrlPaste.value = false
   editError.value = ''
   editSaving.value = false
 })
@@ -1428,9 +1754,26 @@ watch(reactionPopupVisible, visible => {
 watch(messageAttachments, () => {
   syncAttachmentUrls()
   preloadAttachmentUrls()
+  syncImagePreviewTargets()
 }, { immediate: true, deep: true })
 
+watch(
+  () => [props.message.sendStatus, props.message.pending],
+  () => syncImagePreviewTargets(),
+)
+
+onMounted(() => {
+  startImagePreviewObserver()
+})
+
 onBeforeUnmount(() => {
+  mediaLifecycleActive = false
+  imagePreviewObserver?.disconnect()
+  imagePreviewObserver = null
+  for (const { request } of pendingImageBlobLoads.values()) {
+    request.cancel()
+  }
+  pendingImageBlobLoads.clear()
   document.removeEventListener('click', handleDocumentClick)
   document.removeEventListener('keydown', handleEscape)
   window.removeEventListener('resize', updateEmojiPickerPosition)
@@ -1444,7 +1787,10 @@ onBeforeUnmount(() => {
   closeMediaPreview()
   clearReactionPopupCloseTimer()
   for (const id of Object.keys(attachmentUrls.value)) {
-    revokeAttachmentUrl(id)
+    revokeAttachmentUrl(attachmentUrls, id)
+  }
+  for (const id of Object.keys(originalImageUrls.value)) {
+    revokeAttachmentUrl(originalImageUrls, id)
   }
 })
 
@@ -1454,6 +1800,7 @@ function startEdit() {
   if (!canModifyMessage.value) return
   showContextMenu.value = false
   editError.value = ''
+  editPendingTaskUrlPaste.value = false
   closeEditTagPicker()
   editBody.value = props.message.body
   editEntities.value = (props.message.entities ?? []).map(entity => ({ ...entity }))
@@ -1469,6 +1816,7 @@ function cancelEdit() {
   editError.value = ''
   editBody.value = ''
   editEntities.value = []
+  editPendingTaskUrlPaste.value = false
   closeEditTagPicker()
 }
 
@@ -1530,6 +1878,7 @@ async function saveEdit() {
     isEditing.value = false
     editBody.value = ''
     editEntities.value = []
+    editPendingTaskUrlPaste.value = false
     closeEditTagPicker()
   } catch (error) {
     editError.value = error instanceof Error ? error.message : 'Failed to edit message'

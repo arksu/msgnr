@@ -104,6 +104,10 @@ SELECT ma.id,
        ma.file_size,
        ma.mime_type,
        ma.storage_key,
+       ma.thumbnail_storage_key,
+       ma.thumbnail_mime_type,
+       ma.thumbnail_file_size,
+       ma.thumbnail_version,
        ma.uploaded_by,
        ma.created_at
 FROM message_attachment ma

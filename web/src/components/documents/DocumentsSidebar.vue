@@ -73,10 +73,10 @@
             </button>
             <button
               type="button"
-              class="flex h-5 w-5 shrink-0 items-center justify-center rounded transition-opacity disabled:opacity-50"
+              class="hidden h-5 w-5 shrink-0 items-center justify-center rounded disabled:opacity-50 group-hover:flex group-focus-within:flex"
               :class="selectedDocumentId === favorite.id
-                ? 'opacity-100 text-white/80 hover:bg-white/10 hover:text-white'
-                : 'opacity-0 text-sidebar-textMuted hover:bg-sidebar-hover hover:text-sidebar-text group-hover:opacity-100 focus-visible:opacity-100'"
+                ? 'text-white/80 hover:bg-white/10 hover:text-white'
+                : 'text-sidebar-textMuted hover:bg-sidebar-hover hover:text-sidebar-text'"
               :data-testid="`documents-favorite-remove-${favorite.id}`"
               title="Remove from favorites"
               aria-label="Remove from favorites"
@@ -141,7 +141,7 @@
               </button>
               <button
                 type="button"
-                class="h-5 w-5 shrink-0 rounded text-sidebar-textMuted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-sidebar-hover hover:text-sidebar-text"
+                class="hidden h-5 w-5 shrink-0 rounded text-sidebar-textMuted group-hover:block group-focus-within:block hover:bg-sidebar-hover hover:text-sidebar-text"
                 :data-testid="`documents-teamspace-add-${teamspace.id}`"
                 title="Add root document"
                 @click.stop="openCreateDocument(teamspace.id, null)"

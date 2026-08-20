@@ -25,19 +25,30 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { JSONContent } from '@tiptap/core'
+import type { Editor as TiptapEditor, JSONContent } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Link from '@tiptap/extension-link'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import type { MessageEntity } from '@/stores/chat'
 import { searchTagEntities, type TagSearchResponse } from '@/services/http/chatApi'
+import { tasksGet } from '@/services/http/tasksApi'
+import {
+  PendingPasteCandidatesExtension,
+  addPendingPasteCandidateToTransaction,
+  clearPendingPasteCandidates,
+  findPendingPasteCandidate,
+  removePendingPasteCandidate,
+  removePendingPasteCandidateFromTransaction,
+} from '@/editor/pendingPasteCandidates'
 import { renderMarkdownToHtml } from '@/utils/markdown'
 import { renderTaskMarkdownToHtml } from '@/utils/taskMarkdown'
 import { tiptapJsonToMarkdown } from '@/utils/tiptapMarkdown'
 import { MessageEntityNode } from '@/editor/messageEntity'
 import { FenceOnEnterExtension, shouldSubmitOnEnter } from '@/editor/richTextShortcuts'
 import { renderMessageEditorHtml, tiptapJsonToMessagePayload } from '@/utils/messageRichText'
+import { buildTaskMentionHref, buildTaskMentionLabel } from '@/utils/descriptionMentions'
+import { findStandaloneCurrentWorkspaceTaskUrl } from '@/utils/taskUrlMention'
 import MessageTagPicker, { type MessageTagPickerItem } from './MessageTagPicker.vue'
 import { userCustomStatusFromDto } from '@/types/userStatus'
 
@@ -72,6 +83,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:entities': [value: MessageEntity[]]
   submit: [{ body: string; entities: MessageEntity[] }]
+  'pending-task-url-paste-change': [pending: boolean]
   'empty-arrow-up': []
   blur: []
   resize: [deltaPx: number]
@@ -82,9 +94,18 @@ const textDraft = ref(props.modelValue ?? '')
 const entitiesDraft = ref<MessageEntity[]>([...(props.entities ?? [])])
 const suppressEditorSync = ref(false)
 const lastMeasuredHeight = ref(0)
+
+interface PendingTaskUrlPaste {
+  url: string
+  sliceJson: string
+}
+
 let handledFocusToken = 0
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let searchRequestToken = 0
+let pendingTaskUrlPasteSequence = 0
+let composerUnmounted = false
+const pendingTaskUrlPastes = new Map<string, PendingTaskUrlPaste>()
 
 const tagPickerOpen = ref(false)
 const tagPickerLoading = ref(false)
@@ -328,6 +349,7 @@ async function handleFiles(files: File[]) {
 function applyValue(body: string, nextEntities: MessageEntity[] = [], emitUpdates = true) {
   const normalizedBody = body ?? ''
   const normalizedEntities = [...(nextEntities ?? [])]
+  clearAllPendingTaskUrlPastes()
   textDraft.value = normalizedBody
   entitiesDraft.value = normalizedEntities
 
@@ -350,6 +372,7 @@ function applyValue(body: string, nextEntities: MessageEntity[] = [], emitUpdate
 }
 
 function emitSubmit() {
+  if (pendingTaskUrlPastes.size > 0) return
   const payload = serializeCurrentState()
   emit('submit', payload)
 }
@@ -377,6 +400,7 @@ const editor = useEditor({
         ]
       : []),
     ...(props.enableMessageEntities ? [MessageEntityNode] : []),
+    ...(props.enableMessageEntities ? [PendingPasteCandidatesExtension] : []),
   ],
   content: renderValueAsHtml(textDraft.value, entitiesDraft.value),
   editable: !props.disabled,
@@ -450,11 +474,44 @@ const editor = useEditor({
 
       return false
     },
-    handlePaste(_view, event) {
+    handlePaste(view, event) {
       const files = Array.from(event.clipboardData?.files ?? [])
-      if (!files.length || !props.onFiles) return false
+      if (files.length && props.onFiles) {
+        event.preventDefault()
+        void handleFiles(files)
+        return true
+      }
+
+      if (!props.enableMessageEntities || props.disabled || editor.value?.isActive('code') || editor.value?.isActive('codeBlock')) {
+        return false
+      }
+
+      const pastedText = event.clipboardData?.getData('text/plain') ?? ''
+      const currentWorkspaceOrigin = `${window.location.protocol}//${window.location.host}`
+      const taskUrl = findStandaloneCurrentWorkspaceTaskUrl(pastedText, currentWorkspaceOrigin)
+      if (!taskUrl) return false
+
       event.preventDefault()
-      void handleFiles(files)
+      const { from, to } = view.state.selection
+      const id = `task-url-paste-${++pendingTaskUrlPasteSequence}`
+      const transaction = view.state.tr.insertText(pastedText, from, to)
+      const registered = addPendingPasteCandidateToTransaction(transaction, {
+        id,
+        from: from + taskUrl.start,
+        to: from + taskUrl.end,
+      })
+      view.dispatch(transaction)
+      if (!registered) return true
+
+      const pendingRange = findPendingPasteCandidate(view.state, id)
+      if (!pendingRange) return true
+
+      pendingTaskUrlPastes.set(id, {
+        url: taskUrl.url,
+        sliceJson: JSON.stringify(view.state.doc.slice(pendingRange.from, pendingRange.to).toJSON()),
+      })
+      emit('pending-task-url-paste-change', true)
+      void resolveTaskUrlPaste(id, taskUrl)
       return true
     },
     handleDrop(_view, event) {
@@ -472,6 +529,7 @@ const editor = useEditor({
   },
   onUpdate({ editor: nextEditor }) {
     if (suppressEditorSync.value) return
+    clearModifiedTaskUrlPastes(nextEditor)
     const payload = serializeCurrentState(nextEditor.getJSON())
     textDraft.value = payload.body
     entitiesDraft.value = payload.entities
@@ -513,6 +571,86 @@ function selectTagItem(item: MessageTagPickerItem) {
   nextTick(() => {
     syncComposerHeight()
   })
+}
+
+function clearPendingTaskUrlPaste(id: string) {
+  const removed = pendingTaskUrlPastes.delete(id)
+  if (removed) {
+    emit('pending-task-url-paste-change', pendingTaskUrlPastes.size > 0)
+  }
+  const nextEditor = editor.value
+  if (composerUnmounted || !nextEditor || nextEditor.isDestroyed) return
+  if (findPendingPasteCandidate(nextEditor.state, id)) {
+    removePendingPasteCandidate(nextEditor.view, id)
+  }
+}
+
+function clearAllPendingTaskUrlPastes() {
+  const wasPending = pendingTaskUrlPastes.size > 0
+  if (!wasPending) return
+
+  pendingTaskUrlPastes.clear()
+  emit('pending-task-url-paste-change', false)
+
+  const nextEditor = editor.value
+  if (composerUnmounted || !nextEditor || nextEditor.isDestroyed) return
+  clearPendingPasteCandidates(nextEditor.view)
+}
+
+function clearModifiedTaskUrlPastes(nextEditor: TiptapEditor) {
+  for (const [id, pendingPaste] of pendingTaskUrlPastes) {
+    const pendingRange = findPendingPasteCandidate(nextEditor.state, id)
+    if (!pendingRange || !pendingTaskUrlPasteMatches(nextEditor, pendingRange, pendingPaste)) {
+      clearPendingTaskUrlPaste(id)
+    }
+  }
+}
+
+function pendingTaskUrlPasteMatches(
+  nextEditor: TiptapEditor,
+  pendingRange: { from: number; to: number },
+  pendingPaste: PendingTaskUrlPaste,
+): boolean {
+  return nextEditor.state.doc.textBetween(pendingRange.from, pendingRange.to, '\n', '\uFFFC') === pendingPaste.url
+    && JSON.stringify(nextEditor.state.doc.slice(pendingRange.from, pendingRange.to).toJSON()) === pendingPaste.sliceJson
+}
+
+async function resolveTaskUrlPaste(
+  id: string,
+  taskUrl: NonNullable<ReturnType<typeof findStandaloneCurrentWorkspaceTaskUrl>>,
+) {
+  try {
+    const task = await tasksGet(taskUrl.publicId)
+    const nextEditor = editor.value
+    const pendingPaste = pendingTaskUrlPastes.get(id)
+    if (composerUnmounted || !pendingPaste || !nextEditor || nextEditor.isDestroyed) return
+
+    const pendingRange = findPendingPasteCandidate(nextEditor.state, id)
+    if (!pendingRange) return
+    if (!pendingTaskUrlPasteMatches(nextEditor, pendingRange, pendingPaste)) return
+
+    const taskEntity = nextEditor.state.schema.nodes.messageEntity
+    if (!taskEntity || task.public_id.trim() !== taskUrl.publicId) return
+
+    const transaction = nextEditor.state.tr.replaceWith(
+      pendingRange.from,
+      pendingRange.to,
+      taskEntity.create({
+        kind: 'task',
+        targetId: task.id,
+        label: buildTaskMentionLabel(task.public_id, task.title),
+        href: buildTaskMentionHref(task.public_id),
+      }),
+    )
+    removePendingPasteCandidateFromTransaction(transaction, id)
+    pendingTaskUrlPastes.delete(id)
+    emit('pending-task-url-paste-change', pendingTaskUrlPastes.size > 0)
+    nextEditor.view.dispatch(transaction)
+  } catch {
+    // A failed task lookup must leave the already-pasted URL as normal text.
+  } finally {
+    clearPendingTaskUrlPaste(id)
+  }
 }
 
 function focusAtEnd() {
@@ -564,6 +702,7 @@ watch(() => props.focusToken, () => {
 }, { immediate: true })
 
 onMounted(() => {
+  composerUnmounted = false
   void nextTick(() => {
     syncPlaceholderState()
     syncComposerHeight()
@@ -571,6 +710,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  composerUnmounted = true
+  pendingTaskUrlPastes.clear()
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer)
     searchDebounceTimer = null

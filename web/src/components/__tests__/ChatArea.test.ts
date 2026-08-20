@@ -163,6 +163,74 @@ describe('ChatArea', () => {
     expect(wsStore.sendMessage).toHaveBeenCalledWith('channel-1', 'hello world', expect.any(String), undefined, [])
   })
 
+  it('keeps uploaded thumbnail metadata on the optimistic message', async () => {
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+
+    authStore.user = {
+      id: 'user-1',
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      avatarUrl: '',
+      role: 'member',
+    }
+    chatStore.channels = [{
+      id: 'channel-1',
+      name: 'general',
+      kind: 'channel',
+      visibility: 'public',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chatStore.activeChannelId = 'channel-1'
+    wsStore.state = 'LIVE_SYNCED'
+    wsStore.sendMessage = vi.fn(() => true)
+    chatStore.addOptimisticMessage = vi.fn()
+
+    const wrapper = mount(ChatArea, {
+      global: {
+        stubs: {
+          MessageBubble: true,
+          MessageInput: {
+            template: `<button
+              data-testid="emit-image-send"
+              @click="$emit('send', {
+                body: '',
+                entities: [],
+                attachmentIds: ['attachment-1'],
+                attachments: [{
+                  id: 'attachment-1',
+                  fileName: 'photo.jpg',
+                  fileSize: 2048,
+                  mimeType: 'image/jpeg',
+                  thumbnailMimeType: 'image/jpeg',
+                  thumbnailFileSize: 256,
+                  thumbnailVersion: 1,
+                }],
+              })"
+            >send</button>`,
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="emit-image-send"]').trigger('click')
+    await flushAll()
+
+    expect(chatStore.addOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [{
+        id: 'attachment-1',
+        fileName: 'photo.jpg',
+        fileSize: 2048,
+        mimeType: 'image/jpeg',
+        thumbnailMimeType: 'image/jpeg',
+        thumbnailFileSize: 256,
+        thumbnailVersion: 1,
+      }],
+    }))
+  })
+
   it('does not auto-encrypt a normal plaintext direct message', async () => {
     const authStore = useAuthStore()
     const chatStore = useChatStore()

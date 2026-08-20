@@ -307,12 +307,32 @@ CREATE TABLE IF NOT EXISTS message_attachment (
   file_size       BIGINT        NOT NULL,
   mime_type       VARCHAR(255)  NOT NULL,
   storage_key     VARCHAR(2048) NOT NULL,
+  thumbnail_storage_key VARCHAR(2048),
+  thumbnail_mime_type   VARCHAR(255),
+  thumbnail_file_size   BIGINT,
+  thumbnail_version     SMALLINT,
   uploaded_by     UUID          NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   created_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
 
   CONSTRAINT chk_message_attachment_file_size CHECK (file_size >= 0),
   CONSTRAINT chk_message_attachment_file_name CHECK (btrim(file_name) <> ''),
-  CONSTRAINT chk_message_attachment_storage_key CHECK (btrim(storage_key) <> '')
+  CONSTRAINT chk_message_attachment_storage_key CHECK (btrim(storage_key) <> ''),
+  CONSTRAINT chk_message_attachment_thumbnail_metadata CHECK (
+    (thumbnail_storage_key IS NULL
+      AND thumbnail_mime_type IS NULL
+      AND thumbnail_file_size IS NULL
+      AND thumbnail_version IS NULL)
+    OR (
+      thumbnail_storage_key IS NOT NULL
+      AND btrim(thumbnail_storage_key) <> ''
+      AND thumbnail_mime_type IS NOT NULL
+      AND btrim(thumbnail_mime_type) <> ''
+      AND thumbnail_file_size IS NOT NULL
+      AND thumbnail_file_size >= 0
+      AND thumbnail_version IS NOT NULL
+      AND thumbnail_version > 0
+    )
+  )
 );
 
 -- message render query path

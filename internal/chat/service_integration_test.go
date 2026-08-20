@@ -270,8 +270,16 @@ func TestIntegration_ForwardMessage_ChatToChatCopiesMetadataAndAttachments(t *te
 	require.NoError(t, err)
 	var sourceAttachmentID uuid.UUID
 	err = pool.QueryRow(ctx, `
-		INSERT INTO message_attachment (conversation_id, message_id, file_name, file_size, mime_type, storage_key, uploaded_by)
-		VALUES ($1, $2, 'source.txt', 12, 'text/plain', 'objects/source.txt', $3)
+		INSERT INTO message_attachment (
+			conversation_id, message_id, file_name, file_size, mime_type, storage_key,
+			thumbnail_storage_key, thumbnail_mime_type, thumbnail_file_size, thumbnail_version,
+			uploaded_by
+		)
+		VALUES (
+			$1, $2, 'source.png', 12, 'image/png', 'objects/source.png',
+			'objects/thumbnail-v1.jpg', 'image/jpeg', 44, 1,
+			$3
+		)
 		RETURNING id`,
 		sourceChannelID, source.MessageID, originalSenderID,
 	).Scan(&sourceAttachmentID)
@@ -299,21 +307,27 @@ func TestIntegration_ForwardMessage_ChatToChatCopiesMetadataAndAttachments(t *te
 	assert.Empty(t, page[0].ForwardedFrom.ThreadTitle)
 	require.Len(t, page[0].Attachments, 1)
 	assert.NotEqual(t, sourceAttachmentID, page[0].Attachments[0].ID)
-	assert.Equal(t, "source.txt", page[0].Attachments[0].FileName)
+	assert.Equal(t, "source.png", page[0].Attachments[0].FileName)
+	assert.Equal(t, "image/jpeg", page[0].Attachments[0].ThumbnailMimeType)
+	assert.Equal(t, int64(44), page[0].Attachments[0].ThumbnailFileSize)
+	assert.Equal(t, int16(1), page[0].Attachments[0].ThumbnailVersion)
 
 	var sourceStorageKey string
+	var sourceThumbnailStorageKey string
 	err = pool.QueryRow(ctx,
-		`SELECT storage_key FROM message_attachment WHERE id = $1`,
+		`SELECT storage_key, thumbnail_storage_key FROM message_attachment WHERE id = $1`,
 		sourceAttachmentID,
-	).Scan(&sourceStorageKey)
+	).Scan(&sourceStorageKey, &sourceThumbnailStorageKey)
 	require.NoError(t, err)
 	var copiedStorageKey string
+	var copiedThumbnailStorageKey string
 	err = pool.QueryRow(ctx,
-		`SELECT storage_key FROM message_attachment WHERE id = $1`,
+		`SELECT storage_key, thumbnail_storage_key FROM message_attachment WHERE id = $1`,
 		page[0].Attachments[0].ID,
-	).Scan(&copiedStorageKey)
+	).Scan(&copiedStorageKey, &copiedThumbnailStorageKey)
 	require.NoError(t, err)
 	assert.Equal(t, sourceStorageKey, copiedStorageKey)
+	assert.Equal(t, sourceThumbnailStorageKey, copiedThumbnailStorageKey)
 }
 
 func TestIntegration_ForwardMessage_ThreadReplyToChatPreservesSourceThreadMetadata(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -91,10 +92,18 @@ type CreateChannelParams struct {
 
 // Service implements admin business logic.
 type Service struct {
-	pool       *pgxpool.Pool
-	db         *sql.DB
-	q          *queries.Queries
-	eventStore *events.Store
+	pool                   *pgxpool.Pool
+	db                     *sql.DB
+	q                      *queries.Queries
+	eventStore             *events.Store
+	messageAttachmentStore messageAttachmentStorage
+	log                    *zap.Logger
+}
+
+// messageAttachmentStorage is the object-store subset needed when an admin
+// deletion cascades chat attachment rows.
+type messageAttachmentStorage interface {
+	DeleteObject(ctx context.Context, key string) error
 }
 
 func NewService(pool *pgxpool.Pool) *Service {
@@ -104,7 +113,23 @@ func NewService(pool *pgxpool.Pool) *Service {
 		db:         sqlDB,
 		q:          queries.New(sqlDB),
 		eventStore: events.NewStore(pool),
+		log:        zap.NewNop(),
 	}
+}
+
+// ConfigureMessageAttachmentStorage enables cleanup of chat attachment
+// originals and generated thumbnails after an admin channel deletion.
+func (s *Service) ConfigureMessageAttachmentStorage(store messageAttachmentStorage) {
+	s.messageAttachmentStore = store
+}
+
+// SetLogger configures logging for best-effort post-commit object cleanup.
+func (s *Service) SetLogger(log *zap.Logger) {
+	if log == nil {
+		s.log = zap.NewNop()
+		return
+	}
+	s.log = log
 }
 
 // ---- Users ----
@@ -477,10 +502,93 @@ func (s *Service) CreateChannel(ctx context.Context, p CreateChannelParams) (Cha
 }
 
 func (s *Service) DeleteChannel(ctx context.Context, id uuid.UUID) error {
-	if err := s.q.AdminDeleteChannel(ctx, id); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("admin: begin delete channel: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	attachmentKeys, err := listMessageAttachmentObjectKeysForChannelDelete(ctx, tx, id)
+	if err != nil {
+		return fmt.Errorf("admin: list channel attachment keys: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM channels WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("admin: delete channel: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("admin: commit delete channel: %w", err)
+	}
+
+	s.cleanupDeletedMessageAttachmentObjects(attachmentKeys)
 	return nil
+}
+
+func listMessageAttachmentObjectKeysForChannelDelete(ctx context.Context, tx pgx.Tx, channelID uuid.UUID) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT storage_key, thumbnail_storage_key
+		  FROM message_attachment
+		 WHERE conversation_id = $1`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	keys := make([]string, 0)
+	seen := make(map[string]struct{})
+	for rows.Next() {
+		var storageKey string
+		var thumbnailStorageKey sql.NullString
+		if err := rows.Scan(&storageKey, &thumbnailStorageKey); err != nil {
+			return nil, err
+		}
+		for _, key := range []string{storageKey, thumbnailStorageKey.String} {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func (s *Service) cleanupDeletedMessageAttachmentObjects(keys []string) {
+	if s.messageAttachmentStore == nil || len(keys) == 0 {
+		return
+	}
+
+	go func() {
+		for _, key := range keys {
+			var referenced bool
+			if err := s.pool.QueryRow(context.Background(), `
+				SELECT EXISTS (
+					SELECT 1
+					  FROM message_attachment
+					 WHERE storage_key = $1
+					    OR thumbnail_storage_key = $1
+				)`, key).Scan(&referenced); err != nil {
+				s.log.Warn("admin channel attachment reference check failed",
+					zap.String("reason", "database"),
+					zap.Error(err))
+				continue
+			}
+			if referenced {
+				continue
+			}
+			if err := s.messageAttachmentStore.DeleteObject(context.Background(), key); err != nil {
+				s.log.Warn("admin channel attachment cleanup failed",
+					zap.String("reason", "storage_delete"),
+					zap.Error(err))
+			}
+		}
+	}()
 }
 
 func (s *Service) RenameChannel(ctx context.Context, channelID uuid.UUID, name string) (ChannelRow, error) {

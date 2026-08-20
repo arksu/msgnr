@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,6 +18,24 @@ import (
 	"msgnr/internal/admin"
 	"msgnr/internal/testdb"
 )
+
+type deleteTrackingAttachmentStorage struct {
+	mu   sync.Mutex
+	keys []string
+}
+
+func (s *deleteTrackingAttachmentStorage) DeleteObject(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keys = append(s.keys, key)
+	return nil
+}
+
+func (s *deleteTrackingAttachmentStorage) deletedKeys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.keys...)
+}
 
 func hashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
@@ -70,6 +90,46 @@ func TestIntegration_CreateChannel_AddAllUsers(t *testing.T) {
 	).Scan(&eventType)
 	require.NoError(t, err)
 	assert.Equal(t, "conversation_upserted", eventType)
+}
+
+func TestIntegration_DeleteChannelCleansUpAttachmentOriginalAndThumbnail(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	adminID := seedAdminUser(t, ctx, pool, "admin")
+	svc := admin.NewService(pool)
+	storage := &deleteTrackingAttachmentStorage{}
+	svc.ConfigureMessageAttachmentStorage(storage)
+
+	channel, err := svc.CreateChannel(ctx, admin.CreateChannelParams{
+		Name:       "cleanup-attachments",
+		Visibility: "public",
+		CreatedBy:  adminID,
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO message_attachment (
+			conversation_id, message_id, file_name, file_size, mime_type, storage_key,
+			thumbnail_storage_key, thumbnail_mime_type, thumbnail_file_size, thumbnail_version,
+			uploaded_by
+		) VALUES (
+			$1, NULL, 'photo.png', 12, 'image/png', 'chat/admin/original.png',
+			'chat/admin/thumbnail-v1.jpg', 'image/jpeg', 9, 1,
+			$2
+		)`,
+		channel.ID, adminID,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DeleteChannel(ctx, channel.ID))
+	require.Eventually(t, func() bool {
+		return len(storage.deletedKeys()) == 2
+	}, time.Second, 10*time.Millisecond)
+	assert.ElementsMatch(t,
+		[]string{"chat/admin/original.png", "chat/admin/thumbnail-v1.jpg"},
+		storage.deletedKeys(),
+	)
 }
 
 func TestIntegration_CreateChannel_AddAllUsersSkipsBots(t *testing.T) {

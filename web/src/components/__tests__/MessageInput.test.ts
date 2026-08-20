@@ -319,6 +319,37 @@ describe('MessageInput', () => {
     ]])
   })
 
+  it('holds send while a pasted task URL is resolving', async () => {
+    const wrapper = mount(MessageInput, {
+      props: {
+        channelName: 'general',
+        conversationId: 'channel-1',
+        disabled: false,
+      },
+    })
+    await waitForComposer(wrapper)
+    await insertText(wrapper, 'ready to send')
+
+    const sendButton = wrapper.get('[data-testid="composer-send-button"]')
+    expect(sendButton.attributes('disabled')).toBeUndefined()
+
+    ;(composer(wrapper).vm as unknown as { $emit: (event: string, value: boolean) => void })
+      .$emit('pending-task-url-paste-change', true)
+    await flushAll()
+
+    expect(sendButton.attributes('disabled')).toBeDefined()
+    await sendButton.trigger('click')
+    expect(wrapper.emitted('send')).toBeFalsy()
+
+    ;(composer(wrapper).vm as unknown as { $emit: (event: string, value: boolean) => void })
+      .$emit('pending-task-url-paste-change', false)
+    await flushAll()
+
+    expect(sendButton.attributes('disabled')).toBeUndefined()
+    await sendButton.trigger('click')
+    expect(wrapper.emitted('send')?.[0]?.[0]).toMatchObject({ body: 'ready to send' })
+  })
+
   it('does not upload dropped files when conversation is not selected', async () => {
     const wrapper = mount(MessageInput, {
       props: {

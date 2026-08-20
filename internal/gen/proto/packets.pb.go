@@ -3075,13 +3075,16 @@ func (x *MessageEvent) GetEncryptedDmPayload() *EncryptedDMMessagePayload {
 }
 
 type MessageAttachment struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AttachmentId  string                 `protobuf:"bytes,1,opt,name=attachment_id,json=attachmentId,proto3" json:"attachment_id,omitempty"`
-	FileName      string                 `protobuf:"bytes,2,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
-	FileSize      int64                  `protobuf:"varint,3,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`
-	MimeType      string                 `protobuf:"bytes,4,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	AttachmentId      string                 `protobuf:"bytes,1,opt,name=attachment_id,json=attachmentId,proto3" json:"attachment_id,omitempty"`
+	FileName          string                 `protobuf:"bytes,2,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
+	FileSize          int64                  `protobuf:"varint,3,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`
+	MimeType          string                 `protobuf:"bytes,4,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
+	ThumbnailMimeType string                 `protobuf:"bytes,5,opt,name=thumbnail_mime_type,json=thumbnailMimeType,proto3" json:"thumbnail_mime_type,omitempty"`
+	ThumbnailFileSize int64                  `protobuf:"varint,6,opt,name=thumbnail_file_size,json=thumbnailFileSize,proto3" json:"thumbnail_file_size,omitempty"`
+	ThumbnailVersion  int32                  `protobuf:"varint,7,opt,name=thumbnail_version,json=thumbnailVersion,proto3" json:"thumbnail_version,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *MessageAttachment) Reset() {
@@ -3140,6 +3143,27 @@ func (x *MessageAttachment) GetMimeType() string {
 		return x.MimeType
 	}
 	return ""
+}
+
+func (x *MessageAttachment) GetThumbnailMimeType() string {
+	if x != nil {
+		return x.ThumbnailMimeType
+	}
+	return ""
+}
+
+func (x *MessageAttachment) GetThumbnailFileSize() int64 {
+	if x != nil {
+		return x.ThumbnailFileSize
+	}
+	return 0
+}
+
+func (x *MessageAttachment) GetThumbnailVersion() int32 {
+	if x != nil {
+		return x.ThumbnailVersion
+	}
+	return 0
 }
 
 type ReactionAggregate struct {
@@ -8464,12 +8488,15 @@ const file_api_proto_packets_proto_rawDesc = "" +
 	" forwarded_from_conversation_kind\x18\x15 \x01(\tR\x1dforwardedFromConversationKind\x12A\n" +
 	"\fcontent_mode\x18\x16 \x01(\x0e2\x1e.packets.v1.MessageContentModeR\vcontentMode\x12(\n" +
 	"\x10sender_device_id\x18\x17 \x01(\tR\x0esenderDeviceId\x12W\n" +
-	"\x14encrypted_dm_payload\x18\x18 \x01(\v2%.packets.v1.EncryptedDMMessagePayloadR\x12encryptedDmPayload\"\x8f\x01\n" +
+	"\x14encrypted_dm_payload\x18\x18 \x01(\v2%.packets.v1.EncryptedDMMessagePayloadR\x12encryptedDmPayload\"\x9c\x02\n" +
 	"\x11MessageAttachment\x12#\n" +
 	"\rattachment_id\x18\x01 \x01(\tR\fattachmentId\x12\x1b\n" +
 	"\tfile_name\x18\x02 \x01(\tR\bfileName\x12\x1b\n" +
 	"\tfile_size\x18\x03 \x01(\x03R\bfileSize\x12\x1b\n" +
-	"\tmime_type\x18\x04 \x01(\tR\bmimeType\"?\n" +
+	"\tmime_type\x18\x04 \x01(\tR\bmimeType\x12.\n" +
+	"\x13thumbnail_mime_type\x18\x05 \x01(\tR\x11thumbnailMimeType\x12.\n" +
+	"\x13thumbnail_file_size\x18\x06 \x01(\x03R\x11thumbnailFileSize\x12+\n" +
+	"\x11thumbnail_version\x18\a \x01(\x05R\x10thumbnailVersion\"?\n" +
 	"\x11ReactionAggregate\x12\x14\n" +
 	"\x05emoji\x18\x01 \x01(\tR\x05emoji\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\"\x9e\x01\n" +

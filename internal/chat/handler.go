@@ -207,10 +207,13 @@ type forwardedMessageResponse struct {
 }
 
 type messageAttachmentResponse struct {
-	ID       string `json:"id"`
-	FileName string `json:"file_name"`
-	FileSize int64  `json:"file_size"`
-	MimeType string `json:"mime_type"`
+	ID                string `json:"id"`
+	FileName          string `json:"file_name"`
+	FileSize          int64  `json:"file_size"`
+	MimeType          string `json:"mime_type"`
+	ThumbnailMimeType string `json:"thumbnail_mime_type,omitempty"`
+	ThumbnailFileSize int64  `json:"thumbnail_file_size,omitempty"`
+	ThumbnailVersion  int16  `json:"thumbnail_version,omitempty"`
 }
 
 type messageEntityRequest struct {
@@ -861,10 +864,13 @@ func (h *Handler) listConversationMessages(w http.ResponseWriter, r *http.Reques
 		attachments := make([]messageAttachmentResponse, 0, len(msg.Attachments))
 		for _, attachment := range msg.Attachments {
 			attachments = append(attachments, messageAttachmentResponse{
-				ID:       attachment.ID.String(),
-				FileName: attachment.FileName,
-				FileSize: attachment.FileSize,
-				MimeType: attachment.MimeType,
+				ID:                attachment.ID.String(),
+				FileName:          attachment.FileName,
+				FileSize:          attachment.FileSize,
+				MimeType:          attachment.MimeType,
+				ThumbnailMimeType: attachment.ThumbnailMimeType,
+				ThumbnailFileSize: attachment.ThumbnailFileSize,
+				ThumbnailVersion:  attachment.ThumbnailVersion,
 			})
 		}
 		editedAt := ""
@@ -965,10 +971,13 @@ func (h *Handler) getMessageContext(w http.ResponseWriter, r *http.Request, prin
 		attachments := make([]messageAttachmentResponse, 0, len(msg.Attachments))
 		for _, attachment := range msg.Attachments {
 			attachments = append(attachments, messageAttachmentResponse{
-				ID:       attachment.ID.String(),
-				FileName: attachment.FileName,
-				FileSize: attachment.FileSize,
-				MimeType: attachment.MimeType,
+				ID:                attachment.ID.String(),
+				FileName:          attachment.FileName,
+				FileSize:          attachment.FileSize,
+				MimeType:          attachment.MimeType,
+				ThumbnailMimeType: attachment.ThumbnailMimeType,
+				ThumbnailFileSize: attachment.ThumbnailFileSize,
+				ThumbnailVersion:  attachment.ThumbnailVersion,
 			})
 		}
 		editedAt := ""
@@ -1284,10 +1293,13 @@ func (h *Handler) chatAttachments(w http.ResponseWriter, r *http.Request, princi
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, messageAttachmentResponse{
-		ID:       attachment.ID.String(),
-		FileName: attachment.FileName,
-		FileSize: attachment.FileSize,
-		MimeType: attachment.MimeType,
+		ID:                attachment.ID.String(),
+		FileName:          attachment.FileName,
+		FileSize:          attachment.FileSize,
+		MimeType:          attachment.MimeType,
+		ThumbnailMimeType: attachment.ThumbnailMimeType,
+		ThumbnailFileSize: attachment.ThumbnailFileSize,
+		ThumbnailVersion:  attachment.ThumbnailVersion,
 	})
 }
 
@@ -1394,6 +1406,26 @@ func (h *Handler) messageItem(w http.ResponseWriter, r *http.Request, principal 
 			return
 		}
 		h.downloadMessageAttachment(w, r, principal, messageID, attachmentID)
+		return
+	}
+
+	// GET /api/messages/:message_id/attachments/:attachment_id/thumbnail/v1
+	if len(parts) == 5 && parts[1] == "attachments" && parts[3] == "thumbnail" && parts[4] == "v1" {
+		if r.Method != http.MethodGet {
+			httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+			return
+		}
+		messageID, err := uuid.Parse(parts[0])
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid message_id"))
+			return
+		}
+		attachmentID, err := uuid.Parse(parts[2])
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid attachment_id"))
+			return
+		}
+		h.downloadMessageAttachmentThumbnail(w, r, principal, messageID, attachmentID)
 		return
 	}
 
@@ -1587,6 +1619,53 @@ func (h *Handler) downloadMessageAttachment(
 	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitiseHeaderValue(fileName)+`"`)
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, body) //nolint:errcheck
+}
+
+func (h *Handler) downloadMessageAttachmentThumbnail(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal auth.Principal,
+	messageID, attachmentID uuid.UUID,
+) {
+	body, size, mimeType, version, err := h.svc.DownloadMessageAttachmentThumbnail(r.Context(), principal.UserID, messageID, attachmentID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrAttachmentNotFound):
+			httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorBody("thumbnail not found"))
+		case errors.Is(err, ErrNotMember):
+			httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorBody("not a member of this conversation"))
+		default:
+			h.log.Error("downloadMessageAttachmentThumbnail error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+	defer body.Close()
+
+	etag := fmt.Sprintf(`"chat-thumbnail-v%d-%s-%d"`, version, attachmentID.String(), size)
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("Cache-Control", "private, max-age=2592000, immutable")
+	// Preserve a CORS middleware's Vary: Origin entry when this endpoint is
+	// served cross-origin; HTTP caches must vary by both values.
+	w.Header().Add("Vary", "Authorization")
+	w.Header().Set("ETag", etag)
+	if matchesETag(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, body) //nolint:errcheck
+}
+
+func matchesETag(requestValue, etag string) bool {
+	for _, candidate := range strings.Split(requestValue, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) listDMCandidates(w http.ResponseWriter, r *http.Request, principal auth.Principal) {

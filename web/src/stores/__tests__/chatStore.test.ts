@@ -21,6 +21,7 @@ import {
   UserCallPresenceChangedEventSchema,
   CallStatus,
   MessageEventSchema,
+  MessageAttachmentSchema,
   SendMessageAckSchema,
   SubscribeThreadResponseSchema,
   NotificationAddedEventSchema,
@@ -764,6 +765,47 @@ describe('chatStore phase 6 flows', () => {
     expect(ws.sendSyncSince).not.toHaveBeenCalled()
     expect(chat.lastAppliedEventSeq).toBe(7n)
     expect(chat.messages['channel-1']).toHaveLength(1)
+  })
+
+  it('maps thumbnail metadata from message_created events', () => {
+    const chat = useChatStore()
+    chat.bootstrapped = true
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-thumbnail-1',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'message-thumbnail-1',
+          senderId: 'user-2',
+          body: 'photo',
+          channelSeq: 1n,
+          attachments: [create(MessageAttachmentSchema, {
+            attachmentId: 'attachment-thumbnail',
+            fileName: 'photo.png',
+            fileSize: 1024n,
+            mimeType: 'image/png',
+            thumbnailMimeType: 'image/jpeg',
+            thumbnailFileSize: 128n,
+            thumbnailVersion: 1,
+          })],
+        }),
+      },
+    }))
+
+    expect(chat.messages['channel-1'][0].attachments).toEqual([{
+      id: 'attachment-thumbnail',
+      fileName: 'photo.png',
+      fileSize: 1024,
+      mimeType: 'image/png',
+      thumbnailMimeType: 'image/jpeg',
+      thumbnailFileSize: 128,
+      thumbnailVersion: 1,
+    }])
   })
 
   it('maps forwarded metadata from message_created events', () => {
@@ -3710,6 +3752,71 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.messages['channel-1'][0].id).toBe('server-1')
   })
 
+  it('keeps optimistic thumbnail metadata when an ACK precedes message_created', () => {
+    const chat = useChatStore()
+    chat.bootstrapped = true
+    chat.messages = {
+      'channel-1': [buildMessage({
+        id: 'client-thumbnail-1',
+        channelId: 'channel-1',
+        clientMsgId: 'client-thumbnail-1',
+        sendStatus: 'sending',
+        attachments: [{
+          id: 'attachment-thumbnail-1',
+          fileName: 'photo.jpg',
+          fileSize: 1024,
+          mimeType: 'image/jpeg',
+          thumbnailMimeType: 'image/jpeg',
+          thumbnailFileSize: 128,
+          thumbnailVersion: 1,
+        }],
+      })],
+    }
+
+    chat.handleSendMessageAck(create(SendMessageAckSchema, {
+      conversationId: 'channel-1',
+      messageId: 'server-thumbnail-1',
+      channelSeq: 2n,
+      clientMsgId: 'client-thumbnail-1',
+    }))
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'evt-server-thumbnail-1',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'channel-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'channel-1',
+          messageId: 'server-thumbnail-1',
+          senderId: 'user-1',
+          body: '',
+          channelSeq: 2n,
+          attachments: [create(MessageAttachmentSchema, {
+            attachmentId: 'attachment-thumbnail-1',
+            fileName: 'photo.jpg',
+            fileSize: 1024n,
+            mimeType: 'image/jpeg',
+            thumbnailMimeType: 'image/jpeg',
+            thumbnailFileSize: 128n,
+            thumbnailVersion: 1,
+          })],
+        }),
+      },
+    }))
+
+    expect(chat.messages['channel-1']).toHaveLength(1)
+    expect(chat.messages['channel-1'][0].attachments).toEqual([{
+      id: 'attachment-thumbnail-1',
+      fileName: 'photo.jpg',
+      fileSize: 1024,
+      mimeType: 'image/jpeg',
+      thumbnailMimeType: 'image/jpeg',
+      thumbnailFileSize: 128,
+      thumbnailVersion: 1,
+    }])
+  })
+
   it('re-subscribes the active thread when summary advances beyond confirmed replies', () => {
     vi.useFakeTimers()
     try {
@@ -4428,6 +4535,15 @@ describe('chatStore phase 6 flows', () => {
           created_at: '2026-03-06T00:00:00Z',
           reactions: [{ emoji: ':+1:', count: 2 }],
           my_reactions: [':+1:'],
+          attachments: [{
+            id: 'attachment-thumbnail',
+            file_name: 'photo.png',
+            file_size: 1024,
+            mime_type: 'image/png',
+            thumbnail_mime_type: 'image/jpeg',
+            thumbnail_file_size: 128,
+            thumbnail_version: 1,
+          }],
         },
       ],
       has_more: false,
@@ -4453,6 +4569,15 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.messages['channel-1'][0].body).toBe('history')
     expect(chat.messages['channel-1'][0].reactions).toEqual([{ emoji: ':+1:', count: 2 }])
     expect(chat.messages['channel-1'][0].myReactions).toEqual([':+1:'])
+    expect(chat.messages['channel-1'][0].attachments).toEqual([{
+      id: 'attachment-thumbnail',
+      fileName: 'photo.png',
+      fileSize: 1024,
+      mimeType: 'image/png',
+      thumbnailMimeType: 'image/jpeg',
+      thumbnailFileSize: 128,
+      thumbnailVersion: 1,
+    }])
     expect(chat.resolveDisplayName('user-2')).toBe('Bob')
     expect(chat.threadSummaries['message-1'].replyCount).toBe(2)
     expect(chat.threadSummaries['message-1'].lastThreadSeq).toBe(2n)

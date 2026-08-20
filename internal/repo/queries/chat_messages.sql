@@ -42,6 +42,9 @@ SELECT m.id, m.channel_id, m.sender_id, u.display_name, m.body, m.channel_seq,
            'file_name', ma.file_name,
            'file_size', ma.file_size,
            'mime_type', ma.mime_type,
+           'thumbnail_mime_type', ma.thumbnail_mime_type,
+           'thumbnail_file_size', ma.thumbnail_file_size,
+           'thumbnail_version', ma.thumbnail_version,
            'uploaded_by', ma.uploaded_by,
            'created_at', ma.created_at
          ) ORDER BY ma.created_at, ma.id)
@@ -124,6 +127,9 @@ context_messages AS (
              'file_name', ma.file_name,
              'file_size', ma.file_size,
              'mime_type', ma.mime_type,
+             'thumbnail_mime_type', ma.thumbnail_mime_type,
+             'thumbnail_file_size', ma.thumbnail_file_size,
+             'thumbnail_version', ma.thumbnail_version,
              'uploaded_by', ma.uploaded_by,
              'created_at', ma.created_at
          ) ORDER BY ma.created_at, ma.id)

@@ -19,6 +19,9 @@ export interface PendingOutboundMessage {
     fileName: string
     fileSize: number
     mimeType: string
+    thumbnailMimeType?: string
+    thumbnailFileSize?: number
+    thumbnailVersion?: number
   }>
 }
 

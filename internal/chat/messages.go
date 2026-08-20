@@ -261,6 +261,16 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 		return ForwardMessageResult{}, ErrInvalidThread
 	}
 
+	// Hold a key-share lock on the source message until the new message and its
+	// attachment references are committed. This serializes forwarding with a
+	// concurrent source deletion (including DM history/channel cascades), so a
+	// forward cannot create a new row for an object that deletion has released.
+	sourceTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ForwardMessageResult{}, fmt.Errorf("chat.ForwardMessage begin source lock: %w", err)
+	}
+	defer sourceTx.Rollback(ctx) //nolint:errcheck
+
 	var source struct {
 		ID                uuid.UUID
 		ChannelID         uuid.UUID
@@ -272,7 +282,7 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 		ConversationTitle string
 		ThreadTitle       sql.NullString
 	}
-	if err := s.pool.QueryRow(ctx, `
+	if err := sourceTx.QueryRow(ctx, `
 		SELECT m.id,
 		       m.channel_id,
 		       m.sender_id,
@@ -305,7 +315,8 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 		     LIMIT 1
 		  ) peer ON c.kind = 'dm'
 		  LEFT JOIN messages root ON root.id = m.thread_root_id
-		 WHERE m.id = $1`,
+		 WHERE m.id = $1
+		 FOR KEY SHARE OF m`,
 		p.SourceMessageID,
 		p.ActorID,
 	).Scan(
@@ -380,7 +391,9 @@ func (s *Service) ForwardMessage(ctx context.Context, p ForwardMessageParams) (F
 
 func (s *Service) loadMessageAttachmentsForForward(ctx context.Context, messageID uuid.UUID) ([]MessageAttachment, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, conversation_id, message_id, file_name, file_size, mime_type, storage_key, uploaded_by, created_at
+		SELECT id, conversation_id, message_id, file_name, file_size, mime_type, storage_key,
+		       thumbnail_storage_key, thumbnail_mime_type, thumbnail_file_size, thumbnail_version,
+		       uploaded_by, created_at
 		  FROM message_attachment
 		 WHERE message_id = $1
 		 ORDER BY created_at ASC, id ASC`,
@@ -770,9 +783,11 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 			batch.Queue(`
 				INSERT INTO message_attachment (
 					id, conversation_id, message_id, file_name, file_size,
-					mime_type, storage_key, uploaded_by, created_at
+					mime_type, storage_key,
+					thumbnail_storage_key, thumbnail_mime_type, thumbnail_file_size, thumbnail_version,
+					uploaded_by, created_at
 				)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 				attachments[i].ID,
 				attachments[i].ConversationID,
 				attachments[i].MessageID,
@@ -780,6 +795,10 @@ func (s *Service) SendMessage(ctx context.Context, p SendMessageParams) (SendMes
 				attachments[i].FileSize,
 				attachments[i].MimeType,
 				attachments[i].StorageKey,
+				nullableString(attachments[i].ThumbnailStorageKey),
+				nullableString(attachments[i].ThumbnailMimeType),
+				nullableInt64(attachments[i].ThumbnailFileSize, attachments[i].ThumbnailStorageKey != ""),
+				nullableInt16(attachments[i].ThumbnailVersion, attachments[i].ThumbnailStorageKey != ""),
 				attachments[i].UploadedBy,
 				attachments[i].CreatedAt,
 			)

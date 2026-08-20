@@ -252,7 +252,11 @@ describe('DocumentsSidebar', () => {
 
     const favoriteToggle = wrapper.get('[data-testid="documents-node-favorite-toggle-doc-1"]')
     expect(favoriteToggle.attributes('aria-label')).toBe('Add to favorites')
-    expect(favoriteToggle.classes()).toContain('opacity-100')
+    expect(favoriteToggle.classes()).toEqual(expect.arrayContaining([
+      'hidden',
+      'group-hover:flex',
+      'group-focus-within:flex',
+    ]))
     expect(wrapper.find('[data-testid="documents-node-favorite-outline-doc-1"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="documents-node-favorite-filled-doc-1"]').exists()).toBe(false)
 
@@ -375,12 +379,86 @@ describe('DocumentsSidebar', () => {
 
     const removeButton = wrapper.get('[data-testid="documents-favorite-remove-doc-1"]')
     expect(removeButton.attributes('aria-label')).toBe('Remove from favorites')
-    expect(removeButton.classes()).toContain('opacity-100')
+    expect(removeButton.classes()).toEqual(expect.arrayContaining([
+      'hidden',
+      'group-hover:flex',
+      'group-focus-within:flex',
+    ]))
 
     await removeButton.trigger('click')
     await Promise.resolve()
 
     expect(documentsStoreMock.unfavoriteDocument).toHaveBeenCalledWith('doc-1')
     expect(wrapper.emitted('openDocument')).toBeUndefined()
+  })
+
+  it('reserves action space only while a document-sidebar row is hovered or focused', () => {
+    documentsStoreMock.favoriteDocuments = [
+      {
+        id: 'favorite-doc',
+        teamspace_id: 'teamspace-1',
+        title: 'Pinned favorite',
+        favorited_at: '2026-05-22T00:00:00Z',
+        ancestor_document_ids: [],
+      },
+    ]
+    documentsStoreMock.sidebarTeamspaces = [
+      {
+        id: 'teamspace-1',
+        name: 'Alpha',
+        documents: [
+          {
+            id: 'doc-1',
+            teamspace_id: 'teamspace-1',
+            parent_document_id: null,
+            title: 'A document with a long title',
+            children: [],
+          },
+        ],
+      },
+    ]
+
+    const wrapper = mount(DocumentsSidebar, {
+      props: {
+        selectedTeamspaceId: null,
+        selectedDocumentId: null,
+        searchQuery: '',
+      },
+      global: {
+        stubs: {
+          Teleport: true,
+        },
+      },
+    })
+
+    const documentTitle = wrapper.get('[data-testid="documents-node-doc-1"]')
+    expect(documentTitle.classes()).toEqual(expect.arrayContaining(['min-w-0', 'flex-1', 'truncate']))
+    for (const testId of [
+      'documents-node-favorite-toggle-doc-1',
+      'documents-node-add-doc-1',
+      'documents-node-menu-doc-1',
+    ]) {
+      expect(wrapper.get(`[data-testid="${testId}"]`).classes()).toEqual(expect.arrayContaining([
+        'hidden',
+        'group-hover:flex',
+        'group-focus-within:flex',
+      ]))
+    }
+
+    const favoriteRemove = wrapper.get('[data-testid="documents-favorite-remove-favorite-doc"]')
+    expect(favoriteRemove.classes()).toEqual(expect.arrayContaining([
+      'hidden',
+      'group-hover:flex',
+      'group-focus-within:flex',
+    ]))
+
+    const teamspaceTitle = wrapper.get('[data-testid="documents-teamspace-teamspace-1"]')
+    expect(teamspaceTitle.classes()).toEqual(expect.arrayContaining(['min-w-0', 'flex-1', 'truncate']))
+    const teamspaceAdd = wrapper.get('[data-testid="documents-teamspace-add-teamspace-1"]')
+    expect(teamspaceAdd.classes()).toEqual(expect.arrayContaining([
+      'hidden',
+      'group-hover:block',
+      'group-focus-within:block',
+    ]))
   })
 })

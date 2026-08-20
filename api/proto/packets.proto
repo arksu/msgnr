@@ -360,6 +360,9 @@ message MessageAttachment {
   string file_name = 2;
   int64 file_size = 3;
   string mime_type = 4;
+  string thumbnail_mime_type = 5;
+  int64 thumbnail_file_size = 6;
+  int32 thumbnail_version = 7;
 }
 
 message ReactionAggregate {

@@ -11,6 +11,7 @@ import { useWsStore } from '@/stores/ws'
 const chatApiMocks = vi.hoisted(() => ({
   createOrOpenDm: vi.fn(),
   fetchMessageAttachmentBlob: vi.fn(),
+  fetchMessageAttachmentThumbnailBlob: vi.fn(),
   listMessageReactionUsers: vi.fn(),
   editMessage: vi.fn(),
   deleteMessage: vi.fn(),
@@ -24,6 +25,7 @@ const chatApiMocks = vi.hoisted(() => ({
 vi.mock('@/services/http/chatApi', () => ({
   createOrOpenDm: chatApiMocks.createOrOpenDm,
   fetchMessageAttachmentBlob: chatApiMocks.fetchMessageAttachmentBlob,
+  fetchMessageAttachmentThumbnailBlob: chatApiMocks.fetchMessageAttachmentThumbnailBlob,
   listMessageReactionUsers: chatApiMocks.listMessageReactionUsers,
   editMessage: chatApiMocks.editMessage,
   deleteMessage: chatApiMocks.deleteMessage,
@@ -35,8 +37,44 @@ vi.mock('@/services/http/chatApi', () => ({
 }))
 
 async function flushAll() {
-  await Promise.resolve()
-  await nextTick()
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve()
+    await nextTick()
+  }
+}
+
+type ObserverCallback = (entries: IntersectionObserverEntry[], observer: IntersectionObserver) => void
+
+class IntersectionObserverMock {
+  static instances: IntersectionObserverMock[] = []
+
+  readonly observed = new Set<Element>()
+
+  constructor(private readonly callback: ObserverCallback) {
+    IntersectionObserverMock.instances.push(this)
+  }
+
+  observe = (element: Element) => {
+    this.observed.add(element)
+  }
+
+  unobserve = (element: Element) => {
+    this.observed.delete(element)
+  }
+
+  disconnect = () => {
+    this.observed.clear()
+  }
+
+  trigger(element: Element) {
+    this.callback([{ target: element, isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver)
+  }
+}
+
+function latestImagePreviewObserver(): IntersectionObserverMock {
+  const observer = IntersectionObserverMock.instances[IntersectionObserverMock.instances.length - 1]
+  if (!observer) throw new Error('image preview observer was not created')
+  return observer
 }
 
 async function waitForEditComposer(wrapper: ReturnType<typeof mount>) {
@@ -115,6 +153,8 @@ function buildMessage(overrides: Partial<Message> = {}): Message {
 describe('MessageBubble reactions', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    IntersectionObserverMock.instances = []
+    vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
     chatApiMocks.createOrOpenDm.mockReset()
     chatApiMocks.createOrOpenDm.mockResolvedValue({
       conversation_id: 'dm-1',
@@ -125,7 +165,10 @@ describe('MessageBubble reactions', () => {
       kind: 'dm',
       visibility: 'dm',
     })
+    chatApiMocks.fetchMessageAttachmentBlob.mockReset()
     chatApiMocks.fetchMessageAttachmentBlob.mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    chatApiMocks.fetchMessageAttachmentThumbnailBlob.mockReset()
+    chatApiMocks.fetchMessageAttachmentThumbnailBlob.mockResolvedValue(new Blob(['thumbnail'], { type: 'image/jpeg' }))
     chatApiMocks.listMessageReactionUsers.mockReset()
     chatApiMocks.listMessageReactionUsers.mockResolvedValue([])
     chatApiMocks.editMessage.mockReset()
@@ -145,7 +188,8 @@ describe('MessageBubble reactions', () => {
     chatApiMocks.saveMessage.mockResolvedValue(undefined)
     chatApiMocks.unsaveMessage.mockReset()
     chatApiMocks.unsaveMessage.mockResolvedValue(undefined)
-    globalThis.URL.createObjectURL = vi.fn(() => 'blob:attachment-preview')
+    let objectUrlIndex = 0
+    globalThis.URL.createObjectURL = vi.fn(() => `blob:attachment-preview-${++objectUrlIndex}`)
     globalThis.URL.revokeObjectURL = vi.fn()
     window.open = vi.fn(() => ({
       opener: null,
@@ -549,6 +593,46 @@ describe('MessageBubble reactions', () => {
     wrapper.unmount()
   })
 
+  it('does not save an inline edit while a task URL paste is resolving', async () => {
+    const auth = useAuthStore()
+    const chat = useChatStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const msg = buildMessage({
+      senderId: 'user-1',
+      reactions: [],
+      myReactions: [],
+      body: 'before edit',
+    })
+    chat.messages = { 'channel-1': [msg] }
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button[title="More actions"]').trigger('click')
+    await flushAll()
+    ;(document.body.querySelector('[data-testid="message-menu-edit"]') as HTMLButtonElement).click()
+    await waitForEditComposer(wrapper)
+
+    ;(editComposer(wrapper).vm as unknown as { $emit: (event: string, value: boolean) => void })
+      .$emit('pending-task-url-paste-change', true)
+    await flushAll()
+    await editProse(wrapper).trigger('keydown', { key: 'Enter' })
+    await flushAll()
+
+    expect(chatApiMocks.editMessage).not.toHaveBeenCalled()
+
+    ;(editComposer(wrapper).vm as unknown as { $emit: (event: string, value: boolean) => void })
+      .$emit('pending-task-url-paste-change', false)
+    await flushAll()
+    await editProse(wrapper).trigger('keydown', { key: 'Enter' })
+    await flushAll()
+
+    expect(chatApiMocks.editMessage).toHaveBeenCalledWith('message-1', 'before edit', [])
+    wrapper.unmount()
+  })
+
   it('sizes inline edit composer to its content on open', async () => {
     const auth = useAuthStore()
     auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
@@ -849,6 +933,7 @@ describe('MessageBubble reactions', () => {
       attachTo: document.body,
     })
 
+    latestImagePreviewObserver().trigger(wrapper.get('[data-message-image-attachment-id="att-1"]').element)
     await flushAll()
 
     const thumbnailButton = wrapper.get('[data-testid="message-image-thumbnail"]')
@@ -880,6 +965,170 @@ describe('MessageBubble reactions', () => {
     await flushAll()
 
     expect(document.body.querySelector('[data-testid="message-image-lightbox"]')).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('waits for visibility, fetches the thumbnail, then upgrades an image lightbox with the original', async () => {
+    let resolveOriginal: (blob: Blob) => void = () => {}
+    chatApiMocks.fetchMessageAttachmentBlob.mockImplementationOnce(() => new Promise<Blob>(resolve => {
+      resolveOriginal = resolve
+    }))
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      attachments: [{
+        id: 'att-thumbnail',
+        fileName: 'photo.png',
+        fileSize: 1024,
+        mimeType: 'image/png',
+        thumbnailMimeType: 'image/jpeg',
+        thumbnailFileSize: 128,
+        thumbnailVersion: 1,
+      }],
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    expect(chatApiMocks.fetchMessageAttachmentThumbnailBlob).not.toHaveBeenCalled()
+    expect(chatApiMocks.fetchMessageAttachmentBlob).not.toHaveBeenCalled()
+
+    latestImagePreviewObserver().trigger(wrapper.get('[data-message-image-attachment-id="att-thumbnail"]').element)
+    await flushAll()
+
+    expect(chatApiMocks.fetchMessageAttachmentThumbnailBlob).toHaveBeenCalledWith('message-1', 'att-thumbnail', 1)
+    expect(chatApiMocks.fetchMessageAttachmentBlob).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="message-image-thumbnail-img"]').attributes('src')).toBe('blob:attachment-preview-1')
+
+    await wrapper.get('[data-testid="message-image-thumbnail"]').trigger('click')
+    await flushAll()
+
+    expect(chatApiMocks.fetchMessageAttachmentBlob).toHaveBeenCalledWith('message-1', 'att-thumbnail')
+    const initialLightboxImage = document.body.querySelector('[data-testid="message-image-lightbox-img"]') as HTMLImageElement
+    expect(initialLightboxImage.src).toContain('blob:attachment-preview-1')
+
+    resolveOriginal(new Blob(['full-size'], { type: 'image/png' }))
+    await flushAll()
+
+    const upgradedLightboxImage = document.body.querySelector('[data-testid="message-image-lightbox-img"]') as HTMLImageElement
+    expect(upgradedLightboxImage.src).toContain('blob:attachment-preview-2')
+
+    wrapper.unmount()
+  })
+
+  it('lazily fetches a legacy image original only after it becomes visible', async () => {
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      attachments: [{
+        id: 'att-legacy',
+        fileName: 'legacy.png',
+        fileSize: 1024,
+        mimeType: 'image/png',
+      }],
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    expect(chatApiMocks.fetchMessageAttachmentThumbnailBlob).not.toHaveBeenCalled()
+    expect(chatApiMocks.fetchMessageAttachmentBlob).not.toHaveBeenCalled()
+
+    latestImagePreviewObserver().trigger(wrapper.get('[data-message-image-attachment-id="att-legacy"]').element)
+    await flushAll()
+
+    expect(chatApiMocks.fetchMessageAttachmentThumbnailBlob).not.toHaveBeenCalled()
+    expect(chatApiMocks.fetchMessageAttachmentBlob).toHaveBeenCalledWith('message-1', 'att-legacy')
+    expect(wrapper.get('[data-testid="message-image-thumbnail-img"]').attributes('src')).toBe('blob:attachment-preview-1')
+
+    wrapper.unmount()
+  })
+
+  it('falls back to the original when a visible thumbnail request fails', async () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    chatApiMocks.fetchMessageAttachmentThumbnailBlob.mockRejectedValueOnce(new Error('thumbnail missing'))
+    const msg = buildMessage({
+      reactions: [],
+      myReactions: [],
+      attachments: [{
+        id: 'att-thumbnail-fallback',
+        fileName: 'photo.png',
+        fileSize: 1024,
+        mimeType: 'image/png',
+        thumbnailMimeType: 'image/jpeg',
+        thumbnailFileSize: 128,
+        thumbnailVersion: 1,
+      }],
+    })
+
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    latestImagePreviewObserver().trigger(wrapper.get('[data-message-image-attachment-id="att-thumbnail-fallback"]').element)
+    await flushAll()
+
+    expect(chatApiMocks.fetchMessageAttachmentThumbnailBlob).toHaveBeenCalledWith('message-1', 'att-thumbnail-fallback', 1)
+    expect(chatApiMocks.fetchMessageAttachmentBlob).toHaveBeenCalledWith('message-1', 'att-thumbnail-fallback')
+    expect(wrapper.get('[data-testid="message-image-thumbnail-img"]').attributes('src')).toBe('blob:attachment-preview-1')
+
+    wrapper.unmount()
+    debug.mockRestore()
+  })
+
+  it('cancels a queued preview when its image attachment is removed', async () => {
+    const pendingThumbnails = new Map<string, { promise: Promise<Blob>; resolve: (blob: Blob) => void }>()
+    chatApiMocks.fetchMessageAttachmentThumbnailBlob.mockImplementation((_messageId, attachmentId) => {
+      let resolve: (blob: Blob) => void = () => {}
+      const promise = new Promise<Blob>(nextResolve => {
+        resolve = nextResolve
+      })
+      const pending = { promise, resolve }
+      pendingThumbnails.set(attachmentId, pending)
+      return promise
+    })
+    const attachments = Array.from({ length: 5 }, (_, index) => ({
+      id: `att-queued-${index + 1}`,
+      fileName: `photo-${index + 1}.png`,
+      fileSize: 1024,
+      mimeType: 'image/png',
+      thumbnailMimeType: 'image/jpeg',
+      thumbnailFileSize: 128,
+      thumbnailVersion: 1,
+    }))
+    const msg = buildMessage({ reactions: [], myReactions: [], attachments })
+    const wrapper = mount(MessageBubble, {
+      props: { message: msg, showHeader: true },
+      attachTo: document.body,
+    })
+
+    const observer = latestImagePreviewObserver()
+    for (const target of wrapper.findAll('[data-message-image-attachment-id]')) {
+      observer.trigger(target.element)
+    }
+    expect(chatApiMocks.fetchMessageAttachmentThumbnailBlob).toHaveBeenCalledTimes(4)
+
+    await wrapper.setProps({
+      message: buildMessage({
+        reactions: [],
+        myReactions: [],
+        attachments: attachments.slice(0, 4),
+      }),
+    })
+    await flushAll()
+
+    for (const pending of pendingThumbnails.values()) {
+      pending.resolve(new Blob(['thumbnail'], { type: 'image/jpeg' }))
+    }
+    await flushAll()
+
+    expect(chatApiMocks.fetchMessageAttachmentThumbnailBlob).not.toHaveBeenCalledWith('message-1', 'att-queued-5', 1)
 
     wrapper.unmount()
   })
@@ -972,6 +1221,7 @@ describe('MessageBubble reactions', () => {
       attachTo: document.body,
     })
 
+    latestImagePreviewObserver().trigger(wrapper.get('[data-message-image-attachment-id="att-1"]').element)
     await flushAll()
 
     await wrapper.get('[data-testid="message-image-thumbnail"]').trigger('click')

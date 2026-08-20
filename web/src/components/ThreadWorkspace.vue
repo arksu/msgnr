@@ -87,7 +87,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChatDraftScope } from '@/services/storage/chatDraftStorage'
-import { useChatStore, type Message } from '@/stores/chat'
+import { useChatStore, type Message, type MessageAttachment } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from '@/components/MessageBubble.vue'
@@ -233,7 +233,7 @@ function handleTyping(active: boolean) {
   scheduleTypingStop()
 }
 
-function handleSend(payload: { body: string; entities: NonNullable<Message['entities']>; attachmentIds: string[]; attachments: Array<{ id: string; fileName: string; fileSize: number; mimeType: string }> }) {
+function handleSend(payload: { body: string; entities: NonNullable<Message['entities']>; attachmentIds: string[]; attachments: MessageAttachment[] }) {
   chatStore.sendThreadReplyToRoot(props.conversationId, props.rootMessageId, payload.body, payload.attachmentIds, payload.attachments, payload.entities)
   stopTypingPresence(true)
   void nextTick(() => scrollToBottom())

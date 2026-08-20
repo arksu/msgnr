@@ -70,6 +70,9 @@ export interface CachedMessage {
     fileName: string
     fileSize: number
     mimeType: string
+    thumbnailMimeType?: string
+    thumbnailFileSize?: number
+    thumbnailVersion?: number
   }>
 }
 
@@ -108,6 +111,9 @@ export interface QueuedOutboundAction {
     fileName: string
     fileSize: number
     mimeType: string
+    thumbnailMimeType?: string
+    thumbnailFileSize?: number
+    thumbnailVersion?: number
   }>
   createdAt: string
 }

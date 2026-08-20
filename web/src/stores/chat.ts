@@ -133,6 +133,9 @@ export interface MessageAttachment {
   fileName: string
   fileSize: number
   mimeType: string
+  thumbnailMimeType?: string
+  thumbnailFileSize?: number
+  thumbnailVersion?: number
 }
 
 export type MessageEntityKind = 'user' | 'task' | 'document'
@@ -3892,6 +3895,9 @@ export const useChatStore = defineStore('chat', () => {
         fileName: item.fileName,
         fileSize: Number(item.fileSize),
         mimeType: item.mimeType,
+        thumbnailMimeType: item.thumbnailMimeType || undefined,
+        thumbnailFileSize: item.thumbnailFileSize > 0n ? Number(item.thumbnailFileSize) : undefined,
+        thumbnailVersion: item.thumbnailVersion > 0 ? item.thumbnailVersion : undefined,
       })),
       isSaved: false,
       contentMode,
@@ -3949,6 +3955,13 @@ export const useChatStore = defineStore('chat', () => {
           fileName: attachment.file_name,
           fileSize: attachment.file_size,
           mimeType: attachment.mime_type,
+          thumbnailMimeType: attachment.thumbnail_mime_type || undefined,
+          thumbnailFileSize: attachment.thumbnail_file_size && attachment.thumbnail_file_size > 0
+            ? attachment.thumbnail_file_size
+            : undefined,
+          thumbnailVersion: attachment.thumbnail_version && attachment.thumbnail_version > 0
+            ? attachment.thumbnail_version
+            : undefined,
         })),
         isSaved: item.is_saved ?? prev?.isSaved ?? false,
         contentMode,

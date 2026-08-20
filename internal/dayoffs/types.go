@@ -59,12 +59,24 @@ type Dayoff struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// EmployeeYearTotal is the calendar-day total for each leave type within a
+// selected calendar year. It includes only the portion of an inclusive record
+// that overlaps that year.
+type EmployeeYearTotal struct {
+	UserID        uuid.UUID `json:"user_id"`
+	VacationDays  int       `json:"vacation_days"`
+	SickLeaveDays int       `json:"sick_leave_days"`
+	PersonalDays  int       `json:"personal_days"`
+}
+
 // MonthResponse contains both the active employee list and all records that
-// intersect the requested month. Empty employees or records are represented as
-// JSON arrays, rather than null, for the calendar client.
+// intersect the requested month, plus each employee's leave totals for that
+// month's calendar year. Empty collections are represented as JSON arrays,
+// rather than null, for the calendar client.
 type MonthResponse struct {
-	Employees []Employee `json:"employees"`
-	Records   []Dayoff   `json:"records"`
+	Employees  []Employee          `json:"employees"`
+	Records    []Dayoff            `json:"records"`
+	YearTotals []EmployeeYearTotal `json:"year_totals"`
 }
 
 type CreateParams struct {

@@ -19,6 +19,32 @@
         </button>
       </div>
 
+      <section
+        class="mb-4 rounded-lg border border-chat-border bg-app-bg/30 px-3 py-3"
+        data-testid="dayoffs-year-summary"
+        :aria-label="`${year} dayoff totals for ${employee.displayName}`"
+      >
+        <div class="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-app-secondaryText">{{ year }} totals</h3>
+          <p class="text-xs text-app-muted">{{ totalDays }} {{ totalDays === 1 ? 'day' : 'days' }} used</p>
+        </div>
+        <div class="grid gap-2 sm:grid-cols-3">
+          <div
+            v-for="option in DAYOFF_TYPE_OPTIONS"
+            :key="option.type"
+            class="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-xs"
+            :data-testid="`dayoffs-year-summary-${option.type}`"
+            :style="option.style"
+          >
+            <span class="flex items-center gap-1.5">
+              <span class="h-2 w-2 rounded-full" :style="option.barStyle" aria-hidden="true" />
+              {{ option.label }}
+            </span>
+            <strong>{{ daysLabel(totalForType(option.type)) }}</strong>
+          </div>
+        </div>
+      </section>
+
       <div v-if="employeeRecords.length" class="space-y-2">
         <article
           v-for="record in employeeRecords"
@@ -67,13 +93,19 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { Dayoff, DayoffEmployee } from '@/stores/dayoffs'
+import type { Dayoff, DayoffEmployee, DayoffType, DayoffYearTotal } from '@/stores/dayoffs'
 import { formatDateRange } from './calendar'
-import { dayoffTypeLabel, dayoffTypePresentation } from './dayoffPresentation'
+import {
+  DAYOFF_TYPE_OPTIONS,
+  dayoffTypeLabel,
+  dayoffTypePresentation,
+} from './dayoffPresentation'
 
 const props = defineProps<{
   employee: DayoffEmployee | null
   records: Dayoff[]
+  year: number
+  yearTotal: DayoffYearTotal | null
   selfUserId: string
   canCreateForEmployee: boolean
   canManage: (record: Dayoff) => boolean
@@ -92,4 +124,25 @@ const employeeRecords = computed(() => {
     .slice()
     .sort((left, right) => left.startDate.localeCompare(right.startDate) || left.endDate.localeCompare(right.endDate))
 })
+
+const totalDays = computed(() => (
+  (props.yearTotal?.vacationDays ?? 0)
+  + (props.yearTotal?.sickLeaveDays ?? 0)
+  + (props.yearTotal?.personalDays ?? 0)
+))
+
+function totalForType(type: DayoffType): number {
+  switch (type) {
+    case 'vacation':
+      return props.yearTotal?.vacationDays ?? 0
+    case 'sick_leave':
+      return props.yearTotal?.sickLeaveDays ?? 0
+    case 'personal_day':
+      return props.yearTotal?.personalDays ?? 0
+  }
+}
+
+function daysLabel(value: number): string {
+  return `${value} ${value === 1 ? 'day' : 'days'}`
+}
 </script>

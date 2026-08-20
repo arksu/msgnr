@@ -9,6 +9,7 @@ import {
   type Dayoff,
   type DayoffEmployee,
   type DayoffType,
+  type DayoffYearTotal,
   type UpdateDayoffInput,
 } from '@/services/http/dayoffsApi'
 import { startOfMonth } from '@/utils/dayoffsCalendar'
@@ -18,6 +19,7 @@ export type {
   Dayoff,
   DayoffEmployee,
   DayoffType,
+  DayoffYearTotal,
   UpdateDayoffInput,
 } from '@/services/http/dayoffsApi'
 export {
@@ -45,6 +47,7 @@ export function canManageDayoff(
 export const useDayoffsStore = defineStore('dayoffs', () => {
   const records = ref<Dayoff[]>([])
   const employees = ref<DayoffEmployee[]>([])
+  const yearTotals = ref<DayoffYearTotal[]>([])
   const selectedMonth = ref(startOfMonth(new Date()))
   const selectedEmployeeId = ref<string | null>(null)
   const loading = ref(false)
@@ -66,6 +69,17 @@ export const useDayoffsStore = defineStore('dayoffs', () => {
       : records.value.filter(record => record.userId === selectedEmployeeId.value)
   ))
 
+  const selectedEmployeeYearTotal = computed<DayoffYearTotal | null>(() => {
+    const employeeId = selectedEmployeeId.value
+    if (employeeId === null) return null
+    return yearTotals.value.find(total => total.userId === employeeId) ?? {
+      userId: employeeId,
+      vacationDays: 0,
+      sickLeaveDays: 0,
+      personalDays: 0,
+    }
+  })
+
   function setSelectedEmployee(id: string | null): void {
     selectedEmployeeId.value = id
   }
@@ -86,6 +100,7 @@ export const useDayoffsStore = defineStore('dayoffs', () => {
 
       employees.value = response.employees
       records.value = response.records
+      yearTotals.value = response.yearTotals
       if (
         selectedEmployeeId.value !== null
         && !response.employees.some(employee => employee.id === selectedEmployeeId.value)
@@ -147,6 +162,7 @@ export const useDayoffsStore = defineStore('dayoffs', () => {
     loadRequestId += 1
     records.value = []
     employees.value = []
+    yearTotals.value = []
     selectedEmployeeId.value = null
     loading.value = false
     error.value = null
@@ -157,9 +173,11 @@ export const useDayoffsStore = defineStore('dayoffs', () => {
   return {
     records,
     employees,
+    yearTotals,
     selectedMonth,
     selectedEmployeeId,
     selectedEmployee,
+    selectedEmployeeYearTotal,
     visibleRecords,
     loading,
     error,

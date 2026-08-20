@@ -85,6 +85,47 @@ func TestIntegration_ListMonthIncludesActiveEmployeesAndIntersectingRanges(t *te
 	assert.Equal(t, aliceRange.ID, response.Records[0].ID)
 	assert.Equal(t, "2026-07-30", response.Records[0].StartDate.String())
 	assert.Equal(t, "2026-08-02", response.Records[0].EndDate.String())
+	require.Len(t, response.YearTotals, 2)
+	assert.Equal(t, dayoffs.EmployeeYearTotal{
+		UserID:       aliceID,
+		VacationDays: 4,
+	}, response.YearTotals[0])
+	assert.Equal(t, dayoffs.EmployeeYearTotal{
+		UserID:        bobID,
+		SickLeaveDays: 2,
+	}, response.YearTotals[1])
+}
+
+func TestIntegration_ListMonthYearTotalsUseCalendarDaysWithinTheSelectedYear(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+	svc := dayoffs.NewService(pool)
+
+	aliceID := seedDayoffUser(t, ctx, pool, "Alice", "member", "active")
+	bobID := seedDayoffUser(t, ctx, pool, "Bob", "member", "active")
+	_ = createDayoff(t, ctx, svc, aliceID, "member", dayoffs.TypeVacation, "2026-01-10", "2026-01-12")
+	_ = createDayoff(t, ctx, svc, aliceID, "member", dayoffs.TypeSickLeave, "2026-02-01", "2026-02-01")
+	_ = createDayoff(t, ctx, svc, aliceID, "member", dayoffs.TypePersonalDay, "2026-12-30", "2027-01-02")
+
+	response, err := svc.ListMonth(ctx, 2026, 7)
+	require.NoError(t, err)
+	require.Len(t, response.Records, 0)
+	require.Len(t, response.YearTotals, 2)
+	assert.Equal(t, dayoffs.EmployeeYearTotal{
+		UserID:        aliceID,
+		VacationDays:  3,
+		SickLeaveDays: 1,
+		PersonalDays:  2,
+	}, response.YearTotals[0])
+	assert.Equal(t, dayoffs.EmployeeYearTotal{UserID: bobID}, response.YearTotals[1])
+
+	nextYearResponse, err := svc.ListMonth(ctx, 2027, 1)
+	require.NoError(t, err)
+	require.Len(t, nextYearResponse.YearTotals, 2)
+	assert.Equal(t, dayoffs.EmployeeYearTotal{
+		UserID:       aliceID,
+		PersonalDays: 2,
+	}, nextYearResponse.YearTotals[0])
 }
 
 func TestIntegration_CreateValidatesRangesAndRejectsInclusiveOverlaps(t *testing.T) {

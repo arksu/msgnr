@@ -116,6 +116,8 @@
         <DayoffsRecordList
           :employee="dayoffsStore.selectedEmployee"
           :records="dayoffsStore.records"
+          :year="dayoffsStore.selectedMonth.getFullYear()"
+          :year-total="dayoffsStore.selectedEmployeeYearTotal"
           :self-user-id="selfUserId"
           :can-create-for-employee="canCreateForSelectedEmployee"
           :can-manage="canManage"

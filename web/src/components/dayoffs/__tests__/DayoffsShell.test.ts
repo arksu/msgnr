@@ -40,9 +40,18 @@ const response = {
     record('record-own', 'user-1', '2026-07-17', '2026-07-20'),
     record('record-other', 'user-2', '2026-07-08', '2026-07-09'),
   ],
+  yearTotals: [
+    { userId: 'user-1', vacationDays: 4, sickLeaveDays: 0, personalDays: 0 },
+    { userId: 'user-2', vacationDays: 8, sickLeaveDays: 2, personalDays: 1 },
+    { userId: 'user-3', vacationDays: 0, sickLeaveDays: 0, personalDays: 0 },
+  ],
 }
 
-async function mountShell(role: 'member' | 'admin' = 'member', sidebarCollapsed = false) {
+async function mountShell(
+  role: 'member' | 'admin' = 'member',
+  sidebarCollapsed = false,
+  initialMonth = new Date(2026, 6, 1),
+) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const authStore = useAuthStore()
@@ -54,7 +63,7 @@ async function mountShell(role: 'member' | 'admin' = 'member', sidebarCollapsed 
     role,
   }
   const dayoffsStore = useDayoffsStore()
-  dayoffsStore.selectedMonth = new Date(2026, 6, 1)
+  dayoffsStore.selectedMonth = initialMonth
 
   const wrapper = mount(DayoffsShell, {
     attachTo: document.body,
@@ -107,6 +116,53 @@ describe('DayoffsShell', () => {
     expect(adminWrapper.find('[data-testid="dayoffs-delete-record-other"]').exists()).toBe(true)
     expect(adminWrapper.find('[data-testid="dayoffs-add-selected"]').exists()).toBe(true)
     adminWrapper.unmount()
+  })
+
+  it('shows selected employee annual totals, including leave types with no days', async () => {
+    const wrapper = await mountShell()
+
+    expect(wrapper.find('[data-testid="dayoffs-year-summary"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="dayoffs-employee-user-2"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="dayoffs-year-summary"]').text()).toContain('2026 totals')
+    expect(wrapper.get('[data-testid="dayoffs-year-summary"]').text()).toContain('11 days used')
+    expect(wrapper.get('[data-testid="dayoffs-year-summary-vacation"]').text()).toContain('8')
+    expect(wrapper.get('[data-testid="dayoffs-year-summary-sick_leave"]').text()).toContain('2')
+    expect(wrapper.get('[data-testid="dayoffs-year-summary-personal_day"]').text()).toContain('1')
+
+    await wrapper.get('[data-testid="dayoffs-employee-user-3"]').trigger('click')
+    await nextTick()
+    expect(wrapper.get('[data-testid="dayoffs-year-summary"]').text()).toContain('0 days used')
+    expect(wrapper.get('[data-testid="dayoffs-year-summary-vacation"]').text()).toContain('0')
+    expect(wrapper.get('[data-testid="dayoffs-year-summary-sick_leave"]').text()).toContain('0')
+    expect(wrapper.get('[data-testid="dayoffs-year-summary-personal_day"]').text()).toContain('0')
+
+    wrapper.unmount()
+  })
+
+  it('refreshes annual totals for the year of the newly selected month', async () => {
+    const wrapper = await mountShell('member', false, new Date(2026, 11, 1))
+    await wrapper.get('[data-testid="dayoffs-employee-user-1"]').trigger('click')
+    await nextTick()
+    expect(wrapper.get('[data-testid="dayoffs-year-summary"]').text()).toContain('2026 totals')
+
+    vi.mocked(dayoffsList).mockResolvedValueOnce({
+      ...response,
+      yearTotals: [
+        { userId: 'user-1', vacationDays: 5, sickLeaveDays: 1, personalDays: 0 },
+        { userId: 'user-2', vacationDays: 0, sickLeaveDays: 0, personalDays: 0 },
+        { userId: 'user-3', vacationDays: 0, sickLeaveDays: 0, personalDays: 0 },
+      ],
+    })
+    await wrapper.get('[data-testid="dayoffs-month-next"]').trigger('click')
+    await flushPromises()
+
+    expect(dayoffsList).toHaveBeenLastCalledWith(2027, 1)
+    expect(wrapper.get('[data-testid="dayoffs-year-summary"]').text()).toContain('2027 totals')
+    expect(wrapper.get('[data-testid="dayoffs-year-summary"]').text()).toContain('6 days used')
+
+    wrapper.unmount()
   })
 
   it('uses the bootstrapped workspace identity while the profile is still unavailable', async () => {

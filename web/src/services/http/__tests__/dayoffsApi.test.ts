@@ -36,6 +36,12 @@ describe('dayoffsApi', () => {
       data: {
         employees: [{ id: 'user-1', display_name: 'Ada Lovelace', avatar_url: '/ada.png' }],
         records: [recordDto],
+        year_totals: [{
+          user_id: 'user-1',
+          vacation_days: 12,
+          sick_leave_days: 3,
+          personal_days: 1,
+        }],
       },
     })
     const { dayoffsList } = await import('@/services/http/dayoffsApi')
@@ -55,6 +61,12 @@ describe('dayoffsApi', () => {
         createdAt: '2026-07-01T10:00:00Z',
         updatedAt: '2026-07-01T10:00:00Z',
       }],
+      yearTotals: [{
+        userId: 'user-1',
+        vacationDays: 12,
+        sickLeaveDays: 3,
+        personalDays: 1,
+      }],
     })
   })
 
@@ -65,6 +77,7 @@ describe('dayoffsApi', () => {
     await expect(dayoffsList(2026, 7)).resolves.toMatchObject({
       employees: [],
       records: [{ id: 'dayoff-1', userId: 'user-1' }],
+      yearTotals: [],
     })
   })
 

@@ -26,9 +26,18 @@ export interface DayoffEmployee {
   active?: boolean
 }
 
+/** Calendar-day leave totals for one employee in the selected calendar year. */
+export interface DayoffYearTotal {
+  userId: string
+  vacationDays: number
+  sickLeaveDays: number
+  personalDays: number
+}
+
 export interface DayoffsListResponse {
   employees: DayoffEmployee[]
   records: Dayoff[]
+  yearTotals: DayoffYearTotal[]
 }
 
 export interface CreateDayoffInput {
@@ -76,9 +85,17 @@ interface DayoffEmployeeDto {
   active?: boolean
 }
 
+interface DayoffYearTotalDto {
+  user_id: string
+  vacation_days?: number
+  sick_leave_days?: number
+  personal_days?: number
+}
+
 interface DayoffsListResponseDto {
   employees: DayoffEmployeeDto[]
   records: DayoffDto[]
+  year_totals?: DayoffYearTotalDto[]
 }
 
 interface DayoffRequestDto {
@@ -125,6 +142,15 @@ function toDayoffEmployee(dto: DayoffEmployeeDto): DayoffEmployee {
   }
 }
 
+function toDayoffYearTotal(dto: DayoffYearTotalDto): DayoffYearTotal {
+  return {
+    userId: dto.user_id,
+    vacationDays: dto.vacation_days ?? 0,
+    sickLeaveDays: dto.sick_leave_days ?? 0,
+    personalDays: dto.personal_days ?? 0,
+  }
+}
+
 function toRequestDto(input: CreateDayoffInput): DayoffRequestDto {
   return {
     ...(input.userId === undefined ? {} : { user_id: input.userId }),
@@ -139,11 +165,12 @@ function normalizeListResponse(response: DayoffsListResponseDto | DayoffDto[]): 
   // The production contract is the envelope. Accepting a record array makes
   // older deployments fail gracefully while they are upgraded.
   if (Array.isArray(response)) {
-    return { employees: [], records: response.map(toDayoff) }
+    return { employees: [], records: response.map(toDayoff), yearTotals: [] }
   }
   return {
     employees: Array.isArray(response.employees) ? response.employees.map(toDayoffEmployee) : [],
     records: Array.isArray(response.records) ? response.records.map(toDayoff) : [],
+    yearTotals: Array.isArray(response.year_totals) ? response.year_totals.map(toDayoffYearTotal) : [],
   }
 }
 

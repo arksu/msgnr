@@ -35,6 +35,10 @@ function makeResponse() {
       { id: 'user-2', displayName: 'Grace Hopper', avatarUrl: '' },
     ],
     records: [makeRecord()],
+    yearTotals: [
+      { userId: 'user-1', vacationDays: 4, sickLeaveDays: 0, personalDays: 0 },
+      { userId: 'user-2', vacationDays: 0, sickLeaveDays: 2, personalDays: 1 },
+    ],
   }
 }
 
@@ -66,6 +70,10 @@ describe('dayoffs store', () => {
     expect(store.selectedMonth.getDate()).toBe(1)
     expect(store.employees.map(employee => employee.id)).toEqual(['user-1', 'user-2'])
     expect(store.records).toEqual([makeRecord()])
+    expect(store.yearTotals).toEqual([
+      { userId: 'user-1', vacationDays: 4, sickLeaveDays: 0, personalDays: 0 },
+      { userId: 'user-2', vacationDays: 0, sickLeaveDays: 2, personalDays: 1 },
+    ])
     expect(store.loading).toBe(false)
   })
 
@@ -76,6 +84,12 @@ describe('dayoffs store', () => {
     store.setSelectedEmployee('user-2')
 
     expect(store.selectedEmployee?.displayName).toBe('Grace Hopper')
+    expect(store.selectedEmployeeYearTotal).toEqual({
+      userId: 'user-2',
+      vacationDays: 0,
+      sickLeaveDays: 2,
+      personalDays: 1,
+    })
     expect(store.visibleRecords).toEqual([])
     expect(store.employees).toHaveLength(2)
   })
@@ -87,6 +101,7 @@ describe('dayoffs store', () => {
     vi.mocked(dayoffsList).mockResolvedValueOnce({
       employees: [{ id: 'user-1', displayName: 'Ada Lovelace', avatarUrl: '' }],
       records: [],
+      yearTotals: [{ userId: 'user-1', vacationDays: 0, sickLeaveDays: 0, personalDays: 0 }],
     })
 
     await store.load()
@@ -161,16 +176,21 @@ describe('dayoffs store', () => {
     august.resolve({
       employees: [{ id: 'user-2', displayName: 'Grace Hopper', avatarUrl: '' }],
       records: [makeRecord('august-dayoff', 'user-2')],
+      yearTotals: [{ userId: 'user-2', vacationDays: 0, sickLeaveDays: 1, personalDays: 0 }],
     })
     await augustLoad
     july.resolve({
       employees: [{ id: 'user-1', displayName: 'Ada Lovelace', avatarUrl: '' }],
       records: [makeRecord('july-dayoff', 'user-1')],
+      yearTotals: [{ userId: 'user-1', vacationDays: 4, sickLeaveDays: 0, personalDays: 0 }],
     })
     await julyLoad
 
     expect(store.records).toEqual([makeRecord('august-dayoff', 'user-2')])
     expect(store.employees.map(employee => employee.id)).toEqual(['user-2'])
+    expect(store.yearTotals).toEqual([
+      { userId: 'user-2', vacationDays: 0, sickLeaveDays: 1, personalDays: 0 },
+    ])
     expect(store.loading).toBe(false)
   })
 

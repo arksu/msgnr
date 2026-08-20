@@ -31,11 +31,14 @@ func (s *Service) ListMonth(ctx context.Context, year, month int) (MonthResponse
 	if err != nil {
 		return MonthResponse{}, err
 	}
+	yearStart, yearEnd := calendarYearBounds(year)
 
 	result := MonthResponse{
-		Employees: make([]Employee, 0),
-		Records:   make([]Dayoff, 0),
+		Employees:  make([]Employee, 0),
+		Records:    make([]Dayoff, 0),
+		YearTotals: make([]EmployeeYearTotal, 0),
 	}
+	totalIndexByEmployeeID := make(map[uuid.UUID]int)
 
 	employees, err := s.pool.Query(ctx, `
 		SELECT id,
@@ -56,9 +59,47 @@ func (s *Service) ListMonth(ctx context.Context, year, month int) (MonthResponse
 			return MonthResponse{}, fmt.Errorf("dayoffs: scan employee: %w", err)
 		}
 		result.Employees = append(result.Employees, employee)
+		totalIndexByEmployeeID[employee.ID] = len(result.YearTotals)
+		result.YearTotals = append(result.YearTotals, EmployeeYearTotal{UserID: employee.ID})
 	}
 	if err := employees.Err(); err != nil {
 		return MonthResponse{}, fmt.Errorf("dayoffs: iterate employees: %w", err)
+	}
+
+	totals, err := s.pool.Query(ctx, `
+		SELECT d.user_id,
+		       COALESCE(SUM(CASE WHEN d.leave_type = 'vacation'
+		                         THEN LEAST(d.end_date, $2) - GREATEST(d.start_date, $1) + 1
+		                         ELSE 0 END), 0)::int AS vacation_days,
+		       COALESCE(SUM(CASE WHEN d.leave_type = 'sick_leave'
+		                         THEN LEAST(d.end_date, $2) - GREATEST(d.start_date, $1) + 1
+		                         ELSE 0 END), 0)::int AS sick_leave_days,
+		       COALESCE(SUM(CASE WHEN d.leave_type = 'personal_day'
+		                         THEN LEAST(d.end_date, $2) - GREATEST(d.start_date, $1) + 1
+		                         ELSE 0 END), 0)::int AS personal_days
+		  FROM dayoffs d
+		  JOIN users u ON u.id = d.user_id
+		 WHERE u.status = 'active'
+		   AND u.role <> 'bot'
+		   AND d.start_date <= $2
+		   AND d.end_date >= $1
+		 GROUP BY d.user_id`, yearStart, yearEnd)
+	if err != nil {
+		return MonthResponse{}, fmt.Errorf("dayoffs: list year totals: %w", err)
+	}
+	defer totals.Close()
+
+	for totals.Next() {
+		var total EmployeeYearTotal
+		if err := totals.Scan(&total.UserID, &total.VacationDays, &total.SickLeaveDays, &total.PersonalDays); err != nil {
+			return MonthResponse{}, fmt.Errorf("dayoffs: scan year total: %w", err)
+		}
+		if index, ok := totalIndexByEmployeeID[total.UserID]; ok {
+			result.YearTotals[index] = total
+		}
+	}
+	if err := totals.Err(); err != nil {
+		return MonthResponse{}, fmt.Errorf("dayoffs: iterate year totals: %w", err)
 	}
 
 	records, err := s.pool.Query(ctx, `
@@ -256,6 +297,11 @@ func calendarMonthBounds(year, month int) (time.Time, time.Time, error) {
 	}
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	return start, start.AddDate(0, 1, -1), nil
+}
+
+func calendarYearBounds(year int) (time.Time, time.Time) {
+	start := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
+	return start, start.AddDate(1, 0, -1)
 }
 
 func parseCalendarDate(raw, field string) (time.Time, error) {

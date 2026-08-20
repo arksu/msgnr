@@ -11,9 +11,9 @@ the annual Vacation, Sick Leave, Personal Day, and combined totals.
 - The selected calendar month supplies the year; changing from December to
   January changes the summary year.
 - The calendar and record list remain month-scoped.
-- Annual totals use saved dayoff records as created, with their inclusive
-  calendar-day duration. No working-day recalculation or leave-type conversion
-  is introduced.
+- Annual totals use the portion of each saved inclusive dayoff record that
+  falls in the selected year, counting calendar days. No working-day
+  recalculation or leave-type conversion is introduced.
 - The annual panel is shown only for a selected employee. It shows every leave
   type, including zero totals.
 - Mutations reload the existing calendar response, so the month and annual

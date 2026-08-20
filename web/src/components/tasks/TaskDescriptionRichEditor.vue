@@ -244,6 +244,39 @@
       data-testid="task-description-editor-content"
     />
 
+    <Teleport to="body">
+      <div
+        v-if="imagePreview.open"
+        data-testid="task-description-image-lightbox"
+        class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/85 p-4 sm:p-6"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="imagePreview.fileName || 'Image preview'"
+        @click.self="closeImagePreview"
+      >
+        <div class="relative max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] rounded-xl bg-black/20 p-2 shadow-xl sm:max-h-[calc(100vh-3rem)] sm:max-w-[calc(100vw-3rem)] sm:p-3">
+          <button
+            data-testid="task-description-image-lightbox-close"
+            type="button"
+            class="absolute right-2 top-2 rounded-md border border-white/20 bg-black/55 p-1.5 text-white/90 transition-colors hover:bg-black/75 hover:text-white"
+            aria-label="Close image preview"
+            @click="closeImagePreview"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+          <img
+            v-if="imagePreview.src"
+            data-testid="task-description-image-lightbox-img"
+            :src="imagePreview.src"
+            :alt="imagePreview.fileName"
+            class="max-h-[calc(100vh-5rem)] max-w-[calc(100vw-5rem)] rounded-lg object-contain sm:max-h-[calc(100vh-6rem)] sm:max-w-[calc(100vw-6rem)]"
+          >
+        </div>
+      </div>
+    </Teleport>
+
     <MessageTagPicker
       :open="mentionPickerOpen"
       :loading="mentionPickerLoading"
@@ -369,6 +402,11 @@ const showRenderedFallback = computed(() =>
 )
 const attachmentObjectUrls = new Map<string, string>()
 const attachmentLoadsInFlight = new Set<string>()
+const imagePreview = ref({
+  open: false,
+  src: '',
+  fileName: '',
+})
 const mentionPickerOpen = ref(false)
 const mentionPickerLoading = ref(false)
 const mentionPickerError = ref('')
@@ -461,6 +499,35 @@ function fetchEditorAttachmentBlob(ownerKind: AttachmentOwnerKind | 'task-staged
     return tasksFetchStagedAttachmentBlob(attachmentId)
   }
   return fetchOwnedAttachmentBlob(ownerKind, ownerId, attachmentId)
+}
+
+function openImagePreview(image: HTMLImageElement): boolean {
+  const attachmentUrl = image.dataset.attachmentUrl ?? image.getAttribute('src') ?? ''
+  if (!parseAttachmentUrl(attachmentUrl)) return false
+  const src = (attachmentObjectUrls.get(attachmentUrl) ?? image.currentSrc) || image.src
+  if (!src || parseAttachmentUrl(src)) return false
+
+  imagePreview.value = {
+    open: true,
+    src,
+    fileName: image.alt || image.title || 'Image',
+  }
+  return true
+}
+
+function closeImagePreview() {
+  imagePreview.value = {
+    open: false,
+    src: '',
+    fileName: '',
+  }
+}
+
+function onImagePreviewKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !imagePreview.value.open) return
+  event.preventDefault()
+  event.stopPropagation()
+  closeImagePreview()
 }
 
 function revokeAttachmentObjectUrls() {
@@ -882,6 +949,13 @@ const editor = useEditor({
         }
         return handled
       },
+      click(_view, event) {
+        const target = event.target
+        if (!(target instanceof HTMLImageElement) || !openImagePreview(target)) return false
+        event.preventDefault()
+        event.stopPropagation()
+        return true
+      },
     },
     handlePaste(_view, event) {
       const files = Array.from(event.clipboardData?.files ?? [])
@@ -1244,11 +1318,20 @@ watch(showRenderedFallback, (next, prev) => {
   })
 }, { immediate: true })
 
+watch(() => imagePreview.value.open, (open) => {
+  if (open) {
+    window.addEventListener('keydown', onImagePreviewKeydown, true)
+    return
+  }
+  window.removeEventListener('keydown', onImagePreviewKeydown, true)
+})
+
 onBeforeUnmount(() => {
   if (mentionSearchDebounceTimer) {
     clearTimeout(mentionSearchDebounceTimer)
     mentionSearchDebounceTimer = null
   }
+  window.removeEventListener('keydown', onImagePreviewKeydown, true)
   revokeAttachmentObjectUrls()
 })
 
@@ -1466,7 +1549,7 @@ defineExpose<{
 }
 
 .task-description-editor-content :deep(.attachment-editor-inline-image) {
-  @apply max-h-[260px] max-w-full rounded-lg border border-chat-border/70 bg-chat-input/60 shadow-sm;
+  @apply max-h-[260px] max-w-full cursor-zoom-in rounded-lg border border-chat-border/70 bg-chat-input/60 shadow-sm transition-colors hover:border-accent/70;
 }
 
 .task-description-editor-content :deep(.collaboration-carets__caret) {

@@ -922,6 +922,52 @@ describe('TaskDescriptionRichEditor', () => {
     expect(fetchOwnedAttachmentBlob).not.toHaveBeenCalled()
   })
 
+  it('opens inline attachment images in a lightbox and closes it with every supported action', async () => {
+    const wrapper = mount(TaskDescriptionRichEditor, {
+      props: {
+        modelValue: '![Photo.png](msgnr-attachment://task/task-1/att-image)',
+        ownerKind: 'task',
+        ownerId: 'task-1',
+        uploadAttachments: vi.fn(),
+      },
+      attachTo: document.body,
+    })
+    await waitForRichEditor(wrapper)
+    await flushPromises()
+
+    const image = wrapper.get('[data-testid="task-description-editor-content"] .ProseMirror img')
+    expect(image.attributes('src')).toBe('blob:editor')
+
+    async function openLightbox() {
+      await image.trigger('click')
+      await flushPromises()
+      return document.body.querySelector<HTMLElement>('[data-testid="task-description-image-lightbox"]')
+    }
+
+    let lightbox = await openLightbox()
+    expect(lightbox).not.toBeNull()
+    expect(lightbox?.querySelector('img')?.getAttribute('src')).toBe('blob:editor')
+    expect(lightbox?.querySelector('img')?.getAttribute('alt')).toBe('Photo.png')
+    expect(fetchOwnedAttachmentBlob).toHaveBeenCalledTimes(1)
+
+    const closeButton = lightbox?.querySelector<HTMLButtonElement>('[data-testid="task-description-image-lightbox-close"]')
+    expect(closeButton).not.toBeNull()
+    closeButton?.click()
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-description-image-lightbox"]')).toBeNull()
+
+    lightbox = await openLightbox()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(lightbox).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="task-description-image-lightbox"]')).toBeNull()
+
+    lightbox = await openLightbox()
+    lightbox?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="task-description-image-lightbox"]')).toBeNull()
+  })
+
   it('opens attachment links from the editor on first mouse press', async () => {
     const wrapper = mount(TaskDescriptionRichEditor, {
       props: {

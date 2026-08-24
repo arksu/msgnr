@@ -399,7 +399,21 @@ export function useSessionOrchestrator() {
           // 'CONNECTING' is the transient pre-open state — ws.connect() sets it
           // before the socket opens. Only 'DISCONNECTED' (set by onerror/onclose)
           // signals a genuine failure, so this check is now safe.
+          // A foreground connection can also fail before onopen, or remain
+          // stuck in the handshake until the foreground deadline. Enter the
+          // existing reconnect loop here; if the close callback already did
+          // so, _scheduleReconnect() deduplicates the pending retry.
+          const shouldRecoverTransport = isForegroundAttempt
+            && !reconnectStopped
+            && (
+              ws.lastErrorKind === 'TRANSPORT'
+              || (ws.lastErrorKind === null && s === 'DISCONNECTED')
+              || (ws.lastErrorKind === null && elapsed >= MAX_WAIT_MS)
+            )
           finalize(false)
+          if (shouldRecoverTransport) {
+            _scheduleReconnect()
+          }
           resolve(false)
         }
       }, TICK_MS)

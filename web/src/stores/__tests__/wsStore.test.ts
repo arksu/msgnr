@@ -323,7 +323,7 @@ describe('wsStore state machine', () => {
     store.connect('/ws')
     mockSocket.simulateOpen()
 
-    store.sendAck(42n)
+    expect(store.sendAck(42n)).toBe(true)
 
     expect(groupCollapsedSpy.mock.calls.some(([message]: [string]) => message === '[WS SEND] ackRequest')).toBe(true)
     expect(consoleLogSpy).toHaveBeenCalledWith(expect.objectContaining({
@@ -335,6 +335,12 @@ describe('wsStore state machine', () => {
       }),
     }))
     expect(groupEndSpy).toHaveBeenCalled()
+  })
+
+  it('reports an unsent ACK when the socket is not open', () => {
+    const store = useWsStore()
+
+    expect(store.sendAck(42n)).toBe(false)
   })
 
   it('sends updateReadCursor requests', () => {
@@ -622,6 +628,20 @@ describe('wsStore state machine', () => {
     mockSocket.simulateError()
     expect(store.state).toBe('DISCONNECTED')
     expect(store.lastErrorKind).toBe('TRANSPORT')
+  })
+
+  it('reports a reconnectable transport drop when the socket closes before opening', () => {
+    const store = useWsStore()
+    const onDrop = vi.fn()
+    store.onTransportDrop(onDrop)
+
+    store.connect('/ws')
+    mockSocket.simulateError()
+    mockSocket.simulateClose(1006)
+
+    expect(store.state).toBe('DISCONNECTED')
+    expect(store.lastErrorKind).toBe('TRANSPORT')
+    expect(onDrop).toHaveBeenCalledTimes(1)
   })
 
   it('stores last close code and clears it on next connect', () => {

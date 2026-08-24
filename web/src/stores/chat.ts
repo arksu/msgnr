@@ -67,7 +67,6 @@ import {
   cacheConversations,
   loadCachedConversations,
   cacheMessages,
-  cacheSingleMessage,
   clearCachedMessages,
   loadCachedMessages,
   cacheThreadSummaries,
@@ -452,11 +451,16 @@ function savedMessageItemFromHttp(item: HttpSavedMessageItem): SavedMessageItem 
 
 const ACK_BATCH_SIZE = 20
 const ACK_INTERVAL_MS = 2000
+const ACK_RESPONSE_TIMEOUT_MS = 15_000
+const SYNC_CURSOR_PERSIST_DELAY_MS = 250
+const SYNC_CURSOR_PERSIST_RETRY_MS = 2000
+const SYNC_EVENT_CHUNK_SIZE = 25
 const DEFAULT_SYNC_BATCH = 200
 const MAX_BUFFERED_SERVER_EVENTS = 512
 const REACTION_OP_TIMEOUT_MS = 8000
 const TOAST_DURATION_MS = 2800
 const THREAD_SUMMARIES_STORAGE_KEY = 'msgnr:thread-summaries:v1'
+const THREAD_SUMMARY_PERSIST_DELAY_MS = 250
 const DEBUG_REACTIONS = false
 
 interface ConversationHistoryState {
@@ -467,7 +471,12 @@ interface ConversationHistoryState {
 }
 
 function readStoredThreadSummaryBuckets(): StoredThreadSummariesByUser {
-  const raw = storage.getItem(THREAD_SUMMARIES_STORAGE_KEY)
+  let raw: string | null
+  try {
+    raw = storage.getItem(THREAD_SUMMARIES_STORAGE_KEY)
+  } catch {
+    return {}
+  }
   if (!raw) return {}
   try {
     const parsed = JSON.parse(raw)
@@ -506,7 +515,7 @@ function loadThreadSummariesForUser(userId: string): Record<string, ThreadSummar
   return summaries
 }
 
-function saveThreadSummariesForUser(userId: string, summaries: Record<string, ThreadSummary>) {
+async function saveThreadSummariesForUser(userId: string, summaries: Record<string, ThreadSummary>) {
   if (!userId) return
   // Write to localStorage (synchronous fallback for bootstrap)
   const all = readStoredThreadSummaryBuckets()
@@ -520,9 +529,15 @@ function saveThreadSummariesForUser(userId: string, summaries: Record<string, Th
     }
   }
   all[userId] = nextBucket
-  storage.setItem(THREAD_SUMMARIES_STORAGE_KEY, JSON.stringify(all))
-  // Write-through to IndexedDB (fire-and-forget)
-  void cacheThreadSummaries(userId, summaries)
+  try {
+    storage.setItem(THREAD_SUMMARIES_STORAGE_KEY, JSON.stringify(all))
+  } catch {
+    // The cache is an optimisation. A quota/privacy-mode failure must not
+    // escape a websocket event handler and stall sync acknowledgement.
+  }
+  // Serialize IndexedDB replacements so an older async write cannot complete
+  // after a newer summary snapshot.
+  await cacheThreadSummaries(userId, summaries)
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -688,10 +703,30 @@ export const useChatStore = defineStore('chat', () => {
   let bootstrapPresenceOverlay = new Map<string, PresenceEvent>()
   let bufferedServerEvents: ServerEvent[] = []
   let seenEventIds = new Set<string>()
+  // This intentionally survives runtime resets. A response started for a
+  // previous account/session must never be able to match a newly created
+  // request for the same conversation id after its per-conversation token map
+  // has been cleared.
   let historyLoadToken = 0
   const historyLoadTokenByConversation = new Map<string, number>()
   let ackTimer: ReturnType<typeof setTimeout> | null = null
+  let ackScheduleGeneration = 0
+  let ackRetryPending = false
   let pendingAckEventCount = 0
+  let ackInFlight = false
+  let ackResponseTimer: ReturnType<typeof setTimeout> | null = null
+  let syncCursorPersistTimer: ReturnType<typeof setTimeout> | null = null
+  let syncCursorPersistDirty = false
+  let lastPersistedSyncCursor = lastAppliedEventSeq.value
+  let syncReplayGeneration = 0
+  let syncReplayProcessing = false
+  const pendingSyncResponses: SyncSinceResponse[] = []
+  let threadSummaryPersistTimer: ReturnType<typeof setTimeout> | null = null
+  let threadSummaryPersistInFlight = false
+  let threadSummaryPersistDirty = false
+  const messageCacheTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const pendingMessageCaches = new Map<string, Message[]>()
+  const messageCacheInFlight = new Set<string>()
   const pendingReadByConversation = new Map<string, bigint>()
   let clientIsActive = true
   let clientInstanceId = getOrCreateClientInstanceId()
@@ -706,7 +741,62 @@ export const useChatStore = defineStore('chat', () => {
   function persistThreadSummaries() {
     const userId = workspace.value?.selfUserId ?? ''
     if (!userId) return
-    saveThreadSummariesForUser(userId, threadSummaries.value)
+    threadSummaryPersistDirty = true
+    if (threadSummaryPersistTimer || threadSummaryPersistInFlight) return
+    threadSummaryPersistTimer = setTimeout(() => {
+      threadSummaryPersistTimer = null
+      void flushThreadSummaryPersistence()
+    }, THREAD_SUMMARY_PERSIST_DELAY_MS)
+  }
+
+  async function flushThreadSummaryPersistence() {
+    if (threadSummaryPersistInFlight || !threadSummaryPersistDirty) return
+    const userId = workspace.value?.selfUserId ?? ''
+    if (!userId) return
+
+    threadSummaryPersistDirty = false
+    threadSummaryPersistInFlight = true
+    try {
+      await saveThreadSummariesForUser(userId, threadSummaries.value)
+    } finally {
+      threadSummaryPersistInFlight = false
+      if (threadSummaryPersistDirty && !threadSummaryPersistTimer) {
+        persistThreadSummaries()
+      }
+    }
+  }
+
+  function scheduleMessageCache(conversationId: string, list: Message[]) {
+    if (!conversationId) return
+    pendingMessageCaches.set(conversationId, list)
+    if (messageCacheTimers.has(conversationId) || messageCacheInFlight.has(conversationId)) return
+    messageCacheTimers.set(conversationId, setTimeout(() => {
+      messageCacheTimers.delete(conversationId)
+      void flushMessageCache(conversationId)
+    }, THREAD_SUMMARY_PERSIST_DELAY_MS))
+  }
+
+  async function flushMessageCache(conversationId: string) {
+    if (messageCacheInFlight.has(conversationId)) return
+    const list = pendingMessageCaches.get(conversationId)
+    if (!list) return
+    pendingMessageCaches.delete(conversationId)
+    messageCacheInFlight.add(conversationId)
+    try {
+      await cacheMessages(conversationId, list)
+    } finally {
+      messageCacheInFlight.delete(conversationId)
+      if (pendingMessageCaches.has(conversationId) && !messageCacheTimers.has(conversationId)) {
+        scheduleMessageCache(conversationId, pendingMessageCaches.get(conversationId) ?? [])
+      }
+    }
+  }
+
+  function cancelScheduledMessageCache(conversationId: string) {
+    const timer = messageCacheTimers.get(conversationId)
+    if (timer) clearTimeout(timer)
+    messageCacheTimers.delete(conversationId)
+    pendingMessageCaches.delete(conversationId)
   }
 
   function bumpThreadReplayVersion(rootId: string) {
@@ -1254,25 +1344,38 @@ export const useChatStore = defineStore('chat', () => {
     email?: string,
     avatarUrl?: string,
     customStatus?: UserCustomStatus | null,
-  ) {
+    refreshLabels = true,
+  ): boolean {
     const normalizedName = (displayName ?? '').trim()
     const normalizedEmail = (email ?? '').trim()
     const normalizedAvatar = (avatarUrl ?? '').trim()
     const resolved = normalizedName || normalizedEmail
     const hasAvatarUpdate = avatarUrl !== undefined
     const previousAvatar = hasAvatarUpdate ? resolveAvatarUrl(userId) : ''
-    if (resolved) {
+    const nameChanged = Boolean(resolved) && userNames.value[userId] !== resolved
+    const emailChanged = Boolean(normalizedEmail) && userEmails.value[userId] !== normalizedEmail
+    const avatarChanged = hasAvatarUpdate && userAvatars.value[userId] !== normalizedAvatar
+    const previousCustomStatus = customStatus !== undefined ? resolveUserCustomStatus(userId) : null
+    const resolvedCustomStatus = customStatus !== undefined
+      ? (isUserCustomStatusActive(customStatus) ? customStatus : null)
+      : undefined
+    const customStatusChanged = resolvedCustomStatus !== undefined && (
+      previousCustomStatus?.text !== resolvedCustomStatus?.text
+      || previousCustomStatus?.emoji !== resolvedCustomStatus?.emoji
+      || previousCustomStatus?.expiresAt !== resolvedCustomStatus?.expiresAt
+    )
+
+    if (nameChanged) {
       userNames.value[userId] = resolved
     }
-    if (normalizedEmail) {
+    if (emailChanged) {
       userEmails.value[userId] = normalizedEmail
     }
-    if (hasAvatarUpdate) {
+    if (hasAvatarUpdate && avatarChanged) {
       userAvatars.value[userId] = normalizedAvatar
       void invalidateUserAvatar(previousAvatar, normalizedAvatar)
     }
-    if (customStatus !== undefined) {
-      const resolvedCustomStatus = isUserCustomStatusActive(customStatus) ? customStatus : null
+    if (resolvedCustomStatus !== undefined && customStatusChanged) {
       userCustomStatuses.value[userId] = resolvedCustomStatus
       const dm = directMessages.value.find(item => item.userId === userId)
       if (dm) {
@@ -1282,43 +1385,66 @@ export const useChatStore = defineStore('chat', () => {
         workspace.value.selfCustomStatus = resolvedCustomStatus
       }
     }
-    if (resolved || hasAvatarUpdate || customStatus !== undefined) {
-      refreshSenderLabels(userId)
-    }
+    // Directory hydration and history pages can contain hundreds of messages
+    // from the same sender. Only rescan resident message lists if this call
+    // actually changes their rendered identity.
+    const changed = nameChanged || emailChanged || avatarChanged || customStatusChanged
+    if (changed && refreshLabels) refreshSenderLabels(userId)
+    return changed
   }
 
   function refreshSenderLabels(userId: string) {
-    const resolved = resolveDisplayName(userId)
-    const resolvedAvatar = resolveAvatarUrl(userId)
-    const resolvedCustomStatus = resolveUserCustomStatus(userId)
+    refreshSenderLabelsForUsers([userId])
+  }
+
+  function refreshSenderLabelsForUsers(userIds: Iterable<string>) {
+    const identities = new Map<string, {
+      displayName: string
+      avatarUrl: string
+      customStatus: UserCustomStatus | null
+    }>()
+    for (const userId of userIds) {
+      if (!userId || identities.has(userId)) continue
+      identities.set(userId, {
+        displayName: resolveDisplayName(userId),
+        avatarUrl: resolveAvatarUrl(userId),
+        customStatus: resolveUserCustomStatus(userId),
+      })
+    }
+    if (identities.size === 0) return
+
     for (const conversationId of Object.keys(messages.value)) {
       const list = messages.value[conversationId]
       for (const msg of list) {
-        if (msg.senderId === userId) {
-          msg.senderName = resolved
-          msg.senderAvatarUrl = resolvedAvatar
-        }
+        const identity = identities.get(msg.senderId)
+        if (!identity) continue
+        msg.senderName = identity.displayName
+        msg.senderAvatarUrl = identity.avatarUrl
       }
     }
     for (const rootId of Object.keys(threadMessages.value)) {
       const list = threadMessages.value[rootId]
       for (const msg of list) {
-        if (msg.senderId === userId) {
-          msg.senderName = resolved
-          msg.senderAvatarUrl = resolvedAvatar
-        }
+        const identity = identities.get(msg.senderId)
+        if (!identity) continue
+        msg.senderName = identity.displayName
+        msg.senderAvatarUrl = identity.avatarUrl
       }
     }
-    const dm = directMessages.value.find(item => item.userId === userId)
-    if (dm) {
-      dm.displayName = resolved
-      dm.avatarUrl = resolvedAvatar
-      dm.customStatus = resolvedCustomStatus
+    for (const dm of directMessages.value) {
+      const identity = identities.get(dm.userId)
+      if (!identity) continue
+      dm.displayName = identity.displayName
+      dm.avatarUrl = identity.avatarUrl
+      dm.customStatus = identity.customStatus
     }
-    if (workspace.value?.selfUserId === userId) {
-      workspace.value.selfDisplayName = resolved
-      workspace.value.selfAvatarUrl = resolvedAvatar
-      workspace.value.selfCustomStatus = resolvedCustomStatus
+    if (workspace.value) {
+      const identity = identities.get(workspace.value.selfUserId)
+      if (identity) {
+        workspace.value.selfDisplayName = identity.displayName
+        workspace.value.selfAvatarUrl = identity.avatarUrl
+        workspace.value.selfCustomStatus = identity.customStatus
+      }
     }
   }
 
@@ -1328,15 +1454,20 @@ export const useChatStore = defineStore('chat', () => {
     userDirectoryPromise = (async () => {
       try {
         const candidates = await listDmCandidates()
+        const changedUserIds = new Set<string>()
         for (const candidate of candidates) {
-          registerUserIdentity(
+          if (registerUserIdentity(
             candidate.user_id,
             candidate.display_name,
             candidate.email,
             candidate.avatar_url,
             userCustomStatusFromDto(candidate.custom_status),
-          )
+            false,
+          )) {
+            changedUserIds.add(candidate.user_id)
+          }
         }
+        refreshSenderLabelsForUsers(changedUserIds)
         userDirectoryHydrated = true
       } catch {
         // Non-fatal: keep short-id fallback if directory fetch fails.
@@ -1374,8 +1505,7 @@ export const useChatStore = defineStore('chat', () => {
       failReason: undefined,
     }
     list.splice(idx, 1, confirmed)
-    // Write-through confirmed message to IndexedDB (fire-and-forget)
-    void cacheSingleMessage(confirmed)
+    scheduleMessageCache(channelId, list)
   }
 
   function reconcileThreadMessage(_channelId: string, clientMsgId: string, ack: SendMessageAck) {
@@ -1452,9 +1582,18 @@ export const useChatStore = defineStore('chat', () => {
     clearAllThreadReplayResyncTimers()
     clearAllThreadReplayResponseWatchdogs()
 
-    if (ackTimer) {
-      clearTimeout(ackTimer)
-      ackTimer = null
+    clearScheduledAck()
+    if (ackResponseTimer) {
+      clearTimeout(ackResponseTimer)
+      ackResponseTimer = null
+    }
+    if (syncCursorPersistTimer) {
+      clearTimeout(syncCursorPersistTimer)
+      syncCursorPersistTimer = null
+    }
+    if (threadSummaryPersistTimer) {
+      clearTimeout(threadSummaryPersistTimer)
+      threadSummaryPersistTimer = null
     }
     if (toastTimer) {
       clearTimeout(toastTimer)
@@ -1464,6 +1603,11 @@ export const useChatStore = defineStore('chat', () => {
       clearTimeout(unreadFeedRefreshTimer)
       unreadFeedRefreshTimer = null
     }
+    for (const timer of messageCacheTimers.values()) {
+      clearTimeout(timer)
+    }
+    messageCacheTimers.clear()
+    pendingMessageCaches.clear()
     pendingThreadReadResolutions.clear()
     incompleteThreadReplayResponses.clear()
 
@@ -1509,6 +1653,7 @@ export const useChatStore = defineStore('chat', () => {
     toast.value = null
     lastAppliedEventSeq.value = 0n
     lastAckedEventSeq.value = 0n
+    lastPersistedSyncCursor = 0n
 
     conversationHistoryState.clear()
     historyLoadTokenByConversation.clear()
@@ -1520,8 +1665,15 @@ export const useChatStore = defineStore('chat', () => {
     bootstrapPresenceOverlay = new Map()
     bufferedServerEvents = []
     seenEventIds = new Set()
-    historyLoadToken = 0
+    // Keep historyLoadToken monotonic across account/session resets so pending
+    // HTTP history from the old session remains stale even if the next session
+    // opens the same conversation id.
     pendingAckEventCount = 0
+    ackInFlight = false
+    syncCursorPersistDirty = false
+    syncReplayGeneration += 1
+    pendingSyncResponses.length = 0
+    threadSummaryPersistDirty = false
     clientIsActive = true
     userDirectoryHydrated = false
     userDirectoryPromise = null
@@ -1975,6 +2127,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function startBootstrap() {
+    discardPendingSyncResponses()
+    clearScheduledAck()
+    ackInFlight = false
+    clearAckResponseWatchdog()
     const ws = useWsStore()
     bootstrapStage = null
     bootstrapPresenceOverlay = new Map()
@@ -2072,8 +2228,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     applyBootstrapSnapshot(bootstrapStage)
-    lastAppliedEventSeq.value = resp.snapshotSeq
-    saveLastAppliedEventSeq(lastAppliedEventSeq.value)
+    replaceSyncCursor(resp.snapshotSeq)
     if (activeChannelId.value) {
       void ensureConversationHistory(activeChannelId.value)
     }
@@ -2517,10 +2672,11 @@ export const useChatStore = defineStore('chat', () => {
       })
       return 0
     } finally {
-      if (token === historyLoadTokenByConversation.get(conversationId)) {
+      const isCurrentRequest = token === historyLoadTokenByConversation.get(conversationId)
+      if (isCurrentRequest) {
         state.loading = false
       }
-      if (isInitialLoad) {
+      if (isInitialLoad && isCurrentRequest) {
         conversationInitialLoadingById.value = {
           ...conversationInitialLoadingById.value,
           [conversationId]: false,
@@ -2667,6 +2823,60 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleSyncSinceResponse(resp: SyncSinceResponse) {
+    pendingSyncResponses.push(resp)
+    if (syncReplayProcessing) return
+    syncReplayProcessing = true
+    void drainSyncSinceResponses()
+  }
+
+  function discardPendingSyncResponses() {
+    syncReplayGeneration += 1
+    pendingSyncResponses.length = 0
+  }
+
+  function yieldSyncReplayChunk(): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  async function drainSyncSinceResponses() {
+    let replayFailed = false
+    try {
+      while (pendingSyncResponses.length > 0) {
+        const resp = pendingSyncResponses.shift()
+        if (!resp) continue
+        const generation = syncReplayGeneration
+        try {
+          await applySyncSinceResponse(resp, generation)
+        } catch {
+          replayFailed = true
+          recoverFailedSyncReplay()
+          return
+        }
+      }
+    } finally {
+      syncReplayProcessing = false
+      if (replayFailed) {
+        // Responses queued behind a failed apply were based on the same stale
+        // local state. Bootstrap will establish a fresh replay boundary.
+        pendingSyncResponses.length = 0
+      } else if (pendingSyncResponses.length > 0) {
+        // A handler can enqueue a response just after the loop drains. Start a
+        // fresh drain rather than leaving it behind the previous async turn.
+        syncReplayProcessing = true
+        void drainSyncSinceResponses()
+      }
+    }
+  }
+
+  function recoverFailedSyncReplay() {
+    const ws = useWsStore()
+    ws.setStaleRebootstrap()
+    // startBootstrap drops pending replay pages and invalidates any delayed
+    // ACK so a cursor from a response that failed to apply is never sent.
+    startBootstrap()
+  }
+
+  async function applySyncSinceResponse(resp: SyncSinceResponse, generation: number) {
     const ws = useWsStore()
     const previousCursor = lastAppliedEventSeq.value
     if (resp.needFullBootstrap) {
@@ -2686,9 +2896,15 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
-    for (const event of resp.events) {
+    for (let index = 0; index < resp.events.length; index += 1) {
+      if (generation !== syncReplayGeneration) return
+      const event = resp.events[index]
       applySequencedEvent(event)
+      if ((index + 1) % SYNC_EVENT_CHUNK_SIZE === 0 && index + 1 < resp.events.length) {
+        await yieldSyncReplayChunk()
+      }
     }
+    if (generation !== syncReplayGeneration) return
     advanceSyncCursor(resp.syncCursor)
     scheduleAckFlush()
 
@@ -2722,9 +2938,17 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleAckResponse(resp: AckResponse) {
-    if (!resp.ok) return
+    ackInFlight = false
+    clearAckResponseWatchdog()
+    if (!resp.ok) {
+      scheduleAckRetry(true)
+      return
+    }
     lastAckedEventSeq.value = resp.persistedEventSeq
     pendingAckEventCount = 0
+    if (lastAppliedEventSeq.value > lastAckedEventSeq.value) {
+      scheduleAckFlush()
+    }
   }
 
   function handleReadCursorAck(ack: ReadCursorAck) {
@@ -2999,22 +3223,116 @@ export const useChatStore = defineStore('chat', () => {
   function advanceSyncCursor(nextSeq: bigint) {
     if (nextSeq <= lastAppliedEventSeq.value) return
     lastAppliedEventSeq.value = nextSeq
-    saveLastAppliedEventSeq(lastAppliedEventSeq.value)
+    syncCursorPersistDirty = true
+    scheduleSyncCursorPersistence()
+  }
+
+  function replaceSyncCursor(nextSeq: bigint) {
+    lastAppliedEventSeq.value = nextSeq
+    syncCursorPersistDirty = lastPersistedSyncCursor !== nextSeq
+    if (!persistSyncCursor()) {
+      scheduleSyncCursorPersistence()
+    }
+  }
+
+  function persistSyncCursor(): boolean {
+    if (!syncCursorPersistDirty && lastPersistedSyncCursor === lastAppliedEventSeq.value) return true
+    if (!saveLastAppliedEventSeq(lastAppliedEventSeq.value)) return false
+    lastPersistedSyncCursor = lastAppliedEventSeq.value
+    syncCursorPersistDirty = false
+    return true
+  }
+
+  function scheduleSyncCursorPersistence(delayMs = SYNC_CURSOR_PERSIST_DELAY_MS) {
+    if (!syncCursorPersistDirty || syncCursorPersistTimer) return
+    syncCursorPersistTimer = setTimeout(() => {
+      syncCursorPersistTimer = null
+      if (!persistSyncCursor()) {
+        scheduleSyncCursorPersistence(SYNC_CURSOR_PERSIST_RETRY_MS)
+      }
+    }, delayMs)
+  }
+
+  function clearAckResponseWatchdog() {
+    if (!ackResponseTimer) return
+    clearTimeout(ackResponseTimer)
+    ackResponseTimer = null
+  }
+
+  function cancelScheduledAckTimer() {
+    ackRetryPending = false
+    if (!ackTimer) return
+    clearTimeout(ackTimer)
+    ackTimer = null
+  }
+
+  function clearScheduledAck() {
+    ackScheduleGeneration += 1
+    cancelScheduledAckTimer()
+  }
+
+  function scheduleAckRetry(retrying = false) {
+    if (ackTimer || lastAppliedEventSeq.value <= lastAckedEventSeq.value) return
+    ackRetryPending = retrying
+    const generation = ackScheduleGeneration
+    const timer = setTimeout(() => {
+      if (ackTimer === timer) {
+        ackTimer = null
+        ackRetryPending = false
+      }
+      if (generation !== ackScheduleGeneration) return
+      flushAck(generation)
+    }, ACK_INTERVAL_MS)
+    ackTimer = timer
+  }
+
+  function flushAck(generation = ackScheduleGeneration) {
+    if (generation !== ackScheduleGeneration) return
+    if (lastAppliedEventSeq.value <= lastAckedEventSeq.value || ackInFlight) return
+    // Do not tell the server an event is durable until its replay cursor has
+    // actually reached local storage. If persistence is unavailable, replaying
+    // after reconnect is safer than silently losing an event.
+    if (!persistSyncCursor()) {
+      scheduleSyncCursorPersistence(SYNC_CURSOR_PERSIST_RETRY_MS)
+      scheduleAckRetry(true)
+      return
+    }
+    const ws = useWsStore()
+    let sent: boolean | void
+    try {
+      sent = ws.sendAck(lastAppliedEventSeq.value)
+    } catch {
+      scheduleAckRetry(true)
+      return
+    }
+    // Existing test doubles and older transports return void; only an explicit
+    // false means the ACK did not reach the socket send path.
+    if (sent === false || generation !== ackScheduleGeneration) {
+      if (generation === ackScheduleGeneration) scheduleAckRetry(true)
+      return
+    }
+    ackInFlight = true
+    clearAckResponseWatchdog()
+    const responseTimer = setTimeout(() => {
+      if (ackResponseTimer === responseTimer) {
+        ackResponseTimer = null
+      }
+      if (generation !== ackScheduleGeneration) return
+      ackInFlight = false
+      scheduleAckRetry(true)
+    }, ACK_RESPONSE_TIMEOUT_MS)
+    ackResponseTimer = responseTimer
   }
 
   function scheduleAckFlush() {
-    const ws = useWsStore()
-    if (pendingAckEventCount >= ACK_BATCH_SIZE && lastAppliedEventSeq.value > lastAckedEventSeq.value) {
-      ws.sendAck(lastAppliedEventSeq.value)
+    if (lastAppliedEventSeq.value <= lastAckedEventSeq.value) return
+    if (ackInFlight) return
+    if (pendingAckEventCount >= ACK_BATCH_SIZE && !ackRetryPending) {
+      cancelScheduledAckTimer()
+      flushAck()
       return
     }
-    if (ackTimer) return
-    ackTimer = setTimeout(() => {
-      ackTimer = null
-      if (lastAppliedEventSeq.value > lastAckedEventSeq.value) {
-        ws.sendAck(lastAppliedEventSeq.value)
-      }
-    }, ACK_INTERVAL_MS)
+    scheduleAckRetry()
   }
 
   function applyServerEventPayload(evt: ServerEvent) {
@@ -3384,6 +3702,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     channels.value = channels.value.filter(channel => channel.id !== conversationId)
     directMessages.value = directMessages.value.filter(dm => dm.id !== conversationId)
+    cancelScheduledMessageCache(conversationId)
     pendingReadByConversation.delete(conversationId)
     conversationHistoryState.delete(conversationId)
     historyLoadTokenByConversation.delete(conversationId)
@@ -3409,6 +3728,8 @@ export const useChatStore = defineStore('chat', () => {
 
   function clearDMConversationHistoryLocal(conversationId: string) {
     if (!conversationId) return
+
+    cancelScheduledMessageCache(conversationId)
 
     const rootIds = new Set((messages.value[conversationId] ?? []).map(message => message.id))
     for (const [rootId, replies] of Object.entries(threadMessages.value)) {
@@ -3605,8 +3926,7 @@ export const useChatStore = defineStore('chat', () => {
 
     messages.value[channelId].push(msg)
     decryptAndApplyMessage(msg, evt.encryptedDmPayload?.recipients)
-    // Write-through to IndexedDB (fire-and-forget)
-    void cacheSingleMessage(msg)
+    scheduleMessageCache(channelId, messages.value[channelId])
     const channel = channels.value.find(item => item.id === channelId)
     if (channel) channel.lastMessageSeq = evt.channelSeq
     const dm = directMessages.value.find(item => item.id === channelId)
@@ -3755,7 +4075,7 @@ export const useChatStore = defineStore('chat', () => {
       const msg = list.find(item => item.id === evt.messageId)
       if (msg) {
         apply(msg)
-        void cacheMessages(evt.conversationId, list)
+        scheduleMessageCache(evt.conversationId, list)
       }
     }
     for (const rootId of Object.keys(threadMessages.value)) {
@@ -3777,7 +4097,7 @@ export const useChatStore = defineStore('chat', () => {
         rootList.splice(idx, 1)
         removedRoot = true
       }
-      void cacheMessages(conversationId, rootList)
+      scheduleMessageCache(conversationId, rootList)
     }
 
     for (const rootId of Object.keys(threadMessages.value)) {
@@ -3910,12 +4230,11 @@ export const useChatStore = defineStore('chat', () => {
     if (message.contentMode !== 'dm_pairwise_signal_v1') return
     void decryptDMMessage(payloads).then(body => {
       if (body === null) return
-      const apply = (candidate: Message) => {
-        if (candidate.id === message.id) candidate.body = body
-      }
-      for (const candidate of messages.value[message.channelId] ?? []) apply(candidate)
-      for (const rootId of Object.keys(threadMessages.value)) {
-        for (const candidate of threadMessages.value[rootId] ?? []) apply(candidate)
+      // Callers pass the same object they just inserted into the canonical
+      // conversation or thread array. Updating it directly avoids a full scan
+      // of every resident message for each decrypt completion.
+      if (message.body === 'Decrypting encrypted message...') {
+        message.body = body
       }
     }).catch(() => {})
   }
@@ -3924,14 +4243,19 @@ export const useChatStore = defineStore('chat', () => {
     const applyStartedAt = performance.now()
     const existing = messages.value[conversationId] ?? []
     const byId = new Map(existing.map(message => [message.id, message]))
+    const changedSenderIds = new Set<string>()
+    const unresolvedSenderIds = new Set<string>()
 
     for (const item of history) {
-      registerUserIdentity(item.sender_id, item.sender_name)
+      if (registerUserIdentity(item.sender_id, item.sender_name, undefined, undefined, undefined, false)) {
+        changedSenderIds.add(item.sender_id)
+      }
       if (!userNames.value[item.sender_id]) {
-        void ensureUserDirectory().then(() => refreshSenderLabels(item.sender_id))
+        unresolvedSenderIds.add(item.sender_id)
       }
       const prev = byId.get(item.id)
       const contentMode = item.content_mode === 'dm_pairwise_signal_v1' ? 'dm_pairwise_signal_v1' : 'plaintext'
+      const entities = normalizeMessageEntities(item.entities)
       const nextMessage: Message = {
         id: item.id,
         channelId: item.conversation_id,
@@ -3940,11 +4264,11 @@ export const useChatStore = defineStore('chat', () => {
         senderAvatarUrl: resolveAvatarUrl(item.sender_id),
         body: contentMode === 'dm_pairwise_signal_v1' ? 'Decrypting encrypted message...' : item.body,
         forwardedFrom: normalizeForwardedMessage(item.forwarded_from),
-        entities: normalizeMessageEntities(item.entities),
+        entities,
         channelSeq: BigInt(item.channel_seq),
         threadSeq: BigInt(item.thread_seq),
         threadRootMessageId: item.thread_root_message_id || undefined,
-        mentionedUserIds: mentionedUserIdsFromEntities(normalizeMessageEntities(item.entities)),
+        mentionedUserIds: mentionedUserIdsFromEntities(entities),
         mentionEveryone: item.mention_everyone,
         createdAt: item.created_at,
         editedAt: item.edited_at || undefined,
@@ -3986,9 +4310,13 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
+    refreshSenderLabelsForUsers(changedSenderIds)
+    if (unresolvedSenderIds.size > 0) {
+      void ensureUserDirectory().then(() => refreshSenderLabelsForUsers(unresolvedSenderIds))
+    }
+
     messages.value[conversationId] = Array.from(byId.values()).sort((a, b) => Number(a.channelSeq - b.channelSeq))
-    // Write-through to IndexedDB (fire-and-forget)
-    void cacheMessages(conversationId, messages.value[conversationId])
+    scheduleMessageCache(conversationId, messages.value[conversationId])
     const applyMs = Math.round((performance.now() - applyStartedAt) * 100) / 100
     logConversationPerf('history:merge-sort:done', {
       conversationId,

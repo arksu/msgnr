@@ -14,6 +14,10 @@ export function normalizeBackendBaseUrl(raw: string): string | null {
   try {
     const parsed = new URL(value)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    // This is a deployment base URL, not a request URL. Keeping a path supports
+    // reverse proxies mounted below the origin, while query/hash/credentials
+    // would make Axios and WebSocket endpoint construction ambiguous.
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) return null
     return stripTrailingSlashes(parsed.toString())
   } catch {
     return null
@@ -66,7 +70,8 @@ export function resolveWsUrl(): string {
   try {
     const wsUrl = new URL(base)
     wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-    wsUrl.pathname = '/ws'
+    const basePath = wsUrl.pathname.replace(/\/+$/, '')
+    wsUrl.pathname = `${basePath}/ws`
     wsUrl.search = ''
     wsUrl.hash = ''
     return wsUrl.toString()

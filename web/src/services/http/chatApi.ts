@@ -1,6 +1,7 @@
 import { AxiosError } from 'axios'
 import type { AxiosProgressEvent } from 'axios'
 import { createAuthenticatedClient } from './client'
+import { CONVERSATION_HISTORY_REQUEST_TIMEOUT_MS } from './timeouts'
 import type { UserCustomStatusDto } from '@/types/userStatus'
 
 const http = createAuthenticatedClient()
@@ -372,6 +373,7 @@ export async function listConversationMessages(
           : {}),
         ...(e2eeDeviceId ? { e2ee_device_id: e2eeDeviceId } : {}),
       },
+      timeout: CONVERSATION_HISTORY_REQUEST_TIMEOUT_MS,
     })
     const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100
     console.debug('[perf][conversation-open] api:listConversationMessages:done', {

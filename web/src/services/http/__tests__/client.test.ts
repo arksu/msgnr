@@ -1,5 +1,6 @@
 import axios, { AxiosError } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { AUTH_REQUEST_TIMEOUT_MS } from '@/services/http/timeouts'
 
 describe('createAuthenticatedClient', () => {
   beforeEach(async () => {
@@ -63,6 +64,11 @@ describe('createAuthenticatedClient', () => {
 
     expect(response.data).toEqual({ ok: true })
     expect(axios.post).toHaveBeenCalledTimes(1)
+    expect(axios.post).toHaveBeenCalledWith(
+      '/api/auth/refresh',
+      { refresh_token: 'refresh-token-1' },
+      expect.objectContaining({ timeout: AUTH_REQUEST_TIMEOUT_MS }),
+    )
     expect(authHeaders).toEqual(['Bearer expired-token', 'Bearer fresh-token'])
     expect(tokenStorage.getAccessToken()).toBe('fresh-token')
     expect(tokenStorage.getRefreshToken()).toBe('refresh-token-2')

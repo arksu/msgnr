@@ -114,6 +114,19 @@ describe('avatarCache', () => {
 
     expect(URL.createObjectURL).not.toHaveBeenCalled()
   })
+
+  it('evicts the least-recently-used object urls once the memory cache is bounded', async () => {
+    for (let index = 0; index < 200; index += 1) {
+      await loadCachedAvatarUrl(`/api/public/avatars/avatars/user-${index}/avatar.png`)
+    }
+    expect(getCachedAvatarObjectUrl('/api/public/avatars/avatars/user-0/avatar.png')).toBe('blob:avatar-1')
+    await loadCachedAvatarUrl('/api/public/avatars/avatars/user-200/avatar.png')
+
+    expect(getCachedAvatarObjectUrl('/api/public/avatars/avatars/user-0/avatar.png')).toBe('blob:avatar-1')
+    expect(getCachedAvatarObjectUrl('/api/public/avatars/avatars/user-1/avatar.png')).toBe('')
+    expect(getCachedAvatarObjectUrl('/api/public/avatars/avatars/user-200/avatar.png')).toBe('blob:avatar-201')
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:avatar-2')
+  })
 })
 
 function createMockCache(): MockCache {

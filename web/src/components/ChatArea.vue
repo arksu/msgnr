@@ -137,23 +137,28 @@
         style="overflow-anchor: none; overscroll-behavior-y: contain;"
         @scroll.passive="handleScroll"
       >
-        <div ref="messagesContentEl" class="min-h-full">
-          <template v-if="messages.length === 0">
-            <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-2">
-              <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-                <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
-              </svg>
-              <span class="text-sm">No messages yet. Start the conversation!</span>
-              <span v-if="wsStore.state === 'BOOTSTRAPPING' || wsStore.state === 'RECOVERING_GAP' || wsStore.state === 'STALE_REBOOTSTRAP'" class="text-xs text-gray-600">
-                {{ statusLabel }}
-              </span>
-            </div>
-          </template>
+        <template v-if="messages.length === 0">
+          <div class="flex min-h-full flex-col items-center justify-center text-gray-500 gap-2">
+            <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 0 1 2 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+            </svg>
+            <span class="text-sm">No messages yet. Start the conversation!</span>
+            <span v-if="wsStore.state === 'BOOTSTRAPPING' || wsStore.state === 'RECOVERING_GAP' || wsStore.state === 'STALE_REBOOTSTRAP'" class="text-xs text-gray-600">
+              {{ statusLabel }}
+            </span>
+          </div>
+        </template>
 
-          <template v-else>
+        <VirtualMessageTimeline
+          v-else
+          ref="messageTimeline"
+          :items="messages"
+          :scroll-container="scrollEl"
+          :keep-rendered-ids="timelinePinnedMessageIds"
+          @content-resize="handleContentResize"
+        >
+          <template #default="{ item: msg, index: idx }">
             <div
-              v-for="(msg, idx) in messages"
-              :key="msg.id"
               :data-message-id="msg.id"
               :class="msg.id === chatStore.focusedMessageId ? 'rounded-md bg-amber-500/10 ring-1 ring-amber-300/40' : ''"
             >
@@ -170,7 +175,7 @@
               />
             </div>
           </template>
-        </div>
+        </VirtualMessageTimeline>
       </div>
 
       <div
@@ -353,6 +358,7 @@ import MessageInput from './MessageInput.vue'
 import MembersPanel from './MembersPanel.vue'
 import UserAvatar from './UserAvatar.vue'
 import BusyCallConfirmDialog from './BusyCallConfirmDialog.vue'
+import VirtualMessageTimeline from './chat/VirtualMessageTimeline.vue'
 import { OUTBOUND_PERSISTENCE_FAILURE_REASON, useOfflineQueue } from '@/composables/useOfflineQueue'
 import { userCustomStatusFromProto, type UserCustomStatus } from '@/types/userStatus'
 import { encryptDMMessage, ensureEncryptedDMDevice } from '@/services/e2ee/dmE2ee'
@@ -368,7 +374,11 @@ const wsStore = useWsStore()
 const callStore = useCallStore()
 const offlineQueue = useOfflineQueue()
 const scrollEl = ref<HTMLElement | null>(null)
-const messagesContentEl = ref<HTMLElement | null>(null)
+interface VirtualMessageTimelineHandle {
+  restoreAnchor: (messageId: string | number, offsetFromViewportTop: number) => boolean
+  scrollToMessage: (messageId: string | number, options?: ScrollIntoViewOptions) => Promise<boolean>
+}
+const messageTimeline = ref<VirtualMessageTimelineHandle | null>(null)
 const openRenderProbe = ref<{ conversationId: string; startedAt: number } | null>(null)
 const loadingOlderHistory = ref(false)
 const forceScrollToBottomOnNextRender = ref(false)
@@ -378,7 +388,6 @@ const inlineEditRequest = ref({ messageId: '', token: 0 })
 const pendingSwitchAutoScrollConversationId = ref('')
 let scheduledBottomStickFrame: number | null = null
 let scheduledBottomStickToken = 0
-let resizeObserver: ResizeObserver | null = null
 let lastResizeAnchor: ScrollAnchor | null = null
 let lastResizeWasNearBottom = true
 let lastResizeAnchorUpdateAtMs = 0
@@ -419,6 +428,10 @@ const conversationDraftScope = computed<ChatDraftScope | null>(() => {
   }
 })
 const messages = computed(() => chatStore.activeMessages)
+const timelinePinnedMessageIds = computed(() => [
+  chatStore.focusedMessageId,
+  activeInlineEditMessageId.value,
+].filter((messageId): messageId is string => Boolean(messageId)))
 const isMembersPanelOpen = ref(false)
 function toggleMembersPanel() { isMembersPanelOpen.value = !isMembersPanelOpen.value }
 function closeMembersPanel() { isMembersPanelOpen.value = false }
@@ -944,7 +957,6 @@ async function flushPendingSwitchAutoScroll(trigger: string) {
 // channel hasn't changed so the channel-switch watcher won't fire. Scroll to
 // the bottom explicitly so the user lands at the latest message.
 onMounted(() => {
-  installResizeObserver()
   const activeConversationId = chatStore.activeChannelId
   if (activeConversationId) {
     pendingSwitchAutoScrollConversationId.value = activeConversationId
@@ -1176,6 +1188,9 @@ function handleInlineEditClose(messageId: string) {
   if (activeInlineEditMessageId.value === messageId) {
     activeInlineEditMessageId.value = ''
   }
+  if (inlineEditRequest.value.messageId === messageId) {
+    inlineEditRequest.value = { messageId: '', token: inlineEditRequest.value.token }
+  }
   composerBottomStickArmed.value = isNearBottom()
 }
 
@@ -1327,21 +1342,35 @@ function maybeCaptureResizeAnchor(container: HTMLElement, nearBottom: boolean) {
 function restoreAnchorPosition(container: HTMLElement, anchor: ScrollAnchor | null): boolean {
   if (!anchor) return false
   const target = container.querySelector<HTMLElement>(messageIdSelector(anchor.messageId))
-  if (!target) return false
-  const containerRect = container.getBoundingClientRect()
-  const targetRect = target.getBoundingClientRect()
-  const delta = (targetRect.top - containerRect.top) - anchor.offsetFromViewportTop
-  if (Math.abs(delta) < 0.5) return true
-  container.scrollTop += delta
-  lastResizeAnchor = captureTopVisibleAnchor(container)
+  if (target) {
+    const containerRect = container.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+    const delta = (targetRect.top - containerRect.top) - anchor.offsetFromViewportTop
+    if (Math.abs(delta) < 0.5) return true
+    container.scrollTop += delta
+    lastResizeAnchor = captureTopVisibleAnchor(container)
+    lastResizeWasNearBottom = isNearBottom()
+    return true
+  }
+
+  if (!messageTimeline.value?.restoreAnchor(anchor.messageId, anchor.offsetFromViewportTop)) return false
+  lastResizeAnchor = anchor
   lastResizeWasNearBottom = isNearBottom()
   return true
 }
 
-function scrollMessageIntoView(messageId: string) {
+async function scrollMessageIntoView(messageId: string) {
   if (!messageId) return
   const container = scrollEl.value
   if (!container) return
+  if (await messageTimeline.value?.scrollToMessage(messageId, { block: 'center' })) {
+    cancelScheduledBottomStick()
+    clearForceBottomFlag()
+    clearPendingConversationOpenScroll('focused-message')
+    lastResizeAnchor = captureTopVisibleAnchor(container)
+    lastResizeWasNearBottom = isNearBottom()
+    return
+  }
   const target = container.querySelector<HTMLElement>(messageIdSelector(messageId))
   if (!target) return
   cancelScheduledBottomStick()
@@ -1364,16 +1393,6 @@ function handleContentResize() {
   if (lastResizeAnchor) {
     restoreAnchorPosition(container, lastResizeAnchor)
   }
-}
-
-function installResizeObserver() {
-  if (resizeObserver || typeof ResizeObserver === 'undefined') return
-  const content = messagesContentEl.value
-  if (!content) return
-  resizeObserver = new ResizeObserver(() => {
-    handleContentResize()
-  })
-  resizeObserver.observe(content)
 }
 
 watch(() => {
@@ -1456,7 +1475,7 @@ watch(() => showConversationLoadingOverlay.value, (loading) => {
 watch(() => [chatStore.focusedMessageId, chatStore.activeChannelId], async ([messageId]) => {
   if (!messageId) return
   await nextTick()
-  scrollMessageIntoView(messageId)
+  await scrollMessageIntoView(messageId)
 })
 
 watch(() => [
@@ -1483,10 +1502,6 @@ watch(() => wsStore.state, (state) => {
 onBeforeUnmount(() => {
   clearForceBottomFlag()
   cancelScheduledBottomStick()
-  if (resizeObserver) {
-    resizeObserver.disconnect()
-    resizeObserver = null
-  }
   stopTypingPresence(true)
 })
 </script>

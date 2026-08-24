@@ -5,32 +5,38 @@
         Root message not available.
       </div>
 
-      <template v-else>
-        <div
-          class="border-b border-chat-border/50 px-2 py-2"
-          :data-thread-message-id="rootMessage.id"
-          :class="chatStore.focusedThreadMessageId === rootMessage.id ? 'bg-amber-500/10 ring-1 ring-inset ring-amber-300/40' : ''"
-        >
-          <MessageBubble
-            :message="rootMessage"
-            :show-header="true"
-            :show-thread-action="false"
-            :show-first-reaction-action="false"
-          />
-        </div>
-
-        <div class="flex items-center gap-3 px-4 py-2">
-          <div class="h-px flex-1 bg-chat-border" />
-          <span class="shrink-0 text-[11px] text-gray-500">
-            {{ replyCount === 0 ? 'No replies yet' : `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` }}
-          </span>
-          <div class="h-px flex-1 bg-chat-border" />
-        </div>
-
-        <div v-if="replies.length > 0" class="pb-2">
+      <VirtualMessageTimeline
+        v-else
+        ref="replyTimeline"
+        :items="replies"
+        :scroll-container="scrollEl"
+        :keep-rendered-ids="timelinePinnedReplyIds"
+      >
+        <template #before>
           <div
-            v-for="(reply, idx) in replies"
-            :key="reply.id"
+            class="border-b border-chat-border/50 px-2 py-2"
+            :data-thread-message-id="rootMessage.id"
+            :class="chatStore.focusedThreadMessageId === rootMessage.id ? 'bg-amber-500/10 ring-1 ring-inset ring-amber-300/40' : ''"
+          >
+            <MessageBubble
+              :message="rootMessage"
+              :show-header="true"
+              :show-thread-action="false"
+              :show-first-reaction-action="false"
+            />
+          </div>
+
+          <div class="flex items-center gap-3 px-4 py-2">
+            <div class="h-px flex-1 bg-chat-border" />
+            <span class="shrink-0 text-[11px] text-gray-500">
+              {{ replyCount === 0 ? 'No replies yet' : `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` }}
+            </span>
+            <div class="h-px flex-1 bg-chat-border" />
+          </div>
+        </template>
+
+        <template #default="{ item: reply, index: idx }">
+          <div
             :data-thread-message-id="reply.id"
             :class="chatStore.focusedThreadMessageId === reply.id ? 'rounded-md bg-amber-500/10 ring-1 ring-inset ring-amber-300/40' : ''"
           >
@@ -40,33 +46,38 @@
               :show-thread-action="false"
               :show-first-reaction-action="true"
               :edit-request-token="editRequestTokenFor(reply.id)"
+              @edit-close="handleInlineEditClose"
             />
           </div>
-        </div>
+        </template>
 
-        <div
-          v-if="replyCount > replies.length && replayStatus === 'error'"
-          class="flex flex-col items-center gap-2 px-4 pb-4 text-center text-xs text-app-muted"
-        >
-          <span>Replies could not be loaded.</span>
-          <button
-            type="button"
-            data-testid="thread-replay-retry"
-            class="rounded border border-chat-border px-2 py-1 text-app-secondaryText transition-colors hover:bg-chat-msgHover hover:text-app-text"
-            @click="retryReplay"
+        <template #after>
+          <div v-if="replies.length > 0" class="h-2" />
+
+          <div
+            v-if="replyCount > replies.length && replayStatus === 'error'"
+            class="flex flex-col items-center gap-2 px-4 pb-4 text-center text-xs text-app-muted"
           >
-            Retry
-          </button>
-        </div>
+            <span>Replies could not be loaded.</span>
+            <button
+              type="button"
+              data-testid="thread-replay-retry"
+              class="rounded border border-chat-border px-2 py-1 text-app-secondaryText transition-colors hover:bg-chat-msgHover hover:text-app-text"
+              @click="retryReplay"
+            >
+              Retry
+            </button>
+          </div>
 
-        <div v-else-if="replyCount > replies.length" class="px-4 pb-4 text-center text-xs text-app-muted">
-          Loading replies...
-        </div>
+          <div v-else-if="replyCount > replies.length" class="px-4 pb-4 text-center text-xs text-app-muted">
+            Loading replies...
+          </div>
 
-        <div v-else-if="replies.length === 0" class="px-4 pb-4 text-center text-xs text-app-muted">
-          Be the first to reply
-        </div>
-      </template>
+          <div v-else-if="replies.length === 0" class="px-4 pb-4 text-center text-xs text-app-muted">
+            Be the first to reply
+          </div>
+        </template>
+      </VirtualMessageTimeline>
     </div>
 
     <MessageInput
@@ -92,6 +103,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from '@/components/MessageBubble.vue'
 import MessageInput from '@/components/MessageInput.vue'
+import VirtualMessageTimeline from '@/components/chat/VirtualMessageTimeline.vue'
 
 const props = defineProps<{
   conversationId: string
@@ -103,6 +115,10 @@ const chatStore = useChatStore()
 const authStore = useAuthStore()
 const wsStore = useWsStore()
 const scrollEl = ref<HTMLElement | null>(null)
+interface VirtualMessageTimelineHandle {
+  scrollToMessage: (messageId: string | number, options?: ScrollIntoViewOptions) => Promise<boolean>
+}
+const replyTimeline = ref<VirtualMessageTimelineHandle | null>(null)
 const isNearBottom = ref(true)
 const inlineEditRequest = ref({ messageId: '', token: 0 })
 let activationToken = 0
@@ -113,6 +129,10 @@ let typingLastSentAtMs = 0
 
 const rootMessage = computed(() => chatStore.getThreadRoot(props.conversationId, props.rootMessageId))
 const replies = computed(() => chatStore.getThreadReplies(props.rootMessageId))
+const timelinePinnedReplyIds = computed(() => [
+  chatStore.focusedThreadMessageId,
+  inlineEditRequest.value.messageId,
+].filter((messageId): messageId is string => Boolean(messageId) && messageId !== rootMessage.value?.id))
 const threadDraftScope = computed<ChatDraftScope>(() => ({
   kind: 'thread',
   conversationId: props.conversationId,
@@ -146,10 +166,11 @@ function scrollToBottom() {
   el.scrollTop = el.scrollHeight
 }
 
-function scrollMessageIntoView(messageId: string) {
+async function scrollMessageIntoView(messageId: string) {
   if (!messageId) return
   const el = scrollEl.value
   if (!el) return
+  if (messageId !== rootMessage.value?.id && await replyTimeline.value?.scrollToMessage(messageId, { block: 'center' })) return
   const target = el.querySelector<HTMLElement>(`[data-thread-message-id="${messageId}"]`)
   target?.scrollIntoView({ block: 'center' })
 }
@@ -184,8 +205,13 @@ function requestInlineEdit(messageId: string) {
     token: inlineEditRequest.value.token + 1,
   }
   void nextTick(() => {
-    scrollMessageIntoView(messageId)
+    void scrollMessageIntoView(messageId)
   })
+}
+
+function handleInlineEditClose(messageId: string) {
+  if (inlineEditRequest.value.messageId !== messageId) return
+  inlineEditRequest.value = { messageId: '', token: inlineEditRequest.value.token }
 }
 
 function handleEditLastMessage() {
@@ -274,7 +300,7 @@ watch(() => replies.value.length, async () => {
 watch(() => [chatStore.focusedThreadMessageId, replies.value.length, rootMessage.value?.id ?? ''] as const, async ([messageId]) => {
   if (!messageId) return
   await nextTick()
-  scrollMessageIntoView(messageId)
+  await scrollMessageIntoView(messageId)
 }, { immediate: true })
 
 onBeforeUnmount(() => {

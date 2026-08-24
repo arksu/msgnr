@@ -524,6 +524,24 @@ describe('MessageBubble reactions', () => {
     wrapper.unmount()
   })
 
+  it('opens inline edit when a virtualized row mounts with an active edit token', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
+
+    const wrapper = mount(MessageBubble, {
+      props: {
+        message: buildMessage({ senderId: 'user-1', reactions: [], myReactions: [], body: 'before edit' }),
+        showHeader: true,
+        editRequestToken: 1,
+      },
+      attachTo: document.body,
+    })
+
+    await waitForEditComposer(wrapper)
+    expect(wrapper.find('[data-testid="message-edit-textarea"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('ignores editRequestToken for messages that cannot be edited', async () => {
     const auth = useAuthStore()
     auth.user = { id: 'user-1', email: 'u1@example.com', displayName: 'U1', role: 'member' }
@@ -1150,6 +1168,9 @@ describe('MessageBubble reactions', () => {
       attachTo: document.body,
     })
 
+    expect(chatApiMocks.fetchMessageAttachmentBlob).not.toHaveBeenCalled()
+    const observer = latestImagePreviewObserver()
+    observer.trigger(wrapper.get('[data-message-media-attachment-id="vid-1"]').element)
     await flushAll()
 
     const thumbnailButton = wrapper.get('[data-testid="message-video-thumbnail"]')
@@ -1202,6 +1223,7 @@ describe('MessageBubble reactions', () => {
     expect(document.body.querySelector('[data-testid="message-video-lightbox"]')).toBeNull()
 
     wrapper.unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:attachment-preview-1')
   })
 
   it('closes image preview on close button and backdrop click', async () => {

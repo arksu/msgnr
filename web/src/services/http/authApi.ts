@@ -1,5 +1,6 @@
 import { AxiosError } from 'axios'
 import { createAuthenticatedClient } from './client'
+import { AUTH_REQUEST_TIMEOUT_MS } from './timeouts'
 import type { UserCustomStatusDto } from '@/types/userStatus'
 
 const http = createAuthenticatedClient()
@@ -58,7 +59,11 @@ function handleError(e: unknown): never {
 
 export async function apiLogin(email: string, password: string): Promise<LoginResponse> {
   try {
-    const { data } = await http.post<LoginResponse>('/api/auth/login', { email, password })
+    const { data } = await http.post<LoginResponse>(
+      '/api/auth/login',
+      { email, password },
+      { timeout: AUTH_REQUEST_TIMEOUT_MS },
+    )
     return data
   } catch (e) {
     handleError(e)
@@ -67,9 +72,11 @@ export async function apiLogin(email: string, password: string): Promise<LoginRe
 
 export async function apiRefresh(refreshToken: string): Promise<RefreshResponse> {
   try {
-    const { data } = await http.post<RefreshResponse>('/api/auth/refresh', {
-      refresh_token: refreshToken,
-    })
+    const { data } = await http.post<RefreshResponse>(
+      '/api/auth/refresh',
+      { refresh_token: refreshToken },
+      { timeout: AUTH_REQUEST_TIMEOUT_MS },
+    )
     return data
   } catch (e) {
     handleError(e)

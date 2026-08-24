@@ -10,9 +10,20 @@ use tauri_plugin_dialog::DialogExt;
 mod call_controls;
 
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(true);
+const ANNOTATION_OVERLAY_LABEL: &str = "annotation_overlay";
 
 struct TrayState {
   _tray: Mutex<Option<TrayIcon>>,
+}
+
+#[derive(Default)]
+struct AnnotationOverlayWindowState {
+  visible: bool,
+  share_label: String,
+}
+
+struct AnnotationOverlayState {
+  window: Mutex<AnnotationOverlayWindowState>,
 }
 
 #[tauri::command]
@@ -135,15 +146,6 @@ struct SaveFileResult {
   saved: bool,
 }
 
-fn normalize_overlay_label(overlay_label: Option<String>) -> String {
-  let trimmed = overlay_label.unwrap_or_else(|| "annotation_overlay".to_string());
-  if trimmed.trim().is_empty() {
-    "annotation_overlay".to_string()
-  } else {
-    trimmed
-  }
-}
-
 fn parse_display_index(share_label: &str) -> Option<usize> {
   let mut digits = String::new();
   for ch in share_label.chars() {
@@ -162,12 +164,12 @@ fn parse_display_index(share_label: &str) -> Option<usize> {
   parsed.checked_sub(1)
 }
 
-fn resolve_overlay_window(app: &AppHandle, overlay_label: &str) -> Result<tauri::WebviewWindow, String> {
-  if let Some(existing) = app.get_webview_window(overlay_label) {
-    return Ok(existing);
+fn create_annotation_overlay(app: &AppHandle) -> tauri::Result<()> {
+  if app.get_webview_window(ANNOTATION_OVERLAY_LABEL).is_some() {
+    return Ok(());
   }
 
-  let mut builder = tauri::WebviewWindowBuilder::new(app, overlay_label, WebviewUrl::App("overlay.html".into()))
+  let mut builder = tauri::WebviewWindowBuilder::new(app, ANNOTATION_OVERLAY_LABEL, WebviewUrl::App("overlay.html".into()))
     .title("Msgnr Annotation Overlay")
     .disable_drag_drop_handler()
     .decorations(false)
@@ -183,7 +185,33 @@ fn resolve_overlay_window(app: &AppHandle, overlay_label: &str) -> Result<tauri:
 
   builder
     .build()
-    .map_err(|err| err.to_string())
+    .map(|_| ())
+}
+
+fn annotation_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+  app
+    .get_webview_window(ANNOTATION_OVERLAY_LABEL)
+    .ok_or_else(|| "annotation overlay window not initialized".to_string())
+}
+
+fn annotation_overlay_matches_target(app: &AppHandle, share_label: &str) -> Result<bool, String> {
+  let state = app.state::<AnnotationOverlayState>();
+  let state = state
+    .window
+    .lock()
+    .map_err(|_| "annotation overlay state is unavailable".to_string())?;
+  Ok(state.visible && state.share_label == share_label)
+}
+
+fn set_annotation_overlay_target(app: &AppHandle, visible: bool, share_label: String) -> Result<(), String> {
+  let state = app.state::<AnnotationOverlayState>();
+  let mut state = state
+    .window
+    .lock()
+    .map_err(|_| "annotation overlay state is unavailable".to_string())?;
+  state.visible = visible;
+  state.share_label = share_label;
+  Ok(())
 }
 
 fn fit_overlay_to_monitor(app: &AppHandle, overlay: &tauri::WebviewWindow, share_label: &str) -> Result<(), String> {
@@ -218,29 +246,38 @@ fn fit_overlay_to_monitor(app: &AppHandle, overlay: &tauri::WebviewWindow, share
 
 #[tauri::command]
 fn annotation_overlay_show(app: AppHandle, overlay_label: Option<String>, share_label: Option<String>) -> Result<(), String> {
-  let label = normalize_overlay_label(overlay_label);
-  let overlay = resolve_overlay_window(&app, &label)?;
+  // Keep accepting the former per-target label argument so an older bundled UI
+  // can still drive the single overlay window. The overlay itself is created
+  // during setup, never from an IPC command (which can deadlock WebView2).
+  let _ = overlay_label;
+  let overlay = annotation_overlay_window(&app)?;
+  let share_label = share_label.unwrap_or_default();
+  if annotation_overlay_matches_target(&app, share_label.as_str())? {
+    return Ok(());
+  }
   let _ = overlay.set_ignore_cursor_events(true);
   let _ = overlay.set_always_on_top(true);
-  fit_overlay_to_monitor(&app, &overlay, share_label.unwrap_or_default().as_str())?;
+  fit_overlay_to_monitor(&app, &overlay, share_label.as_str())?;
   overlay.show().map_err(|err| err.to_string())?;
+  set_annotation_overlay_target(&app, true, share_label)?;
   Ok(())
 }
 
 #[tauri::command]
 fn annotation_overlay_hide(app: AppHandle, overlay_label: Option<String>) -> Result<(), String> {
-  let label = normalize_overlay_label(overlay_label);
-  if let Some(window) = app.get_webview_window(&label) {
+  let _ = overlay_label;
+  if let Some(window) = app.get_webview_window(ANNOTATION_OVERLAY_LABEL) {
     let _ = window.eval("window.__overlayClear?.();");
     let _ = window.hide();
   }
+  set_annotation_overlay_target(&app, false, String::new())?;
   Ok(())
 }
 
 #[tauri::command]
 fn annotation_overlay_clear(app: AppHandle, overlay_label: Option<String>) -> Result<(), String> {
-  let label = normalize_overlay_label(overlay_label);
-  if let Some(window) = app.get_webview_window(&label) {
+  let _ = overlay_label;
+  if let Some(window) = app.get_webview_window(ANNOTATION_OVERLAY_LABEL) {
     window
       .eval("window.__overlayClear?.();")
       .map_err(|err| err.to_string())?;
@@ -249,16 +286,27 @@ fn annotation_overlay_clear(app: AppHandle, overlay_label: Option<String>) -> Re
 }
 
 #[tauri::command]
+fn annotation_overlay_push_segments(
+  app: AppHandle,
+  overlay_label: Option<String>,
+  segments_json: String,
+) -> Result<(), String> {
+  let _ = overlay_label;
+  let window = annotation_overlay_window(&app)?;
+  let arg_literal = serde_json::to_string(&segments_json).map_err(|err| err.to_string())?;
+  let script = format!("window.__overlayPushSegmentsFromJson?.({arg_literal});");
+  window.eval(script.as_str()).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn annotation_overlay_push_segment(
   app: AppHandle,
   overlay_label: Option<String>,
   segment_json: String,
 ) -> Result<(), String> {
-  let label = normalize_overlay_label(overlay_label);
-  let window = resolve_overlay_window(&app, &label)?;
-  let arg_literal = serde_json::to_string(&segment_json).map_err(|err| err.to_string())?;
-  let script = format!("window.__overlayPushSegmentFromJson?.({arg_literal});");
-  window.eval(script.as_str()).map_err(|err| err.to_string())
+  // Legacy command kept for a previously bundled renderer. It now targets the
+  // setup-created reusable overlay rather than constructing a WebView on IPC.
+  annotation_overlay_push_segments(app, overlay_label, format!("[{segment_json}]"))
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -296,6 +344,12 @@ pub fn run() {
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
     .setup(|app| {
+      app.manage(AnnotationOverlayState {
+        window: Mutex::new(AnnotationOverlayWindowState::default()),
+      });
+      // WebView construction is safe in setup. Creating it in a synchronous
+      // command can deadlock WebView2 on Windows.
+      create_annotation_overlay(app.handle())?;
       let tray = build_tray(app.handle())?;
       app.manage(TrayState {
         _tray: Mutex::new(Some(tray)),
@@ -332,6 +386,7 @@ pub fn run() {
       annotation_overlay_show,
       annotation_overlay_hide,
       annotation_overlay_clear,
+      annotation_overlay_push_segments,
       annotation_overlay_push_segment
     ])
     .run(tauri::generate_context!())

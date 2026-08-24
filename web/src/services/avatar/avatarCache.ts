@@ -2,6 +2,7 @@ import { isTauriRuntime } from '@/platform/runtime'
 import { resolveApiBaseUrl } from '@/services/runtime/backendEndpoint'
 
 const AVATAR_CACHE_NAME = 'msgnr-avatars-v1'
+const MAX_MEMORY_CACHE_ENTRIES = 200
 
 const memoryCache = new Map<string, string>()
 const inflightLoads = new Map<string, Promise<string>>()
@@ -25,7 +26,11 @@ export function resolveAvatarUrlForDisplay(rawUrl: string): string {
 
 export function getCachedAvatarObjectUrl(rawUrl: string): string {
   const url = resolveAvatarUrlForDisplay(rawUrl)
-  return url ? memoryCache.get(url) ?? '' : ''
+  if (!url) return ''
+  const cached = memoryCache.get(url)
+  if (!cached) return ''
+  touchMemoryEntry(url, cached)
+  return cached
 }
 
 export async function loadCachedAvatarUrl(rawUrl: string): Promise<string> {
@@ -33,7 +38,10 @@ export async function loadCachedAvatarUrl(rawUrl: string): Promise<string> {
   if (!url) return ''
 
   const cached = memoryCache.get(url)
-  if (cached) return cached
+  if (cached) {
+    touchMemoryEntry(url, cached)
+    return cached
+  }
 
   const inflight = inflightLoads.get(url)
   if (inflight) return inflight
@@ -164,8 +172,20 @@ function cacheBlobUrl(url: string, blob: Blob): string {
   if (previous) {
     revokeObjectUrl(previous)
   }
+  memoryCache.delete(url)
   memoryCache.set(url, objectUrl)
+  while (memoryCache.size > MAX_MEMORY_CACHE_ENTRIES) {
+    const oldest = memoryCache.entries().next().value as [string, string] | undefined
+    if (!oldest) break
+    memoryCache.delete(oldest[0])
+    revokeObjectUrl(oldest[1])
+  }
   return objectUrl
+}
+
+function touchMemoryEntry(url: string, objectUrl: string): void {
+  memoryCache.delete(url)
+  memoryCache.set(url, objectUrl)
 }
 
 function revokeObjectUrl(objectUrl: string): void {

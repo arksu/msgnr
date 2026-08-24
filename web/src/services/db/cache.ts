@@ -214,17 +214,24 @@ export async function cacheMessages(
   msgs: Message[],
 ): Promise<void> {
   try {
-    // Filter out optimistic messages and convert
-    const confirmed = msgs.filter(m => !m.sendStatus && !m.pending && m.contentMode !== 'dm_pairwise_signal_v1')
-    const rows = confirmed.map(messageToCache)
+    // Timelines normally arrive ordered, but cache writes can also be invoked
+    // with merged history or replay output. Select by server sequence rather
+    // than input position so the retained window is always the newest one.
+    const rows = msgs
+      .filter(message => !message.sendStatus && !message.pending && message.contentMode !== 'dm_pairwise_signal_v1')
+      .sort((left, right) => {
+        if (left.channelSeq === right.channelSeq) return 0
+        return left.channelSeq > right.channelSeq ? -1 : 1
+      })
+      .slice(0, MAX_MESSAGES_PER_CONVERSATION)
+      .reverse()
+      .map(messageToCache)
 
     await db.transaction('rw', db.messages, async () => {
       // Delete existing messages for this conversation
       await db.messages.where('conversationId').equals(conversationId).delete()
-      // Keep only the latest N
-      const toStore = rows.slice(-MAX_MESSAGES_PER_CONVERSATION)
-      if (toStore.length > 0) {
-        await db.messages.bulkPut(toStore)
+      if (rows.length > 0) {
+        await db.messages.bulkPut(rows)
       }
     })
   } catch (error) {

@@ -160,6 +160,84 @@ describe('useSessionOrchestrator', () => {
     expect(orchestrator.reconnectAttempt.value).toBe(0)
   })
 
+  it('schedules reconnect when the initial socket fails before opening', async () => {
+    let connectCall = 0
+    mockWsStore.connect.mockImplementation(() => {
+      connectCall += 1
+      if (connectCall === 1) {
+        mockWsStore.state = 'DISCONNECTED'
+        mockWsStore.lastErrorKind = 'TRANSPORT'
+        return
+      }
+      mockWsStore.state = 'LIVE_SYNCED'
+      mockWsStore.lastErrorKind = null
+      mockWsStore.authResult = { userRole: 'member' }
+    })
+
+    const { resetSessionOrchestratorStateForTests, useSessionOrchestrator } = await import('@/composables/useSessionOrchestrator')
+    resetSessionOrchestratorStateForTests()
+    const orchestrator = useSessionOrchestrator()
+
+    const firstConnect = orchestrator.connectAndAuthenticate('token-initial')
+    await vi.advanceTimersByTimeAsync(100)
+
+    await expect(firstConnect).resolves.toBe(false)
+    expect(orchestrator.isReconnecting.value).toBe(true)
+    expect(orchestrator.reconnectAttempt.value).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(5_100)
+
+    expect(mockWsStore.connect).toHaveBeenCalledTimes(2)
+    expect(orchestrator.isReconnecting.value).toBe(false)
+  })
+
+  it('schedules reconnect when the foreground connection deadline expires', async () => {
+    let connectCall = 0
+    mockWsStore.connect.mockImplementation(() => {
+      connectCall += 1
+      if (connectCall === 1) {
+        mockWsStore.state = 'CONNECTING'
+        return
+      }
+      mockWsStore.state = 'LIVE_SYNCED'
+      mockWsStore.authResult = { userRole: 'member' }
+    })
+
+    const { resetSessionOrchestratorStateForTests, useSessionOrchestrator } = await import('@/composables/useSessionOrchestrator')
+    resetSessionOrchestratorStateForTests()
+    const orchestrator = useSessionOrchestrator()
+
+    const firstConnect = orchestrator.connectAndAuthenticate('token-initial')
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    await expect(firstConnect).resolves.toBe(false)
+    expect(orchestrator.isReconnecting.value).toBe(true)
+    expect(orchestrator.reconnectAttempt.value).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(5_100)
+
+    expect(mockWsStore.connect).toHaveBeenCalledTimes(2)
+    expect(orchestrator.isReconnecting.value).toBe(false)
+  })
+
+  it('does not treat an initial auth rejection as a transport reconnect', async () => {
+    mockWsStore.connect.mockImplementation(() => {
+      mockWsStore.state = 'DISCONNECTED'
+      mockWsStore.lastErrorKind = 'UNAUTHENTICATED'
+    })
+
+    const { resetSessionOrchestratorStateForTests, useSessionOrchestrator } = await import('@/composables/useSessionOrchestrator')
+    resetSessionOrchestratorStateForTests()
+    const orchestrator = useSessionOrchestrator()
+
+    const firstConnect = orchestrator.connectAndAuthenticate('token-initial')
+    await vi.advanceTimersByTimeAsync(100)
+
+    await expect(firstConnect).resolves.toBe(false)
+    expect(orchestrator.isReconnecting.value).toBe(false)
+    expect(mockAuthStore.refresh).not.toHaveBeenCalled()
+  })
+
   it('returns degraded restore result and retries recovery on focus', async () => {
     let refreshCalls = 0
     mockAuthStore.refresh.mockImplementation(async () => {

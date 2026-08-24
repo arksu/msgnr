@@ -28,11 +28,16 @@
     <script>
       const SEGMENT_TTL_MS = 20000;
       const FADE_MS = 300;
+      const RENDER_INTERVAL_MS = 33;
+      const MAX_SEGMENTS = 1024;
+      const MAX_BATCH_SEGMENTS = 128;
       const FALLBACK_STROKE_COLOR = '#f59e0b';
       const STROKE_WIDTH = 3;
       const segments = [];
+      const strokes = new Map();
       const segmentKeys = new Set();
-      let renderFrame = 0;
+      let renderTimer = 0;
+      let lastDrawAt = 0;
 
       const canvas = document.getElementById('overlay');
       const ctx = canvas.getContext('2d', { alpha: true });
@@ -46,15 +51,6 @@
         if (!ctx) return;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         requestDraw();
-      }
-
-      function prune(now) {
-        for (let i = segments.length - 1; i >= 0; i -= 1) {
-          if (segments[i].expiresAt <= now) {
-            segmentKeys.delete(segments[i].key);
-            segments.splice(i, 1);
-          }
-        }
       }
 
       function clamp01(value) {
@@ -78,39 +74,50 @@
         };
       }
 
-      function buildStrokeGroups(width, height, now) {
-        const grouped = new Map();
-        for (const segment of segments) {
-          const msLeft = segment.expiresAt - now;
-          if (msLeft <= 0) continue;
-          const key = strokeKey(segment);
-          const group = grouped.get(key);
-          if (group) {
-            group.push(segment);
-          } else {
-            grouped.set(key, [segment]);
-          }
+      function removeSegment(segment) {
+        segmentKeys.delete(segment.key);
+        const stroke = strokes.get(segment.strokeKey);
+        if (!stroke) return;
+        const index = stroke.segments.indexOf(segment);
+        if (index >= 0) {
+          stroke.segments.splice(index, 1);
         }
+        if (stroke.segments.length === 0) {
+          strokes.delete(segment.strokeKey);
+        }
+      }
 
-        return Array.from(grouped.entries()).map(([key, groupSegments]) => {
-          const ordered = groupSegments.slice().sort((a, b) => a.seq - b.seq);
-          const points = [];
-          let alpha = 1;
-          for (const segment of ordered) {
-            const msLeft = segment.expiresAt - now;
-            alpha = Math.min(alpha, msLeft < FADE_MS ? Math.max(0, msLeft / FADE_MS) : 1);
-            if (points.length === 0) {
-              points.push(toPoint(segment.from, width, height));
-            }
-            points.push(toPoint(segment.to, width, height));
-          }
-          return {
-            key,
-            color: ordered[0]?.color || FALLBACK_STROKE_COLOR,
-            alpha,
-            points,
-          };
-        });
+      function prune(now) {
+        // Entries are appended in arrival order, and expiry is derived from
+        // arrival time, so expired entries are always at the front.
+        while (segments.length > 0 && segments[0].expiresAt <= now) {
+          removeSegment(segments.shift());
+        }
+      }
+
+      function addSegmentToStroke(segment) {
+        let stroke = strokes.get(segment.strokeKey);
+        if (!stroke) {
+          stroke = { segments: [] };
+          strokes.set(segment.strokeKey, stroke);
+        }
+        const items = stroke.segments;
+        const last = items[items.length - 1];
+        if (!last || last.seq <= segment.seq) {
+          items.push(segment);
+          return;
+        }
+        let index = items.length;
+        while (index > 0 && items[index - 1].seq > segment.seq) {
+          index -= 1;
+        }
+        items.splice(index, 0, segment);
+      }
+
+      function enforceSegmentLimit() {
+        while (segments.length > MAX_SEGMENTS) {
+          removeSegment(segments.shift());
+        }
       }
 
       function strokeSmoothedPath(points) {
@@ -132,10 +139,29 @@
         ctx.stroke();
       }
 
+      function drawStroke(stroke, width, height, now) {
+        const points = [];
+        let alpha = 1;
+        for (const segment of stroke.segments) {
+          const msLeft = segment.expiresAt - now;
+          if (msLeft <= 0) continue;
+          alpha = Math.min(alpha, msLeft < FADE_MS ? Math.max(0, msLeft / FADE_MS) : 1);
+          if (points.length === 0) {
+            points.push(toPoint(segment.from, width, height));
+          }
+          points.push(toPoint(segment.to, width, height));
+        }
+        if (points.length < 2) return;
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = stroke.segments[0]?.color || FALLBACK_STROKE_COLOR;
+        strokeSmoothedPath(points);
+      }
+
       function draw() {
-        if (!ctx) return;
         const now = Date.now();
+        lastDrawAt = now;
         prune(now);
+        if (!ctx) return;
 
         const width = Math.max(1, window.innerWidth);
         const height = Math.max(1, window.innerHeight);
@@ -144,34 +170,33 @@
         ctx.lineJoin = 'round';
         ctx.lineWidth = STROKE_WIDTH;
 
-        for (const group of buildStrokeGroups(width, height, now)) {
-          ctx.globalAlpha = group.alpha;
-          ctx.strokeStyle = group.color;
-          strokeSmoothedPath(group.points);
+        for (const stroke of strokes.values()) {
+          drawStroke(stroke, width, height, now);
         }
         ctx.globalAlpha = 1;
       }
 
       function requestDraw() {
-        if (renderFrame) return;
-        const requestFrame = window.requestAnimationFrame || ((callback) => window.setTimeout(() => callback(Date.now()), 16));
-        renderFrame = requestFrame(() => {
-          renderFrame = 0;
+        if (renderTimer) return;
+        const delay = Math.max(0, RENDER_INTERVAL_MS - (Date.now() - lastDrawAt));
+        renderTimer = window.setTimeout(() => {
+          renderTimer = 0;
           draw();
           if (segments.length > 0) {
             requestDraw();
           }
-        });
+        }, delay);
       }
 
-      function pushSegment(segment) {
-        if (!segment || typeof segment !== 'object') return;
-        if (!segment.from || !segment.to) return;
+      function pushSegment(segment, scheduleDraw = true) {
+        if (!segment || typeof segment !== 'object') return false;
+        if (!segment.from || !segment.to) return false;
         const key = segmentKey(segment);
-        if (segmentKeys.has(key)) return;
-        segmentKeys.add(key);
-        segments.push({
+        if (segmentKeys.has(key)) return false;
+
+        const normalized = {
           key,
+          strokeKey: strokeKey(segment),
           from: segment.from,
           to: segment.to,
           senderIdentity: String(segment.senderIdentity || ''),
@@ -179,14 +204,40 @@
           seq: Number.isInteger(segment.seq) ? segment.seq : 0,
           color: typeof segment.color === 'string' && segment.color.trim() ? segment.color : FALLBACK_STROKE_COLOR,
           expiresAt: Date.now() + SEGMENT_TTL_MS,
-        });
-        requestDraw();
+        };
+        segmentKeys.add(key);
+        segments.push(normalized);
+        addSegmentToStroke(normalized);
+        enforceSegmentLimit();
+        if (scheduleDraw) {
+          requestDraw();
+        }
+        return true;
       }
+
+      function pushSegments(segmentsBatch) {
+        if (!Array.isArray(segmentsBatch)) return;
+        let changed = false;
+        for (const segment of segmentsBatch.slice(0, MAX_BATCH_SEGMENTS)) {
+          changed = pushSegment(segment, false) || changed;
+        }
+        if (changed) {
+          requestDraw();
+        }
+      }
+
+      window.__overlayPushSegmentsFromJson = function overlayPushSegmentsFromJson(raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          pushSegments(Array.isArray(parsed) ? parsed : [parsed]);
+        } catch {
+          // best effort
+        }
+      };
 
       window.__overlayPushSegmentFromJson = function overlayPushSegmentFromJson(raw) {
         try {
-          const parsed = JSON.parse(raw);
-          pushSegment(parsed);
+          pushSegment(JSON.parse(raw));
         } catch {
           // best effort
         }
@@ -194,7 +245,12 @@
 
       window.__overlayClear = function overlayClear() {
         segments.length = 0;
+        strokes.clear();
         segmentKeys.clear();
+        if (renderTimer) {
+          window.clearTimeout(renderTimer);
+          renderTimer = 0;
+        }
         draw();
       };
 

@@ -69,5 +69,6 @@ declare module 'vue' {
     UnreadFeedPane: typeof import('./src/components/UnreadFeedPane.vue')['default']
     UserAvatar: typeof import('./src/components/UserAvatar.vue')['default']
     UserMentionCard: typeof import('./src/components/UserMentionCard.vue')['default']
+    VirtualMessageTimeline: typeof import('./src/components/chat/VirtualMessageTimeline.vue')['default']
   }
 }

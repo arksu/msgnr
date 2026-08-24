@@ -1,6 +1,7 @@
 import axios, { AxiosError } from 'axios'
 import { resolveApiBaseUrl } from '@/services/runtime/backendEndpoint'
 import { storage } from '@/services/storage/storageAdapter'
+import { AUTH_REQUEST_TIMEOUT_MS } from './timeouts'
 import {
   clearAccessToken,
   clearRefreshToken,
@@ -191,6 +192,7 @@ async function requestRefresh(refreshToken: string): Promise<RefreshedSessionTok
     refresh_token: refreshToken,
   }, {
     baseURL: resolveApiBaseUrl(),
+    timeout: AUTH_REQUEST_TIMEOUT_MS,
   })
 
   if (!data?.access_token || !data?.refresh_token) {

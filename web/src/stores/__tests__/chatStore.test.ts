@@ -113,6 +113,29 @@ function buildMessage(overrides: Partial<Message> = {}): Message {
   }
 }
 
+function buildSequencedMessageEvent(eventSeq: bigint, messageId = `message-${eventSeq}`) {
+  return create(ServerEventSchema, {
+    eventSeq,
+    eventId: `event-${eventSeq}`,
+    eventType: EventType.MESSAGE_CREATED,
+    conversationId: 'channel-1',
+    payload: {
+      case: 'messageCreated',
+      value: create(MessageEventSchema, {
+        conversationId: 'channel-1',
+        messageId,
+        senderId: 'user-2',
+        body: `message ${eventSeq}`,
+        channelSeq: eventSeq,
+        threadRootMessageId: '',
+        threadSeq: 0n,
+        mentionedUserIds: [],
+        mentionEveryone: false,
+      }),
+    },
+  })
+}
+
 function buildUnreadThreadItem(overrides: Record<string, unknown> = {}) {
   return {
     id: 'thread:reply-1',
@@ -891,6 +914,193 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.lastAppliedEventSeq).toBe(40n)
     expect(ws.sendSyncSince).toHaveBeenCalledWith(40n, 200)
     expect(ws.setLiveSynced).not.toHaveBeenCalled()
+  })
+
+  it('yields between bounded sync replay chunks without reordering events', async () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.sendSyncSince = vi.fn()
+      chat.bootstrapped = true
+
+      const events = Array.from({ length: 26 }, (_, index) => {
+        const sequence = BigInt(index + 1)
+        return create(ServerEventSchema, {
+          eventSeq: sequence,
+          eventId: `evt-sync-${sequence}`,
+          eventType: EventType.MESSAGE_CREATED,
+          conversationId: 'channel-1',
+          payload: {
+            case: 'messageCreated',
+            value: create(MessageEventSchema, {
+              conversationId: 'channel-1',
+              messageId: `message-sync-${sequence}`,
+              senderId: 'user-2',
+              body: `sync ${sequence}`,
+              channelSeq: sequence,
+              threadRootMessageId: '',
+              threadSeq: 0n,
+              mentionedUserIds: [],
+              mentionEveryone: false,
+            }),
+          },
+        })
+      })
+
+      chat.handleSyncSinceResponse(create(SyncSinceResponseSchema, {
+        events,
+        syncCursor: 26n,
+        needFullBootstrap: false,
+      }))
+
+      expect(chat.lastAppliedEventSeq).toBe(25n)
+      expect(chat.messages['channel-1']).toHaveLength(25)
+
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(chat.lastAppliedEventSeq).toBe(26n)
+      expect(chat.messages['channel-1'].map(message => message.id)).toEqual(
+        Array.from({ length: 26 }, (_, index) => `message-sync-${index + 1}`),
+      )
+      expect(ws.sendSyncSince).toHaveBeenCalledWith(26n, 200)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('persists the replay cursor before sending its matching ACK', () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    ws.sendAck = vi.fn(() => {
+      expect(storage.getItem('msgnr:last-applied-event-seq')).toBe('20')
+      return true
+    })
+    chat.bootstrapped = true
+
+    const events = Array.from({ length: 20 }, (_, index) => {
+      const sequence = BigInt(index + 1)
+      return create(ServerEventSchema, {
+        eventSeq: sequence,
+        eventId: `evt-ack-${sequence}`,
+        eventType: EventType.MESSAGE_CREATED,
+        conversationId: 'channel-1',
+        payload: {
+          case: 'messageCreated',
+          value: create(MessageEventSchema, {
+            conversationId: 'channel-1',
+            messageId: `message-ack-${sequence}`,
+            senderId: 'user-2',
+            body: `ack ${sequence}`,
+            channelSeq: sequence,
+          }),
+        },
+      })
+    })
+
+    chat.handleSyncSinceResponse(create(SyncSinceResponseSchema, {
+      events,
+      syncCursor: 20n,
+      needFullBootstrap: false,
+    }))
+
+    expect(ws.sendAck).toHaveBeenCalledWith(20n)
+  })
+
+  it('retries an ACK that was not sent without treating it as in flight', async () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.sendAck = vi.fn()
+        .mockReturnValueOnce(false)
+        .mockImplementationOnce(() => {
+          throw new Error('socket closed while sending ACK')
+        })
+        .mockReturnValue(true)
+      chat.bootstrapped = true
+
+      chat.handleSyncSinceResponse(create(SyncSinceResponseSchema, {
+        events: Array.from({ length: 20 }, (_, index) => buildSequencedMessageEvent(BigInt(index + 1))),
+        syncCursor: 20n,
+        needFullBootstrap: false,
+      }))
+
+      expect(ws.sendAck).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(ws.sendAck).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(ws.sendAck).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels a delayed ACK when bootstrap restarts', () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.sendAck = vi.fn().mockReturnValue(true)
+      ws.sendBootstrap = vi.fn()
+      chat.bootstrapped = true
+
+      chat.handleServerEvent(buildSequencedMessageEvent(1n))
+      chat.startBootstrap()
+
+      vi.advanceTimersByTime(2000)
+      expect(ws.sendAck).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('recovers from a replay apply failure without ACKing its cursor or poisoning later replay', async () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      const ws = useWsStore()
+      ws.sendAck = vi.fn().mockReturnValue(true)
+      ws.sendBootstrap = vi.fn()
+      ws.setStaleRebootstrap = vi.fn()
+      chat.bootstrapped = true
+
+      // Queue a delayed ACK for the last known-good cursor, then make the
+      // next replay event fail while mutating its destination collection.
+      chat.handleServerEvent(buildSequencedMessageEvent(1n))
+      chat.messages = {
+        'channel-1': Object.freeze([]) as unknown as Message[],
+      }
+      chat.handleSyncSinceResponse(create(SyncSinceResponseSchema, {
+        events: [buildSequencedMessageEvent(2n)],
+        syncCursor: 2n,
+        needFullBootstrap: false,
+      }))
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(chat.lastAppliedEventSeq).toBe(1n)
+      expect(ws.setStaleRebootstrap).toHaveBeenCalledTimes(1)
+      expect(ws.sendBootstrap).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(ws.sendAck).not.toHaveBeenCalled()
+
+      chat.messages = {}
+      chat.handleSyncSinceResponse(create(SyncSinceResponseSchema, {
+        events: [buildSequencedMessageEvent(2n)],
+        syncCursor: 2n,
+        needFullBootstrap: false,
+      }))
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(chat.lastAppliedEventSeq).toBe(2n)
+      expect(chat.messages['channel-1'].map(message => message.id)).toEqual(['message-2'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('uses bootstrap instead of syncSince when reconnecting with a cached snapshot and cursor', () => {
@@ -4481,6 +4691,84 @@ describe('chatStore phase 6 flows', () => {
 
     expect(chat.messages['dm-1']).toEqual([])
     expect(chat.conversationHasMoreHistory('dm-1')).toBe(false)
+  })
+
+  it('does not apply an old-session history response after reset opens the same conversation', async () => {
+    const chat = useChatStore()
+    let resolveOldHistory!: (page: {
+      messages: Array<{
+        id: string
+        conversation_id: string
+        sender_id: string
+        sender_name: string
+        body: string
+        channel_seq: string
+        thread_seq: string
+        thread_root_message_id: string
+        mention_everyone: boolean
+        created_at: string
+        entities: []
+      }>
+      has_more: boolean
+      page_size: number
+    }) => void
+    let resolveNewHistory!: typeof resolveOldHistory
+
+    chatApiMocks.listConversationMessages
+      .mockReturnValueOnce(new Promise(resolve => {
+        resolveOldHistory = resolve
+      }))
+      .mockReturnValueOnce(new Promise(resolve => {
+        resolveNewHistory = resolve
+      }))
+
+    const oldLoad = chat.ensureConversationHistory('channel-1')
+    await Promise.resolve()
+    chat.resetRuntimeState()
+    const newLoad = chat.ensureConversationHistory('channel-1')
+    await Promise.resolve()
+
+    resolveOldHistory({
+      messages: [{
+        id: 'old-message',
+        conversation_id: 'channel-1',
+        sender_id: 'user-old',
+        sender_name: 'Old user',
+        body: 'old account history',
+        channel_seq: '1',
+        thread_seq: '0',
+        thread_root_message_id: '',
+        mention_everyone: false,
+        created_at: '2026-03-06T00:00:00Z',
+        entities: [],
+      }],
+      has_more: false,
+      page_size: 1,
+    })
+    await oldLoad
+
+    expect(chat.messages['channel-1']).toBeUndefined()
+
+    resolveNewHistory({
+      messages: [{
+        id: 'new-message',
+        conversation_id: 'channel-1',
+        sender_id: 'user-new',
+        sender_name: 'New user',
+        body: 'new account history',
+        channel_seq: '1',
+        thread_seq: '0',
+        thread_root_message_id: '',
+        mention_everyone: false,
+        created_at: '2026-03-06T00:00:00Z',
+        entities: [],
+      }],
+      has_more: false,
+      page_size: 1,
+    })
+    await newLoad
+
+    expect(chat.messages['channel-1'].map(message => message.body)).toEqual(['new account history'])
   })
 
   it('uses thread_summary_updated.lastThreadSeq as cursor and allows reply_count decreases', () => {

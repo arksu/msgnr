@@ -14,22 +14,28 @@
         </div>
       </template>
 
-      <template v-else>
-        <div
-          v-for="(msg, idx) in messages"
-          :key="msg.id"
-          :data-conversation-message-id="msg.id"
-        >
-          <MessageBubble
-            :message="msg"
-            :show-header="shouldShowHeader(idx)"
-            :thread-reply-count="threadReplyCount(msg.id)"
-            :is-active-thread="false"
-            :edit-request-token="editRequestTokenFor(msg.id)"
-            @open-thread="emit('openThread', $event)"
-          />
-        </div>
-      </template>
+      <VirtualMessageTimeline
+        v-else
+        ref="messageTimeline"
+        :items="messages"
+        :scroll-container="scrollEl"
+        :row-gap="2"
+        :keep-rendered-ids="timelinePinnedMessageIds"
+      >
+        <template #default="{ item: msg, index: idx }">
+          <div :data-conversation-message-id="msg.id">
+            <MessageBubble
+              :message="msg"
+              :show-header="shouldShowHeader(idx)"
+              :thread-reply-count="threadReplyCount(msg.id)"
+              :is-active-thread="false"
+              :edit-request-token="editRequestTokenFor(msg.id)"
+              @edit-close="handleInlineEditClose"
+              @open-thread="emit('openThread', $event)"
+            />
+          </div>
+        </template>
+      </VirtualMessageTimeline>
     </div>
 
     <MessageInput
@@ -55,6 +61,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useWsStore } from '@/stores/ws'
 import MessageBubble from '@/components/MessageBubble.vue'
 import MessageInput from '@/components/MessageInput.vue'
+import VirtualMessageTimeline from '@/components/chat/VirtualMessageTimeline.vue'
 
 const props = defineProps<{
   conversationId: string
@@ -70,6 +77,10 @@ const chatStore = useChatStore()
 const authStore = useAuthStore()
 const wsStore = useWsStore()
 const scrollEl = ref<HTMLElement | null>(null)
+interface VirtualMessageTimelineHandle {
+  scrollToMessage: (messageId: string | number, options?: ScrollIntoViewOptions) => Promise<boolean>
+}
+const messageTimeline = ref<VirtualMessageTimelineHandle | null>(null)
 const isNearBottom = ref(true)
 const inlineEditRequest = ref({ messageId: '', token: 0 })
 let typingIdleTimer: ReturnType<typeof setTimeout> | null = null
@@ -78,6 +89,7 @@ let typingLastSentAtMs = 0
 
 const conversation = computed(() => chatStore.getConversationById(props.conversationId))
 const messages = computed(() => chatStore.getMessagesForConversation(props.conversationId))
+const timelinePinnedMessageIds = computed(() => [inlineEditRequest.value.messageId].filter(Boolean))
 const conversationDraftScope = computed<ChatDraftScope>(() => ({
   kind: 'conversation',
   conversationId: props.conversationId,
@@ -105,10 +117,11 @@ function scrollToBottom() {
   el.scrollTop = el.scrollHeight
 }
 
-function scrollMessageIntoView(messageId: string) {
+async function scrollMessageIntoView(messageId: string) {
   if (!messageId) return
   const el = scrollEl.value
   if (!el) return
+  if (await messageTimeline.value?.scrollToMessage(messageId, { block: 'center' })) return
   const target = el.querySelector<HTMLElement>(`[data-conversation-message-id="${messageId}"]`)
   target?.scrollIntoView({ block: 'center' })
 }
@@ -158,8 +171,13 @@ function requestInlineEdit(messageId: string) {
     token: inlineEditRequest.value.token + 1,
   }
   void nextTick(() => {
-    scrollMessageIntoView(messageId)
+    void scrollMessageIntoView(messageId)
   })
+}
+
+function handleInlineEditClose(messageId: string) {
+  if (inlineEditRequest.value.messageId !== messageId) return
+  inlineEditRequest.value = { messageId: '', token: inlineEditRequest.value.token }
 }
 
 function handleEditLastMessage() {

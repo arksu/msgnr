@@ -232,6 +232,10 @@ const CALL_DEBUG_STORAGE_KEY = 'debug.calls'
 const SCREEN_ANNOTATION_TOPIC = 'screen-annotation.v1'
 const SCREEN_ANNOTATION_OVERLAY_LABEL = 'annotation_overlay'
 const SCREEN_ANNOTATION_MONITOR_POLL_MS = 500
+const SCREEN_ANNOTATION_OVERLAY_BATCH_INTERVAL_MS = 33
+const SCREEN_ANNOTATION_OVERLAY_MAX_PENDING_SEGMENTS = 256
+const SCREEN_ANNOTATION_OVERLAY_MAX_BATCH_SEGMENTS = 64
+const SCREEN_ANNOTATION_OVERLAY_SHOW_RETRY_MS = 1000
 
 export interface ScreenAnnotationPoint {
   x: number
@@ -435,12 +439,6 @@ function resolveMonitorOverlayTargetKey(shareLabel: string): string {
   return normalized ? `monitor:${normalized}` : ''
 }
 
-function overlayLabelForTargetKey(targetKey: string): string {
-  return targetKey
-    ? `${SCREEN_ANNOTATION_OVERLAY_LABEL}_${targetKey.replace(/:/g, '-')}`
-    : SCREEN_ANNOTATION_OVERLAY_LABEL
-}
-
 function decodeScreenAnnotationPacket(payload: Uint8Array): ScreenAnnotationPacketV1 | null {
   let parsed: unknown
   try {
@@ -575,8 +573,17 @@ export const useCallStore = defineStore('call', () => {
   let suppressParticipantChangeSounds = false
   let localScreenShareUsedInSession = false
   let lastResolvedNativeOverlayTargetKey = ''
-  let activeNativeOverlayLabelVersion = 0
-  const activeNativeOverlayLabels = new Map<string, number>()
+  let nativeAnnotationOverlayGeneration = 0
+  let nativeAnnotationOverlayTargetKey = ''
+  let nativeAnnotationOverlayShareLabel = ''
+  let nativeAnnotationOverlayVisible = false
+  let nativeAnnotationOverlayReady = false
+  let nativeAnnotationOverlayShowQueued = false
+  let nativeAnnotationOverlayNextShowAtMs = 0
+  let nativeAnnotationOverlayBatchTimer: ReturnType<typeof setTimeout> | null = null
+  let nativeAnnotationOverlayBatchInFlight = false
+  const pendingNativeAnnotationOverlaySegments: ScreenAnnotationOverlaySegment[] = []
+  let nativeAnnotationOverlayLifecycle = Promise.resolve()
   let hardwareCallControlsRegistered = false
   let hardwareCallControlsSyncSeq = 0
   let hardwareHangupInFlight = false
@@ -739,78 +746,187 @@ export const useCallStore = defineStore('call', () => {
     return Boolean(identity && identity === session.sharerIdentity)
   }
 
-  async function showNativeAnnotationOverlay(overlayLabel: string, shareLabel: string): Promise<void> {
-    if (localRuntimePlatform() !== 'tauri') return
+  async function showNativeAnnotationOverlay(shareLabel: string): Promise<boolean> {
+    if (localRuntimePlatform() !== 'tauri') return false
     try {
       await platform?.system.invokeNative?.('annotation_overlay_show', {
-        overlayLabel,
+        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
         shareLabel,
       })
+      return true
     } catch (err) {
       callDebug('annotation overlay show failed', { error: toErrorMessage(err) })
+      return false
     }
   }
 
-  async function hideNativeAnnotationOverlay(overlayLabel: string): Promise<void> {
+  async function hideNativeAnnotationOverlay(): Promise<void> {
     if (localRuntimePlatform() !== 'tauri') return
     try {
       await platform?.system.invokeNative?.('annotation_overlay_hide', {
-        overlayLabel,
+        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
       })
     } catch (err) {
       callDebug('annotation overlay hide failed', { error: toErrorMessage(err) })
     }
   }
 
-  async function clearNativeAnnotationOverlay(overlayLabel: string): Promise<void> {
+  async function clearNativeAnnotationOverlay(): Promise<void> {
     if (localRuntimePlatform() !== 'tauri') return
     try {
       await platform?.system.invokeNative?.('annotation_overlay_clear', {
-        overlayLabel,
+        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
       })
     } catch (err) {
       callDebug('annotation overlay clear failed', { error: toErrorMessage(err) })
     }
   }
 
-  async function pushNativeAnnotationOverlaySegment(
-    overlayLabel: string,
-    segment: ScreenAnnotationEvent,
-  ): Promise<void> {
+  async function pushNativeAnnotationOverlaySegments(segments: ScreenAnnotationOverlaySegment[]): Promise<void> {
     if (localRuntimePlatform() !== 'tauri') return
+    try {
+      await platform?.system.invokeNative?.('annotation_overlay_push_segments', {
+        overlayLabel: SCREEN_ANNOTATION_OVERLAY_LABEL,
+        segmentsJson: JSON.stringify(segments),
+      })
+    } catch (err) {
+      callDebug('annotation overlay segment batch push failed', { error: toErrorMessage(err) })
+    }
+  }
+
+  function enqueueNativeAnnotationOverlayOperation(operation: () => Promise<void>): Promise<void> {
+    const queued = nativeAnnotationOverlayLifecycle
+      .catch(() => undefined)
+      .then(operation)
+    nativeAnnotationOverlayLifecycle = queued
+    return queued
+  }
+
+  function enqueueNativeAnnotationOverlayOperationForGeneration(
+    generation: number,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    return enqueueNativeAnnotationOverlayOperation(async () => {
+      if (generation !== nativeAnnotationOverlayGeneration) return
+      await operation()
+    })
+  }
+
+  function clearPendingNativeAnnotationOverlaySegments() {
+    if (nativeAnnotationOverlayBatchTimer) {
+      clearTimeout(nativeAnnotationOverlayBatchTimer)
+      nativeAnnotationOverlayBatchTimer = null
+    }
+    pendingNativeAnnotationOverlaySegments.length = 0
+  }
+
+  function scheduleNativeAnnotationOverlayBatch() {
+    if (!nativeAnnotationOverlayVisible || !nativeAnnotationOverlayTargetKey) return
+    if (nativeAnnotationOverlayBatchTimer || nativeAnnotationOverlayBatchInFlight) return
+    if (pendingNativeAnnotationOverlaySegments.length === 0) return
+
+    const generation = nativeAnnotationOverlayGeneration
+    nativeAnnotationOverlayBatchTimer = setTimeout(() => {
+      nativeAnnotationOverlayBatchTimer = null
+      void flushNativeAnnotationOverlayBatch(generation)
+    }, SCREEN_ANNOTATION_OVERLAY_BATCH_INTERVAL_MS)
+  }
+
+  async function flushNativeAnnotationOverlayBatch(generation: number): Promise<void> {
+    if (generation !== nativeAnnotationOverlayGeneration) return
+    if (!nativeAnnotationOverlayVisible || !nativeAnnotationOverlayTargetKey) return
+    if (nativeAnnotationOverlayBatchInFlight) return
+
+    const batch = pendingNativeAnnotationOverlaySegments.splice(0, SCREEN_ANNOTATION_OVERLAY_MAX_BATCH_SEGMENTS)
+    if (batch.length === 0) return
+
+    nativeAnnotationOverlayBatchInFlight = true
+    try {
+      await enqueueNativeAnnotationOverlayOperationForGeneration(generation, async () => {
+        if (!nativeAnnotationOverlayReady || !nativeAnnotationOverlayVisible) return
+        await pushNativeAnnotationOverlaySegments(batch)
+      })
+    } finally {
+      nativeAnnotationOverlayBatchInFlight = false
+      scheduleNativeAnnotationOverlayBatch()
+    }
+  }
+
+  function queueNativeAnnotationOverlaySegment(targetKey: string, segment: ScreenAnnotationEvent) {
+    if (targetKey !== nativeAnnotationOverlayTargetKey) return
+    if (!nativeAnnotationOverlayVisible) return
+
     const overlaySegment: ScreenAnnotationOverlaySegment = {
       ...segment,
       color: resolveScreenAnnotationStrokeColor(segment.senderIdentity),
     }
-    try {
-      await platform?.system.invokeNative?.('annotation_overlay_push_segment', {
-        overlayLabel,
-        segmentJson: JSON.stringify(overlaySegment),
-      })
-    } catch (err) {
-      callDebug('annotation overlay segment push failed', { error: toErrorMessage(err) })
+    const overflow = pendingNativeAnnotationOverlaySegments.length - SCREEN_ANNOTATION_OVERLAY_MAX_PENDING_SEGMENTS + 1
+    if (overflow > 0) {
+      pendingNativeAnnotationOverlaySegments.splice(0, overflow)
+      callDebug('annotation overlay batch queue dropped stale segments', { overflow })
     }
+    pendingNativeAnnotationOverlaySegments.push(overlaySegment)
+    scheduleNativeAnnotationOverlayBatch()
+  }
+
+  function ensureNativeAnnotationOverlayVisible(targetKey: string, shareLabel: string): void {
+    if (!targetKey) return
+
+    const sameTarget = nativeAnnotationOverlayTargetKey === targetKey
+      && nativeAnnotationOverlayShareLabel === shareLabel
+      && nativeAnnotationOverlayVisible
+    if (sameTarget && (nativeAnnotationOverlayReady || nativeAnnotationOverlayShowQueued || Date.now() < nativeAnnotationOverlayNextShowAtMs)) {
+      return
+    }
+
+    const targetChanged = nativeAnnotationOverlayVisible && nativeAnnotationOverlayTargetKey !== targetKey
+    if (!sameTarget) {
+      nativeAnnotationOverlayGeneration += 1
+      clearPendingNativeAnnotationOverlaySegments()
+      nativeAnnotationOverlayTargetKey = targetKey
+      nativeAnnotationOverlayShareLabel = shareLabel
+      nativeAnnotationOverlayVisible = true
+      nativeAnnotationOverlayReady = false
+      nativeAnnotationOverlayShowQueued = false
+      nativeAnnotationOverlayNextShowAtMs = 0
+    }
+
+    const generation = nativeAnnotationOverlayGeneration
+    nativeAnnotationOverlayShowQueued = true
+    void enqueueNativeAnnotationOverlayOperationForGeneration(generation, async () => {
+      if (targetChanged) {
+        await clearNativeAnnotationOverlay()
+      }
+      if (generation !== nativeAnnotationOverlayGeneration) return
+
+      const shown = await showNativeAnnotationOverlay(shareLabel)
+      if (generation !== nativeAnnotationOverlayGeneration) return
+
+      nativeAnnotationOverlayShowQueued = false
+      nativeAnnotationOverlayReady = shown
+      nativeAnnotationOverlayNextShowAtMs = shown ? 0 : Date.now() + SCREEN_ANNOTATION_OVERLAY_SHOW_RETRY_MS
+      if (shown) {
+        scheduleNativeAnnotationOverlayBatch()
+      }
+    })
   }
 
   async function clearAndHideAllNativeAnnotationOverlays(): Promise<void> {
-    const overlayEntries = Array.from(activeNativeOverlayLabels.entries())
-    await Promise.all(overlayEntries.flatMap(([overlayLabel]) => [
-      clearNativeAnnotationOverlay(overlayLabel),
-      hideNativeAnnotationOverlay(overlayLabel),
-    ]))
-    for (const [overlayLabel, version] of overlayEntries) {
-      if (activeNativeOverlayLabels.get(overlayLabel) === version) {
-        activeNativeOverlayLabels.delete(overlayLabel)
-      }
-    }
-  }
+    const hadOverlay = nativeAnnotationOverlayVisible || nativeAnnotationOverlayShowQueued || Boolean(nativeAnnotationOverlayTargetKey)
+    nativeAnnotationOverlayGeneration += 1
+    clearPendingNativeAnnotationOverlaySegments()
+    nativeAnnotationOverlayTargetKey = ''
+    nativeAnnotationOverlayShareLabel = ''
+    nativeAnnotationOverlayVisible = false
+    nativeAnnotationOverlayReady = false
+    nativeAnnotationOverlayShowQueued = false
+    nativeAnnotationOverlayNextShowAtMs = 0
+    if (!hadOverlay) return
 
-  async function ensureNativeAnnotationOverlayVisible(targetKey: string, shareLabel: string): Promise<void> {
-    if (!targetKey) return
-    const overlayLabel = overlayLabelForTargetKey(targetKey)
-    activeNativeOverlayLabelVersion += 1
-    activeNativeOverlayLabels.set(overlayLabel, activeNativeOverlayLabelVersion)
-    await showNativeAnnotationOverlay(overlayLabel, shareLabel)
+    await enqueueNativeAnnotationOverlayOperation(async () => {
+      await clearNativeAnnotationOverlay()
+      await hideNativeAnnotationOverlay()
+    })
   }
 
   function resolveCurrentLocalAnnotationRoutingTarget(
@@ -840,7 +956,7 @@ export const useCallStore = defineStore('call', () => {
     const routingTarget = resolveCurrentLocalAnnotationRoutingTarget(session, capture)
     if (routingTarget) {
       lastResolvedNativeOverlayTargetKey = routingTarget.targetKey
-      await ensureNativeAnnotationOverlayVisible(routingTarget.targetKey, routingTarget.shareLabel)
+      ensureNativeAnnotationOverlayVisible(routingTarget.targetKey, routingTarget.shareLabel)
     } else if (capture.shareType === 'window' || capture.shareType === 'browser') {
       lastResolvedNativeOverlayTargetKey = ''
     }
@@ -1097,8 +1213,8 @@ export const useCallStore = defineStore('call', () => {
         room.value ? resolveLocalShareCaptureContext(room.value) : { shareType: 'unknown', shareLabel: '', overlayTargetKey: '' },
       )
       if (routingTarget) {
-        void ensureNativeAnnotationOverlayVisible(routingTarget.targetKey, routingTarget.shareLabel)
-        void pushNativeAnnotationOverlaySegment(overlayLabelForTargetKey(routingTarget.targetKey), event)
+        ensureNativeAnnotationOverlayVisible(routingTarget.targetKey, routingTarget.shareLabel)
+        queueNativeAnnotationOverlaySegment(routingTarget.targetKey, event)
       }
     }
     return true

@@ -9,8 +9,32 @@ function scopeKey(workspaceId: string, userId: string): string {
   return `${workspaceId}:${userId}`
 }
 
+function getStoredValue(key: string): string | null {
+  try {
+    return storage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function setStoredValue(key: string, value: string) {
+  try {
+    storage.setItem(key, value)
+  } catch {
+    // Last-opened conversation is an optional startup optimisation.
+  }
+}
+
+function removeStoredValue(key: string) {
+  try {
+    storage.removeItem(key)
+  } catch {
+    // Last-opened conversation is an optional startup optimisation.
+  }
+}
+
 function readBucket(): LastConversationBucket {
-  const raw = storage.getItem(LAST_CONVERSATION_BY_USER_KEY)
+  const raw = getStoredValue(LAST_CONVERSATION_BY_USER_KEY)
   if (!raw) return {}
   try {
     const parsed = JSON.parse(raw)
@@ -26,7 +50,7 @@ function readBucket(): LastConversationBucket {
 }
 
 function writeBucket(bucket: LastConversationBucket) {
-  storage.setItem(LAST_CONVERSATION_BY_USER_KEY, JSON.stringify(bucket))
+  setStoredValue(LAST_CONVERSATION_BY_USER_KEY, JSON.stringify(bucket))
 }
 
 export function loadLastOpenedConversation(workspaceId: string, userId: string): string {
@@ -35,7 +59,7 @@ export function loadLastOpenedConversation(workspaceId: string, userId: string):
     const scoped = bucket[scopeKey(workspaceId, userId)] ?? ''
     if (scoped) return scoped
   }
-  return storage.getItem(LAST_CONVERSATION_GLOBAL_KEY) ?? ''
+  return getStoredValue(LAST_CONVERSATION_GLOBAL_KEY) ?? ''
 }
 
 export function saveLastOpenedConversation(workspaceId: string, userId: string, conversationId: string) {
@@ -45,7 +69,7 @@ export function saveLastOpenedConversation(workspaceId: string, userId: string, 
     bucket[scopeKey(workspaceId, userId)] = conversationId
     writeBucket(bucket)
   }
-  storage.setItem(LAST_CONVERSATION_GLOBAL_KEY, conversationId)
+  setStoredValue(LAST_CONVERSATION_GLOBAL_KEY, conversationId)
 }
 
 export function clearLastOpenedConversation(workspaceId: string, userId: string) {
@@ -54,10 +78,10 @@ export function clearLastOpenedConversation(workspaceId: string, userId: string)
     delete bucket[scopeKey(workspaceId, userId)]
     writeBucket(bucket)
   }
-  storage.removeItem(LAST_CONVERSATION_GLOBAL_KEY)
+  removeStoredValue(LAST_CONVERSATION_GLOBAL_KEY)
 }
 
 export function clearAllLastOpenedConversations() {
-  storage.removeItem(LAST_CONVERSATION_BY_USER_KEY)
-  storage.removeItem(LAST_CONVERSATION_GLOBAL_KEY)
+  removeStoredValue(LAST_CONVERSATION_BY_USER_KEY)
+  removeStoredValue(LAST_CONVERSATION_GLOBAL_KEY)
 }

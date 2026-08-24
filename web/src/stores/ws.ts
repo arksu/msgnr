@@ -103,6 +103,7 @@ const WS_CLOSED = 3 // WebSocket.CLOSED
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000
 const TRANSPORT_HEARTBEAT_INTERVAL_MS = 30_000
 const REQUEST_TIMEOUT_MS = 15_000
+const DEBUG_WS_PACKETS = import.meta.env.DEV
 
 const REQUESTED_CAPABILITIES: FeatureCapability[] = Object.values(FeatureCapability)
   .filter((v): v is FeatureCapability => typeof v === 'number' && v !== FeatureCapability.UNSPECIFIED)
@@ -123,6 +124,11 @@ function normalizeForLog(value: unknown): unknown {
 }
 
 function logPacket(direction: 'SEND' | 'RECV', envelope: Envelope) {
+  // Packet normalization walks every nested value. In particular, protobuf byte
+  // fields expand into one property per byte, which can block the renderer for
+  // large attachments or sync batches. Keep this diagnostic strictly dev-only
+  // so it is compiled out of packaged clients.
+  if (!DEBUG_WS_PACKETS) return
   const summary = `[WS ${direction}] ${packetLabel(envelope)}`
   const normalized = normalizeForLog(envelope)
   console.groupCollapsed(summary)
@@ -427,16 +433,9 @@ export const useWsStore = defineStore('ws', () => {
     console.log('[ws:connect] new socket created, suppressTransportDrop reset to false')
     wsConn.binaryType = 'arraybuffer'
 
-    // Track whether this socket ever progressed past DISCONNECTED (i.e. onopen fired).
-    // onerror sets state = 'DISCONNECTED' before onclose fires, which would cause
-    // the onclose wasConnected check to return false and silently suppress the
-    // transport-drop callback. Using a per-socket flag avoids that race.
-    let socketHadOpened = false
-
     wsConn.onopen = () => {
       if (socket !== wsConn) { console.log('[ws:onopen] stale socket, ignored'); return }
       console.log('[ws:onopen] socket opened')
-      socketHadOpened = true
       state.value = 'WS_CONNECTED'
       sendHello()
     }
@@ -462,19 +461,14 @@ export const useWsStore = defineStore('ws', () => {
       if (socket !== wsConn) { console.log('[ws:onclose] stale socket, ignored. code=', ev?.code); return }
       stopPresenceHeartbeat()
       stopTransportHeartbeat()
-      // Use socketHadOpened rather than state.value !== 'DISCONNECTED': onerror
-      // sets state = 'DISCONNECTED' before onclose fires, which would wrongly
-      // suppress the transport-drop callback for error-induced disconnects.
-      const wasConnected = socketHadOpened
       lastCloseCode.value = ev?.code ?? null
-      console.log('[ws:onclose] code=', ev?.code, 'wasConnected=', wasConnected, 'suppress=', suppressTransportDrop, 'lastErrorKind=', lastErrorKind.value)
+      console.log('[ws:onclose] code=', ev?.code, 'suppress=', suppressTransportDrop, 'lastErrorKind=', lastErrorKind.value)
       if (state.value !== 'DISCONNECTED') {
         state.value = 'DISCONNECTED'
       }
       rejectPendingRequests(new Error('WebSocket disconnected'))
       if (
         !suppressTransportDrop &&
-        wasConnected &&
         lastErrorKind.value !== 'UNAUTHENTICATED'
       ) {
         console.log('[ws:onclose] firing onTransportDropCallback')
@@ -823,8 +817,8 @@ export const useWsStore = defineStore('ws', () => {
     state.value = 'RECOVERING_GAP'
   }
 
-  function sendAck(lastAppliedEventSeq: bigint) {
-    sendEnvelope(create(EnvelopeSchema, {
+  function sendAck(lastAppliedEventSeq: bigint): boolean {
+    return sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
       traceId: generateId(),
       protocolVersion: PROTOCOL_VERSION,

@@ -369,7 +369,7 @@
               </div>
             </section>
 
-            <section v-else class="space-y-3" role="tabpanel" aria-label="Password">
+            <section v-else-if="settingsActiveTab === 'password'" class="space-y-3" role="tabpanel" aria-label="Password">
               <div>
                 <label class="block text-sm text-app-muted mb-1">New password</label>
                 <input
@@ -393,6 +393,150 @@
                 />
               </div>
             </section>
+
+            <section v-else class="space-y-6" role="tabpanel" aria-label="Security">
+              <div>
+                <h3 class="text-sm font-semibold text-app-text">Encrypted direct messages</h3>
+                <p class="mt-1 text-xs leading-5 text-app-muted">
+                  {{ settingsE2EEDeviceAvailable
+                    ? 'This browser has an encrypted-DM identity.'
+                    : 'This browser has no encrypted-DM identity yet.' }}
+                </p>
+              </div>
+
+              <div class="border-t border-chat-border pt-5">
+                <h4 class="text-sm font-medium text-app-text">Create recovery package</h4>
+                <p class="mt-1 text-xs leading-5 text-app-muted">
+                  Anyone with this package and its passphrase can read encrypted-DM history available to this identity.
+                </p>
+                <template v-if="settingsE2EEDeviceAvailable">
+                  <div class="mt-4 space-y-3">
+                    <label class="block">
+                      <span class="mb-1 block text-xs text-app-muted">Recovery passphrase</span>
+                      <input
+                        v-model="settingsE2EEExportPassphrase"
+                        type="password"
+                        autocomplete="new-password"
+                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text outline-none focus:border-accent"
+                        data-testid="e2ee-recovery-export-passphrase"
+                        @input="clearE2EERecoveryPackage"
+                      >
+                    </label>
+                    <label class="block">
+                      <span class="mb-1 block text-xs text-app-muted">Confirm passphrase</span>
+                      <input
+                        v-model="settingsE2EEExportPassphraseConfirmation"
+                        type="password"
+                        autocomplete="new-password"
+                        class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text outline-none focus:border-accent"
+                        data-testid="e2ee-recovery-export-passphrase-confirmation"
+                        @input="clearE2EERecoveryPackage"
+                      >
+                    </label>
+                    <button
+                      type="button"
+                      class="rounded bg-accent px-3 py-2 text-xs font-medium text-app-onAccent transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="!canCreateE2EERecoveryPackage || settingsE2EEExporting"
+                      data-testid="e2ee-recovery-create"
+                      @click="createE2EERecoveryPackage"
+                    >
+                      {{ settingsE2EEExporting ? 'Creating...' : 'Create recovery package' }}
+                    </button>
+                  </div>
+
+                  <div v-if="settingsE2EERecoveryPackage" class="mt-4 space-y-2">
+                    <label class="block">
+                      <span class="mb-1 block text-xs text-app-muted">Recovery package</span>
+                      <textarea
+                        :value="settingsE2EERecoveryPackage"
+                        readonly
+                        rows="4"
+                        spellcheck="false"
+                        autocapitalize="off"
+                        autocomplete="off"
+                        class="w-full resize-y rounded border border-chat-border bg-chat-input px-3 py-2 font-mono text-xs text-app-text outline-none focus:border-accent"
+                        data-testid="e2ee-recovery-export-package"
+                      ></textarea>
+                    </label>
+                    <button
+                      type="button"
+                      class="rounded border border-chat-border px-3 py-2 text-xs text-app-secondaryText transition-colors hover:bg-chat-msgHover"
+                      data-testid="e2ee-recovery-copy"
+                      @click="copyE2EERecoveryPackage"
+                    >
+                      Copy recovery package
+                    </button>
+                  </div>
+                </template>
+                <p v-else class="mt-3 text-xs leading-5 text-app-muted">
+                  Start or open an encrypted DM on this browser before creating a recovery package.
+                </p>
+              </div>
+
+              <div class="border-t border-chat-border pt-5">
+                <h4 class="text-sm font-medium text-app-text">Restore recovery package</h4>
+                <p class="mt-1 text-xs leading-5 text-app-muted">
+                  Restoring keeps the original browser active because both browsers share the recovered encrypted-DM identity.
+                </p>
+                <div class="mt-4 space-y-3">
+                  <label class="block">
+                    <span class="mb-1 block text-xs text-app-muted">Recovery package</span>
+                    <textarea
+                      v-model="settingsE2EEImportPackage"
+                      rows="4"
+                      maxlength="32768"
+                      spellcheck="false"
+                      autocapitalize="off"
+                      autocomplete="off"
+                      class="w-full resize-y rounded border border-chat-border bg-chat-input px-3 py-2 font-mono text-xs text-app-text outline-none focus:border-accent"
+                      data-testid="e2ee-recovery-import-package"
+                      @input="resetE2EERecoveryImportConfirmation"
+                    ></textarea>
+                  </label>
+                  <label class="block">
+                    <span class="mb-1 block text-xs text-app-muted">Recovery passphrase</span>
+                    <input
+                      v-model="settingsE2EEImportPassphrase"
+                      type="password"
+                      autocomplete="new-password"
+                      class="w-full rounded border border-chat-border bg-chat-input px-3 py-2 text-sm text-app-text outline-none focus:border-accent"
+                      data-testid="e2ee-recovery-import-passphrase"
+                      @input="resetE2EERecoveryImportConfirmation"
+                    >
+                  </label>
+                  <label
+                    v-if="settingsE2EEReplacementConfirmationRequired"
+                    class="flex items-start gap-2 rounded border border-amber-400/40 bg-amber-500/10 p-3 text-xs leading-5 text-app-secondaryText"
+                  >
+                    <input
+                      v-model="settingsE2EEReplaceConfirmed"
+                      type="checkbox"
+                      class="mt-1 h-4 w-4 shrink-0 accent-accent"
+                      data-testid="e2ee-recovery-replace-confirmation"
+                    >
+                    <span>
+                      I exported this browser's current identity. Replacing it can make messages addressed only to that identity unavailable here.
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    class="rounded bg-accent px-3 py-2 text-xs font-medium text-app-onAccent transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!canRestoreE2EERecoveryPackage || settingsE2EEImporting"
+                    data-testid="e2ee-recovery-restore"
+                    @click="restoreE2EERecoveryPackage"
+                  >
+                    {{ settingsE2EEImporting ? 'Restoring...' : 'Restore encrypted DMs' }}
+                  </button>
+                </div>
+              </div>
+
+              <p v-if="settingsE2EERecoveryError" class="text-xs text-red-400" role="alert">
+                {{ settingsE2EERecoveryError }}
+              </p>
+              <p v-if="settingsE2EERecoverySuccess" class="text-xs text-emerald-300" role="status">
+                {{ settingsE2EERecoverySuccess }}
+              </p>
+            </section>
           </div>
 
           <div v-if="settingsError" class="px-5 text-red-400 text-sm">
@@ -413,14 +557,15 @@
 
           <div class="flex shrink-0 gap-3 border-t border-chat-border px-5 py-4">
             <button
-              class="flex-1 py-2 rounded bg-chat-msgHover hover:bg-app-tertiary text-app-secondaryText text-sm transition-colors"
-              :disabled="settingsLoading"
+              class="py-2 rounded bg-chat-msgHover hover:bg-app-tertiary text-app-secondaryText text-sm transition-colors"
+              :class="settingsActiveTab === 'security' ? 'w-full' : 'flex-1'"
+              :disabled="settingsLoading || settingsE2EEBusy"
               @click="closeSettings"
             >
               Cancel
             </button>
             <button
-              v-if="settingsActiveTab !== 'password'"
+              v-if="settingsActiveTab === 'profile' || settingsActiveTab === 'status'"
               class="flex-1 py-2 rounded bg-accent hover:bg-accent-hover text-app-onAccent text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="!canSaveSettings || settingsLoading"
               @click="saveSettings"
@@ -542,6 +687,14 @@ import {
   stripNotificationOpenQuery,
   type NotificationOpenIntent,
 } from '@/services/notificationOpen'
+import { activateE2EERecoveryDevice } from '@/services/http/chatApi'
+import {
+  E2EERecoveryError,
+  exportEncryptedDMRecoveryPackage,
+  hasLocalEncryptedDMDevice,
+  localEncryptedDMDeviceId,
+  prepareEncryptedDMRecoveryImport,
+} from '@/services/e2ee/dmE2ee'
 import { loadSidebarCollapsed, saveSidebarCollapsed } from '@/services/storage/sidebarCollapseStorage'
 import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
@@ -704,12 +857,13 @@ import { useCallStore } from '@/stores/call'
 
 const route = useRoute()
 const router = useRouter()
-type ProfileSettingsTab = 'profile' | 'status' | 'theme' | 'password'
+type ProfileSettingsTab = 'profile' | 'status' | 'theme' | 'password' | 'security'
 const profileSettingsTabs: Array<{ id: ProfileSettingsTab; label: string }> = [
   { id: 'profile', label: 'Profile' },
   { id: 'status', label: 'Status' },
   { id: 'theme', label: 'Theme' },
   { id: 'password', label: 'Password' },
+  { id: 'security', label: 'Security' },
 ]
 const settingsOpen = ref(false)
 const settingsActiveTab = ref<ProfileSettingsTab>('profile')
@@ -733,6 +887,19 @@ const settingsConfirmPassword = ref('')
 const settingsPasswordLoading = ref(false)
 const settingsPasswordError = ref('')
 const settingsPasswordSuccess = ref('')
+const settingsE2EEDeviceAvailable = ref(false)
+const settingsE2EEExportPassphrase = ref('')
+const settingsE2EEExportPassphraseConfirmation = ref('')
+const settingsE2EERecoveryPackage = ref('')
+const settingsE2EEImportPackage = ref('')
+const settingsE2EEImportPassphrase = ref('')
+const settingsE2EEReplacementConfirmationRequired = ref(false)
+const settingsE2EEReplaceConfirmed = ref(false)
+const settingsE2EEExporting = ref(false)
+const settingsE2EEImporting = ref(false)
+const settingsE2EERecoveryError = ref('')
+const settingsE2EERecoverySuccess = ref('')
+let e2eeRecoveryOperationGeneration = 0
 const settingsAvatarLoading = ref(false)
 const settingsAvatarError = ref('')
 const profileAvatarInput = ref<HTMLInputElement | null>(null)
@@ -779,6 +946,9 @@ type DocumentsBrowseRoute =
 type DocumentsNonCardRoute =
   | DocumentsBrowseRoute
   | { name: 'documents-search'; query: string }
+type DocumentsCardRoute = {
+  documentId: string
+}
 
 const lastDocumentsBrowseRoute = ref<DocumentsBrowseRoute>({
   name: 'documents-teamspaces',
@@ -786,6 +956,7 @@ const lastDocumentsBrowseRoute = ref<DocumentsBrowseRoute>({
 const lastDocumentsNonCardRoute = ref<DocumentsNonCardRoute>({
   name: 'documents-teamspaces',
 })
+const lastDocumentsCardRoute = ref<DocumentsCardRoute | null>(null)
 let unsubscribeIncomingMessageSound: (() => void) | null = null
 const tasksStore = useTasksStore()
 const documentsStore = useDocumentsStore()
@@ -1101,6 +1272,13 @@ async function goToDocumentsMode() {
     return
   }
   setSidebarCollapsed(false)
+  if (lastDocumentsCardRoute.value) {
+    await router.push({
+      name: 'documents-card',
+      params: { documentId: lastDocumentsCardRoute.value.documentId },
+    })
+    return
+  }
   if (lastDocumentsNonCardRoute.value.name === 'documents-search' && lastDocumentsNonCardRoute.value.query.trim()) {
     await router.push({ name: 'documents-search', query: { q: lastDocumentsNonCardRoute.value.query } })
     return
@@ -1192,6 +1370,9 @@ async function handleDocumentsDeleted(deletedDocumentIds: string[]) {
   if (!currentDocumentId || !deletedDocumentIds.includes(currentDocumentId)) {
     return
   }
+  if (lastDocumentsCardRoute.value?.documentId === currentDocumentId) {
+    lastDocumentsCardRoute.value = null
+  }
   documentsStore.clearSelectedDocument()
   await backToDocuments()
 }
@@ -1272,6 +1453,7 @@ watch(
         await backToDocuments()
         return
       }
+      lastDocumentsCardRoute.value = { documentId }
       void documentsStore.loadSidebar()
       if (routeDocumentIdMatchesSelected(documentId)) {
         return
@@ -1279,6 +1461,9 @@ watch(
       documentsStore.clearSelectedDocument()
       await documentsStore.selectDocument(documentId, true)
       if (!routeDocumentIdMatchesSelected(documentId)) {
+        if (lastDocumentsCardRoute.value?.documentId === documentId) {
+          lastDocumentsCardRoute.value = null
+        }
         await backToDocuments()
       }
       return
@@ -1482,6 +1667,16 @@ const settingsStatusValidationError = computed(() => {
 })
 
 const settingsStatusError = computed(() => settingsStatusValidationError.value || settingsStatusSaveError.value)
+const settingsE2EEBusy = computed(() => settingsE2EEExporting.value || settingsE2EEImporting.value)
+const canCreateE2EERecoveryPackage = computed(() =>
+  settingsE2EEDeviceAvailable.value
+  && settingsE2EEExportPassphrase.value.length > 0
+  && settingsE2EEExportPassphrase.value === settingsE2EEExportPassphraseConfirmation.value,
+)
+const canRestoreE2EERecoveryPackage = computed(() =>
+  settingsE2EEImportPackage.value.trim().length > 0
+  && settingsE2EEImportPassphrase.value.length > 0,
+)
 
 const settingsPreviewCustomStatus = computed<UserCustomStatus | null>(() => {
   const text = settingsStatusText.value.trim()
@@ -1610,7 +1805,137 @@ function clearStatusDraft() {
   closeStatusEmojiPicker()
 }
 
+function clearE2EERecoveryForm() {
+  e2eeRecoveryOperationGeneration += 1
+  settingsE2EEExportPassphrase.value = ''
+  settingsE2EEExportPassphraseConfirmation.value = ''
+  settingsE2EERecoveryPackage.value = ''
+  settingsE2EEImportPackage.value = ''
+  settingsE2EEImportPassphrase.value = ''
+  settingsE2EEReplacementConfirmationRequired.value = false
+  settingsE2EEReplaceConfirmed.value = false
+  settingsE2EERecoveryError.value = ''
+  settingsE2EERecoverySuccess.value = ''
+}
+
+function clearE2EERecoveryPackage() {
+  e2eeRecoveryOperationGeneration += 1
+  settingsE2EERecoveryPackage.value = ''
+  settingsE2EERecoveryError.value = ''
+  settingsE2EERecoverySuccess.value = ''
+}
+
+function resetE2EERecoveryImportConfirmation() {
+  e2eeRecoveryOperationGeneration += 1
+  settingsE2EEReplacementConfirmationRequired.value = false
+  settingsE2EEReplaceConfirmed.value = false
+  settingsE2EERecoveryError.value = ''
+  settingsE2EERecoverySuccess.value = ''
+}
+
+function recoveryErrorMessage(error: unknown): string {
+  if (error instanceof E2EERecoveryError && error.code === 'unsupported') {
+    return 'This recovery package uses an unsupported format.'
+  }
+  if (error instanceof E2EERecoveryError && error.code === 'unavailable') {
+    return 'No encrypted-DM identity is available on this browser.'
+  }
+  return 'Could not unlock the recovery package. Check the passphrase and try again.'
+}
+
+async function createE2EERecoveryPackage() {
+  if (!canCreateE2EERecoveryPackage.value || settingsE2EEExporting.value) return
+
+  const operation = ++e2eeRecoveryOperationGeneration
+  const passphrase = settingsE2EEExportPassphrase.value
+  settingsE2EEExporting.value = true
+  settingsE2EERecoveryError.value = ''
+  settingsE2EERecoverySuccess.value = ''
+  try {
+    const recoveryPackage = await exportEncryptedDMRecoveryPackage(passphrase)
+    if (operation !== e2eeRecoveryOperationGeneration) return
+    settingsE2EERecoveryPackage.value = recoveryPackage
+    settingsE2EEExportPassphrase.value = ''
+    settingsE2EEExportPassphraseConfirmation.value = ''
+    settingsE2EERecoverySuccess.value = 'Recovery package created.'
+  } catch (error) {
+    if (operation !== e2eeRecoveryOperationGeneration) return
+    if (error instanceof E2EERecoveryError && error.code === 'unavailable') {
+      settingsE2EEDeviceAvailable.value = false
+    }
+    settingsE2EERecoveryError.value = recoveryErrorMessage(error)
+  } finally {
+    settingsE2EEExporting.value = false
+  }
+}
+
+async function copyE2EERecoveryPackage() {
+  const recoveryPackage = settingsE2EERecoveryPackage.value
+  if (!recoveryPackage) return
+
+  settingsE2EERecoveryError.value = ''
+  settingsE2EERecoverySuccess.value = ''
+  try {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) {
+      throw new Error('Clipboard unavailable')
+    }
+    await navigator.clipboard.writeText(recoveryPackage)
+    settingsE2EERecoverySuccess.value = 'Recovery package copied.'
+  } catch {
+    settingsE2EERecoveryError.value = 'Clipboard access is unavailable. Copy the recovery package from the field.'
+  }
+}
+
+async function restoreE2EERecoveryPackage() {
+  if (!canRestoreE2EERecoveryPackage.value || settingsE2EEImporting.value) return
+
+  const operation = ++e2eeRecoveryOperationGeneration
+  const recoveryPackage = settingsE2EEImportPackage.value
+  const passphrase = settingsE2EEImportPassphrase.value
+  settingsE2EEImporting.value = true
+  settingsE2EERecoveryError.value = ''
+  settingsE2EERecoverySuccess.value = ''
+  try {
+    const prepared = await prepareEncryptedDMRecoveryImport(recoveryPackage, passphrase)
+    if (operation !== e2eeRecoveryOperationGeneration) return
+
+    const currentDeviceID = localEncryptedDMDeviceId()
+    const replacingCurrentDevice = Boolean(currentDeviceID && currentDeviceID !== prepared.deviceId)
+    if (replacingCurrentDevice && !settingsE2EEReplaceConfirmed.value) {
+      settingsE2EEReplacementConfirmationRequired.value = true
+      settingsE2EERecoveryError.value = 'Export this browser\'s current encrypted-DM identity before replacing it.'
+      return
+    }
+
+    await activateE2EERecoveryDevice({
+      ...prepared.registration,
+      ...(replacingCurrentDevice ? { replace_device_id: currentDeviceID } : {}),
+    })
+    prepared.install()
+    settingsE2EEDeviceAvailable.value = true
+    await chatStore.reloadActiveEncryptedDMHistory()
+
+    if (operation !== e2eeRecoveryOperationGeneration) return
+    settingsE2EEExportPassphrase.value = ''
+    settingsE2EEExportPassphraseConfirmation.value = ''
+    settingsE2EERecoveryPackage.value = ''
+    settingsE2EEImportPackage.value = ''
+    settingsE2EEImportPassphrase.value = ''
+    settingsE2EEReplacementConfirmationRequired.value = false
+    settingsE2EEReplaceConfirmed.value = false
+    settingsE2EERecoverySuccess.value = 'Encrypted-DM recovery completed.'
+  } catch (error) {
+    if (operation !== e2eeRecoveryOperationGeneration) return
+    settingsE2EERecoveryError.value = error instanceof E2EERecoveryError
+      ? recoveryErrorMessage(error)
+      : 'Could not restore encrypted DMs. Check the package and try again.'
+  } finally {
+    settingsE2EEImporting.value = false
+  }
+}
+
 function closeSettings() {
+  if (settingsE2EEBusy.value) return
   settingsOpen.value = false
   settingsError.value = ''
   settingsAvatarError.value = ''
@@ -1619,10 +1944,17 @@ function closeSettings() {
   settingsConfirmPassword.value = ''
   settingsPasswordError.value = ''
   settingsPasswordSuccess.value = ''
+  clearE2EERecoveryForm()
   closeStatusEmojiPicker()
 }
 
 function setSettingsActiveTab(tab: ProfileSettingsTab) {
+  if (settingsE2EEBusy.value) return
+  if (tab !== 'security') {
+    clearE2EERecoveryForm()
+  } else {
+    settingsE2EEDeviceAvailable.value = hasLocalEncryptedDMDevice()
+  }
   settingsActiveTab.value = tab
   if (tab !== 'status') {
     closeStatusEmojiPicker()
@@ -1651,12 +1983,14 @@ async function openSettings() {
   settingsConfirmPassword.value = ''
   settingsPasswordError.value = ''
   settingsPasswordSuccess.value = ''
+  clearE2EERecoveryForm()
   try {
     await authStore.ensureUserLoaded()
   } catch (error) {
     settingsError.value = error instanceof Error ? error.message : 'Failed to load profile'
   }
   syncSettingsFormFromUser()
+  settingsE2EEDeviceAvailable.value = hasLocalEncryptedDMDevice()
   settingsActiveTab.value = 'profile'
   settingsOpen.value = true
 }

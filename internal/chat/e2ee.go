@@ -2,10 +2,14 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 
 	packetspb "msgnr/internal/gen/proto"
@@ -13,6 +17,11 @@ import (
 )
 
 const encryptedDMEnvelopeAlgorithm = "dm-p256-aesgcm-v1"
+
+const (
+	maxE2EEDeviceLabelRunes      = 256
+	maxE2EEDeviceKeyMaterialSize = 16 * 1024
+)
 
 type RegisterDeviceParams struct {
 	DeviceID              uuid.UUID
@@ -34,12 +43,53 @@ type UserDeviceBundle struct {
 	SignedPrekeySignature []byte
 }
 
+type ActivateRecoveredDeviceParams struct {
+	RegisterDeviceParams
+	ReplaceDeviceID uuid.UUID
+}
+
+func validateRegisterDeviceParams(p RegisterDeviceParams, requireDeviceID bool) error {
+	if (requireDeviceID && p.DeviceID == uuid.Nil) || p.UserID == uuid.Nil || p.SignedPrekeyID < 0 {
+		return ErrInvalidDMTarget
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(p.DeviceLabel)) > maxE2EEDeviceLabelRunes {
+		return ErrInvalidDMTarget
+	}
+	if len(p.IdentityKeyPublic) == 0 || len(p.IdentityKeyPublic) > maxE2EEDeviceKeyMaterialSize {
+		return ErrInvalidDMTarget
+	}
+	if len(p.SignedPrekeyPublic) == 0 || len(p.SignedPrekeyPublic) > maxE2EEDeviceKeyMaterialSize {
+		return ErrInvalidDMTarget
+	}
+	if len(p.SignedPrekeySignature) == 0 || len(p.SignedPrekeySignature) > maxE2EEDeviceKeyMaterialSize {
+		return ErrInvalidDMTarget
+	}
+	return nil
+}
+
+func userDeviceBundleFromRow(row pgx.Row) (UserDeviceBundle, error) {
+	var device UserDeviceBundle
+	err := row.Scan(
+		&device.DeviceID,
+		&device.UserID,
+		&device.DeviceLabel,
+		&device.IdentityKeyPublic,
+		&device.SignedPrekeyID,
+		&device.SignedPrekeyPublic,
+		&device.SignedPrekeySignature,
+	)
+	if err != nil {
+		return UserDeviceBundle{}, err
+	}
+	return device, nil
+}
+
 func (s *Service) RegisterDevice(ctx context.Context, p RegisterDeviceParams) (UserDeviceBundle, error) {
 	if p.DeviceID == uuid.Nil {
 		p.DeviceID = uuid.New()
 	}
-	if p.UserID == uuid.Nil || len(p.IdentityKeyPublic) == 0 || len(p.SignedPrekeyPublic) == 0 || len(p.SignedPrekeySignature) == 0 {
-		return UserDeviceBundle{}, ErrInvalidDMTarget
+	if err := validateRegisterDeviceParams(p, true); err != nil {
+		return UserDeviceBundle{}, err
 	}
 	row, err := s.q.UpsertUserDevice(ctx, queries.UpsertUserDeviceParams{
 		ID:                    p.DeviceID,
@@ -62,6 +112,117 @@ func (s *Service) RegisterDevice(ctx context.Context, p RegisterDeviceParams) (U
 		SignedPrekeyPublic:    row.SignedPrekeyPublic,
 		SignedPrekeySignature: row.SignedPrekeySignature,
 	}, nil
+}
+
+// ActivateRecoveredDevice restores a user's existing public device identity and
+// retires a different temporary identity created on the importing browser.
+// Private recovery material never reaches this service.
+func (s *Service) ActivateRecoveredDevice(ctx context.Context, p ActivateRecoveredDeviceParams) (UserDeviceBundle, error) {
+	if p.ReplaceDeviceID == p.DeviceID {
+		p.ReplaceDeviceID = uuid.Nil
+	}
+	if err := validateRegisterDeviceParams(p.RegisterDeviceParams, true); err != nil {
+		return UserDeviceBundle{}, err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return UserDeviceBundle{}, fmt.Errorf("chat.ActivateRecoveredDevice begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	deviceIDs := []uuid.UUID{p.DeviceID}
+	if p.ReplaceDeviceID != uuid.Nil {
+		deviceIDs = append(deviceIDs, p.ReplaceDeviceID)
+	}
+	sort.Slice(deviceIDs, func(i, j int) bool {
+		return deviceIDs[i].String() < deviceIDs[j].String()
+	})
+
+	owners := make(map[uuid.UUID]uuid.UUID, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		if _, seen := owners[deviceID]; seen {
+			continue
+		}
+		var ownerID uuid.UUID
+		err := tx.QueryRow(ctx, `SELECT user_id FROM user_devices WHERE id = $1 FOR UPDATE`, deviceID).Scan(&ownerID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return UserDeviceBundle{}, fmt.Errorf("chat.ActivateRecoveredDevice lock device: %w", err)
+		}
+		owners[deviceID] = ownerID
+	}
+	if ownerID, exists := owners[p.DeviceID]; exists && ownerID != p.UserID {
+		return UserDeviceBundle{}, ErrE2EERecoveryDeviceOwnership
+	}
+	if ownerID, exists := owners[p.ReplaceDeviceID]; p.ReplaceDeviceID != uuid.Nil && exists && ownerID != p.UserID {
+		return UserDeviceBundle{}, ErrE2EERecoveryDeviceOwnership
+	}
+
+	device, err := userDeviceBundleFromRow(tx.QueryRow(ctx, `
+		INSERT INTO user_devices (
+			id,
+			user_id,
+			device_label,
+			identity_key_public,
+			signed_prekey_id,
+			signed_prekey_public,
+			signed_prekey_signature,
+			last_seen_at,
+			revoked_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), NULL)
+		ON CONFLICT (id) DO UPDATE
+			SET device_label = EXCLUDED.device_label,
+				identity_key_public = EXCLUDED.identity_key_public,
+				signed_prekey_id = EXCLUDED.signed_prekey_id,
+				signed_prekey_public = EXCLUDED.signed_prekey_public,
+				signed_prekey_signature = EXCLUDED.signed_prekey_signature,
+				last_seen_at = now(),
+				revoked_at = NULL
+		WHERE user_devices.user_id = EXCLUDED.user_id
+		RETURNING id,
+			user_id,
+			device_label,
+			identity_key_public,
+			signed_prekey_id,
+			signed_prekey_public,
+			signed_prekey_signature`,
+		p.DeviceID,
+		p.UserID,
+		strings.TrimSpace(p.DeviceLabel),
+		append([]byte(nil), p.IdentityKeyPublic...),
+		p.SignedPrekeyID,
+		append([]byte(nil), p.SignedPrekeyPublic...),
+		append([]byte(nil), p.SignedPrekeySignature...),
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UserDeviceBundle{}, ErrE2EERecoveryDeviceOwnership
+	}
+	if err != nil {
+		return UserDeviceBundle{}, fmt.Errorf("chat.ActivateRecoveredDevice activate device: %w", err)
+	}
+
+	if p.ReplaceDeviceID != uuid.Nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE user_devices
+			   SET revoked_at = now()
+			 WHERE id = $1
+			   AND user_id = $2
+			   AND revoked_at IS NULL`,
+			p.ReplaceDeviceID,
+			p.UserID,
+		); err != nil {
+			return UserDeviceBundle{}, fmt.Errorf("chat.ActivateRecoveredDevice revoke temporary device: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return UserDeviceBundle{}, fmt.Errorf("chat.ActivateRecoveredDevice commit: %w", err)
+	}
+	return device, nil
 }
 
 func (s *Service) ListEncryptedDMDevices(ctx context.Context, requesterID, conversationID uuid.UUID) ([]UserDeviceBundle, error) {

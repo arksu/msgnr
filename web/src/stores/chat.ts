@@ -2588,6 +2588,25 @@ export const useChatStore = defineStore('chat', () => {
     await loadConversationHistoryPage(conversationId, undefined, selectStartedAt)
   }
 
+  async function reloadActiveEncryptedDMHistory(): Promise<void> {
+    const conversationId = activeChannelId.value
+    if (!conversationId || !encryptedDMHistoryDeviceId(conversationId)) return
+
+    // A pending request may have been addressed to the temporary local device.
+    // Invalidate it before clearing the timeline so it cannot restore stale
+    // encrypted-message placeholders after the recovered identity is installed.
+    historyLoadTokenByConversation.set(conversationId, ++historyLoadToken)
+    const state = getOrCreateHistoryState(conversationId)
+    state.initialized = false
+    state.loading = false
+    state.hasMore = true
+    state.nextBeforeChannelSeq = undefined
+    cancelScheduledMessageCache(conversationId)
+    messages.value[conversationId] = []
+
+    await ensureConversationHistory(conversationId)
+  }
+
   async function loadOlderConversationHistory(conversationId: string): Promise<number> {
     if (!conversationId) return 0
     const state = getOrCreateHistoryState(conversationId)
@@ -4471,6 +4490,7 @@ export const useChatStore = defineStore('chat', () => {
     loadCachedState,
     applyBootstrapSnapshot,
     ensureConversationHistory,
+    reloadActiveEncryptedDMHistory,
     loadMessageContext,
     refreshUnreadFeed,
     refreshSavedMessages,

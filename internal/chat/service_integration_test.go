@@ -1362,6 +1362,94 @@ func TestIntegration_SendMessage_StoresEncryptedDMCiphertexts(t *testing.T) {
 	assert.Equal(t, 0, remainingCiphertexts)
 }
 
+func TestIntegration_ActivateRecoveredDevice_ReactivatesOwnerDeviceAndRetiresTemporaryDevice(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	store := events.NewStore(pool)
+	svc := chat.NewService(pool, store)
+
+	ownerID := seedChatUserWithAttrs(t, ctx, pool, "Recovery Owner", "member", "active")
+	otherUserID := seedChatUserWithAttrs(t, ctx, pool, "Recovery Other", "member", "active")
+	restoredDeviceID := uuid.New()
+	temporaryDeviceID := uuid.New()
+	otherDeviceID := uuid.New()
+
+	restored, err := svc.RegisterDevice(ctx, chat.RegisterDeviceParams{
+		DeviceID:              restoredDeviceID,
+		UserID:                ownerID,
+		DeviceLabel:           "old browser",
+		IdentityKeyPublic:     []byte("restored identity"),
+		SignedPrekeyID:        1,
+		SignedPrekeyPublic:    []byte("restored prekey"),
+		SignedPrekeySignature: []byte("restored signature"),
+	})
+	require.NoError(t, err)
+	_, err = svc.RegisterDevice(ctx, chat.RegisterDeviceParams{
+		DeviceID:              temporaryDeviceID,
+		UserID:                ownerID,
+		DeviceLabel:           "temporary browser",
+		IdentityKeyPublic:     []byte("temporary identity"),
+		SignedPrekeyID:        1,
+		SignedPrekeyPublic:    []byte("temporary prekey"),
+		SignedPrekeySignature: []byte("temporary signature"),
+	})
+	require.NoError(t, err)
+	_, err = svc.RegisterDevice(ctx, chat.RegisterDeviceParams{
+		DeviceID:              otherDeviceID,
+		UserID:                otherUserID,
+		IdentityKeyPublic:     []byte("other identity"),
+		SignedPrekeyID:        1,
+		SignedPrekeyPublic:    []byte("other prekey"),
+		SignedPrekeySignature: []byte("other signature"),
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `UPDATE user_devices SET revoked_at = now() WHERE id = $1`, restoredDeviceID)
+	require.NoError(t, err)
+
+	activated, err := svc.ActivateRecoveredDevice(ctx, chat.ActivateRecoveredDeviceParams{
+		RegisterDeviceParams: chat.RegisterDeviceParams{
+			DeviceID:              restoredDeviceID,
+			UserID:                ownerID,
+			DeviceLabel:           "new browser",
+			IdentityKeyPublic:     restored.IdentityKeyPublic,
+			SignedPrekeyID:        restored.SignedPrekeyID,
+			SignedPrekeyPublic:    restored.SignedPrekeyPublic,
+			SignedPrekeySignature: restored.SignedPrekeySignature,
+		},
+		ReplaceDeviceID: temporaryDeviceID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, restoredDeviceID, activated.DeviceID)
+	assert.Equal(t, "new browser", activated.DeviceLabel)
+
+	var restoredActive, temporaryActive bool
+	err = pool.QueryRow(ctx, `SELECT revoked_at IS NULL FROM user_devices WHERE id = $1`, restoredDeviceID).Scan(&restoredActive)
+	require.NoError(t, err)
+	err = pool.QueryRow(ctx, `SELECT revoked_at IS NULL FROM user_devices WHERE id = $1`, temporaryDeviceID).Scan(&temporaryActive)
+	require.NoError(t, err)
+	assert.True(t, restoredActive)
+	assert.False(t, temporaryActive)
+
+	_, err = svc.ActivateRecoveredDevice(ctx, chat.ActivateRecoveredDeviceParams{
+		RegisterDeviceParams: chat.RegisterDeviceParams{
+			DeviceID:              otherDeviceID,
+			UserID:                ownerID,
+			IdentityKeyPublic:     []byte("attempted overwrite"),
+			SignedPrekeyID:        1,
+			SignedPrekeyPublic:    []byte("attempted prekey"),
+			SignedPrekeySignature: []byte("attempted signature"),
+		},
+	})
+	require.ErrorIs(t, err, chat.ErrE2EERecoveryDeviceOwnership)
+
+	var otherActive bool
+	err = pool.QueryRow(ctx, `SELECT revoked_at IS NULL FROM user_devices WHERE id = $1`, otherDeviceID).Scan(&otherActive)
+	require.NoError(t, err)
+	assert.True(t, otherActive)
+}
+
 func TestIntegration_ClearDMConversationHistory_HardDeletesMessagesAndKeepsDM(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

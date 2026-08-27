@@ -70,6 +70,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chat/attachments/", h.requireAuth(h.chatAttachmentItem))
 	mux.HandleFunc("/api/dm-candidates", h.requireAuth(h.listDMCandidates))
 	mux.HandleFunc("/api/e2ee/devices", h.requireAuth(h.e2eeDevices))
+	mux.HandleFunc("/api/e2ee/recovery/activate", h.requireAuth(h.activateE2EERecoveryDevice))
 	mux.HandleFunc("/api/e2ee/conversation-devices", h.requireAuth(h.listEncryptedDMDevices))
 	mux.HandleFunc("/api/dms/e2ee", h.requireAuth(h.createOrOpenEncryptedDirectMessage))
 	mux.HandleFunc("/api/dms", h.requireAuth(h.createOrOpenDirectMessage))
@@ -107,6 +108,13 @@ type registerE2EEDeviceRequest struct {
 	SignedPrekeyPublic    string `json:"signed_prekey_public"`
 	SignedPrekeySignature string `json:"signed_prekey_signature"`
 }
+
+type activateE2EERecoveryDeviceRequest struct {
+	registerE2EEDeviceRequest
+	ReplaceDeviceID string `json:"replace_device_id"`
+}
+
+const maxE2EEDeviceRequestBytes int64 = 64 * 1024
 
 type e2eeDeviceResponse struct {
 	DeviceID              string `json:"device_id"`
@@ -1806,49 +1814,116 @@ func (h *Handler) e2eeDevices(w http.ResponseWriter, r *http.Request, principal 
 	}
 
 	var req registerE2EEDeviceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeE2EEDeviceRequest(w, r, &req); err != nil {
 		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
 		return
 	}
-	var deviceID uuid.UUID
-	if strings.TrimSpace(req.DeviceID) != "" {
-		parsed, err := uuid.Parse(req.DeviceID)
-		if err != nil {
-			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid device_id"))
+	params, err := parseE2EEDeviceRegistrationRequest(req, false)
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody(err.Error()))
+		return
+	}
+	params.UserID = principal.UserID
+	device, err := h.svc.RegisterDevice(r.Context(), params)
+	if err != nil {
+		if errors.Is(err, ErrInvalidDMTarget) {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid e2ee device"))
 			return
 		}
-		deviceID = parsed
-	}
-	identityKeyPublic, err := base64.StdEncoding.DecodeString(req.IdentityKeyPublic)
-	if err != nil || len(identityKeyPublic) == 0 {
-		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid identity_key_public"))
-		return
-	}
-	signedPrekeyPublic, err := base64.StdEncoding.DecodeString(req.SignedPrekeyPublic)
-	if err != nil || len(signedPrekeyPublic) == 0 {
-		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid signed_prekey_public"))
-		return
-	}
-	signedPrekeySignature, err := base64.StdEncoding.DecodeString(req.SignedPrekeySignature)
-	if err != nil || len(signedPrekeySignature) == 0 {
-		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid signed_prekey_signature"))
-		return
-	}
-	device, err := h.svc.RegisterDevice(r.Context(), RegisterDeviceParams{
-		DeviceID:              deviceID,
-		UserID:                principal.UserID,
-		DeviceLabel:           req.DeviceLabel,
-		IdentityKeyPublic:     identityKeyPublic,
-		SignedPrekeyID:        req.SignedPrekeyID,
-		SignedPrekeyPublic:    signedPrekeyPublic,
-		SignedPrekeySignature: signedPrekeySignature,
-	})
-	if err != nil {
 		h.log.Error("register e2ee device error", zap.Error(err))
 		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, mapE2EEDeviceResponse(device))
+}
+
+func (h *Handler) activateE2EERecoveryDevice(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	if r.Method != http.MethodPost {
+		httputil.WriteJSON(w, http.StatusMethodNotAllowed, httputil.ErrorBody("method not allowed"))
+		return
+	}
+
+	var req activateE2EERecoveryDeviceRequest
+	if err := decodeE2EEDeviceRequest(w, r, &req); err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid json"))
+		return
+	}
+	params, err := parseE2EEDeviceRegistrationRequest(req.registerE2EEDeviceRequest, true)
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid recovery device"))
+		return
+	}
+	var replaceDeviceID uuid.UUID
+	if strings.TrimSpace(req.ReplaceDeviceID) != "" {
+		parsed, err := uuid.Parse(req.ReplaceDeviceID)
+		if err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid replace_device_id"))
+			return
+		}
+		replaceDeviceID = parsed
+	}
+	params.UserID = principal.UserID
+	device, err := h.svc.ActivateRecoveredDevice(r.Context(), ActivateRecoveredDeviceParams{
+		RegisterDeviceParams: params,
+		ReplaceDeviceID:      replaceDeviceID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidDMTarget), errors.Is(err, ErrE2EERecoveryDeviceOwnership):
+			httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorBody("invalid recovery device"))
+		default:
+			h.log.Error("activate e2ee recovery device error", zap.Error(err))
+			httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorBody("internal error"))
+		}
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, mapE2EEDeviceResponse(device))
+}
+
+func decodeE2EEDeviceRequest(w http.ResponseWriter, r *http.Request, target any) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxE2EEDeviceRequestBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("invalid json")
+	}
+	return nil
+}
+
+func parseE2EEDeviceRegistrationRequest(req registerE2EEDeviceRequest, requireDeviceID bool) (RegisterDeviceParams, error) {
+	var deviceID uuid.UUID
+	if strings.TrimSpace(req.DeviceID) != "" {
+		parsed, err := uuid.Parse(req.DeviceID)
+		if err != nil {
+			return RegisterDeviceParams{}, errors.New("invalid device_id")
+		}
+		deviceID = parsed
+	}
+	if requireDeviceID && deviceID == uuid.Nil {
+		return RegisterDeviceParams{}, errors.New("invalid device_id")
+	}
+	identityKeyPublic, err := base64.StdEncoding.DecodeString(req.IdentityKeyPublic)
+	if err != nil || len(identityKeyPublic) == 0 {
+		return RegisterDeviceParams{}, errors.New("invalid identity_key_public")
+	}
+	signedPrekeyPublic, err := base64.StdEncoding.DecodeString(req.SignedPrekeyPublic)
+	if err != nil || len(signedPrekeyPublic) == 0 {
+		return RegisterDeviceParams{}, errors.New("invalid signed_prekey_public")
+	}
+	signedPrekeySignature, err := base64.StdEncoding.DecodeString(req.SignedPrekeySignature)
+	if err != nil || len(signedPrekeySignature) == 0 {
+		return RegisterDeviceParams{}, errors.New("invalid signed_prekey_signature")
+	}
+	return RegisterDeviceParams{
+		DeviceID:              deviceID,
+		DeviceLabel:           req.DeviceLabel,
+		IdentityKeyPublic:     identityKeyPublic,
+		SignedPrekeyID:        req.SignedPrekeyID,
+		SignedPrekeyPublic:    signedPrekeyPublic,
+		SignedPrekeySignature: signedPrekeySignature,
+	}, nil
 }
 
 func (h *Handler) listEncryptedDMDevices(w http.ResponseWriter, r *http.Request, principal auth.Principal) {

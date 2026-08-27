@@ -301,16 +301,29 @@ export async function createOrOpenEncryptedDm(conversationId: string): Promise<D
   } catch (e) { handleError(e) }
 }
 
-export async function registerE2EEDevice(payload: {
+export interface E2EEDeviceRegistrationPayload {
   device_id: string
   device_label: string
   identity_key_public: string
   signed_prekey_id: number
   signed_prekey_public: string
   signed_prekey_signature: string
-}): Promise<E2EEDeviceItem> {
+}
+
+export interface E2EERecoveryActivationPayload extends E2EEDeviceRegistrationPayload {
+  replace_device_id?: string
+}
+
+export async function registerE2EEDevice(payload: E2EEDeviceRegistrationPayload): Promise<E2EEDeviceItem> {
   try {
     const { data } = await http.post<E2EEDeviceItem>('/api/e2ee/devices', payload)
+    return data
+  } catch (e) { handleError(e) }
+}
+
+export async function activateE2EERecoveryDevice(payload: E2EERecoveryActivationPayload): Promise<E2EEDeviceItem> {
+  try {
+    const { data } = await http.post<E2EEDeviceItem>('/api/e2ee/recovery/activate', payload)
     return data
   } catch (e) { handleError(e) }
 }

@@ -53,6 +53,21 @@ const platformMocks = vi.hoisted(() => ({
   clearBadge: vi.fn<() => Promise<void>>(),
 }))
 
+const e2eeRecoveryMocks = vi.hoisted(() => ({
+  hasLocalEncryptedDMDevice: vi.fn(),
+  localEncryptedDMDeviceId: vi.fn(),
+  exportEncryptedDMRecoveryPackage: vi.fn(),
+  prepareEncryptedDMRecoveryImport: vi.fn(),
+}))
+
+const e2eeRecoveryApiMocks = vi.hoisted(() => ({
+  activateE2EERecoveryDevice: vi.fn(),
+}))
+
+const clipboardMocks = vi.hoisted(() => ({
+  writeText: vi.fn(),
+}))
+
 vi.mock('@/composables/useSessionOrchestrator', () => ({
   useSessionOrchestrator: () => ({
     logout: orchestratorMocks.logout,
@@ -73,6 +88,25 @@ vi.mock('@/services/sound', () => ({
 vi.mock('@/platform', () => ({
   getPlatformOrNull: () => platformMocks.adapter,
 }))
+
+vi.mock('@/services/e2ee/dmE2ee', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/e2ee/dmE2ee')>()
+  return {
+    ...actual,
+    hasLocalEncryptedDMDevice: e2eeRecoveryMocks.hasLocalEncryptedDMDevice,
+    localEncryptedDMDeviceId: e2eeRecoveryMocks.localEncryptedDMDeviceId,
+    exportEncryptedDMRecoveryPackage: e2eeRecoveryMocks.exportEncryptedDMRecoveryPackage,
+    prepareEncryptedDMRecoveryImport: e2eeRecoveryMocks.prepareEncryptedDMRecoveryImport,
+  }
+})
+
+vi.mock('@/services/http/chatApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/http/chatApi')>()
+  return {
+    ...actual,
+    activateE2EERecoveryDevice: e2eeRecoveryApiMocks.activateE2EERecoveryDevice,
+  }
+})
 
 vi.mock('@/services/storage/lastTaskRouteStorage', () => ({
   loadLastOpenedTaskPublicId: taskRouteStorageMocks.loadLastOpenedTaskPublicId,
@@ -400,6 +434,20 @@ describe('MainView server unavailable state', () => {
     platformMocks.setBadge.mockResolvedValue(undefined)
     platformMocks.clearBadge.mockReset()
     platformMocks.clearBadge.mockResolvedValue(undefined)
+    e2eeRecoveryMocks.hasLocalEncryptedDMDevice.mockReset()
+    e2eeRecoveryMocks.hasLocalEncryptedDMDevice.mockReturnValue(false)
+    e2eeRecoveryMocks.localEncryptedDMDeviceId.mockReset()
+    e2eeRecoveryMocks.localEncryptedDMDeviceId.mockReturnValue(undefined)
+    e2eeRecoveryMocks.exportEncryptedDMRecoveryPackage.mockReset()
+    e2eeRecoveryMocks.prepareEncryptedDMRecoveryImport.mockReset()
+    e2eeRecoveryApiMocks.activateE2EERecoveryDevice.mockReset()
+    e2eeRecoveryApiMocks.activateE2EERecoveryDevice.mockResolvedValue({})
+    clipboardMocks.writeText.mockReset()
+    clipboardMocks.writeText.mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboardMocks.writeText },
+    })
 
     const tasksStore = useTasksStore(pinia)
     vi.spyOn(tasksStore, 'selectTask').mockImplementation(async (id: string) => {
@@ -596,6 +644,102 @@ describe('MainView server unavailable state', () => {
     expect(passwordTab?.getAttribute('aria-selected')).toBe('true')
     expect(document.body.textContent).toContain('Change password')
     expect(document.body.textContent).not.toContain('Display name')
+
+    wrapper.unmount()
+  })
+
+  it('exports and restores encrypted-DM recovery packages without sending private key material', async () => {
+    const router = createMainRouter()
+    router.push('/')
+    await router.isReady()
+
+    const authStore = useAuthStore()
+    authStore.user = {
+      id: 'user-1',
+      email: 'user@example.com',
+      displayName: 'User One',
+      avatarUrl: '',
+      role: 'member',
+      customStatus: null,
+    }
+    const publicRegistration = {
+      device_id: 'recovered-device',
+      device_label: 'Recovered browser',
+      identity_key_public: 'public-identity',
+      signed_prekey_id: 1,
+      signed_prekey_public: 'public-prekey',
+      signed_prekey_signature: 'public-signature',
+    }
+    const install = vi.fn()
+    e2eeRecoveryMocks.hasLocalEncryptedDMDevice.mockReturnValue(true)
+    e2eeRecoveryMocks.localEncryptedDMDeviceId.mockReturnValue('temporary-device')
+    e2eeRecoveryMocks.exportEncryptedDMRecoveryPackage.mockResolvedValue('MSGE2E-R1.exported-package')
+    e2eeRecoveryMocks.prepareEncryptedDMRecoveryImport.mockResolvedValue({
+      deviceId: 'recovered-device',
+      registration: publicRegistration,
+      install,
+    })
+    const chatStore = useChatStore()
+    const reloadHistory = vi.spyOn(chatStore, 'reloadActiveEncryptedDMHistory').mockResolvedValue(undefined)
+
+    const wrapper = mountAtRoute(router)
+    await (wrapper.findComponent(MainView).vm as any).openSettings()
+    await flushUi()
+    ;(document.body.querySelector('[data-testid="profile-tab-security"]') as HTMLButtonElement).click()
+    await flushUi()
+
+    const exportPassphrase = document.body.querySelector('[data-testid="e2ee-recovery-export-passphrase"]') as HTMLInputElement
+    const exportConfirmation = document.body.querySelector('[data-testid="e2ee-recovery-export-passphrase-confirmation"]') as HTMLInputElement
+    exportPassphrase.value = 'recovery passphrase'
+    exportPassphrase.dispatchEvent(new Event('input'))
+    exportConfirmation.value = 'recovery passphrase'
+    exportConfirmation.dispatchEvent(new Event('input'))
+    await flushUi()
+    ;(document.body.querySelector('[data-testid="e2ee-recovery-create"]') as HTMLButtonElement).click()
+    await flushUi()
+
+    expect(e2eeRecoveryMocks.exportEncryptedDMRecoveryPackage).toHaveBeenCalledWith('recovery passphrase')
+    const exportedPackage = document.body.querySelector('[data-testid="e2ee-recovery-export-package"]') as HTMLTextAreaElement
+    expect(exportedPackage.value).toBe('MSGE2E-R1.exported-package')
+    expect(exportPassphrase.value).toBe('')
+    expect(exportConfirmation.value).toBe('')
+
+    clipboardMocks.writeText.mockRejectedValueOnce(new Error('clipboard unavailable'))
+    ;(document.body.querySelector('[data-testid="e2ee-recovery-copy"]') as HTMLButtonElement).click()
+    await flushUi()
+    expect(document.body.textContent).toContain('Clipboard access is unavailable')
+    expect(exportedPackage.value).toBe('MSGE2E-R1.exported-package')
+
+    const importPackage = document.body.querySelector('[data-testid="e2ee-recovery-import-package"]') as HTMLTextAreaElement
+    const importPassphrase = document.body.querySelector('[data-testid="e2ee-recovery-import-passphrase"]') as HTMLInputElement
+    importPackage.value = 'MSGE2E-R1.imported-package'
+    importPackage.dispatchEvent(new Event('input'))
+    importPassphrase.value = 'recovery passphrase'
+    importPassphrase.dispatchEvent(new Event('input'))
+    await flushUi()
+    ;(document.body.querySelector('[data-testid="e2ee-recovery-restore"]') as HTMLButtonElement).click()
+    await flushUi()
+
+    expect(e2eeRecoveryApiMocks.activateE2EERecoveryDevice).not.toHaveBeenCalled()
+    const replaceConfirmation = document.body.querySelector('[data-testid="e2ee-recovery-replace-confirmation"]') as HTMLInputElement
+    expect(replaceConfirmation).not.toBeNull()
+    replaceConfirmation.checked = true
+    replaceConfirmation.dispatchEvent(new Event('change'))
+    await flushUi()
+    ;(document.body.querySelector('[data-testid="e2ee-recovery-restore"]') as HTMLButtonElement).click()
+    await flushUi()
+
+    expect(e2eeRecoveryApiMocks.activateE2EERecoveryDevice).toHaveBeenCalledWith({
+      ...publicRegistration,
+      replace_device_id: 'temporary-device',
+    })
+    const activationPayload = e2eeRecoveryApiMocks.activateE2EERecoveryDevice.mock.calls[0][0]
+    expect(JSON.stringify(activationPayload)).not.toContain('privateKeyJwk')
+    expect(install).toHaveBeenCalledTimes(1)
+    expect(reloadHistory).toHaveBeenCalledTimes(1)
+    expect(importPackage.value).toBe('')
+    expect(importPassphrase.value).toBe('')
+    expect(document.body.textContent).toContain('Encrypted-DM recovery completed.')
 
     wrapper.unmount()
   })
@@ -984,6 +1128,26 @@ describe('MainView server unavailable state', () => {
     expect(wrapper.find('[data-testid="documents-mode"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="documents-sidebar"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="teamspaces-view"]').exists()).toBe(true)
+  })
+
+  it('restores the open document when returning from chat in the same session', async () => {
+    const router = createMainRouter()
+    router.push('/documents/document-123')
+    await router.isReady()
+
+    const wrapper = mountAtRoute(router)
+    await flushAsyncWork()
+
+    await (wrapper.findComponent(MainView).vm as any).goToChatMode()
+    await flushAsyncWork()
+    expect(router.currentRoute.value.name).toBe('main')
+
+    await (wrapper.findComponent(MainView).vm as any).goToDocumentsMode()
+    await flushAsyncWork()
+
+    expect(router.currentRoute.value.name).toBe('documents-card')
+    expect(router.currentRoute.value.params.documentId).toBe('document-123')
+    expect(wrapper.find('[data-testid="document-card"]').exists()).toBe(true)
   })
 
   it('opens documents mode with its sidebar when selected from collapsed chat', async () => {

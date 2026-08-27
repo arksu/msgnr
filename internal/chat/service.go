@@ -36,6 +36,7 @@ var (
 	ErrEncryptedMessagesUnsupported = errors.New("encrypted messages are not implemented")
 	ErrInvalidEncryptedPayload      = errors.New("invalid encrypted message payload")
 	ErrEncryptedMessageUnsupported  = errors.New("encrypted message action is not supported")
+	ErrE2EERecoveryDeviceOwnership  = errors.New("e2ee recovery device does not belong to user")
 )
 
 // Service handles messaging, reactions, and thread subscriptions.

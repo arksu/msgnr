@@ -4693,6 +4693,88 @@ describe('chatStore phase 6 flows', () => {
     expect(chat.conversationHasMoreHistory('dm-1')).toBe(false)
   })
 
+  it('reloads the active encrypted DM with a recovered local device and ignores the temporary-device request', async () => {
+    const chat = useChatStore()
+    chat.directMessages = [{
+      id: 'dm-1',
+      userId: 'user-2',
+      displayName: 'Bob',
+      avatarUrl: '',
+      presence: 'online',
+      encryptionMode: 'dm_pairwise_signal_v1',
+      unread: 0,
+      notificationLevel: NotificationLevel.ALL,
+    }]
+    chat.activeChannelId = 'dm-1'
+    chat.messages = {
+      'dm-1': [buildMessage({
+        id: 'temporary-placeholder',
+        channelId: 'dm-1',
+        body: 'Decrypting encrypted message...',
+        contentMode: 'dm_pairwise_signal_v1',
+      })],
+    }
+    localStorage.setItem('msgnr:e2ee:dm-device:v1', JSON.stringify({
+      deviceId: 'temporary-device',
+      publicKeyJwk: {},
+      privateKeyJwk: {},
+    }))
+
+    type EncryptedHistoryPage = {
+      messages: Array<Record<string, unknown>>
+      has_more: boolean
+      page_size: number
+      next_before_channel_seq: string
+    }
+    let resolveTemporaryHistory!: (page: EncryptedHistoryPage) => void
+    chatApiMocks.listConversationMessages
+      .mockReturnValueOnce(new Promise<EncryptedHistoryPage>(resolve => {
+        resolveTemporaryHistory = resolve
+      }))
+      .mockResolvedValueOnce({
+        messages: [],
+        has_more: false,
+        page_size: 50,
+        next_before_channel_seq: '',
+      })
+
+    const temporaryLoad = chat.ensureConversationHistory('dm-1')
+    await Promise.resolve()
+    expect(chatApiMocks.listConversationMessages).toHaveBeenLastCalledWith('dm-1', undefined, 'temporary-device')
+
+    localStorage.setItem('msgnr:e2ee:dm-device:v1', JSON.stringify({
+      deviceId: 'recovered-device',
+      publicKeyJwk: {},
+      privateKeyJwk: {},
+    }))
+    await chat.reloadActiveEncryptedDMHistory()
+
+    expect(chat.messages['dm-1']).toEqual([])
+    expect(chatApiMocks.listConversationMessages).toHaveBeenLastCalledWith('dm-1', undefined, 'recovered-device')
+
+    resolveTemporaryHistory({
+      messages: [{
+        id: 'temporary-message',
+        conversation_id: 'dm-1',
+        sender_id: 'user-2',
+        sender_name: 'Bob',
+        body: 'old temporary ciphertext',
+        channel_seq: '1',
+        thread_seq: '0',
+        thread_root_message_id: '',
+        mention_everyone: false,
+        created_at: '2026-08-27T00:00:00Z',
+        entities: [],
+      }],
+      has_more: false,
+      page_size: 1,
+      next_before_channel_seq: '',
+    })
+    await temporaryLoad
+
+    expect(chat.messages['dm-1']).toEqual([])
+  })
+
   it('does not apply an old-session history response after reset opens the same conversation', async () => {
     const chat = useChatStore()
     let resolveOldHistory!: (page: {

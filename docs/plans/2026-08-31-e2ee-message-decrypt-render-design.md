@@ -6,17 +6,19 @@ Opening an encrypted direct-message conversation can leave its messages showing
 `Decrypting encrypted message...` even after local decryption completes.
 Changing conversations and returning makes the decrypted bodies appear.
 
-The chat store deliberately updates the canonical message object in place after
-decryption. The virtual timeline derives its render list from item identities,
-so an in-place body update does not reliably invalidate the active slot render.
+The chat store starts decryption with a plain message object before that object
+is inserted into Pinia's reactive conversation or thread collection. The async
+completion updates that original non-reactive object, so Vue does not observe
+the body change. A later remount reads the changed object and makes the text
+appear.
 
 ## Decision
 
-Keep decryption and message ownership in the chat store unchanged. Give the
-virtual timeline a lightweight, render-relevant revision input derived from the
-visible messages' bodies. A decrypt completion advances that input, causing the
-active timeline to render the updated message and allowing its existing
-`ResizeObserver` to recalculate the row height.
+Keep the encryption protocol and message ownership unchanged. When decryption
+finishes, resolve the message by ID from the canonical reactive conversation or
+thread collection, then update that object's body only while it still contains
+the decrypting placeholder. Vue and the existing timeline then receive the
+normal reactive update and recalculate the row height if necessary.
 
 This applies identically to encrypted messages received through history and to
 messages received through the live WebSocket event path. It does not copy
@@ -24,8 +26,8 @@ plaintext into caches, queues, or any server-facing path.
 
 ## Alternatives considered
 
-- Replace each decrypted message object in the store. This would invalidate the
-  timeline but adds unnecessary array/map churn and risks unrelated cache work.
+- Pass a reactive proxy into the decrypt helper immediately after insertion.
+  This also works but makes call-site ordering easier to get wrong.
 - Force-remount or refresh the whole timeline after every decrypt. This is
   broader and unnecessarily costly for long conversations.
 

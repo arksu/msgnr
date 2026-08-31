@@ -3911,7 +3911,11 @@ export const useChatStore = defineStore('chat', () => {
       const rootId = evt.threadRootMessageId
       const alreadyPresentInThread = (threadMessages.value[rootId] ?? []).some(item => item.id === evt.messageId)
       _upsertThreadMessage(rootId, msg)
-      decryptAndApplyMessage(msg, evt.encryptedDmPayload?.recipients)
+      decryptAndApplyMessage(
+        msg,
+        evt.encryptedDmPayload?.recipients,
+        () => threadMessages.value[rootId]?.find(item => item.id === msg.id),
+      )
       const known = threadSummaries.value[rootId]
       const nextLastThreadSeq = known?.lastThreadSeq && known.lastThreadSeq > evt.threadSeq
         ? known.lastThreadSeq
@@ -3944,7 +3948,11 @@ export const useChatStore = defineStore('chat', () => {
     if (alreadyPresent) return
 
     messages.value[channelId].push(msg)
-    decryptAndApplyMessage(msg, evt.encryptedDmPayload?.recipients)
+    decryptAndApplyMessage(
+      msg,
+      evt.encryptedDmPayload?.recipients,
+      () => messages.value[channelId]?.find(item => item.id === msg.id),
+    )
     scheduleMessageCache(channelId, messages.value[channelId])
     const channel = channels.value.find(item => item.id === channelId)
     if (channel) channel.lastMessageSeq = evt.channelSeq
@@ -4245,15 +4253,19 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function decryptAndApplyMessage(message: Message, payloads: Parameters<typeof decryptDMMessage>[0]) {
+  function decryptAndApplyMessage(
+    message: Message,
+    payloads: Parameters<typeof decryptDMMessage>[0],
+    findCanonicalMessage: () => Message | undefined,
+  ) {
     if (message.contentMode !== 'dm_pairwise_signal_v1') return
     void decryptDMMessage(payloads).then(body => {
       if (body === null) return
-      // Callers pass the same object they just inserted into the canonical
-      // conversation or thread array. Updating it directly avoids a full scan
-      // of every resident message for each decrypt completion.
-      if (message.body === 'Decrypting encrypted message...') {
-        message.body = body
+      // `message` is initially a plain object. Resolve its reactive store
+      // counterpart at completion so Vue updates the currently rendered row.
+      const canonicalMessage = findCanonicalMessage()
+      if (canonicalMessage?.body === 'Decrypting encrypted message...') {
+        canonicalMessage.body = body
       }
     }).catch(() => {})
   }
@@ -4312,7 +4324,11 @@ export const useChatStore = defineStore('chat', () => {
         encryptedDMPayloads: item.encrypted_dm_payloads,
       }
       byId.set(item.id, nextMessage)
-      decryptAndApplyMessage(nextMessage, item.encrypted_dm_payloads)
+      decryptAndApplyMessage(
+        nextMessage,
+        item.encrypted_dm_payloads,
+        () => messages.value[conversationId]?.find(message => message.id === nextMessage.id),
+      )
 
       const threadReplyCount = Math.max(0, Math.floor(Number(item.thread_reply_count ?? 0)))
       const known = threadSummaries.value[item.id]

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { create } from '@bufbuild/protobuf'
+import { nextTick, watch } from 'vue'
 import { useChatStore, type Message } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
 import { useAuthStore } from '@/stores/auth'
@@ -40,6 +41,7 @@ import {
   NotificationType,
   NotificationLevel,
   ConversationEncryptionMode,
+  MessageContentMode,
   ReactionAggregateSchema,
 } from '@/shared/proto/packets_pb'
 
@@ -59,6 +61,10 @@ const chatApiMocks = vi.hoisted(() => ({
 
 const avatarCacheMocks = vi.hoisted(() => ({
   invalidateUserAvatar: vi.fn(),
+}))
+
+const e2eeMocks = vi.hoisted(() => ({
+  decryptDMMessage: vi.fn(),
 }))
 
 const offlineQueueMocks = vi.hoisted(() => ({
@@ -90,6 +96,14 @@ vi.mock('@/services/http/chatApi', () => ({
 vi.mock('@/services/avatar/avatarCache', () => ({
   invalidateUserAvatar: avatarCacheMocks.invalidateUserAvatar,
 }))
+
+vi.mock('@/services/e2ee/dmE2ee', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/e2ee/dmE2ee')>()
+  return {
+    ...actual,
+    decryptDMMessage: e2eeMocks.decryptDMMessage,
+  }
+})
 
 vi.mock('@/composables/useOfflineQueue', () => ({
   useOfflineQueue: () => offlineQueueMocks,
@@ -170,6 +184,7 @@ describe('chatStore phase 6 flows', () => {
     chatApiMocks.getMessageContext.mockReset()
     chatApiMocks.resolveUnreadFeedNotification.mockReset()
     avatarCacheMocks.invalidateUserAvatar.mockReset()
+    e2eeMocks.decryptDMMessage.mockReset()
     offlineQueueMocks.enqueue.mockReset()
     offlineQueueMocks.claimInFlight.mockReset()
     offlineQueueMocks.releaseInFlight.mockReset()
@@ -191,6 +206,7 @@ describe('chatStore phase 6 flows', () => {
     chatApiMocks.unsaveMessage.mockResolvedValue(undefined)
     chatApiMocks.getMessageContext.mockResolvedValue({ messages: [], has_more: false, page_size: 0 })
     chatApiMocks.resolveUnreadFeedNotification.mockResolvedValue(undefined)
+    e2eeMocks.decryptDMMessage.mockResolvedValue(null)
   })
 
   it('applies a bootstrap response into sidebar state and watermark', () => {
@@ -4773,6 +4789,87 @@ describe('chatStore phase 6 flows', () => {
     await temporaryLoad
 
     expect(chat.messages['dm-1']).toEqual([])
+  })
+
+  it('reactively applies decrypted encrypted-DM history without reopening the conversation', async () => {
+    const chat = useChatStore()
+    const observedBodies: string[] = []
+    const stopWatchingBody = watch(
+      () => chat.messages['dm-1']?.[0]?.body,
+      body => {
+        if (body) observedBodies.push(body)
+      },
+    )
+    e2eeMocks.decryptDMMessage.mockResolvedValue('decrypted history message')
+    chatApiMocks.listConversationMessages.mockResolvedValue({
+      messages: [{
+        id: 'encrypted-history-message',
+        conversation_id: 'dm-1',
+        sender_id: 'user-2',
+        sender_name: 'Bob',
+        body: 'opaque ciphertext',
+        channel_seq: '1',
+        thread_seq: '0',
+        thread_root_message_id: '',
+        mention_everyone: false,
+        created_at: '2026-08-31T00:00:00Z',
+        entities: [],
+        content_mode: 'dm_pairwise_signal_v1',
+        encrypted_dm_payloads: [],
+      }],
+      has_more: false,
+      page_size: 1,
+    })
+
+    await chat.ensureConversationHistory('dm-1')
+    await nextTick()
+
+    expect(chat.messages['dm-1'][0].body).toBe('decrypted history message')
+    expect(observedBodies).toContain('decrypted history message')
+    stopWatchingBody()
+  })
+
+  it('reactively applies a decrypted live encrypted-DM message without reopening the conversation', async () => {
+    const chat = useChatStore()
+    const ws = useWsStore()
+    const observedBodies: string[] = []
+    chat.bootstrapped = true
+    ws.state = 'LIVE_SYNCED'
+    e2eeMocks.decryptDMMessage.mockResolvedValue('decrypted live message')
+    const stopWatchingBody = watch(
+      () => chat.messages['dm-1']?.[0]?.body,
+      body => {
+        if (body) observedBodies.push(body)
+      },
+    )
+
+    chat.handleServerEvent(create(ServerEventSchema, {
+      eventSeq: 1n,
+      eventId: 'encrypted-live-message',
+      eventType: EventType.MESSAGE_CREATED,
+      conversationId: 'dm-1',
+      payload: {
+        case: 'messageCreated',
+        value: create(MessageEventSchema, {
+          conversationId: 'dm-1',
+          messageId: 'encrypted-live-message',
+          senderId: 'user-2',
+          body: 'opaque ciphertext',
+          channelSeq: 1n,
+          threadRootMessageId: '',
+          threadSeq: 0n,
+          mentionedUserIds: [],
+          mentionEveryone: false,
+          contentMode: MessageContentMode.DM_PAIRWISE_SIGNAL_V1,
+        }),
+      },
+    }))
+    await Promise.resolve()
+    await nextTick()
+
+    expect(chat.messages['dm-1'][0].body).toBe('decrypted live message')
+    expect(observedBodies).toContain('decrypted live message')
+    stopWatchingBody()
   })
 
   it('does not apply an old-session history response after reset opens the same conversation', async () => {

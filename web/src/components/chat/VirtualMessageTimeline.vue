@@ -54,19 +54,17 @@ const props = withDefaults(
     estimatedRowHeight?: number
     overscan?: number
     rowGap?: number
+    bottomStickThreshold?: number
     keepRenderedIds?: Array<string | number>
   }>(),
   {
     estimatedRowHeight: 96,
     overscan: 720,
     rowGap: 0,
+    bottomStickThreshold: 72,
     keepRenderedIds: () => [],
   },
 )
-
-const emit = defineEmits<{
-  contentResize: []
-}>()
 
 const VIRTUALIZE_AFTER = 80
 const FALLBACK_VIEWPORT_HEIGHT = 800
@@ -80,10 +78,19 @@ const beforeHeight = ref(0)
 const measurementVersion = ref(0)
 const rowHeights = new Map<string, number>()
 const rowElements = new Map<string, HTMLElement>()
+const rowIds = new WeakMap<HTMLElement, string>()
 
 let rowResizeObserver: ResizeObserver | null = null
 let staticResizeObserver: ResizeObserver | null = null
 let observedScrollContainer: HTMLElement | null = null
+let pendingLayoutAnchor: TimelineScrollAnchor | null = null
+let layoutCorrectionQueued = false
+let disposed = false
+
+type TimelineScrollAnchor =
+  | { kind: 'bottom' }
+  | { kind: 'entry'; messageId: string; offsetFromEntryTop: number }
+  | { kind: 'static'; scrollTop: number }
 
 function itemId(item: T): string {
   return String(item.id)
@@ -119,13 +126,12 @@ function updateViewport() {
   viewportHeight.value = container.clientHeight || FALLBACK_VIEWPORT_HEIGHT
 }
 
-function syncStaticHeight() {
+function syncStaticHeight(): boolean {
   const nextHeight = beforeEl.value?.offsetHeight ?? 0
-  if (nextHeight === beforeHeight.value) return
+  if (nextHeight === beforeHeight.value) return false
 
   beforeHeight.value = nextHeight
-  updateViewport()
-  emit('contentResize')
+  return true
 }
 
 function findEntryAtOffset(offset: number): VirtualTimelineEntry<T> | undefined {
@@ -176,56 +182,119 @@ const renderedEntries = computed(() => {
 })
 
 function setRowElement(id: string, element: Element | ComponentPublicInstance | null) {
+  const next = element instanceof HTMLElement ? element : null
   const previous = rowElements.get(id)
+  if (previous === next) return
+
   if (previous) {
     rowResizeObserver?.unobserve(previous)
     rowElements.delete(id)
+    rowIds.delete(previous)
   }
 
-  if (!(element instanceof HTMLElement)) return
-  rowElements.set(id, element)
-  rowResizeObserver?.observe(element)
+  if (!next) return
+  rowElements.set(id, next)
+  rowIds.set(next, id)
+  rowResizeObserver?.observe(next)
 }
 
 function handleRowResize(entries: ResizeObserverEntry[]) {
   let changed = false
-  let scrollAdjustment = 0
-  const currentLayout = layout.value
-  const visibleTop = viewportTop.value - beforeHeight.value
+  let anchor: TimelineScrollAnchor | null = null
 
   for (const entry of entries) {
     const row = entry.target as HTMLElement
-    let rowId: string | undefined
-    // A ResizeObserver entry has no user data. The map is bounded by rendered rows,
-    // so resolving its id here is cheap and avoids DOM attributes leaking into slots.
-    for (const [candidateId, candidateRow] of rowElements) {
-      if (candidateRow === row) {
-        rowId = candidateId
-        break
-      }
-    }
+    const rowId = rowIds.get(row)
     if (!rowId) continue
 
     const nextHeight = Math.max(1, Math.ceil(entry.contentRect.height))
     const previousHeight = rowHeights.get(rowId) ?? props.estimatedRowHeight
     if (nextHeight === previousHeight) continue
 
-    const layoutEntry = currentLayout.entryById.get(rowId)
-    if (layoutEntry && layoutEntry.start < visibleTop) {
-      scrollAdjustment += nextHeight - previousHeight
-    }
+    anchor ??= captureTimelineAnchor()
     rowHeights.set(rowId, nextHeight)
     changed = true
   }
 
   if (!changed) return
 
-  if (scrollAdjustment !== 0 && props.scrollContainer) {
-    props.scrollContainer.scrollTop += scrollAdjustment
-  }
   measurementVersion.value += 1
+  queueLayoutCorrection(anchor)
+}
+
+function isNearBottom(container: HTMLElement): boolean {
+  return container.scrollHeight - (container.scrollTop + container.clientHeight) <= props.bottomStickThreshold
+}
+
+function captureTimelineAnchor(): TimelineScrollAnchor | null {
+  const container = props.scrollContainer
+  if (!container) return null
+  if (isNearBottom(container)) return { kind: 'bottom' }
+
+  const timelineTop = container.scrollTop - beforeHeight.value
+  if (timelineTop < 0) return { kind: 'static', scrollTop: container.scrollTop }
+
+  const entry = findEntryAtOffset(timelineTop)
+  if (!entry) return { kind: 'static', scrollTop: container.scrollTop }
+  return {
+    kind: 'entry',
+    messageId: entry.id,
+    offsetFromEntryTop: timelineTop - entry.start,
+  }
+}
+
+function restoreTimelineAnchor(anchor: TimelineScrollAnchor) {
+  const container = props.scrollContainer
+  if (!container) return
+
+  if (anchor.kind === 'bottom') {
+    container.scrollTop = container.scrollHeight
+  } else if (anchor.kind === 'entry') {
+    const entry = layout.value.entryById.get(anchor.messageId)
+    if (!entry) return
+    container.scrollTop = Math.max(0, beforeHeight.value + entry.start + anchor.offsetFromEntryTop)
+  } else {
+    container.scrollTop = Math.max(0, anchor.scrollTop)
+  }
   updateViewport()
-  emit('contentResize')
+}
+
+function queueLayoutCorrection(anchor: TimelineScrollAnchor | null) {
+  if (!anchor) return
+  if (!pendingLayoutAnchor) pendingLayoutAnchor = anchor
+  if (layoutCorrectionQueued) return
+
+  layoutCorrectionQueued = true
+  void nextTick().then(() => {
+    layoutCorrectionQueued = false
+    const pending = pendingLayoutAnchor
+    pendingLayoutAnchor = null
+    if (!pending || disposed) return
+    restoreTimelineAnchor(pending)
+  })
+}
+
+function handleStaticResize(entries: ResizeObserverEntry[]) {
+  let contentChanged = false
+  let anchor: TimelineScrollAnchor | null = null
+
+  for (const entry of entries) {
+    if (entry.target === observedScrollContainer) {
+      updateViewport()
+      continue
+    }
+    if (entry.target !== beforeEl.value && entry.target !== afterEl.value) continue
+
+    anchor ??= captureTimelineAnchor()
+    if (entry.target === beforeEl.value) {
+      const nextHeight = Math.max(0, Math.ceil(entry.contentRect.height))
+      if (nextHeight === beforeHeight.value) continue
+      beforeHeight.value = nextHeight
+    }
+    contentChanged = true
+  }
+
+  if (contentChanged) queueLayoutCorrection(anchor)
 }
 
 function attachScrollContainer(container: HTMLElement | null) {
@@ -296,7 +365,8 @@ watch(
   async () => {
     removeMissingMeasurements()
     await nextTick()
-    syncStaticHeight()
+    const anchor = captureTimelineAnchor()
+    if (syncStaticHeight()) queueLayoutCorrection(anchor)
     updateViewport()
   },
 )
@@ -304,20 +374,22 @@ watch(
 onMounted(() => {
   if (typeof ResizeObserver !== 'undefined') {
     rowResizeObserver = new ResizeObserver(handleRowResize)
-    staticResizeObserver = new ResizeObserver(() => {
-      syncStaticHeight()
-      updateViewport()
-    })
+    staticResizeObserver = new ResizeObserver(handleStaticResize)
     if (beforeEl.value) staticResizeObserver.observe(beforeEl.value)
     if (afterEl.value) staticResizeObserver.observe(afterEl.value)
     if (props.scrollContainer) staticResizeObserver.observe(props.scrollContainer)
     for (const row of rowElements.values()) rowResizeObserver.observe(row)
   }
   attachScrollContainer(props.scrollContainer)
-  void nextTick().then(syncStaticHeight)
+  void nextTick().then(() => {
+    const anchor = captureTimelineAnchor()
+    if (syncStaticHeight()) queueLayoutCorrection(anchor)
+  })
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  pendingLayoutAnchor = null
   if (observedScrollContainer) {
     observedScrollContainer.removeEventListener('scroll', updateViewport)
   }

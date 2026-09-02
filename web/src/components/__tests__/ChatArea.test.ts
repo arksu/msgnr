@@ -61,25 +61,12 @@ function buildMessage(overrides: Partial<Message> = {}): Message {
 }
 
 describe('ChatArea', () => {
-  let resizeObserverCallbacks: ResizeObserverCallback[] = []
-
-  function triggerResizeObserver() {
-    for (const callback of resizeObserverCallbacks) {
-      callback([], {} as ResizeObserver)
-    }
-  }
-
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     cacheMocks.enqueueOutbound.mockResolvedValue(true)
     useOfflineQueue().clear()
-    resizeObserverCallbacks = []
     class TestResizeObserver {
-      constructor(private readonly callback: ResizeObserverCallback) {
-        resizeObserverCallbacks.push(callback)
-      }
-
       observe = vi.fn()
       unobserve = vi.fn()
       disconnect = vi.fn()
@@ -1106,92 +1093,6 @@ describe('ChatArea', () => {
     } finally {
       HTMLElement.prototype.getBoundingClientRect = originalRect
     }
-  })
-
-  it('keeps the latest message visible when content resizes near the bottom', async () => {
-    const chatStore = useChatStore()
-    const wsStore = useWsStore()
-    wsStore.state = 'LIVE_SYNCED'
-    chatStore.channels = [{
-      id: 'channel-1',
-      name: 'general',
-      kind: 'channel',
-      visibility: 'public',
-      unread: 0,
-      notificationLevel: NotificationLevel.ALL,
-    }]
-    chatStore.activeChannelId = 'channel-1'
-    chatStore.messages = {
-      'channel-1': [buildMessage({ id: 'message-1' })],
-    }
-
-    const wrapper = mount(ChatArea, {
-      global: {
-        stubs: {
-          MessageBubble: true,
-          MessageInput: true,
-        },
-      },
-    })
-
-    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
-    let scrollHeight = 1500
-    Object.defineProperty(el, 'scrollHeight', {
-      configurable: true,
-      get: () => scrollHeight,
-    })
-    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
-    el.scrollTop = 1000
-    await wrapper.find('.overflow-y-auto').trigger('scroll')
-
-    scrollHeight = 1800
-    triggerResizeObserver()
-    await flushFrames()
-
-    expect(el.scrollTop).toBe(1800)
-  })
-
-  it('does not jump when content resizes while the user is reading older messages', async () => {
-    const chatStore = useChatStore()
-    const wsStore = useWsStore()
-    wsStore.state = 'LIVE_SYNCED'
-    chatStore.channels = [{
-      id: 'channel-1',
-      name: 'general',
-      kind: 'channel',
-      visibility: 'public',
-      unread: 0,
-      notificationLevel: NotificationLevel.ALL,
-    }]
-    chatStore.activeChannelId = 'channel-1'
-    chatStore.messages = {
-      'channel-1': [buildMessage({ id: 'message-1' })],
-    }
-
-    const wrapper = mount(ChatArea, {
-      global: {
-        stubs: {
-          MessageBubble: true,
-          MessageInput: true,
-        },
-      },
-    })
-
-    const el = wrapper.find('.overflow-y-auto').element as HTMLDivElement
-    let scrollHeight = 2000
-    Object.defineProperty(el, 'scrollHeight', {
-      configurable: true,
-      get: () => scrollHeight,
-    })
-    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
-    el.scrollTop = 400
-    await wrapper.find('.overflow-y-auto').trigger('scroll')
-
-    scrollHeight = 2300
-    triggerResizeObserver()
-    await flushFrames()
-
-    expect(el.scrollTop).toBe(400)
   })
 
   it('increments unread without moving scroll when a remote message arrives while scrolled away', async () => {

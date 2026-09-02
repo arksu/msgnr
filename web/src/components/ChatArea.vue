@@ -155,7 +155,6 @@
           :items="messages"
           :scroll-container="scrollEl"
           :keep-rendered-ids="timelinePinnedMessageIds"
-          @content-resize="handleContentResize"
         >
           <template #default="{ item: msg, index: idx }">
             <div
@@ -388,13 +387,9 @@ const inlineEditRequest = ref({ messageId: '', token: 0 })
 const pendingSwitchAutoScrollConversationId = ref('')
 let scheduledBottomStickFrame: number | null = null
 let scheduledBottomStickToken = 0
-let lastResizeAnchor: ScrollAnchor | null = null
-let lastResizeWasNearBottom = true
-let lastResizeAnchorUpdateAtMs = 0
 const TOP_PRELOAD_THRESHOLD_PX = 120
 const TOP_PRELOAD_REARM_GAP_PX = 72
 const BOTTOM_STICK_THRESHOLD_PX = 72
-const SCROLL_ANCHOR_CAPTURE_INTERVAL_MS = 100
 const DEBUG_CHAT_COMPOSER_SCROLL = import.meta.env.DEV
 const topPreloadArmed = ref(true)
 const isAtBottom = ref(true)
@@ -413,7 +408,7 @@ interface ScrollMetrics {
   distanceFromBottom: number
 }
 
-type BottomStickReason = 'conversation-open' | 'send' | 'composer-resize' | 'inline-edit' | 'content-resize'
+type BottomStickReason = 'conversation-open' | 'send' | 'composer-resize' | 'inline-edit'
 
 const conversation = computed(() => chatStore.activeConversation)
 const isEncryptedDMConversation = computed(() =>
@@ -1154,9 +1149,6 @@ function scrollToBottom() {
   const el = scrollEl.value
   if (!el) return
   el.scrollTop = el.scrollHeight
-  lastResizeWasNearBottom = true
-  lastResizeAnchor = null
-  lastResizeAnchorUpdateAtMs = performance.now()
 }
 
 function isLastTimelineMessage(messageId: string): boolean {
@@ -1263,8 +1255,6 @@ async function preloadOlderHistory() {
     if (!current) return
     if (!restoreAnchorPosition(current, anchor)) {
       current.scrollTop = previousTop + (current.scrollHeight - previousHeight)
-      lastResizeAnchor = captureTopVisibleAnchor(current)
-      lastResizeWasNearBottom = isNearBottom()
     }
   } finally {
     loadingOlderHistory.value = false
@@ -1280,8 +1270,6 @@ function handleScroll() {
   const el = scrollEl.value
   if (!el) return
   const nearBottom = isNearBottom()
-  lastResizeWasNearBottom = nearBottom
-  maybeCaptureResizeAnchor(el, nearBottom)
   composerBottomStickArmed.value = nearBottom
   isAtBottom.value = nearBottom
   if (nearBottom) {
@@ -1327,18 +1315,6 @@ function messageIdSelector(messageId: string): string {
   return `[data-message-id="${escaped}"]`
 }
 
-function maybeCaptureResizeAnchor(container: HTMLElement, nearBottom: boolean) {
-  if (nearBottom) {
-    lastResizeAnchor = null
-    lastResizeAnchorUpdateAtMs = performance.now()
-    return
-  }
-  const now = performance.now()
-  if (now - lastResizeAnchorUpdateAtMs < SCROLL_ANCHOR_CAPTURE_INTERVAL_MS) return
-  lastResizeAnchor = captureTopVisibleAnchor(container)
-  lastResizeAnchorUpdateAtMs = now
-}
-
 function restoreAnchorPosition(container: HTMLElement, anchor: ScrollAnchor | null): boolean {
   if (!anchor) return false
   const target = container.querySelector<HTMLElement>(messageIdSelector(anchor.messageId))
@@ -1348,14 +1324,10 @@ function restoreAnchorPosition(container: HTMLElement, anchor: ScrollAnchor | nu
     const delta = (targetRect.top - containerRect.top) - anchor.offsetFromViewportTop
     if (Math.abs(delta) < 0.5) return true
     container.scrollTop += delta
-    lastResizeAnchor = captureTopVisibleAnchor(container)
-    lastResizeWasNearBottom = isNearBottom()
     return true
   }
 
   if (!messageTimeline.value?.restoreAnchor(anchor.messageId, anchor.offsetFromViewportTop)) return false
-  lastResizeAnchor = anchor
-  lastResizeWasNearBottom = isNearBottom()
   return true
 }
 
@@ -1367,8 +1339,6 @@ async function scrollMessageIntoView(messageId: string) {
     cancelScheduledBottomStick()
     clearForceBottomFlag()
     clearPendingConversationOpenScroll('focused-message')
-    lastResizeAnchor = captureTopVisibleAnchor(container)
-    lastResizeWasNearBottom = isNearBottom()
     return
   }
   const target = container.querySelector<HTMLElement>(messageIdSelector(messageId))
@@ -1377,22 +1347,6 @@ async function scrollMessageIntoView(messageId: string) {
   clearForceBottomFlag()
   clearPendingConversationOpenScroll('focused-message')
   target.scrollIntoView({ block: 'center' })
-  lastResizeAnchor = captureTopVisibleAnchor(container)
-  lastResizeWasNearBottom = isNearBottom()
-}
-
-function handleContentResize() {
-  const container = scrollEl.value
-  if (!container || loadingOlderHistory.value) return
-  if (forceScrollToBottomOnNextRender.value || lastResizeWasNearBottom) {
-    scheduleStableBottomStick('content-resize', {
-      persistForce: forceScrollToBottomOnNextRender.value,
-    })
-    return
-  }
-  if (lastResizeAnchor) {
-    restoreAnchorPosition(container, lastResizeAnchor)
-  }
 }
 
 watch(() => {

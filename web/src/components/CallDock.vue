@@ -193,6 +193,15 @@
               <div class="absolute left-3 bottom-12 z-10 rounded-md border border-slate-500/70 bg-black/60 px-2 py-1 text-[11px] text-white">
                 {{ pinnedTileName }}
               </div>
+              <div
+                v-if="pinnedTile?.raisedHandPosition"
+                class="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-md border border-amber-300/60 bg-amber-400/90 px-2 py-1 text-[11px] font-semibold text-slate-950"
+                :aria-label="`Raised hand position ${pinnedTile.raisedHandPosition}`"
+                :data-testid="`calldock-pinned-hand-${pinnedTile.raisedHandPosition}`"
+              >
+                <span aria-hidden="true">✋</span>
+                <span>{{ pinnedTile.raisedHandPosition }}</span>
+              </div>
               <!-- Unpin button -->
               <button
                 class="absolute top-3 right-3 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
@@ -252,9 +261,19 @@
                     <!-- "Sharing screen" badge -->
                     <div
                       v-if="localTile?.screenShareOn"
-                      class="absolute left-2 top-2 z-10 rounded border border-emerald-400/50 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-200"
+                      class="absolute left-2 z-10 rounded border border-emerald-400/50 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-200"
+                      :class="localTile?.raisedHandPosition ? 'top-8' : 'top-2'"
                     >
                       Sharing screen
+                    </div>
+                    <div
+                      v-if="localTile?.raisedHandPosition"
+                      class="absolute left-2 top-2 z-10 flex items-center gap-1 rounded border border-amber-300/60 bg-amber-400/90 px-1.5 py-0.5 text-[10px] font-semibold text-slate-950"
+                      :aria-label="`Raised hand position ${localTile.raisedHandPosition}`"
+                      :data-testid="`calldock-local-hand-${localTile.raisedHandPosition}`"
+                    >
+                      <span aria-hidden="true">✋</span>
+                      <span>{{ localTile.raisedHandPosition }}</span>
                     </div>
                     <!-- Name + mic overlay -->
                     <div class="absolute bottom-0 inset-x-0 z-10 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5">
@@ -338,10 +357,20 @@
                     </div>
                     <div
                       v-if="tile.screenShareOn"
-                      class="absolute left-2 top-2 z-10 rounded border border-emerald-400/50 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-200"
+                      class="absolute left-2 z-10 rounded border border-emerald-400/50 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-200"
+                      :class="tile.raisedHandPosition ? 'top-8' : 'top-2'"
                       :data-testid="`calldock-remote-share-badge-${tile.sid}`"
                     >
                       {{ callStore.remoteScreenShareReceiveEnabled ? 'Sharing screen' : 'Screen share paused' }}
+                    </div>
+                    <div
+                      v-if="tile.raisedHandPosition"
+                      class="absolute left-2 top-2 z-10 flex items-center gap-1 rounded border border-amber-300/60 bg-amber-400/90 px-1.5 py-0.5 text-[10px] font-semibold text-slate-950"
+                      :aria-label="`Raised hand position ${tile.raisedHandPosition}`"
+                      :data-testid="`calldock-remote-hand-${tile.sid}-${tile.raisedHandPosition}`"
+                    >
+                      <span aria-hidden="true">✋</span>
+                      <span>{{ tile.raisedHandPosition }}</span>
                     </div>
                     <div
                       v-if="tile.screenShareOn"
@@ -472,6 +501,22 @@
               </button>
             </div>
           </div>
+
+          <!-- Raise / lower hand -->
+          <button
+            class="flex h-10 w-10 items-center justify-center rounded-xl border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            :class="callStore.localHandRaised
+              ? 'border-amber-300/70 bg-amber-400/90 text-slate-950 hover:bg-amber-300'
+              : 'border-chat-border bg-chat-input text-app-text hover:bg-chat-msgHover'"
+            :title="callStore.localHandRaised ? 'Lower hand' : 'Raise hand'"
+            :aria-label="callStore.localHandRaised ? 'Lower hand' : 'Raise hand'"
+            :aria-pressed="callStore.localHandRaised"
+            :disabled="callStore.handActionInFlight || !callStore.connected"
+            data-testid="calldock-raise-hand"
+            @click="handleToggleHandRaised"
+          >
+            <span class="text-lg leading-none" aria-hidden="true">✋</span>
+          </button>
 
           <!-- Camera -->
           <button
@@ -713,6 +758,7 @@ interface ParticipantTile {
   screenShareOn: boolean
   micOn: boolean
   isSpeaking: boolean
+  raisedHandPosition?: number
 }
 
 interface InviteCandidate {
@@ -1146,6 +1192,7 @@ const participantTiles = computed<ParticipantTile[]>(() => {
 
   const currentRoom = callStore.room
   const speakerSids = callStore.activeSpeakerSids
+  const raisedHandPositions = new Map(callStore.raisedHands.map(hand => [hand.userId, hand.position]))
 
   const localName = (currentRoom?.localParticipant.name ?? '').trim()
     || authStore.user?.displayName?.trim()
@@ -1170,6 +1217,7 @@ const participantTiles = computed<ParticipantTile[]>(() => {
     screenShareOn: callStore.screenShareEnabled && Boolean(localScreenPub?.track) && !localScreenPub?.isMuted,
     micOn: callStore.micEnabled && Boolean(localMicPub?.track) && !localMicPub?.isMuted,
     isSpeaking: Boolean(localParticipant && speakerSids.has(localParticipant.sid)),
+    raisedHandPosition: raisedHandPositions.get(localParticipant?.identity ?? ''),
   })
 
   if (!currentRoom) return tiles
@@ -1191,6 +1239,7 @@ const participantTiles = computed<ParticipantTile[]>(() => {
       screenShareOn: participant.sid === remoteScreenTileSid.value,
       micOn: Boolean(micPub?.isSubscribed && micPub?.track && !micPub?.isMuted),
       isSpeaking: speakerSids.has(participant.sid),
+      raisedHandPosition: raisedHandPositions.get(participant.identity),
     })
   }
 
@@ -2480,6 +2529,10 @@ async function sendCallInvites() {
 
 async function handleToggleMute() {
   try { await callStore.toggleMute() } catch { /* best effort */ }
+}
+
+async function handleToggleHandRaised() {
+  try { await callStore.toggleHandRaised() } catch { /* server state remains authoritative */ }
 }
 
 async function handleToggleCamera() {

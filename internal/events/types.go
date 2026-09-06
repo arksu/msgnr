@@ -48,6 +48,7 @@ var eventTypeToProto = map[string]packetspb.EventType{
 	"reaction_updated":           packetspb.EventType_EVENT_TYPE_REACTION_UPDATED,
 	"user_identity_updated":      packetspb.EventType_EVENT_TYPE_USER_IDENTITY_UPDATED,
 	"task_status_changed":        packetspb.EventType_EVENT_TYPE_TASK_STATUS_CHANGED,
+	"call_raised_hands_changed":  packetspb.EventType_EVENT_TYPE_CALL_RAISED_HANDS_CHANGED,
 }
 
 // protoToEventType is the reverse of eventTypeToProto.
@@ -138,6 +139,10 @@ func ValidateEventTypePayload(dbText string, evt *packetspb.ServerEvent) error {
 	case packetspb.EventType_EVENT_TYPE_CALL_STATE_CHANGED:
 		if evt.GetCallStateChanged() == nil {
 			return fmt.Errorf("event_type %q requires call_state_changed payload", dbText)
+		}
+	case packetspb.EventType_EVENT_TYPE_CALL_RAISED_HANDS_CHANGED:
+		if evt.GetCallRaisedHandsChanged() == nil {
+			return fmt.Errorf("event_type %q requires call_raised_hands_changed payload", dbText)
 		}
 	case packetspb.EventType_EVENT_TYPE_USER_CALL_PRESENCE_CHANGED:
 		if evt.GetUserCallPresenceChanged() == nil {

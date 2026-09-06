@@ -533,6 +533,14 @@ func TestIntegration_Bootstrap_ActiveCallsIncludeParticipantOnlyUser(t *testing.
 	callID := seedBootstrapActiveCall(t, ctx, pool, dmID, ownerID)
 	seedBootstrapCallParticipant(t, ctx, pool, callID, ownerID)
 	seedBootstrapCallParticipant(t, ctx, pool, callID, outsiderID)
+	_, err := pool.Exec(ctx, `
+		UPDATE call_participants
+		   SET hand_raised_sequence = CASE user_id
+		     WHEN $2 THEN 1
+		     WHEN $3 THEN 2
+		   END
+		 WHERE call_id = $1`, callID, ownerID, outsiderID)
+	require.NoError(t, err)
 
 	principal := auth.Principal{UserID: outsiderID, SessionID: uuid.New(), Role: "member"}
 	resp, err := bootstrapSvc.Bootstrap(ctx, principal, &packetspb.BootstrapRequest{
@@ -545,4 +553,9 @@ func TestIntegration_Bootstrap_ActiveCallsIncludeParticipantOnlyUser(t *testing.
 	assert.Equal(t, callID.String(), resp.GetActiveCalls()[0].GetCallId())
 	assert.Equal(t, dmID.String(), resp.GetActiveCalls()[0].GetConversationId())
 	assert.Equal(t, int32(2), resp.GetActiveCalls()[0].GetParticipantCount())
+	require.Len(t, resp.GetActiveCalls()[0].GetRaisedHands(), 2)
+	assert.Equal(t, ownerID.String(), resp.GetActiveCalls()[0].GetRaisedHands()[0].GetUserId())
+	assert.Equal(t, int32(1), resp.GetActiveCalls()[0].GetRaisedHands()[0].GetPosition())
+	assert.Equal(t, outsiderID.String(), resp.GetActiveCalls()[0].GetRaisedHands()[1].GetUserId())
+	assert.Equal(t, int32(2), resp.GetActiveCalls()[0].GetRaisedHands()[1].GetPosition())
 }

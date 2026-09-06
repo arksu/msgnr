@@ -282,7 +282,7 @@ func TestFanout_CallStateChangedDeliveredOnlyToAuthorizedMembers(t *testing.T) {
 	}
 }
 
-func TestFanout_CallStateChangedFallbackDoesNotGrantConversationCache(t *testing.T) {
+func TestFanout_CallParticipantEventsFallbackDoesNotGrantConversationCache(t *testing.T) {
 	bus := events.NewBus(zap.NewNop())
 	srv := newTestServer(bus)
 	srv.authSvc = auth.NewService(nil, nil, nil, nil, 0, nil)
@@ -337,6 +337,27 @@ func TestFanout_CallStateChangedFallbackDoesNotGrantConversationCache(t *testing
 
 	bus.Publish(&packetspb.ServerEvent{
 		EventSeq:       9,
+		EventType:      packetspb.EventType_EVENT_TYPE_CALL_RAISED_HANDS_CHANGED,
+		ConversationId: targetConversation,
+		Payload: &packetspb.ServerEvent_CallRaisedHandsChanged{
+			CallRaisedHandsChanged: &packetspb.CallRaisedHandsChangedEvent{
+				CallId:         "call-1",
+				ConversationId: targetConversation,
+			},
+		},
+	})
+
+	select {
+	case msg := <-outbound:
+		require.NotNil(t, msg.env)
+		require.NotNil(t, msg.env.GetServerEvent())
+		require.NotNil(t, msg.env.GetServerEvent().GetCallRaisedHandsChanged())
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fallback-authorized call_raised_hands_changed event")
+	}
+
+	bus.Publish(&packetspb.ServerEvent{
+		EventSeq:       10,
 		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,
 		ConversationId: targetConversation,
 	})

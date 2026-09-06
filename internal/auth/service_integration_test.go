@@ -71,7 +71,7 @@ func seedAuthCallParticipant(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	require.NoError(t, err)
 }
 
-func TestIntegration_CanReceiveEvent_CallStateChangedAllowsActiveParticipant(t *testing.T) {
+func TestIntegration_CanReceiveEvent_CallEventsAllowActiveParticipant(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()
 
@@ -102,6 +102,17 @@ func TestIntegration_CanReceiveEvent_CallStateChangedAllowsActiveParticipant(t *
 		},
 	}
 	assert.True(t, svc.CanReceiveEvent(ctx, principal, callEvent))
+	raisedHandsEvent := &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_CALL_RAISED_HANDS_CHANGED,
+		ConversationId: dmID.String(),
+		Payload: &packetspb.ServerEvent_CallRaisedHandsChanged{
+			CallRaisedHandsChanged: &packetspb.CallRaisedHandsChangedEvent{
+				CallId:         callID.String(),
+				ConversationId: dmID.String(),
+			},
+		},
+	}
+	assert.True(t, svc.CanReceiveEvent(ctx, principal, raisedHandsEvent))
 
 	messageEvent := &packetspb.ServerEvent{
 		EventType:      packetspb.EventType_EVENT_TYPE_MESSAGE_CREATED,

@@ -305,11 +305,16 @@ func (s *Service) fillFirstPageFields(ctx context.Context, userID uuid.UUID, res
 	}
 	resp.ActiveCalls = make([]*packetspb.ActiveCallSummary, 0, len(activeCalls))
 	for _, row := range activeCalls {
+		raisedHands, err := s.listCallRaisedHands(ctx, row.ID)
+		if err != nil {
+			return fmt.Errorf("bootstrap raised hands for call %s: %w", row.ID, err)
+		}
 		resp.ActiveCalls = append(resp.ActiveCalls, &packetspb.ActiveCallSummary{
 			CallId:           row.ID.String(),
 			ConversationId:   row.ChannelID.String(),
 			Status:           mapCallStatus(row.Status),
 			ParticipantCount: int32(row.ParticipantCount),
+			RaisedHands:      raisedHands,
 		})
 	}
 
@@ -374,6 +379,35 @@ func (s *Service) fillFirstPageFields(ctx context.Context, userID uuid.UUID, res
 	}
 
 	return nil
+}
+
+func (s *Service) listCallRaisedHands(ctx context.Context, callID uuid.UUID) ([]*packetspb.CallRaisedHand, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_id,
+		       ROW_NUMBER() OVER (ORDER BY hand_raised_sequence ASC)::int
+		  FROM call_participants
+		 WHERE call_id = $1
+		   AND left_at IS NULL
+		   AND hand_raised_sequence IS NOT NULL
+		 ORDER BY hand_raised_sequence ASC`, callID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	hands := make([]*packetspb.CallRaisedHand, 0, 4)
+	for rows.Next() {
+		var userID uuid.UUID
+		var position int
+		if err := rows.Scan(&userID, &position); err != nil {
+			return nil, err
+		}
+		hands = append(hands, &packetspb.CallRaisedHand{
+			UserId:   userID.String(),
+			Position: int32(position),
+		})
+	}
+	return hands, rows.Err()
 }
 
 func (s *Service) loadBootstrapSelfSummary(ctx context.Context, userID uuid.UUID) (bootstrapSelfSummary, error) {

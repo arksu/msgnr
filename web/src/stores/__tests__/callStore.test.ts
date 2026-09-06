@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import { Track } from 'livekit-client'
-import { ErrorCode, NotificationLevel } from '@/shared/proto/packets_pb'
+import { ErrorCode, NotificationLevel, type SetCallHandRaisedResponse } from '@/shared/proto/packets_pb'
 import { useCallStore } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
 import { useWsStore } from '@/stores/ws'
@@ -85,6 +85,88 @@ describe('callStore syncWithActiveCalls', () => {
       conversationId: 'channel-1',
     }))
     consoleInfoSpy.mockRestore()
+  })
+})
+
+describe('callStore raised hands', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('prevents rapid duplicate requests and lets sequenced queue snapshots own the visible state', async () => {
+    const callStore = useCallStore()
+    const chatStore = useChatStore()
+    const wsStore = useWsStore()
+    let resolveRequest: ((value: SetCallHandRaisedResponse | PromiseLike<SetCallHandRaisedResponse>) => void) | undefined
+
+    chatStore.activeCalls = [{
+      id: 'call-1',
+      conversationId: 'channel-1',
+      status: '1',
+      participantCount: 2,
+      raisedHands: [],
+    }]
+    callStore.activeCallId = 'call-1'
+    callStore.activeConversationId = 'channel-1'
+    callStore.connected = true
+    callStore.room = {
+      localParticipant: { identity: 'user-a' },
+    } as never
+
+    const requestSpy = vi.spyOn(wsStore, 'requestSetCallHandRaised').mockImplementation(() => new Promise(resolve => {
+      resolveRequest = resolve
+    }))
+
+    const first = callStore.toggleHandRaised()
+    const duplicate = callStore.toggleHandRaised()
+    expect(requestSpy).toHaveBeenCalledTimes(1)
+    expect(requestSpy).toHaveBeenCalledWith('call-1', true)
+
+    resolveRequest?.({
+      callId: 'call-1',
+      conversationId: 'channel-1',
+      raisedHands: [{ userId: 'user-a', position: 1 }],
+    } as never)
+    await Promise.all([first, duplicate])
+
+    expect(callStore.localHandRaised).toBe(false)
+    chatStore.applyCallRaisedHandsSnapshot('call-1', 'channel-1', [{ userId: 'user-a', position: 1 }])
+    expect(callStore.localHandRaised).toBe(true)
+    expect(callStore.raisedHands).toEqual([{ userId: 'user-a', position: 1 }])
+
+    requestSpy.mockResolvedValue({
+      callId: 'call-1',
+      conversationId: 'channel-1',
+      raisedHands: [],
+    } as never)
+    await callStore.toggleHandRaised()
+
+    expect(requestSpy).toHaveBeenLastCalledWith('call-1', false)
+    expect(callStore.localHandRaised).toBe(true)
+    chatStore.applyCallRaisedHandsSnapshot('call-1', 'channel-1', [])
+    expect(callStore.localHandRaised).toBe(false)
+  })
+
+  it('replaces and renumbers the queue from a later shared snapshot', () => {
+    const callStore = useCallStore()
+    const chatStore = useChatStore()
+
+    callStore.activeCallId = 'call-1'
+    callStore.activeConversationId = 'channel-1'
+    chatStore.applyCallRaisedHandsSnapshot('call-1', 'channel-1', [
+      { userId: 'user-a', position: 1 },
+      { userId: 'user-b', position: 2 },
+      { userId: 'user-c', position: 3 },
+    ] as never)
+    chatStore.applyCallRaisedHandsSnapshot('call-1', 'channel-1', [
+      { userId: 'user-b', position: 1 },
+      { userId: 'user-c', position: 2 },
+    ] as never)
+
+    expect(callStore.raisedHands).toEqual([
+      { userId: 'user-b', position: 1 },
+      { userId: 'user-c', position: 2 },
+    ])
   })
 })
 

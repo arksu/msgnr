@@ -867,12 +867,17 @@ func (s *Service) CanReceiveEvent(ctx context.Context, principal Principal, evt 
 		return true
 	}
 
-	callStateChanged := evt.GetCallStateChanged()
-	if callStateChanged == nil || s.db == nil {
+	callIDValue := ""
+	if callStateChanged := evt.GetCallStateChanged(); callStateChanged != nil {
+		callIDValue = callStateChanged.GetCallId()
+	} else if raisedHandsChanged := evt.GetCallRaisedHandsChanged(); raisedHandsChanged != nil {
+		callIDValue = raisedHandsChanged.GetCallId()
+	}
+	if callIDValue == "" || s.db == nil {
 		return false
 	}
 
-	callID, err := uuid.Parse(callStateChanged.GetCallId())
+	callID, err := uuid.Parse(callIDValue)
 	if err != nil {
 		return false
 	}

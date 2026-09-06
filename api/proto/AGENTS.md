@@ -153,8 +153,10 @@ Important event families:
 - notifications add/resolve
 - call invites create/cancel
 - call state changes
+- raised-hand queue changes
 
-Call state updates are delivered only through `ServerEvent.call_state_changed`.
+Call lifecycle updates are delivered through `ServerEvent.call_state_changed`.
+Raised-hand queue snapshots are delivered through `ServerEvent.call_raised_hands_changed`.
 
 ## Evolution Guidance
 

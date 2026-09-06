@@ -635,14 +635,15 @@ func (s *Server) startEventFanout(
 			}
 
 			cacheReady := state.cacheReady()
-			shouldFallback := !cacheReady || evt.GetConversationUpserted() != nil || evt.GetCallStateChanged() != nil
+			isCallParticipantEvent := evt.GetCallStateChanged() != nil || evt.GetCallRaisedHandsChanged() != nil
+			shouldFallback := !cacheReady || evt.GetConversationUpserted() != nil || isCallParticipantEvent
 			if result == "conversation_cache_miss" && shouldFallback && s.authorizeEvent != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 				allowed = s.authorizeEvent(ctx, principal, evt)
 				timeoutErr := ctx.Err()
 				cancel()
 				if allowed {
-					if conversationID := evt.GetConversationId(); conversationID != "" && evt.GetCallStateChanged() == nil {
+					if conversationID := evt.GetConversationId(); conversationID != "" && !isCallParticipantEvent {
 						state.allowConversation(conversationID)
 					}
 					label := "allowed_fallback_cache_miss"
@@ -2294,6 +2295,51 @@ func (s *Server) handleDomainPayload(
 					LivekitUrl:   result.LiveKitURL,
 					LivekitToken: result.LiveKitToken,
 					LivekitRoom:  result.LiveKitRoom,
+					CallId:       result.CallID.String(),
+					RaisedHands:  result.RaisedHands,
+				},
+			},
+		})
+
+	case *packetspb.Envelope_SetCallHandRaisedRequest:
+		req := p.SetCallHandRaisedRequest
+		if req == nil || s.callSvc == nil {
+			badReq("set_call_hand_raised_request: missing payload")
+			return
+		}
+		callID, err := uuid.Parse(req.GetCallId())
+		if err != nil {
+			badReq("set_call_hand_raised_request: invalid call_id")
+			return
+		}
+		result, err := s.callSvc.SetHandRaised(ctx, calls.SetHandRaisedParams{
+			CallID:  callID,
+			ActorID: principal.UserID,
+			Raised:  req.GetRaised(),
+		})
+		if err != nil {
+			switch {
+			case errors.Is(err, calls.ErrCallNotActive):
+				enqueue(s.buildErrorEnvelope(reqID, traceID, packetspb.ErrorCode_ERROR_CODE_CALL_NOT_ACTIVE, "call is not active", 0))
+			case errors.Is(err, calls.ErrForbiddenAction), errors.Is(err, calls.ErrNotMember):
+				forbidden("not an active participant in this call")
+			case errors.Is(err, calls.ErrBadRequest):
+				badReq("set_call_hand_raised_request: invalid request")
+			default:
+				s.log.Error("ws: SetCallHandRaised error", zap.Error(err), zap.String("user_id", principal.UserID.String()))
+				badReq("set_call_hand_raised_request: internal error")
+			}
+			return
+		}
+		enqueue(&packetspb.Envelope{
+			RequestId:       reqID,
+			TraceId:         traceID,
+			ProtocolVersion: protocolVersion,
+			Payload: &packetspb.Envelope_SetCallHandRaisedResponse{
+				SetCallHandRaisedResponse: &packetspb.SetCallHandRaisedResponse{
+					CallId:         result.CallID.String(),
+					ConversationId: result.ConversationID.String(),
+					RaisedHands:    result.RaisedHands,
 				},
 			},
 		})

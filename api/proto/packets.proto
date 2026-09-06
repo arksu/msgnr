@@ -152,6 +152,7 @@ enum EventType {
   EVENT_TYPE_MESSAGE_ALERT = 19;
   EVENT_TYPE_USER_CALL_PRESENCE_CHANGED = 20;
   EVENT_TYPE_DM_HISTORY_CLEARED = 21;
+  EVENT_TYPE_CALL_RAISED_HANDS_CHANGED = 22;
 }
 
 message Envelope {
@@ -217,6 +218,8 @@ message Envelope {
     ListActiveCallMembersResponse list_active_call_members_response = 73;
     TransportHeartbeatRequest transport_heartbeat_request = 74;
     TransportHeartbeatAck transport_heartbeat_ack = 75;
+    SetCallHandRaisedRequest set_call_hand_raised_request = 76;
+    SetCallHandRaisedResponse set_call_hand_raised_response = 77;
   }
 }
 
@@ -509,6 +512,19 @@ message JoinCallTokenResponse {
   string livekit_url = 1;
   string livekit_token = 2;
   string livekit_room = 3;
+  string call_id = 4;
+  repeated CallRaisedHand raised_hands = 5;
+}
+
+message SetCallHandRaisedRequest {
+  string call_id = 1;
+  bool raised = 2;
+}
+
+message SetCallHandRaisedResponse {
+  string call_id = 1;
+  string conversation_id = 2;
+  repeated CallRaisedHand raised_hands = 3;
 }
 
 message AcceptCallInviteRequest {
@@ -588,6 +604,12 @@ message ActiveCallSummary {
   string conversation_id = 2;
   CallStatus status = 3;
   int32 participant_count = 4;
+  repeated CallRaisedHand raised_hands = 5;
+}
+
+message CallRaisedHand {
+  string user_id = 1;
+  int32 position = 2;
 }
 
 message UserCallPresenceSummary {
@@ -732,6 +754,12 @@ message CallStateChangedEvent {
   string call_id = 1;
   string conversation_id = 2;
   CallStatus status = 3;
+}
+
+message CallRaisedHandsChangedEvent {
+  string call_id = 1;
+  string conversation_id = 2;
+  repeated CallRaisedHand raised_hands = 3;
 }
 
 message UserCallPresenceChangedEvent {
@@ -896,5 +924,6 @@ message ServerEvent {
     MessageAlertEvent message_alert = 28;
     UserCallPresenceChangedEvent user_call_presence_changed = 29;
     DmHistoryClearedEvent dm_history_cleared = 30;
+    CallRaisedHandsChangedEvent call_raised_hands_changed = 31;
   }
 }

@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { ConversationType, ErrorCode } from '@/shared/proto/packets_pb'
 import { Room, RoomEvent, Track, ScreenSharePresets, type AudioCaptureOptions, type LocalVideoTrack, type LocalAudioTrack, type TrackPublishOptions, type ScreenShareCaptureOptions } from 'livekit-client'
 import { useWsStore } from '@/stores/ws'
-import { useChatStore } from '@/stores/chat'
+import { useChatStore, type RaisedHand } from '@/stores/chat'
 import { useNotificationSoundEngine } from '@/services/sound'
 import { loadAudioPrefs, saveAudioPrefs } from '@/services/storage/audioPrefsStorage'
 import { getPlatformOrNull } from '@/platform'
@@ -513,6 +513,7 @@ export const useCallStore = defineStore('call', () => {
   const remoteParticipantCount = ref(0)
   const mediaVersion = ref(0)
   const annotationSessionState = ref<ScreenAnnotationSessionState | null>(null)
+  const handActionInFlight = ref(false)
 
   // True when any remote participant is actively sharing a screen track.
   // Reads mediaVersion to re-evaluate whenever track publications change.
@@ -552,7 +553,13 @@ export const useCallStore = defineStore('call', () => {
     return ''
   })
 
-  let pendingJoinResolve: ((resp: { livekitUrl: string; livekitToken: string; livekitRoom: string }) => void) | null = null
+  let pendingJoinResolve: ((resp: {
+    livekitUrl: string
+    livekitToken: string
+    livekitRoom: string
+    callId: string
+    raisedHands: RaisedHand[]
+  }) => void) | null = null
   let pendingJoinReject: ((error: Error) => void) | null = null
   let pendingJoinTimer: ReturnType<typeof setTimeout> | null = null
   let pendingJoinRequestId = ''
@@ -595,6 +602,17 @@ export const useCallStore = defineStore('call', () => {
     const dm = chatStore.directMessages.find(item => item.id === activeConversationId.value)
     if (dm) return dm.displayName
     return 'Call'
+  })
+
+  const raisedHands = computed<RaisedHand[]>(() => {
+    const call = chatStore.activeCalls.find(item => item.id === activeCallId.value)
+      ?? chatStore.activeCalls.find(item => item.conversationId === activeConversationId.value)
+    return call?.raisedHands ?? []
+  })
+
+  const localHandRaised = computed(() => {
+    const identity = room.value?.localParticipant.identity ?? ''
+    return Boolean(identity && raisedHands.value.some(hand => hand.userId === identity))
   })
 
   function shouldExposeHardwareCallControls(): boolean {
@@ -1579,6 +1597,7 @@ export const useCallStore = defineStore('call', () => {
       micEnabled.value = false
       remoteScreenShareReceiveEnabled.value = true
       remoteParticipantCount.value = 0
+      handActionInFlight.value = false
       mediaVersion.value += 1
       activeSpeakerSids.value = new Set()
       playbackBlocked.value = false
@@ -2165,7 +2184,13 @@ export const useCallStore = defineStore('call', () => {
     }
     callDebug('requesting join token', { conversationId, kind, visibility })
 
-    const response = await new Promise<{ livekitUrl: string; livekitToken: string; livekitRoom: string }>((resolve, reject) => {
+    const response = await new Promise<{
+      livekitUrl: string
+      livekitToken: string
+      livekitRoom: string
+      callId: string
+      raisedHands: RaisedHand[]
+    }>((resolve, reject) => {
       pendingJoinResolve = resolve
       pendingJoinReject = reject
       pendingJoinTimer = setTimeout(() => {
@@ -2178,6 +2203,7 @@ export const useCallStore = defineStore('call', () => {
       conversationId,
       room: response.livekitRoom,
       livekitUrl: response.livekitUrl,
+      callId: response.callId,
     })
 
     return response
@@ -2297,6 +2323,9 @@ export const useCallStore = defineStore('call', () => {
       }
 
       const join = await requestJoinToken(conversationId, kind, visibility)
+      if (join.callId) {
+        chatStore.applyCallRaisedHandsSnapshot(join.callId, conversationId, join.raisedHands)
+      }
       const normalizedLiveKitUrl = normalizeLiveKitUrl(join.livekitUrl)
       if (!join.livekitToken) {
         throw new Error('Join token response has empty livekitToken')
@@ -2315,7 +2344,7 @@ export const useCallStore = defineStore('call', () => {
       room.value = nextRoom
       activeConversationId.value = conversationId
       activeRoomName.value = join.livekitRoom
-      activeCallId.value = chatStore.activeCalls.find(call => call.conversationId === conversationId)?.id ?? ''
+      activeCallId.value = join.callId || (chatStore.activeCalls.find(call => call.conversationId === conversationId)?.id ?? '')
 
       callDebug('joining livekit room', {
         room: join.livekitRoom,
@@ -2437,6 +2466,7 @@ export const useCallStore = defineStore('call', () => {
     screenShareEnabled.value = false
     remoteScreenShareReceiveEnabled.value = true
     remoteParticipantCount.value = 0
+    handActionInFlight.value = false
     mediaVersion.value = 0
     activeSpeakerSids.value = new Set()
     playbackBlocked.value = false
@@ -2466,6 +2496,25 @@ export const useCallStore = defineStore('call', () => {
       enabled: next,
       room: current.name,
     })
+  }
+
+  async function toggleHandRaised() {
+    if (handActionInFlight.value) return
+    const callId = activeCallId.value || chatStore.activeCalls.find(call => call.conversationId === activeConversationId.value)?.id
+    if (!callId || !connected.value) {
+      throw new Error('Call is not connected')
+    }
+
+    handActionInFlight.value = true
+    try {
+      const response = await useWsStore().requestSetCallHandRaised(callId, !localHandRaised.value)
+      activeCallId.value = response.callId
+      // The durable, sequenced call_raised_hands_changed event owns the client
+      // state. Do not let this unsequenced acknowledgement overwrite a newer
+      // queue event that arrived while the request was in flight.
+    } finally {
+      handActionInFlight.value = false
+    }
   }
 
   async function switchInputDevice(deviceId: string) {
@@ -2816,6 +2865,9 @@ export const useCallStore = defineStore('call', () => {
     annotationSessionMode,
     remoteScreenShareActive,
     remoteParticipantCount,
+    raisedHands,
+    localHandRaised,
+    handActionInFlight,
     mediaVersion,
     activeSpeakerSids,
     playbackBlocked,
@@ -2825,6 +2877,7 @@ export const useCallStore = defineStore('call', () => {
     leaveCall,
     resetRuntimeState,
     toggleMute,
+    toggleHandRaised,
     switchInputDevice,
     toggleCamera,
     toggleScreenShare,

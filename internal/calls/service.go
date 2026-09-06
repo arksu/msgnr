@@ -96,6 +96,20 @@ type JoinCallTokenResult struct {
 	LiveKitURL   string
 	LiveKitToken string
 	LiveKitRoom  string
+	CallID       uuid.UUID
+	RaisedHands  []*packetspb.CallRaisedHand
+}
+
+type SetHandRaisedParams struct {
+	CallID  uuid.UUID
+	ActorID uuid.UUID
+	Raised  bool
+}
+
+type SetHandRaisedResult struct {
+	CallID         uuid.UUID
+	ConversationID uuid.UUID
+	RaisedHands    []*packetspb.CallRaisedHand
 }
 
 type InviteActionParams struct {
@@ -286,6 +300,10 @@ func (s *Service) JoinCallToken(ctx context.Context, p JoinCallTokenParams) (Joi
 	if err := s.upsertParticipantAndEmitPresenceTx(ctx, tx, activeCall.ID, p.UserID); err != nil {
 		return JoinCallTokenResult{}, err
 	}
+	raisedHands, err := s.listCallRaisedHandsTx(ctx, tx, activeCall.ID)
+	if err != nil {
+		return JoinCallTokenResult{}, err
+	}
 
 	identityName, err := s.lookupUserDisplayNameTx(ctx, tx, p.UserID)
 	if err != nil {
@@ -305,6 +323,98 @@ func (s *Service) JoinCallToken(ctx context.Context, p JoinCallTokenParams) (Joi
 		LiveKitURL:   s.cfg.LiveKitURL,
 		LiveKitToken: token,
 		LiveKitRoom:  activeCall.LiveKitRoom,
+		CallID:       activeCall.ID,
+		RaisedHands:  raisedHands,
+	}, nil
+}
+
+// SetHandRaised changes only the actor's hand state. The call row lock assigns
+// a unique sequence under contention, making the server the queue authority.
+func (s *Service) SetHandRaised(ctx context.Context, p SetHandRaisedParams) (SetHandRaisedResult, error) {
+	if p.CallID == uuid.Nil || p.ActorID == uuid.Nil {
+		return SetHandRaisedResult{}, ErrBadRequest
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return SetHandRaisedResult{}, fmt.Errorf("calls.SetHandRaised begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var conversationID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT channel_id
+		  FROM calls
+		 WHERE id = $1
+		   AND status = 'active'
+		 FOR UPDATE`, p.CallID).Scan(&conversationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SetHandRaisedResult{}, ErrCallNotActive
+		}
+		return SetHandRaisedResult{}, fmt.Errorf("calls.SetHandRaised lock call: %w", err)
+	}
+
+	var alreadyRaised bool
+	err = tx.QueryRow(ctx, `
+		SELECT hand_raised_sequence IS NOT NULL
+		  FROM call_participants
+		 WHERE call_id = $1
+		   AND user_id = $2
+		   AND left_at IS NULL
+		 FOR UPDATE`, p.CallID, p.ActorID).Scan(&alreadyRaised)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SetHandRaisedResult{}, ErrForbiddenAction
+		}
+		return SetHandRaisedResult{}, fmt.Errorf("calls.SetHandRaised lock participant: %w", err)
+	}
+
+	changed := alreadyRaised != p.Raised
+	if p.Raised && !alreadyRaised {
+		var sequence int64
+		if err := tx.QueryRow(ctx, `
+			UPDATE calls
+			   SET next_hand_raise_sequence = next_hand_raise_sequence + 1
+			 WHERE id = $1
+			 RETURNING next_hand_raise_sequence`, p.CallID).Scan(&sequence); err != nil {
+			return SetHandRaisedResult{}, fmt.Errorf("calls.SetHandRaised allocate sequence: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE call_participants
+			   SET hand_raised_sequence = $3
+			 WHERE call_id = $1
+			   AND user_id = $2
+			   AND left_at IS NULL`, p.CallID, p.ActorID, sequence); err != nil {
+			return SetHandRaisedResult{}, fmt.Errorf("calls.SetHandRaised raise hand: %w", err)
+		}
+	} else if !p.Raised && alreadyRaised {
+		if _, err := tx.Exec(ctx, `
+			UPDATE call_participants
+			   SET hand_raised_sequence = NULL
+			 WHERE call_id = $1
+			   AND user_id = $2
+			   AND left_at IS NULL`, p.CallID, p.ActorID); err != nil {
+			return SetHandRaisedResult{}, fmt.Errorf("calls.SetHandRaised lower hand: %w", err)
+		}
+	}
+
+	raisedHands, err := s.listCallRaisedHandsTx(ctx, tx, p.CallID)
+	if err != nil {
+		return SetHandRaisedResult{}, err
+	}
+	if changed {
+		if err := s.appendCallRaisedHandsChangedTx(ctx, tx, p.CallID, conversationID, raisedHands); err != nil {
+			return SetHandRaisedResult{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return SetHandRaisedResult{}, fmt.Errorf("calls.SetHandRaised commit: %w", err)
+	}
+	return SetHandRaisedResult{
+		CallID:         p.CallID,
+		ConversationID: conversationID,
+		RaisedHands:    raisedHands,
 	}, nil
 }
 
@@ -791,6 +901,13 @@ func (s *Service) HandleWebhook(ctx context.Context, evt *lkwebhookEvent) (bool,
 			if err := s.emitUserCallPresenceIfChangedTx(ctx, tx, userID, beforeUserCount); err != nil {
 				return false, err
 			}
+			hands, err := s.listCallRaisedHandsTx(ctx, tx, call.ID)
+			if err != nil {
+				return false, err
+			}
+			if err := s.appendCallRaisedHandsChangedTx(ctx, tx, call.ID, call.ChannelID, hands); err != nil {
+				return false, err
+			}
 		}
 
 		var activeParticipants int
@@ -944,7 +1061,8 @@ func (s *Service) findActiveCallTx(ctx context.Context, tx pgx.Tx, conversationI
 		 WHERE channel_id = $1
 		   AND status = 'active'
 		 ORDER BY started_at DESC
-		 LIMIT 1`, conversationID).Scan(&row.ID, &row.ChannelID, &row.LiveKitRoom)
+		 LIMIT 1
+		 FOR UPDATE`, conversationID).Scan(&row.ID, &row.ChannelID, &row.LiveKitRoom)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return callRow{}, false, nil
@@ -1090,16 +1208,42 @@ func (s *Service) leaveOtherActiveCallsForUserTx(ctx context.Context, tx pgx.Tx,
 		return nil
 	}
 
-	if _, err := tx.Exec(ctx, `
+	leftRows, err := tx.Query(ctx, `
 		UPDATE call_participants
 		   SET left_at = now()
 		 WHERE user_id = $1
 		   AND call_id = ANY($2::uuid[])
-		   AND left_at IS NULL`, userID, callIDs); err != nil {
+		   AND left_at IS NULL
+		 RETURNING call_id, hand_raised_sequence IS NOT NULL`, userID, callIDs)
+	if err != nil {
 		return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx leave participants: %w", err)
 	}
+	raisedHandRemoved := make(map[uuid.UUID]bool, len(refs))
+	for leftRows.Next() {
+		var callID uuid.UUID
+		var hadRaisedHand bool
+		if err := leftRows.Scan(&callID, &hadRaisedHand); err != nil {
+			leftRows.Close()
+			return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx scan left participant: %w", err)
+		}
+		raisedHandRemoved[callID] = hadRaisedHand
+	}
+	if err := leftRows.Err(); err != nil {
+		leftRows.Close()
+		return fmt.Errorf("calls.leaveOtherActiveCallsForUserTx left participants: %w", err)
+	}
+	leftRows.Close()
 
 	for _, ref := range refs {
+		if raisedHandRemoved[ref.id] {
+			hands, err := s.listCallRaisedHandsTx(ctx, tx, ref.id)
+			if err != nil {
+				return err
+			}
+			if err := s.appendCallRaisedHandsChangedTx(ctx, tx, ref.id, ref.conversationID, hands); err != nil {
+				return err
+			}
+		}
 		var activeParticipants int
 		if err := tx.QueryRow(ctx, `
 			SELECT COUNT(*)
@@ -1228,14 +1372,50 @@ func (s *Service) resolveInviteNotificationTx(ctx context.Context, tx pgx.Tx, co
 
 func (s *Service) upsertParticipantTx(ctx context.Context, tx pgx.Tx, callID, userID uuid.UUID) error {
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO call_participants (call_id, user_id, joined_at, left_at)
-		VALUES ($1, $2, now(), NULL)
+		INSERT INTO call_participants (call_id, user_id, joined_at, left_at, hand_raised_sequence)
+		VALUES ($1, $2, now(), NULL, NULL)
 		ON CONFLICT (call_id, user_id) DO UPDATE
 		   SET joined_at = now(),
-		       left_at = NULL`, callID, userID); err != nil {
+		       left_at = NULL,
+		       hand_raised_sequence = CASE
+		         WHEN call_participants.left_at IS NULL THEN call_participants.hand_raised_sequence
+		         ELSE NULL
+		       END`, callID, userID); err != nil {
 		return fmt.Errorf("calls.upsertParticipantTx upsert participant: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) listCallRaisedHandsTx(ctx context.Context, tx pgx.Tx, callID uuid.UUID) ([]*packetspb.CallRaisedHand, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT user_id,
+		       ROW_NUMBER() OVER (ORDER BY hand_raised_sequence ASC)::int
+		  FROM call_participants
+		 WHERE call_id = $1
+		   AND left_at IS NULL
+		   AND hand_raised_sequence IS NOT NULL
+		 ORDER BY hand_raised_sequence ASC`, callID)
+	if err != nil {
+		return nil, fmt.Errorf("calls.listCallRaisedHandsTx query: %w", err)
+	}
+	defer rows.Close()
+
+	hands := make([]*packetspb.CallRaisedHand, 0, 4)
+	for rows.Next() {
+		var userID uuid.UUID
+		var position int
+		if err := rows.Scan(&userID, &position); err != nil {
+			return nil, fmt.Errorf("calls.listCallRaisedHandsTx scan: %w", err)
+		}
+		hands = append(hands, &packetspb.CallRaisedHand{
+			UserId:   userID.String(),
+			Position: int32(position),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("calls.listCallRaisedHandsTx rows: %w", err)
+	}
+	return hands, nil
 }
 
 func (s *Service) upsertParticipantAndEmitPresenceTx(ctx context.Context, tx pgx.Tx, callID, userID uuid.UUID) error {
@@ -1441,6 +1621,39 @@ func (s *Service) appendCallStateChangedTx(ctx context.Context, tx pgx.Tx, callI
 	return nil
 }
 
+func (s *Service) appendCallRaisedHandsChangedTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	callID, conversationID uuid.UUID,
+	raisedHands []*packetspb.CallRaisedHand,
+) error {
+	payload := &packetspb.CallRaisedHandsChangedEvent{
+		CallId:         callID.String(),
+		ConversationId: conversationID.String(),
+		RaisedHands:    raisedHands,
+	}
+	payloadJSON, err := protojson.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("calls.appendCallRaisedHandsChangedTx marshal payload: %w", err)
+	}
+
+	stored, err := s.eventStore.AppendEventTx(ctx, tx, events.AppendParams{
+		EventID:      uuid.NewString(),
+		EventType:    "call_raised_hands_changed",
+		ChannelID:    conversationID.String(),
+		PayloadJSON:  payloadJSON,
+		OccurredAt:   time.Now().UTC(),
+		ProtoPayload: s.buildCallRaisedHandsChangedEnvelope(callID, conversationID, raisedHands),
+	})
+	if err != nil {
+		return fmt.Errorf("calls.appendCallRaisedHandsChangedTx append event: %w", err)
+	}
+	if err := s.eventStore.NotifyEventTx(ctx, tx, stored.Seq); err != nil {
+		return fmt.Errorf("calls.appendCallRaisedHandsChangedTx notify event: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) appendUserCallPresenceChangedTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, activeCallCount int) error {
 	payload := &packetspb.UserCallPresenceChangedEvent{
 		UserId:          userID.String(),
@@ -1635,6 +1848,20 @@ func (s *Service) buildCallStateChangedEnvelope(callID, conversationID uuid.UUID
 				CallId:         callID.String(),
 				ConversationId: conversationID.String(),
 				Status:         status,
+			},
+		},
+	}
+}
+
+func (s *Service) buildCallRaisedHandsChangedEnvelope(callID, conversationID uuid.UUID, raisedHands []*packetspb.CallRaisedHand) *packetspb.ServerEvent {
+	return &packetspb.ServerEvent{
+		EventType:      packetspb.EventType_EVENT_TYPE_CALL_RAISED_HANDS_CHANGED,
+		ConversationId: conversationID.String(),
+		Payload: &packetspb.ServerEvent_CallRaisedHandsChanged{
+			CallRaisedHandsChanged: &packetspb.CallRaisedHandsChangedEvent{
+				CallId:         callID.String(),
+				ConversationId: conversationID.String(),
+				RaisedHands:    raisedHands,
 			},
 		},
 	}

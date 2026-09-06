@@ -218,6 +218,63 @@ function installAnnotationEmitter(callStore: ReturnType<typeof useCallStore>) {
   }
 }
 
+describe('CallDock raised hands', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('shows numbered hand indicators and exposes the lower-hand control state', async () => {
+    seedCallUserState()
+    const chatStore = useChatStore()
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.activeConversationId = 'channel-1'
+    callStore.activeCallId = 'call-1'
+    callStore.room = {
+      localParticipant: {
+        sid: 'local-sid',
+        identity: 'user-a',
+        name: 'Ada',
+        getTrackPublication: () => undefined,
+        videoTrackPublications: new Map(),
+        audioTrackPublications: new Map(),
+      },
+      remoteParticipants: new Map([['remote-sid', {
+        sid: 'remote-sid',
+        identity: 'user-b',
+        name: 'Bob',
+        getTrackPublication: () => undefined,
+        videoTrackPublications: new Map(),
+        audioTrackPublications: new Map(),
+      }]]),
+    } as never
+    chatStore.activeCalls = [{
+      id: 'call-1',
+      conversationId: 'channel-1',
+      status: '1',
+      participantCount: 2,
+      raisedHands: [
+        { userId: 'user-a', position: 1 },
+        { userId: 'user-b', position: 2 },
+      ],
+    }]
+
+    const wrapper = mount(CallDock, {
+      global: { stubs: { UserAvatar: true } },
+    })
+    await flushAll()
+
+    expect(wrapper.get('[data-testid="calldock-local-hand-1"]').attributes('aria-label')).toBe('Raised hand position 1')
+    expect(wrapper.get('[data-testid="calldock-remote-hand-remote-sid-2"]').text()).toContain('2')
+    const control = wrapper.get('[data-testid="calldock-raise-hand"]')
+    expect(control.attributes('title')).toBe('Lower hand')
+    expect(control.attributes('aria-pressed')).toBe('true')
+
+    wrapper.unmount()
+  })
+})
+
 describe('CallDock invite modal', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

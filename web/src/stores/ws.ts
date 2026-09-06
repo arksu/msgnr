@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { create, toBinary, fromBinary } from '@bufbuild/protobuf'
 import {
   AcceptCallInviteRequestSchema,
+  SetCallHandRaisedRequestSchema,
   EncryptedDMMessagePayloadSchema,
   EncryptedDMRecipientPayloadSchema,
   EnvelopeSchema,
@@ -24,6 +25,7 @@ import {
   type InviteCallMembersResponse,
   type JoinCallTokenResponse,
   type CallInviteActionAck,
+  type SetCallHandRaisedResponse,
   type ListActiveCallMembersResponse,
   type ListConversationMembersResponse,
   type SetNotificationLevelResponse,
@@ -1056,6 +1058,13 @@ export const useWsStore = defineStore('ws', () => {
     }, 'listActiveCallMembersResponse')
   }
 
+  function requestSetCallHandRaised(callId: string, raised: boolean): Promise<SetCallHandRaisedResponse> {
+    return requestEnvelope({
+      case: 'setCallHandRaisedRequest',
+      value: create(SetCallHandRaisedRequestSchema, { callId, raised }),
+    }, 'setCallHandRaisedResponse')
+  }
+
   function sendAcceptCallInvite(inviteId: string) {
     sendEnvelope(create(EnvelopeSchema, {
       requestId: generateId(),
@@ -1328,6 +1337,7 @@ export const useWsStore = defineStore('ws', () => {
     sendJoinCallToken,
     requestConversationMembers,
     requestActiveCallMembers,
+    requestSetCallHandRaised,
     sendAcceptCallInvite,
     requestAcceptCallInvite,
     sendRejectCallInvite,

@@ -566,7 +566,8 @@ CREATE TABLE IF NOT EXISTS calls (
   livekit_room TEXT        NOT NULL,
   created_by   UUID        NOT NULL REFERENCES users(id),
   started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  ended_at     TIMESTAMPTZ
+  ended_at     TIMESTAMPTZ,
+  next_hand_raise_sequence BIGINT NOT NULL DEFAULT 0 CHECK (next_hand_raise_sequence >= 0)
 );
 
 -- at most one active call per channel
@@ -579,6 +580,7 @@ CREATE TABLE IF NOT EXISTS call_participants (
   user_id   UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   left_at   TIMESTAMPTZ,
+  hand_raised_sequence BIGINT CHECK (hand_raised_sequence IS NULL OR hand_raised_sequence > 0),
   PRIMARY KEY (call_id, user_id)
 );
 
@@ -724,7 +726,8 @@ CREATE TABLE IF NOT EXISTS workspace_events (
                 'reaction_updated',
                 'user_identity_updated',
                 'task_status_changed',
-                'dm_history_cleared'
+                'dm_history_cleared',
+                'call_raised_hands_changed'
               )),
   channel_id  UUID        REFERENCES channels(id) ON DELETE SET NULL,
   payload     JSONB       NOT NULL,

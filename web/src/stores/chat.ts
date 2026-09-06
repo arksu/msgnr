@@ -30,6 +30,8 @@ import type {
   NotificationAddedEvent,
   NotificationLevelChangedEvent,
   CallStateChangedEvent,
+  CallRaisedHandsChangedEvent,
+  CallRaisedHand,
   CallInviteCreatedEvent,
   CallInviteCancelledEvent,
   TaskStatusChangedEvent,
@@ -281,7 +283,10 @@ export interface ActiveCallItem {
   conversationId: string
   status: string
   participantCount: number
+  raisedHands?: RaisedHand[]
 }
+
+export type RaisedHand = Pick<CallRaisedHand, 'userId' | 'position'>
 
 export interface PendingInviteItem {
   id: string
@@ -3393,6 +3398,9 @@ export const useChatStore = defineStore('chat', () => {
       case 'callStateChanged':
         applyCallStateChanged(evt.payload.value)
         break
+      case 'callRaisedHandsChanged':
+        applyCallRaisedHandsChanged(evt.payload.value)
+        break
       case 'userCallPresenceChanged':
         applyUserCallPresenceChanged(evt.payload.value)
         break
@@ -3630,6 +3638,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function applyCallStateChanged(evt: CallStateChangedEvent) {
+    const existing = activeCalls.value.find(call => call.id === evt.callId)
     activeCalls.value = activeCalls.value.filter(call => call.id !== evt.callId)
     if (evt.status === CallStatus.ACTIVE) {
       activeCalls.value.unshift({
@@ -3637,8 +3646,37 @@ export const useChatStore = defineStore('chat', () => {
         conversationId: evt.conversationId,
         status: evt.status.toString(),
         participantCount: 0,
+        raisedHands: existing?.raisedHands ?? [],
       })
     }
+  }
+
+  function normalizeRaisedHands(hands: readonly RaisedHand[]): RaisedHand[] {
+    return hands
+      .filter(hand => Boolean(hand.userId) && Number.isInteger(hand.position) && hand.position > 0)
+      .slice()
+      .sort((a, b) => a.position - b.position)
+      .map(hand => ({ userId: hand.userId, position: hand.position }))
+  }
+
+  function applyCallRaisedHandsSnapshot(callId: string, conversationId: string, raisedHands: readonly RaisedHand[]) {
+    const queue = normalizeRaisedHands(raisedHands)
+    const existing = activeCalls.value.find(call => call.id === callId)
+    if (existing) {
+      existing.raisedHands = queue
+      return
+    }
+    activeCalls.value.unshift({
+      id: callId,
+      conversationId,
+      status: CallStatus.ACTIVE.toString(),
+      participantCount: 0,
+      raisedHands: queue,
+    })
+  }
+
+  function applyCallRaisedHandsChanged(evt: CallRaisedHandsChangedEvent) {
+    applyCallRaisedHandsSnapshot(evt.callId, evt.conversationId, evt.raisedHands)
   }
 
   function applyUserCallPresenceChanged(evt: UserCallPresenceChangedEvent) {
@@ -4441,6 +4479,7 @@ export const useChatStore = defineStore('chat', () => {
     workspace,
     notifications,
     activeCalls,
+    applyCallRaisedHandsSnapshot,
     userCallPresenceByUserId,
     pendingInvites,
     presenceByUserId,
@@ -4563,6 +4602,11 @@ function activeCallSummaryToItem(summary: ActiveCallSummary): ActiveCallItem {
     conversationId: summary.conversationId,
     status: summary.status.toString(),
     participantCount: summary.participantCount,
+    raisedHands: summary.raisedHands
+      .filter(hand => Boolean(hand.userId) && Number.isInteger(hand.position) && hand.position > 0)
+      .slice()
+      .sort((a, b) => a.position - b.position)
+      .map(hand => ({ userId: hand.userId, position: hand.position })),
   }
 }
 

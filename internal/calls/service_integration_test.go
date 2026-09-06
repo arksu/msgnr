@@ -159,6 +159,99 @@ func assertCallStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cal
 	assert.Equal(t, expected, status)
 }
 
+func assertRaisedHands(t *testing.T, hands []*packetspb.CallRaisedHand, expectedUserIDs ...uuid.UUID) {
+	t.Helper()
+	require.Len(t, hands, len(expectedUserIDs))
+	for index, userID := range expectedUserIDs {
+		assert.Equal(t, userID.String(), hands[index].GetUserId())
+		assert.Equal(t, int32(index+1), hands[index].GetPosition())
+	}
+}
+
+func raisedHandEventCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, callID uuid.UUID) int {
+	t.Helper()
+	var count int
+	err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		  FROM workspace_events
+		 WHERE event_type = 'call_raised_hands_changed'
+		   AND payload->>'callId' = $1`, callID.String()).Scan(&count)
+	require.NoError(t, err)
+	return count
+}
+
+func TestIntegration_SetHandRaised_OrdersQueueAcrossDuplicateCommandsLeavesAndRejoins(t *testing.T) {
+	pool, _ := testdb.New(t)
+	ctx := context.Background()
+
+	svc := NewService(pool, events.NewStore(pool), &config.Config{
+		LiveKitURL:       "wss://livekit.example.test",
+		LiveKitAPIKey:    "test-key",
+		LiveKitAPISecret: "test-secret",
+	})
+	userA := seedCallUser(t, ctx, pool, "User A")
+	userB := seedCallUser(t, ctx, pool, "User B")
+	userC := seedCallUser(t, ctx, pool, "User C")
+	channelID := seedCallChannel(t, ctx, pool, userA)
+	for _, userID := range []uuid.UUID{userA, userB, userC} {
+		seedMember(t, ctx, pool, channelID, userID)
+	}
+	callID, room := seedActiveCall(t, ctx, pool, channelID, userA)
+	for _, userID := range []uuid.UUID{userA, userB, userC} {
+		seedParticipant(t, ctx, pool, callID, userID)
+	}
+
+	raise := func(userID uuid.UUID) *SetHandRaisedResult {
+		t.Helper()
+		result, err := svc.SetHandRaised(ctx, SetHandRaisedParams{CallID: callID, ActorID: userID, Raised: true})
+		require.NoError(t, err)
+		return &result
+	}
+	lower := func(userID uuid.UUID) *SetHandRaisedResult {
+		t.Helper()
+		result, err := svc.SetHandRaised(ctx, SetHandRaisedParams{CallID: callID, ActorID: userID, Raised: false})
+		require.NoError(t, err)
+		return &result
+	}
+
+	assertRaisedHands(t, raise(userA).RaisedHands, userA)
+	assertRaisedHands(t, raise(userB).RaisedHands, userA, userB)
+	assertRaisedHands(t, raise(userC).RaisedHands, userA, userB, userC)
+	assert.Equal(t, 3, raisedHandEventCount(t, ctx, pool, callID))
+
+	// A duplicate raise is idempotent: it neither changes position nor emits an event.
+	assertRaisedHands(t, raise(userA).RaisedHands, userA, userB, userC)
+	assert.Equal(t, 3, raisedHandEventCount(t, ctx, pool, callID))
+
+	assertRaisedHands(t, lower(userA).RaisedHands, userB, userC)
+	assert.Equal(t, 4, raisedHandEventCount(t, ctx, pool, callID))
+	assertRaisedHands(t, lower(userA).RaisedHands, userB, userC)
+	assert.Equal(t, 4, raisedHandEventCount(t, ctx, pool, callID))
+
+	// Re-raising goes to the tail instead of restoring the previous position.
+	assertRaisedHands(t, raise(userA).RaisedHands, userB, userC, userA)
+
+	// A transient token refresh keeps an active participant's hand and position.
+	join, err := svc.JoinCallToken(ctx, JoinCallTokenParams{ConversationID: channelID, UserID: userB})
+	require.NoError(t, err)
+	assertRaisedHands(t, join.RaisedHands, userB, userC, userA)
+
+	// A confirmed leave removes the hand, renumbers everyone, and a later rejoin
+	// must explicitly raise again at the end of the queue.
+	processed, err := svc.HandleWebhook(ctx, &lkwebhookEvent{
+		Event:               webhookEventParticipantLeft,
+		RoomName:            room,
+		ParticipantIdentity: userB.String(),
+	})
+	require.NoError(t, err)
+	assert.False(t, processed)
+
+	join, err = svc.JoinCallToken(ctx, JoinCallTokenParams{ConversationID: channelID, UserID: userB})
+	require.NoError(t, err)
+	assertRaisedHands(t, join.RaisedHands, userC, userA)
+	assertRaisedHands(t, raise(userB).RaisedHands, userC, userA, userB)
+}
+
 func TestIntegration_HandleWebhook_ParticipantLeftEndsCallWhenRoomBecomesEmpty(t *testing.T) {
 	pool, _ := testdb.New(t)
 	ctx := context.Background()

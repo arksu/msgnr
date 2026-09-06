@@ -93,7 +93,7 @@ describe('callStore raised hands', () => {
     setActivePinia(createPinia())
   })
 
-  it('prevents rapid duplicate requests and lets sequenced queue snapshots own the visible state', async () => {
+  it('uses the server queue response and prevents rapid duplicate requests', async () => {
     const callStore = useCallStore()
     const chatStore = useChatStore()
     const wsStore = useWsStore()
@@ -129,8 +129,6 @@ describe('callStore raised hands', () => {
     } as never)
     await Promise.all([first, duplicate])
 
-    expect(callStore.localHandRaised).toBe(false)
-    chatStore.applyCallRaisedHandsSnapshot('call-1', 'channel-1', [{ userId: 'user-a', position: 1 }])
     expect(callStore.localHandRaised).toBe(true)
     expect(callStore.raisedHands).toEqual([{ userId: 'user-a', position: 1 }])
 
@@ -142,8 +140,6 @@ describe('callStore raised hands', () => {
     await callStore.toggleHandRaised()
 
     expect(requestSpy).toHaveBeenLastCalledWith('call-1', false)
-    expect(callStore.localHandRaised).toBe(true)
-    chatStore.applyCallRaisedHandsSnapshot('call-1', 'channel-1', [])
     expect(callStore.localHandRaised).toBe(false)
   })
 

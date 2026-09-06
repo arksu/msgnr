@@ -2719,9 +2719,7 @@ export const useCallStore = defineStore('call', () => {
     try {
       const response = await useWsStore().requestSetCallHandRaised(callId, !localHandRaised.value)
       activeCallId.value = response.callId
-      // The durable, sequenced call_raised_hands_changed event owns the client
-      // state. Do not let this unsequenced acknowledgement overwrite a newer
-      // queue event that arrived while the request was in flight.
+      chatStore.applyCallRaisedHandsSnapshot(response.callId, response.conversationId, response.raisedHands)
     } finally {
       handActionInFlight.value = false
     }

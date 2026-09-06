@@ -32,13 +32,14 @@ type BootstrapSessionItem struct {
 }
 
 type Call struct {
-	ID          uuid.UUID    `json:"id"`
-	ChannelID   uuid.UUID    `json:"channel_id"`
-	Status      string       `json:"status"`
-	LivekitRoom string       `json:"livekit_room"`
-	CreatedBy   uuid.UUID    `json:"created_by"`
-	StartedAt   time.Time    `json:"started_at"`
-	EndedAt     sql.NullTime `json:"ended_at"`
+	ID                    uuid.UUID    `json:"id"`
+	ChannelID             uuid.UUID    `json:"channel_id"`
+	Status                string       `json:"status"`
+	LivekitRoom           string       `json:"livekit_room"`
+	CreatedBy             uuid.UUID    `json:"created_by"`
+	StartedAt             time.Time    `json:"started_at"`
+	EndedAt               sql.NullTime `json:"ended_at"`
+	NextHandRaiseSequence int64        `json:"next_hand_raise_sequence"`
 }
 
 type CallInvite struct {
@@ -56,10 +57,11 @@ type CallInvite struct {
 }
 
 type CallParticipant struct {
-	CallID   uuid.UUID    `json:"call_id"`
-	UserID   uuid.UUID    `json:"user_id"`
-	JoinedAt time.Time    `json:"joined_at"`
-	LeftAt   sql.NullTime `json:"left_at"`
+	CallID             uuid.UUID     `json:"call_id"`
+	UserID             uuid.UUID     `json:"user_id"`
+	JoinedAt           time.Time     `json:"joined_at"`
+	LeftAt             sql.NullTime  `json:"left_at"`
+	HandRaisedSequence sql.NullInt64 `json:"hand_raised_sequence"`
 }
 
 type Channel struct {

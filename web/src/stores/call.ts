@@ -682,6 +682,10 @@ export const useCallStore = defineStore('call', () => {
   })
 
   const localHandRaised = computed(() => {
+    // LiveKit fills in identity during connect() without mutating the shallow
+    // room ref. Re-evaluate when connection completes, even if the dock rendered
+    // earlier with an empty identity and never subscribed to raisedHands.
+    if (!connected.value) return false
     const identity = room.value?.localParticipant.identity ?? ''
     return Boolean(identity && raisedHands.value.some(hand => hand.userId === identity))
   })

@@ -108,10 +108,12 @@ describe('callStore raised hands', () => {
     }]
     callStore.activeCallId = 'call-1'
     callStore.activeConversationId = 'channel-1'
+    const localParticipant = { identity: '' }
+    callStore.room = { localParticipant } as never
+    // The dock renders before connect() populates LiveKit's non-reactive identity.
+    expect(callStore.localHandRaised).toBe(false)
+    localParticipant.identity = 'user-a'
     callStore.connected = true
-    callStore.room = {
-      localParticipant: { identity: 'user-a' },
-    } as never
 
     const requestSpy = vi.spyOn(wsStore, 'requestSetCallHandRaised').mockImplementation(() => new Promise(resolve => {
       resolveRequest = resolve
@@ -141,6 +143,17 @@ describe('callStore raised hands', () => {
 
     expect(requestSpy).toHaveBeenLastCalledWith('call-1', false)
     expect(callStore.localHandRaised).toBe(false)
+    expect(callStore.raisedHands).toEqual([])
+
+    requestSpy.mockResolvedValue({
+      callId: 'call-1',
+      conversationId: 'channel-1',
+      raisedHands: [{ userId: 'user-a', position: 1 }],
+    } as never)
+    await callStore.toggleHandRaised()
+
+    expect(requestSpy).toHaveBeenLastCalledWith('call-1', true)
+    expect(callStore.localHandRaised).toBe(true)
   })
 
   it('replaces and renumbers the queue from a later shared snapshot', () => {

@@ -8,6 +8,7 @@ import CallDock from '@/components/CallDock.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useCallStore } from '@/stores/call'
+import { useWsStore } from '@/stores/ws'
 import { resolveScreenAnnotationStrokeColor } from '@/utils/color'
 
 const chatApiMocks = vi.hoisted(() => ({
@@ -224,7 +225,7 @@ describe('CallDock raised hands', () => {
     vi.clearAllMocks()
   })
 
-  it('shows numbered hand indicators and exposes the lower-hand control state', async () => {
+  it('toggles numbered hand indicators and renumbers the remaining participant', async () => {
     seedCallUserState()
     const chatStore = useChatStore()
     const callStore = useCallStore()
@@ -268,6 +269,33 @@ describe('CallDock raised hands', () => {
     expect(wrapper.get('[data-testid="calldock-local-hand-1"]').attributes('aria-label')).toBe('Raised hand position 1')
     expect(wrapper.get('[data-testid="calldock-remote-hand-remote-sid-2"]').text()).toContain('2')
     const control = wrapper.get('[data-testid="calldock-raise-hand"]')
+    expect(control.attributes('title')).toBe('Lower hand')
+    expect(control.attributes('aria-pressed')).toBe('true')
+
+    const requestSpy = vi.spyOn(useWsStore(), 'requestSetCallHandRaised').mockResolvedValue({
+      callId: 'call-1',
+      conversationId: 'channel-1',
+      raisedHands: [{ userId: 'user-b', position: 1 }],
+    } as never)
+    await control.trigger('click')
+    await flushAll()
+
+    expect(requestSpy).toHaveBeenLastCalledWith('call-1', false)
+    expect(wrapper.find('[data-testid="calldock-local-hand-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="calldock-remote-hand-remote-sid-1"]').text()).toContain('1')
+    expect(control.attributes('title')).toBe('Raise hand')
+    expect(control.attributes('aria-pressed')).toBe('false')
+
+    requestSpy.mockResolvedValue({
+      callId: 'call-1',
+      conversationId: 'channel-1',
+      raisedHands: [{ userId: 'user-b', position: 1 }, { userId: 'user-a', position: 2 }],
+    } as never)
+    await control.trigger('click')
+    await flushAll()
+
+    expect(requestSpy).toHaveBeenLastCalledWith('call-1', true)
+    expect(wrapper.get('[data-testid="calldock-local-hand-2"]').text()).toContain('2')
     expect(control.attributes('title')).toBe('Lower hand')
     expect(control.attributes('aria-pressed')).toBe('true')
 

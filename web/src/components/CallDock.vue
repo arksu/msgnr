@@ -189,6 +189,15 @@
                   :class="fallbackAvatarClass"
                 />
               </div>
+              <div
+                v-if="pinnedTile?.reactionEmoji"
+                class="absolute right-3 bottom-12 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/30 bg-black/65 text-xl shadow-lg"
+                role="status"
+                :aria-label="`${pinnedTileName} reacted ${pinnedTile.reactionEmoji}`"
+                :data-testid="`calldock-pinned-reaction-${pinnedTile.sid}`"
+              >
+                <span aria-hidden="true">{{ pinnedTile.reactionEmoji }}</span>
+              </div>
               <!-- Name badge -->
               <div class="absolute left-3 bottom-12 z-10 rounded-md border border-slate-500/70 bg-black/60 px-2 py-1 text-[11px] text-white">
                 {{ pinnedTileName }}
@@ -274,6 +283,15 @@
                     >
                       <span aria-hidden="true">✋</span>
                       <span>{{ localTile.raisedHandPosition }}</span>
+                    </div>
+                    <div
+                      v-if="localTile?.reactionEmoji"
+                      class="absolute right-2 bottom-9 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-black/65 text-lg shadow-lg"
+                      role="status"
+                      :aria-label="`${localTile.name} reacted ${localTile.reactionEmoji}`"
+                      data-testid="calldock-local-reaction"
+                    >
+                      <span aria-hidden="true">{{ localTile.reactionEmoji }}</span>
                     </div>
                     <!-- Name + mic overlay -->
                     <div class="absolute bottom-0 inset-x-0 z-10 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5">
@@ -371,6 +389,15 @@
                     >
                       <span aria-hidden="true">✋</span>
                       <span>{{ tile.raisedHandPosition }}</span>
+                    </div>
+                    <div
+                      v-if="tile.reactionEmoji"
+                      class="absolute right-2 bottom-9 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-black/65 text-lg shadow-lg"
+                      role="status"
+                      :aria-label="`${tile.name} reacted ${tile.reactionEmoji}`"
+                      :data-testid="`calldock-remote-reaction-${tile.sid}`"
+                    >
+                      <span aria-hidden="true">{{ tile.reactionEmoji }}</span>
                     </div>
                     <div
                       v-if="tile.screenShareOn"
@@ -517,6 +544,46 @@
           >
             <span class="text-lg leading-none" aria-hidden="true">✋</span>
           </button>
+
+          <!-- Call reactions -->
+          <div ref="reactionPickerWrapEl" class="relative">
+            <button
+              class="flex h-10 w-10 items-center justify-center rounded-xl border border-chat-border bg-chat-input text-app-text transition-colors hover:bg-chat-msgHover disabled:cursor-not-allowed disabled:opacity-60"
+              title="Reactions"
+              aria-label="Reactions"
+              aria-haspopup="menu"
+              :aria-expanded="reactionPickerOpen"
+              :disabled="!callStore.connected"
+              data-testid="calldock-reactions-toggle"
+              @click="toggleReactionPicker"
+            >
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M8.5 10h.01M15.5 10h.01" />
+                <path d="M8.5 14.5c.9 1 2.1 1.5 3.5 1.5s2.6-.5 3.5-1.5" />
+              </svg>
+            </button>
+            <div
+              v-if="reactionPickerOpen"
+              class="absolute bottom-[calc(100%+8px)] left-1/2 z-30 flex -translate-x-1/2 gap-1 rounded-xl border border-chat-border bg-chat-header p-1.5 shadow-2xl"
+              role="menu"
+              aria-label="Call reactions"
+              data-testid="calldock-reactions-picker"
+            >
+              <button
+                v-for="reaction in reactionOptions"
+                :key="reaction.emoji"
+                class="flex h-8 w-8 items-center justify-center rounded-lg text-lg transition-colors hover:bg-chat-msgHover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                type="button"
+                role="menuitem"
+                :aria-label="`Send ${reaction.label} reaction`"
+                :data-testid="`calldock-reaction-${reaction.emoji}`"
+                @click="handleReactionSelect(reaction.emoji)"
+              >
+                <span aria-hidden="true">{{ reaction.emoji }}</span>
+              </button>
+            </div>
+          </div>
 
           <!-- Camera -->
           <button
@@ -728,7 +795,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, toRaw, watch, watchEffect, type CSSProperties } from 'vue'
 import { Track } from 'livekit-client'
-import { useCallStore, type ScreenAnnotationEvent, type ScreenAnnotationSegmentV1 } from '@/stores/call'
+import { useCallStore, type CallReactionEmoji, type ScreenAnnotationEvent, type ScreenAnnotationSegmentV1 } from '@/stores/call'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { listDmCandidates, type DmCandidateItem } from '@/services/http/chatApi'
@@ -759,6 +826,7 @@ interface ParticipantTile {
   micOn: boolean
   isSpeaking: boolean
   raisedHandPosition?: number
+  reactionEmoji?: CallReactionEmoji
 }
 
 interface InviteCandidate {
@@ -814,6 +882,15 @@ interface PausedRemoteScreenFrame {
   imageDataUrl: string
 }
 
+const reactionOptions: ReadonlyArray<{ emoji: CallReactionEmoji; label: string }> = [
+  { emoji: '👍', label: 'thumbs up' },
+  { emoji: '👏', label: 'clapping' },
+  { emoji: '❤️', label: 'heart' },
+  { emoji: '😂', label: 'laughing' },
+  { emoji: '🎉', label: 'celebration' },
+  { emoji: '😮', label: 'surprised' },
+]
+
 const ANNOTATION_SEGMENT_TTL_MS = 20_000
 const ANNOTATION_SEGMENT_FADE_MS = 300
 const ANNOTATION_STROKE_WIDTH_PX = 3
@@ -844,6 +921,7 @@ const stageEl = ref<HTMLDivElement | null>(null)
 const annotationCanvasEl = ref<HTMLCanvasElement | null>(null)
 const remoteAudioHostEl = ref<HTMLDivElement | null>(null)
 const inputSelectorWrapEl = ref<HTMLDivElement | null>(null)
+const reactionPickerWrapEl = ref<HTMLDivElement | null>(null)
 const minimizedDockEl = ref<HTMLElement | null>(null)
 const expandedDockEl = ref<HTMLElement | null>(null)
 const maximized = ref(false)
@@ -864,6 +942,7 @@ const inputDeviceLoading = ref(false)
 const inputDeviceSwitching = ref(false)
 const inputDeviceError = ref('')
 const inputDeviceMenuOpen = ref(false)
+const reactionPickerOpen = ref(false)
 const annotationDrawMode = ref(false)
 const annotationActiveSegmentCount = ref(0)
 const annotationFadingSegmentCount = ref(0)
@@ -1079,14 +1158,38 @@ async function handleInputDeviceSelect(deviceId: string) {
   }
 }
 
+function toggleReactionPicker() {
+  reactionPickerOpen.value = !reactionPickerOpen.value
+  if (reactionPickerOpen.value) inputDeviceMenuOpen.value = false
+}
+
+async function handleReactionSelect(emoji: CallReactionEmoji) {
+  reactionPickerOpen.value = false
+  try {
+    await callStore.sendCallReaction(emoji)
+  } catch {
+    // The local reaction is optimistic; the store handles its short lifetime.
+  }
+}
+
 function handleDocumentPointerDown(event: PointerEvent) {
-  if (!inputDeviceMenuOpen.value) return
-  const wrap = unwrapEl(inputSelectorWrapEl.value)
   const target = event.target instanceof Node ? event.target : null
-  if (!wrap || !target) return
-  if (wrap.contains(target)) return
-  inputDeviceMenuOpen.value = false
-  inputDeviceLog('closed input selector menu (outside click)')
+  if (!target) return
+
+  if (inputDeviceMenuOpen.value) {
+    const inputWrap = unwrapEl(inputSelectorWrapEl.value)
+    if (inputWrap && !inputWrap.contains(target)) {
+      inputDeviceMenuOpen.value = false
+      inputDeviceLog('closed input selector menu (outside click)')
+    }
+  }
+
+  if (reactionPickerOpen.value) {
+    const reactionWrap = unwrapEl(reactionPickerWrapEl.value)
+    if (reactionWrap && !reactionWrap.contains(target)) {
+      reactionPickerOpen.value = false
+    }
+  }
 }
 
 // ── Computed layout ───────────────────────────────────────────────────────────
@@ -1218,6 +1321,7 @@ const participantTiles = computed<ParticipantTile[]>(() => {
     micOn: callStore.micEnabled && Boolean(localMicPub?.track) && !localMicPub?.isMuted,
     isSpeaking: Boolean(localParticipant && speakerSids.has(localParticipant.sid)),
     raisedHandPosition: raisedHandPositions.get(localParticipant?.identity ?? ''),
+    reactionEmoji: callStore.reactionsByParticipantId[localParticipant?.identity ?? '']?.emoji,
   })
 
   if (!currentRoom) return tiles
@@ -1240,6 +1344,7 @@ const participantTiles = computed<ParticipantTile[]>(() => {
       micOn: Boolean(micPub?.isSubscribed && micPub?.track && !micPub?.isMuted),
       isSpeaking: speakerSids.has(participant.sid),
       raisedHandPosition: raisedHandPositions.get(participant.identity),
+      reactionEmoji: callStore.reactionsByParticipantId[participant.identity]?.emoji,
     })
   }
 
@@ -2343,6 +2448,10 @@ function handleEscapeKey(evt: KeyboardEvent) {
     inputDeviceMenuOpen.value = false
     return
   }
+  if (reactionPickerOpen.value) {
+    reactionPickerOpen.value = false
+    return
+  }
   if (inviteDialogOpen.value) {
     closeInviteDialog()
     return
@@ -2352,17 +2461,17 @@ function handleEscapeKey(evt: KeyboardEvent) {
   }
 }
 
-watch([maximized, inviteDialogOpen, inputDeviceMenuOpen], ([isMaximized, isInviteOpen, isInputMenuOpen]) => {
-  const shouldListen = isMaximized || isInviteOpen || isInputMenuOpen
+watch([maximized, inviteDialogOpen, inputDeviceMenuOpen, reactionPickerOpen], ([isMaximized, isInviteOpen, isInputMenuOpen, isReactionPickerOpen]) => {
+  const shouldListen = isMaximized || isInviteOpen || isInputMenuOpen || isReactionPickerOpen
   document.removeEventListener('keydown', handleEscapeKey)
   if (shouldListen) {
     document.addEventListener('keydown', handleEscapeKey)
   }
 })
 
-watch(inputDeviceMenuOpen, (open) => {
+watch([inputDeviceMenuOpen, reactionPickerOpen], ([isInputMenuOpen, isReactionPickerOpen]) => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
-  if (open) {
+  if (isInputMenuOpen || isReactionPickerOpen) {
     document.addEventListener('pointerdown', handleDocumentPointerDown)
   }
 })
@@ -2385,6 +2494,7 @@ watch(isVisible, (visible) => {
   inputDeviceLog('call dock hidden: detaching input device listener')
   detachInputDeviceChangeListener()
   inputDeviceMenuOpen.value = false
+  reactionPickerOpen.value = false
   annotationDrawMode.value = false
   stopActiveAnnotationStroke()
   clearRenderedAnnotationSegments()

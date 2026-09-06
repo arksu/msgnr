@@ -230,6 +230,9 @@ const REMOTE_AUDIO_STATS_INTERVAL_MS = 3000
 const EMPTY_CALL_AUTO_CLOSE_MS = 5000
 const CALL_DEBUG_STORAGE_KEY = 'debug.calls'
 const SCREEN_ANNOTATION_TOPIC = 'screen-annotation.v1'
+const CALL_REACTION_TOPIC = 'call-reaction.v1'
+const CALL_REACTION_TTL_MS = 4000
+const CALL_REACTION_DEDUPE_TTL_MS = CALL_REACTION_TTL_MS + 1000
 const SCREEN_ANNOTATION_OVERLAY_LABEL = 'annotation_overlay'
 const SCREEN_ANNOTATION_MONITOR_POLL_MS = 500
 const SCREEN_ANNOTATION_OVERLAY_BATCH_INTERVAL_MS = 33
@@ -245,6 +248,23 @@ export interface ScreenAnnotationPoint {
 export type ScreenAnnotationSharerPlatform = 'tauri' | 'pwa' | 'unknown'
 export type ScreenAnnotationShareType = 'monitor' | 'window' | 'browser' | 'unknown'
 export type ScreenAnnotationSessionMode = 'os-overlay' | 'preview-fallback' | 'disabled'
+
+export const CALL_REACTION_EMOJIS = ['👍', '👏', '❤️', '😂', '🎉', '😮'] as const
+export type CallReactionEmoji = (typeof CALL_REACTION_EMOJIS)[number]
+
+export interface CallReactionPacketV1 {
+  version: 1
+  kind: 'reaction'
+  emoji: CallReactionEmoji
+  senderSessionId: string
+  sequence: number
+  reactionId: string
+  sentAtMs: number
+}
+
+export interface ActiveCallReaction extends CallReactionPacketV1 {
+  expiresAtMs: number
+}
 
 export interface ScreenAnnotationSessionState {
   version: 1
@@ -486,6 +506,52 @@ function decodeScreenAnnotationPacket(payload: Uint8Array): ScreenAnnotationPack
   }
 }
 
+function isBoundedNonEmptyString(value: unknown, maxLength = 128): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength
+}
+
+function isCallReactionEmoji(value: unknown): value is CallReactionEmoji {
+  return typeof value === 'string' && (CALL_REACTION_EMOJIS as readonly string[]).includes(value)
+}
+
+function decodeCallReactionPacket(payload: Uint8Array): CallReactionPacketV1 | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(payload))
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+
+  const candidate = parsed as Record<string, unknown>
+  if (candidate.version !== 1 || candidate.kind !== 'reaction') return null
+  if (!isCallReactionEmoji(candidate.emoji)) return null
+  if (!isBoundedNonEmptyString(candidate.senderSessionId)) return null
+  if (!isBoundedNonEmptyString(candidate.reactionId)) return null
+  if (typeof candidate.sequence !== 'number' || !Number.isSafeInteger(candidate.sequence) || candidate.sequence <= 0) return null
+  if (typeof candidate.sentAtMs !== 'number' || !Number.isFinite(candidate.sentAtMs) || candidate.sentAtMs < 0) return null
+
+  return {
+    version: 1,
+    kind: 'reaction',
+    emoji: candidate.emoji,
+    senderSessionId: candidate.senderSessionId,
+    sequence: candidate.sequence,
+    reactionId: candidate.reactionId,
+    sentAtMs: candidate.sentAtMs,
+  }
+}
+
+let callReactionNonce = 0
+
+function createCallReactionId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  callReactionNonce += 1
+  return `${Date.now().toString(36)}-${callReactionNonce.toString(36)}`
+}
+
 function logScreenShare(message: string, payload?: unknown) {
   if (typeof payload === 'undefined') {
     console.info(`[call-screen] ${message}`)
@@ -513,6 +579,7 @@ export const useCallStore = defineStore('call', () => {
   const remoteParticipantCount = ref(0)
   const mediaVersion = ref(0)
   const annotationSessionState = ref<ScreenAnnotationSessionState | null>(null)
+  const reactionsByParticipantId = ref<Record<string, ActiveCallReaction>>({})
   const handActionInFlight = ref(false)
 
   // True when any remote participant is actively sharing a screen track.
@@ -539,6 +606,10 @@ export const useCallStore = defineStore('call', () => {
   const soundEngine = useNotificationSoundEngine()
   const platform = getPlatformOrNull()
   const annotationListeners = new Set<ScreenAnnotationListener>()
+  const reactionTimeoutsByParticipantId = new Map<string, ReturnType<typeof setTimeout>>()
+  const seenReactionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+  const reactionSessionId = createCallReactionId()
+  let localReactionSequence = 0
 
   const annotationSessionMode = computed<ScreenAnnotationSessionMode>(() => deriveAnnotationSessionMode(annotationSessionState.value))
 
@@ -1140,6 +1211,129 @@ export const useCallStore = defineStore('call', () => {
     }
   }
 
+  function callReactionKey(participantId: string, reactionId: string): string {
+    return `${participantId}\u0000${reactionId}`
+  }
+
+  function hasSeenCallReaction(participantId: string, reactionId: string): boolean {
+    return seenReactionTimeouts.has(callReactionKey(participantId, reactionId))
+  }
+
+  function rememberCallReaction(participantId: string, reactionId: string) {
+    const key = callReactionKey(participantId, reactionId)
+    if (seenReactionTimeouts.has(key)) return
+    const timeout = setTimeout(() => {
+      seenReactionTimeouts.delete(key)
+    }, CALL_REACTION_DEDUPE_TTL_MS)
+    seenReactionTimeouts.set(key, timeout)
+  }
+
+  function clearCallReaction(participantId: string) {
+    const normalizedParticipantId = participantId.trim()
+    if (!normalizedParticipantId) return
+
+    const timeout = reactionTimeoutsByParticipantId.get(normalizedParticipantId)
+    if (timeout) {
+      clearTimeout(timeout)
+      reactionTimeoutsByParticipantId.delete(normalizedParticipantId)
+    }
+    if (!(normalizedParticipantId in reactionsByParticipantId.value)) return
+
+    const { [normalizedParticipantId]: _removed, ...remaining } = reactionsByParticipantId.value
+    reactionsByParticipantId.value = remaining
+  }
+
+  function clearCallReactions() {
+    for (const timeout of reactionTimeoutsByParticipantId.values()) {
+      clearTimeout(timeout)
+    }
+    reactionTimeoutsByParticipantId.clear()
+    reactionsByParticipantId.value = {}
+
+    for (const timeout of seenReactionTimeouts.values()) {
+      clearTimeout(timeout)
+    }
+    seenReactionTimeouts.clear()
+  }
+
+  function showCallReaction(participantId: string, packet: CallReactionPacketV1) {
+    const currentTimeout = reactionTimeoutsByParticipantId.get(participantId)
+    if (currentTimeout) clearTimeout(currentTimeout)
+
+    const reaction: ActiveCallReaction = {
+      ...packet,
+      expiresAtMs: Date.now() + CALL_REACTION_TTL_MS,
+    }
+    reactionsByParticipantId.value = {
+      ...reactionsByParticipantId.value,
+      [participantId]: reaction,
+    }
+
+    const timeout = setTimeout(() => {
+      const activeReaction = reactionsByParticipantId.value[participantId]
+      if (
+        activeReaction?.reactionId !== reaction.reactionId
+        || activeReaction.senderSessionId !== reaction.senderSessionId
+        || activeReaction.sequence !== reaction.sequence
+      ) {
+        return
+      }
+      clearCallReaction(participantId)
+    }, CALL_REACTION_TTL_MS)
+    reactionTimeoutsByParticipantId.set(participantId, timeout)
+  }
+
+  function ingestCallReactionPacket(payload: Uint8Array, participantIdentity?: string): boolean {
+    const packet = decodeCallReactionPacket(payload)
+    const participantId = participantIdentity?.trim() || ''
+    if (!packet || !isBoundedNonEmptyString(participantId)) return false
+    if (hasSeenCallReaction(participantId, packet.reactionId)) return true
+    rememberCallReaction(participantId, packet.reactionId)
+
+    const activeReaction = reactionsByParticipantId.value[participantId]
+    if (
+      activeReaction?.senderSessionId === packet.senderSessionId
+      && packet.sequence <= activeReaction.sequence
+    ) {
+      return true
+    }
+    if (activeReaction && packet.sentAtMs < activeReaction.sentAtMs) return true
+
+    showCallReaction(participantId, packet)
+    return true
+  }
+
+  async function sendCallReaction(emoji: CallReactionEmoji): Promise<void> {
+    if (!isCallReactionEmoji(emoji)) {
+      throw new Error('Unsupported call reaction')
+    }
+
+    const current = room.value
+    const participantId = current?.localParticipant.identity?.trim() || ''
+    if (!current || !connected.value || !isBoundedNonEmptyString(participantId)) {
+      throw new Error('Call is not connected')
+    }
+
+    localReactionSequence += 1
+    const packet: CallReactionPacketV1 = {
+      version: 1,
+      kind: 'reaction',
+      emoji,
+      senderSessionId: reactionSessionId,
+      sequence: localReactionSequence,
+      reactionId: createCallReactionId(),
+      sentAtMs: Date.now(),
+    }
+    rememberCallReaction(participantId, packet.reactionId)
+    showCallReaction(participantId, packet)
+
+    const encoded = new TextEncoder().encode(JSON.stringify(packet))
+    await current.localParticipant.publishData(encoded, {
+      reliable: true,
+      topic: CALL_REACTION_TOPIC,
+    })
+  }
+
   async function publishAnnotationPacket(packet: ScreenAnnotationPacketV1): Promise<void> {
     const current = room.value
     if (!current) return
@@ -1608,6 +1802,7 @@ export const useCallStore = defineStore('call', () => {
       activeConversationVisibility.value = 'public'
       room.value = null
       clearAnnotationSession()
+      clearCallReactions()
       stopTrackedDisplayCaptureTracks('room-event-disconnected')
       clearEmptyCallAutoCloseTimer()
       knownRemoteParticipantSids.clear()
@@ -1632,6 +1827,7 @@ export const useCallStore = defineStore('call', () => {
 
     next.on(RoomEvent.Reconnecting, () => {
       callDebug('room reconnecting', { room: next.name })
+      clearCallReactions()
     })
 
     next.on(RoomEvent.Reconnected, () => {
@@ -1681,6 +1877,7 @@ export const useCallStore = defineStore('call', () => {
       if (annotationSessionState.value?.sharerIdentity === participant.identity) {
         clearAnnotationSession()
       }
+      clearCallReaction(participant.identity ?? '')
       callDebug('remote participant disconnected', {
         participant: participant.identity,
         sid: participant.sid,
@@ -1701,10 +1898,20 @@ export const useCallStore = defineStore('call', () => {
     })
 
     next.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
-      if (topic !== SCREEN_ANNOTATION_TOPIC) return
-      const accepted = ingestScreenAnnotationPacket(payload, participant?.identity)
-      if (!accepted) {
+      if (topic === SCREEN_ANNOTATION_TOPIC) {
+        const accepted = ingestScreenAnnotationPacket(payload, participant?.identity)
+        if (accepted) return
         callDebug('screen annotation packet ignored (invalid payload)', {
+          participant: participant?.identity ?? null,
+          topic,
+          payloadSize: payload.byteLength,
+        })
+        return
+      }
+      if (topic === CALL_REACTION_TOPIC) {
+        const accepted = ingestCallReactionPacket(payload, participant?.identity)
+        if (accepted) return
+        callDebug('call reaction packet ignored (invalid payload)', {
           participant: participant?.identity ?? null,
           topic,
           payloadSize: payload.byteLength,
@@ -1929,6 +2136,7 @@ export const useCallStore = defineStore('call', () => {
     clearEmptyCallAutoCloseTimer()
     if (!current) {
       clearAnnotationSession()
+      clearCallReactions()
       remoteScreenShareReceiveEnabled.value = true
       suppressParticipantChangeSounds = false
       logScreenShare('ensureDisconnected skipped: no active room', { teardownId })
@@ -1958,6 +2166,7 @@ export const useCallStore = defineStore('call', () => {
     }
     room.value = null
     clearAnnotationSession()
+    clearCallReactions()
     remoteScreenShareReceiveEnabled.value = true
     knownRemoteParticipantSids.clear()
     suppressParticipantChangeSounds = false
@@ -2447,6 +2656,7 @@ export const useCallStore = defineStore('call', () => {
   async function resetRuntimeState() {
     await ensureDisconnected()
     clearAnnotationSession()
+    clearCallReactions()
     localScreenShareUsedInSession = false
     clearPendingCreateCall()
     clearPendingInviteMembers()
@@ -2860,6 +3070,7 @@ export const useCallStore = defineStore('call', () => {
     screenShareEnabled,
     remoteScreenShareReceiveEnabled,
     annotationSessionState,
+    reactionsByParticipantId,
     annotationAvailable,
     annotationDisabledReason,
     annotationSessionMode,
@@ -2881,11 +3092,15 @@ export const useCallStore = defineStore('call', () => {
     switchInputDevice,
     toggleCamera,
     toggleScreenShare,
+    sendCallReaction,
     stopRemoteScreenShareForMe,
     startRemoteScreenShareForMe,
     publishScreenAnnotationSegment,
     onScreenAnnotation,
     ingestScreenAnnotationPacket,
+    ingestCallReactionPacket,
+    clearCallReaction,
+    clearCallReactions,
     enableAudioPlayback,
     localVideoTrack,
     localScreenShareTrack,

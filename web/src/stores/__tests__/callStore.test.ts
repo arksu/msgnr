@@ -170,6 +170,102 @@ describe('callStore raised hands', () => {
   })
 })
 
+describe('callStore reactions', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('shows the local reaction immediately, sends it reliably, replaces rapid reactions, and expires the latest one', async () => {
+    vi.useFakeTimers()
+    try {
+      const callStore = useCallStore()
+      const publishData = vi.fn().mockResolvedValue(undefined)
+      callStore.connected = true
+      callStore.room = {
+        localParticipant: {
+          identity: 'user-a',
+          publishData,
+        },
+      } as never
+
+      await callStore.sendCallReaction('👍')
+      expect(callStore.reactionsByParticipantId['user-a']?.emoji).toBe('👍')
+      expect(publishData).toHaveBeenCalledWith(expect.objectContaining({
+        byteLength: expect.any(Number),
+      }), {
+        reliable: true,
+        topic: 'call-reaction.v1',
+      })
+
+      const firstPacket = JSON.parse(new TextDecoder().decode(publishData.mock.calls[0]?.[0]))
+      expect(firstPacket).toEqual(expect.objectContaining({
+        version: 1,
+        kind: 'reaction',
+        emoji: '👍',
+        sequence: 1,
+      }))
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      await callStore.sendCallReaction('🎉')
+      expect(callStore.reactionsByParticipantId['user-a']?.emoji).toBe('🎉')
+
+      await vi.advanceTimersByTimeAsync(3_999)
+      expect(callStore.reactionsByParticipantId['user-a']?.emoji).toBe('🎉')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(callStore.reactionsByParticipantId['user-a']).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('accepts valid remote reactions once, rejects invalid input, and ignores stale replacements', async () => {
+    vi.useFakeTimers()
+    try {
+      const callStore = useCallStore()
+      const encode = (packet: Record<string, unknown>) => new TextEncoder().encode(JSON.stringify(packet))
+      const latestPacket = {
+        version: 1,
+        kind: 'reaction',
+        emoji: '👏',
+        senderSessionId: 'remote-session',
+        sequence: 2,
+        reactionId: 'reaction-2',
+        sentAtMs: 200,
+      }
+
+      expect(callStore.ingestCallReactionPacket(encode(latestPacket), 'user-b')).toBe(true)
+      expect(callStore.reactionsByParticipantId['user-b']?.emoji).toBe('👏')
+
+      // A duplicate does not restart its lifetime or alter the visible state.
+      expect(callStore.ingestCallReactionPacket(encode(latestPacket), 'user-b')).toBe(true)
+      expect(callStore.ingestCallReactionPacket(encode({
+        ...latestPacket,
+        emoji: '❤️',
+        reactionId: 'reaction-1',
+        sequence: 1,
+        sentAtMs: 100,
+      }), 'user-b')).toBe(true)
+      expect(callStore.reactionsByParticipantId['user-b']?.emoji).toBe('👏')
+
+      expect(callStore.ingestCallReactionPacket(encode({
+        ...latestPacket,
+        emoji: 'not-an-emoji',
+        reactionId: 'invalid-reaction',
+        sequence: 3,
+      }), 'user-b')).toBe(false)
+      expect(callStore.ingestCallReactionPacket(encode(latestPacket), '')).toBe(false)
+      expect(callStore.reactionsByParticipantId['user-b']?.emoji).toBe('👏')
+
+      callStore.clearCallReaction('user-b')
+      expect(callStore.reactionsByParticipantId['user-b']).toBeUndefined()
+      callStore.clearCallReactions()
+      expect(callStore.reactionsByParticipantId).toEqual({})
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('callStore leaveCall media cleanup', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

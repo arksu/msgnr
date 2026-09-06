@@ -275,6 +275,86 @@ describe('CallDock raised hands', () => {
   })
 })
 
+describe('CallDock reactions', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('opens the reaction picker, sends the selected emoji, and renders reactions on the matching tiles', async () => {
+    seedCallUserState()
+    const callStore = useCallStore()
+    callStore.connected = true
+    callStore.activeConversationId = 'channel-1'
+    callStore.room = {
+      localParticipant: {
+        sid: 'local-sid',
+        identity: 'user-a',
+        name: 'Ada',
+        getTrackPublication: () => undefined,
+        videoTrackPublications: new Map(),
+        audioTrackPublications: new Map(),
+      },
+      remoteParticipants: new Map([['remote-sid', {
+        sid: 'remote-sid',
+        identity: 'user-b',
+        name: 'Bob',
+        getTrackPublication: () => undefined,
+        videoTrackPublications: new Map(),
+        audioTrackPublications: new Map(),
+      }]]),
+    } as never
+    callStore.reactionsByParticipantId = {
+      'user-a': {
+        version: 1,
+        kind: 'reaction',
+        emoji: '👍',
+        senderSessionId: 'local-session',
+        sequence: 1,
+        reactionId: 'local-reaction',
+        sentAtMs: 1,
+        expiresAtMs: 4_001,
+      },
+      'user-b': {
+        version: 1,
+        kind: 'reaction',
+        emoji: '🎉',
+        senderSessionId: 'remote-session',
+        sequence: 1,
+        reactionId: 'remote-reaction',
+        sentAtMs: 1,
+        expiresAtMs: 4_001,
+      },
+    }
+    callStore.sendCallReaction = vi.fn().mockResolvedValue(undefined)
+
+    const wrapper = mount(CallDock, {
+      global: { stubs: { UserAvatar: true } },
+    })
+    await flushAll()
+
+    expect(wrapper.get('[data-testid="calldock-local-reaction"]').attributes('aria-label')).toBe('Ada reacted 👍')
+    expect(wrapper.get('[data-testid="calldock-remote-reaction-remote-sid"]').attributes('aria-label')).toBe('Bob reacted 🎉')
+
+    const reactionsToggle = wrapper.get('[data-testid="calldock-reactions-toggle"]')
+    await reactionsToggle.trigger('click')
+    await flushAll()
+    expect(reactionsToggle.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('[data-testid="calldock-reactions-picker"]').exists()).toBe(true)
+
+    await wrapper.get('button[aria-label="Send laughing reaction"]').trigger('click')
+    await flushAll()
+    expect(callStore.sendCallReaction).toHaveBeenCalledWith('😂')
+    expect(wrapper.find('[data-testid="calldock-reactions-picker"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="calldock-remote-tile-remote-sid"]').get('button[title="Pin to full view"]').trigger('click')
+    await flushAll()
+    expect(wrapper.get('[data-testid="calldock-pinned-reaction-remote-sid"]').attributes('aria-label')).toBe('Bob reacted 🎉')
+
+    wrapper.unmount()
+  })
+})
+
 describe('CallDock invite modal', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

@@ -10,19 +10,21 @@ successful lower-hand acknowledgement and restore a stale numbered badge.
 
 Use the durable workspace-event sequence as the queue snapshot version.
 
-- `SetCallHandRaisedResponse` includes the sequence of the event written for a
-  state-changing command.
+- `SetCallHandRaisedResponse` includes the current durable queue event
+  sequence, including for an idempotent command.
 - The chat store tracks the latest queue sequence for each call.
 - Acknowledgement and realtime snapshots update a queue only when their
   sequence is at least the version already applied for that call.
-- Existing bootstrap and join snapshots remain unversioned initial state; any
-  sequenced event supersedes them.
+- Bootstrap uses its existing atomic snapshot watermark as the queue baseline
+  and retains a local queue only when its acknowledgement is newer.
+- Bootstrap snapshots use their existing global watermark; the unversioned join
+  snapshot remains initial state and cannot replace a versioned local queue.
 
 ## Edge cases
 
-No-op commands do not add duplicate durable events. Their acknowledgement does
-not replace a versioned local queue. Reconnect/bootstrap still supplies the
-current queue, and normal raise/lower actions always have a new sequence.
+No-op commands do not add duplicate durable events. Their acknowledgement uses
+the latest durable queue sequence, so it remains safe to apply after retries or
+lost acknowledgements. Reconnect/bootstrap still supplies the current queue.
 
 ## Verification
 
